@@ -2414,12 +2414,13 @@ class InboxUXTests(unittest.TestCase):
         body.update(over)
         return self.console.write("question", body, "agent", agent=agent)
 
-    # -- Q33: one tap, a countdown, then the lock --------------------------------------
+    # -- Q33: one tap locks, at once (0.9.12 removed the countdown) ---------------------
 
-    def test_q33_one_tap_locks_only_when_the_countdown_ends(self):
-        # Catches: a lock sent at the tap with a cosmetic countdown (nothing may reach the store before it ends);
-        # a countdown that never sends; a second confirm step left in (one tap must be enough); and an Undo
-        # that is not where focus lands, so a keyboard owner cannot stop it.
+    def test_q33_one_tap_locks_at_once_with_no_countdown_or_confirm(self):
+        # 0.9.12 ("The 5-second lock countdown is gone"): Lock this answer sends at the tap.
+        # Catches: a countdown or Undo left in (nothing may stand between the tap and the lock); a second
+        # confirm step left in (one tap must be enough); a tap that locks twice or not at all; and focus
+        # left on the Lock button the lock removed, so a keyboard owner is dropped on the board.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
@@ -2427,27 +2428,26 @@ class InboxUXTests(unittest.TestCase):
                 self.answer("LANE.1/Q1")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                self.assertIn("Locking in 5 s", page.locator(".ck-lock-countdown").text_content())
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-undo')"))
-                self.said(page, "Locking in 5 seconds")
-                self.assertEqual(page.locator(".ck-confirm").count(), 0, "a second confirmation step is left in")
-                page.wait_for_timeout(3500)
-                self.assertEqual(self.locks(), [], "the lock reached the store before the countdown ended")
-                self.assertIn(page.locator(".ck-lock-left").text_content(), ("Locking in 2 s", "Locking in 1 s"))
-                _wait_for(page, "document.querySelector('.ck-lock-countdown') === null", timeout=6000)
+                self.assertEqual(self.locks(), [], "a lock reached the store before the tap")
+                page.focus(".ck-lock-one")
+                page.keyboard.press("Enter")
+                self.said(page, "Locked.")
                 self.assertTrue(self.locked("LANE.1/Q1"))
                 self.assertEqual(len(self.locks()), 1)
-                self.said(page, "Locked.")
-                # Focus was on the Undo the lock removed: it lands on the question's own line.
+                self.assertEqual(page.locator(".ck-confirm").count(), 0, "a second confirmation step is left in")
+                self.assertEqual(page.locator(".ck-lock-countdown, .ck-lock-undo").count(), 0,
+                                 "a countdown or Undo is left in")
+                # Focus was on the Lock button the lock removed: it lands on the question's own line.
                 page.wait_for_selector(".ck-q-line[data-qid='LANE.1/Q1']")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-q-line')"))
+                self.assertEqual(page.locator(".ck-lock-one").count(), 0)
+                page.wait_for_timeout(1000)   # nothing deferred lands a second lock later
+                self.assertEqual(len(self.locks()), 1)
 
-    def test_q33_undo_leaving_the_question_and_leaving_the_page_send_nothing(self):
-        # Catches: an Undo that hides the countdown but lets its timer fire; a countdown that keeps running
-        # after the owner left the question (a lock from a place they can no longer see); and a page that
-        # sends the lock as it unloads (a beacon or fetch keepalive on pagehide).
+    def test_q33_leaving_the_question_and_leaving_the_page_without_a_tap_send_nothing(self):
+        # Catches: a lock sent without the tap (an answer is not a lock); a page that sends a lock as it
+        # unloads (a beacon or fetch keepalive on pagehide, where the countdown's drop handler was); and a
+        # Lock button that leaving the question or the page breaks, so the tap after it does nothing.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
@@ -2455,104 +2455,94 @@ class InboxUXTests(unittest.TestCase):
                 self.answer("LANE.1/Q1")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                # 1. Undo, by keyboard: Enter on the focused Undo.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-undo")
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-one")
-                self.said(page, "Nothing was sent")
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-one')"))
-                # A second tap after an Undo counts the full five seconds again (no timer left running from the first).
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-undo")
-                page.wait_for_timeout(3200)
-                self.assertEqual(self.locks(), [], "a timer left from the undone count ran the new one fast")
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-one")
-                # 2. Leaving the question: another item mid-count.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
+                # 1. Leaving the question: another item, then back.
                 page.evaluate("ConsoleKit.open('LANE')")
-                self.said(page, "you left the question")
-                # 3. Leaving the page mid-count and coming back from the back/forward cache. The page and its
-                # timers live on (navigating away for real would kill them and prove nothing): only the pagehide
-                # handler can stop this lock from landing on return.
+                page.wait_for_timeout(500)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
+                # 2. Leaving the page and coming back from the back/forward cache. The page and its
+                # handlers live on (navigating away for real would kill them and prove nothing).
                 page.evaluate("""() => {
                     window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
                     window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
                 }""")
-                self.said(page, "you left the page before it locked")
-                page.wait_for_selector(".ck-lock-one")
-                page.wait_for_timeout(6500)   # past every countdown above
-                self.assertEqual(self.locks(), [], "a lock was sent without the countdown ending on show")
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 0)
-
-    def test_q33_hiding_the_tab_or_closing_the_panel_mid_count_sends_nothing(self):
-        # Review MEDIUMs. Catches: a countdown that keeps running in a background tab (the lock would land
-        # where the owner cannot see it), and one that survives the panel being closed over it.
-        for kind in BROWSERS:
-            with self.subTest(browser=kind):
-                url = self.serve()
-                self.ask(1)
-                self.answer("LANE.1/Q1")
-                page = self.page(kind, 1280, url)
-                self.open_item(page)
-                # 1. The tab is hidden (switching tabs, minimising), then shown again.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                page.evaluate("""() => {
-                    const set = v => Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => v});
-                    set('hidden'); document.dispatchEvent(new Event('visibilitychange'));
-                    set('visible'); document.dispatchEvent(new Event('visibilitychange'));
-                }""")
-                self.said(page, "you left the page before it locked")
-                page.wait_for_selector(".ck-lock-one")
-                page.wait_for_timeout(6500)
-                self.assertEqual(self.locks(), [], "a hidden tab kept counting and locked")
-                # 2. The panel is closed mid-count, then opened again.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                page.click(".ck-close-btn")
-                self.said(page, "you left the question before it locked")
-                page.wait_for_timeout(6500)
-                self.assertEqual(self.locks(), [], "a closed panel kept counting and locked")
-                self.open_item(page)
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 0)
+                page.wait_for_timeout(1000)
+                self.assertEqual(self.locks(), [], "a lock was sent without a tap")
                 self.assertEqual(page.locator(".ck-lock-one").count(), 1)
+                # 3. The Lock button still works after all that, once.
+                page.click(".ck-lock-one")
+                self.said(page, "Locked.")
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertEqual(len(self.locks()), 1)
 
-    def test_q33_a_live_redraw_mid_count_keeps_the_countdown_and_the_undo_focus(self):
-        # Catches: a countdown lost to a live redraw (it would lock with nothing on show, or not at all), focus
-        # thrown off the Undo by the redraw, and a lock landing under a box the owner is typing in.
+    def test_q33_hiding_the_tab_or_closing_the_panel_sends_nothing_and_keeps_a_lock_once(self):
+        # Review MEDIUMs, after 0.9.12. Catches: a hidden tab or a closed panel that sends a lock the owner
+        # never tapped; and a lock tapped just before the tab hides that is then lost, sent twice, or
+        # reported as dropped (it already went: "you left the page before it locked" would be a lie).
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
                 self.ask(1)
                 self.ask(2)
                 self.answer("LANE.1/Q1")
+                self.answer("LANE.1/Q2")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                self.ask(3)   # arrives live while the count runs
-                page.wait_for_selector(".ck-question:has-text('Question 3')", timeout=6000)
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 1)
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-undo')"))
-                # Now type in Q2's own-words box while the lock lands: the box is not redrawn under the owner.
+                hide_and_show = """() => {
+                    const set = v => Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => v});
+                    set('hidden'); document.dispatchEvent(new Event('visibilitychange'));
+                    set('visible'); document.dispatchEvent(new Event('visibilitychange'));
+                }"""
+                # 1. The tab is hidden (switching tabs, minimising), then shown again.
+                page.evaluate(hide_and_show)
+                # 2. The panel is closed, then opened again.
+                page.click(".ck-close-btn")
+                page.wait_for_timeout(1000)
+                self.assertEqual(self.locks(), [], "hiding the tab or closing the panel sent a lock")
+                self.open_item(page)
+                self.assertEqual(page.locator(".ck-lock-one").count(), 2)
+                # 3. A tap, then the tab hides at once: the lock already went, exactly once.
+                page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one").click()
+                page.evaluate(hide_and_show)
+                self.said(page, "Locked.")
+                page.wait_for_timeout(1000)
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertFalse(self.locked("LANE.1/Q2"))
+                self.assertEqual(len(self.locks()), 1)
+                self.assertNotIn("before it locked", page.evaluate("document.querySelector('.ck-live').textContent"))
+
+    def test_q33_a_live_redraw_after_the_lock_keeps_focus_and_the_box_being_typed_in(self):
+        # Catches: focus thrown off the locked question's line by a live redraw (Enter would land somewhere
+        # else), the lock undone or doubled by the redraw, and a live change (a lock landing from elsewhere)
+        # redrawing a box the owner is typing in.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                self.ask(2)
+                self.ask(3)
+                self.answer("LANE.1/Q1")
+                self.answer("LANE.1/Q3")
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one").click()
+                self.said(page, "Locked.")
+                page.wait_for_selector(".ck-q-line[data-qid='LANE.1/Q1']")
+                self.ask(4)   # arrives live after the lock
+                page.wait_for_selector(".ck-question:has-text('Question 4')", timeout=6000)
+                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-q-line') && "
+                                              "document.activeElement.dataset.qid === 'LANE.1/Q1'"))
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertEqual(len(self.locks()), 1)
+                # Now type in Q2's own-words box while a lock on Q3 lands live: the box is not redrawn under the owner.
                 box = page.locator(".ck-question:has-text('Question 2') textarea").first
                 box.click()
                 box.type("half a thought")
-                deadline = time.monotonic() + 9
-                while not self.locked("LANE.1/Q1") and time.monotonic() < deadline:
-                    page.wait_for_timeout(200)   # not time.sleep: the sync route relaying POSTs runs only inside a Playwright call
-                self.assertTrue(self.locked("LANE.1/Q1"), page.evaluate("document.querySelector('.ck-live').textContent"))
-                # Not redrawn, yet not left saying "Locking in 1 s" over a question that is locked.
-                _wait_for(page, "document.querySelector('.ck-lock-left').textContent === 'Locked.'")
-                self.assertEqual(page.locator(".ck-lock-undo").get_attribute("aria-disabled"), "true")
+                self.lock("LANE.1/Q3")
+                self.ask(5)   # after the lock in the store: its "Show" note says the page has both
+                page.wait_for_selector(".ck-live-note", timeout=6000)   # the change waits behind "Show"
                 self.assertEqual(box.input_value(), "half a thought")
                 self.assertTrue(page.evaluate("document.activeElement.tagName === 'TEXTAREA'"))
+                self.assertEqual(len(self.locks()), 2)
 
     # -- Q37: a settled question is one line ------------------------------------------
 
