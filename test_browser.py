@@ -173,6 +173,13 @@ INBOX_CLOSED_THIS_SESSION = "try { sessionStorage.setItem('ck-inbox-closed', '1'
 
 FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
+# The open docked column's width with nothing stored. 1.24.0 replaced the 50vw default (it "ate half of
+# a 27" monitor on first open") with a fixed one, clamped to [320px, 60vw] (DOCK_W_MIN / DOCK_W_MAX_FRAC);
+# the Unreleased fixes after 1.31.0 widened it from 420px to 480px, where the eight-tab strip fits.
+# console.js DOCK_W_DEFAULT and console.css --ck-col. Every docked width the tests use (1024px and up)
+# has 60vw >= 614px, so the clamp never bites and the column is exactly this wide.
+DOCK_COL = 480
+
 
 def _expand(page, qid=None) -> None:
     """CONSOLE-kit/Q37: a locked question is one line until opened; open it (or every one) to reach its controls."""
@@ -267,10 +274,10 @@ class DockTests(unittest.TestCase):
                 self.assertEqual(s["bodyMargin"], "44px", s)          # the board keeps clear of the strip
                 page.click(".ck-dock-strip")
                 s = self._state(page)
-                self.assertEqual(s["panel"], [700, 1400], s)          # one click: a column half the screen
+                self.assertEqual(s["panel"], [1400 - DOCK_COL, 1400], s)  # one click: a column, 1.24's default width
                 self.assertEqual((s["modal"], s["backdrop"]), (None, False), s)
                 self.assertEqual((s["role"], s["inert"]), ("complementary", False), s)  # a landmark
-                self.assertEqual((s["strip"], s["expanded"], s["bodyMargin"]), (None, "true", "700px"), s)
+                self.assertEqual((s["strip"], s["expanded"], s["bodyMargin"]), (None, "true", f"{DOCK_COL}px"), s)
                 self.assertTrue(s["focusInPanel"], s)
                 self.assertFalse(s["overflow"], s)
 
@@ -284,8 +291,8 @@ class DockTests(unittest.TestCase):
                 _wait_for(page, "document.querySelector('.ck-panel').getAttribute('data-open') === 'true'")
                 s = self._state(page)
                 self.assertEqual((s["open"], s["panel"], s["strip"], s["expanded"]),
-                                 (True, [700, 1400], None, "true"), s)
-                self.assertEqual((s["modal"], s["backdrop"], s["bodyMargin"]), (None, False, "700px"), s)
+                                 (True, [1400 - DOCK_COL, 1400], None, "true"), s)
+                self.assertEqual((s["modal"], s["backdrop"], s["bodyMargin"]), (None, False, f"{DOCK_COL}px"), s)
                 page.focus(".ck-panel .ck-close-btn")
                 page.keyboard.press("Escape")
                 self.assertFalse(self._state(page)["open"])
@@ -300,17 +307,20 @@ class DockTests(unittest.TestCase):
                 self.assertEqual((s["open"], s["inboxBtn"], s["backdrop"]), (False, True, False), s)
 
     # Owner, 2026-09-29: "on big monitors can you make it 50% of the screen until
-    # closed". Catches: a fixed-width column, a column whose width and the page's
-    # margin disagree (board text under the column), and a state chip that keeps
-    # its own column beside the question and squeezes the text into a strip.
-    HALF = """() => { const p = document.querySelector('.ck-panel').getBoundingClientRect();
+    # closed"; 1.24.0 reversed that (the 50vw dock "ate half of a 27" monitor on first
+    # open, which operators closed reflexively") for a fixed default the owner can drag,
+    # 480px since the fixes after 1.31.0. Catches: a column that still scales with the
+    # screen, a column whose width and the page's margin disagree (board text under the
+    # column), and a state chip that keeps its own column beside the question and
+    # squeezes the text into a strip.
+    COLUMN = """() => { const p = document.querySelector('.ck-panel').getBoundingClientRect();
       const qs = Array.from(document.querySelectorAll('.ck-panel .ck-q-header')).map(h => {
         const c = h.querySelector('.ck-q-state').getBoundingClientRect(), t = h.querySelector('.ck-q-textcol').getBoundingClientRect();
         return { chipAbove: c.bottom <= t.top + 1, textWide: t.width >= h.getBoundingClientRect().width - 30 }; });
       return { panel: [Math.round(p.left), Math.round(p.right)], margin: getComputedStyle(document.body).marginRight,
                overflow: document.documentElement.scrollWidth > innerWidth, qs }; }"""
 
-    def test_an_open_docked_column_is_half_the_screen(self):
+    def test_an_open_docked_column_has_the_default_width(self):
         for kind in BROWSERS:
             for width in (1024, 1400, 1920):
                 with self.subTest(browser=kind, width=width):
@@ -319,9 +329,9 @@ class DockTests(unittest.TestCase):
                     page.wait_for_selector(".ck-panel .ck-q-header")
                     # the column slides in: measure once it has arrived at the right edge
                     _wait_for(page, "Math.round(document.querySelector('.ck-panel').getBoundingClientRect().right) === innerWidth")
-                    got = page.evaluate(self.HALF)
-                    self.assertEqual(got["panel"], [width // 2, width], got)
-                    self.assertEqual(got["margin"], f"{width // 2}px", got)
+                    got = page.evaluate(self.COLUMN)
+                    self.assertEqual(got["panel"], [width - DOCK_COL, width], got)
+                    self.assertEqual(got["margin"], f"{DOCK_COL}px", got)
                     self.assertFalse(got["overflow"], got)
                     self.assertTrue(got["qs"], got)  # the inbox really shows questions
                     for q in got["qs"]:
@@ -350,7 +360,7 @@ class DockTests(unittest.TestCase):
                 page = self._page(kind, 1400)
                 page.click(".ck-item-btn")
                 s = self._state(page)
-                self.assertEqual((s["panel"], s["modal"], s["backdrop"]), ([700, 1400], None, False), s)
+                self.assertEqual((s["panel"], s["modal"], s["backdrop"]), ([1400 - DOCK_COL, 1400], None, False), s)
                 self.assertEqual(page.get_attribute(".ck-panel", "aria-label"), "Console: LANE.1")
 
     # 0.8.4, owner: messages and agent replies lost their line breaks. The text goes in by
@@ -402,7 +412,7 @@ class DockTests(unittest.TestCase):
                 self.assertEqual((s["modal"], s["backdrop"], s["focusInPanel"]), ("true", True, True), s)
                 page.set_viewport_size({"width": 1400, "height": 800})
                 s = self._state(page)
-                self.assertEqual((s["modal"], s["backdrop"], s["panel"]), (None, False, [700, 1400]), s)
+                self.assertEqual((s["modal"], s["backdrop"], s["panel"]), (None, False, [1400 - DOCK_COL, 1400]), s)
 
 
     def test_shift_tab_leaves_an_open_docked_column(self):
@@ -478,8 +488,12 @@ class DockTests(unittest.TestCase):
                 _Handler.view_fails = True
                 page = self._page(kind, 1400, loaded=False)
                 page.wait_for_timeout(500)
-                self.assertEqual(page.text_content(".ck-dock-strip .ck-inbox-count"), "?")
-                self.assertIn("not loaded", page.get_attribute(".ck-dock-strip", "aria-label"))
+                # 1.24.0: the pre-load "?" became a muted, decorative inbox glyph; never "0", which would
+                # read as "nothing waiting". The label, not the glyph, says the count is unknown.
+                self.assertEqual(page.text_content(".ck-dock-strip .ck-inbox-count"), "✉")
+                self.assertEqual(page.get_attribute(".ck-dock-strip .ck-inbox-glyph", "aria-hidden"), "true")
+                self.assertEqual(page.get_attribute(".ck-dock-strip", "data-loaded"), "false")
+                self.assertEqual(page.get_attribute(".ck-dock-strip", "aria-label"), "Open inbox (loading)")
                 self.assertEqual(page.get_attribute(".ck-dock-strip", "aria-controls"), "ck-panel")
                 _Handler.view_fails = False
 
@@ -558,11 +572,13 @@ class DockTests(unittest.TestCase):
     TOGGLE = """() => { const b = document.querySelector('.ck-sheet-toggle'), t = document.querySelector('.ck-title');
       const back = document.querySelector('.ck-back-btn');
       return { text: b && b.textContent, pressed: b && b.getAttribute('aria-pressed'), title: t && t.textContent,
-               backShown: !!back && getComputedStyle(back).display !== 'none' }; }"""
+               backShown: !!back && getComputedStyle(back).display !== 'none', backLabel: back && back.getAttribute('aria-label') }; }"""
 
     def test_all_answers_is_a_toggle_back_to_the_inbox(self):
-        # Catches: a sheet with no way back on a desktop, where the header's Back button is hidden
-        # (the reported bug), or a toggle that goes somewhere other than the inbox.
+        # Catches: a sheet with no way back on a desktop (the reported bug), a toggle that goes
+        # somewhere other than the inbox, or a header Back that is hidden or leads elsewhere. 0.9.0
+        # stopped hiding the header's Back at desktop widths, so the toggle is no longer the only
+        # way back: both lead to the inbox, at every width.
         for kind in BROWSERS:
             for width, opener in ((1400, ".ck-dock-strip"), (800, ".ck-inbox-btn")):
                 with self.subTest(browser=kind, width=width):
@@ -575,8 +591,7 @@ class DockTests(unittest.TestCase):
                     _wait_for(page, "document.querySelector('.ck-title').textContent.startsWith('Answers')")
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"]), ("Inbox", "true"), got)
-                    if width >= 1024:
-                        self.assertFalse(got["backShown"], "the toggle is the only way back here")
+                    self.assertEqual((got["backShown"], got["backLabel"]), (True, "Back to inbox"), got)
                     page.click(".ck-sheet-toggle")
                     _wait_for(page, "document.querySelector('.ck-title').textContent === 'Inbox'")
                     got = page.evaluate(self.TOGGLE)
@@ -1316,7 +1331,7 @@ class LiveConsoleTests(unittest.TestCase):
         if block_live:  # routes run newest first: every long poll fails, so the page never updates itself
             page.route("**/api/wait*", lambda route: route.abort())
         page.goto(url)
-        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '?'")
+        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
         page.evaluate("window.__notReloaded = true")
         return page
 
@@ -1687,7 +1702,7 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
                     page.reload()
-                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '?'")
+                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
                     page.evaluate("ConsoleKit.openRound(%s)" % json.dumps(f["id"]))
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
@@ -1896,12 +1911,14 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-tabs")
                     self.assertEqual(page.get_attribute(".ck-panel", "data-open"), "true")
                     self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-qid')"), "LANE.1/Q1")
-                    # Opened from the board, the same item keeps the board's Back (narrow screens only).
+                    # Opened from the board, the same item keeps the board's Back, at every width since 0.9.0
+                    # ("the ← Back button no longer hides at desktop widths").
                     page.evaluate("window.ConsoleKit.open('LANE.1')")
                     page.wait_for_selector(".ck-title-id")
                     back = page.locator(".ck-panel .ck-back-btn")
                     self.assertEqual(back.get_attribute("aria-label"), "Back to board")
-                    self.assertEqual(back.is_visible(), width < 400)
+                    self.assertTrue(back.is_visible())
+                    self.assertEqual(back.text_content(), "← Back")
                     self.assertFalse(page.evaluate(OVERFLOW))
                     self.assert_not_reloaded(page)
 
