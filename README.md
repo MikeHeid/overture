@@ -5,28 +5,103 @@
   </picture>
 </h1>
 
-> **Overture is the self-hosted owner-operator layer for AI software
-> development: one web cockpit, behind your own Cloudflare Access, that
-> unifies every AI-coding project you run — Portfolio and cross-project
-> Priority ribbon, Playbooks and Triggers with branching and replay,
-> Command palette and deep links for owner speed, and a full audit
-> trail from trigger log to Markdown export. In a market of AI
-> assistants that generate code, Overture is the trust-first
-> control plane — SHA-256 secret drift checks, sandboxed-iframe
-> visuals with no CDN, closed-set predicate validation, signed
-> releases — that keeps a single operator in command of what gets
-> shipped across many projects without surrendering oversight to a
-> third-party SaaS.
+<p align="center">
+  <strong>Your AI coding agents ask. You answer from one web page.<br>
+  Overture keeps the answers and warns you when the code changes under them.</strong>
+</p>
 
-**Answer your agents' questions from a web page.** An agent working in a
-project asks you structured questions: options, a recommended pick (★), what
-each costs, and the evidence behind it. You answer from any browser, behind
-Cloudflare Access. The next Claude session in that project is told what
-arrived, acts on it, and folds your locked answers into the project's own
-record.
+<p align="center">
+  <img alt="version" src="https://img.shields.io/badge/version-1.31.0-0969da">
+  <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
+  <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
+  <img alt="tests" src="https://img.shields.io/badge/tests-723-2da44e">
+</p>
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/overview-light.png">
+  <img alt="Overture docked beside a project dashboard: waves, phases and lanes on the left, the Inbox of agent questions on the right" src="docs/screenshots/overview-dark.png">
+</picture>
+
+## What is it?
+
+When you run AI coding agents (for example several Claude Code sessions),
+they keep needing **decisions** from you. Which database should we use? How
+many retries? Which region? Today each agent stops and waits in its own
+terminal. Your answer then disappears when the session ends.
+
+**Overture gathers all those questions into one inbox you open in a
+browser**, on your laptop or your phone.
+
+1. **An agent asks.** It lists the options, marks the one it recommends (★),
+   and shows the code that matters.
+2. **You answer.** Tap an option, or answer a whole batch from the keyboard.
+   Lock it when you're sure.
+3. **Every agent remembers it.** Locked answers are saved into your project's
+   own git history. If the code they relied on later changes, the answer is
+   flagged **stale**, so you are never relying on a decision whose code has
+   since changed.
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/question-light.png">
+  <img alt="An agent's question in Overture: three options, the recommended one starred, with a short explanation for each" src="docs/screenshots/question-dark.png">
+</picture>
+
+It docks beside any page you already have. The screenshots show it next to a
+project dashboard: waves, phases and lanes, with a live count of open
+questions on each card. It runs on your own machine behind your own login,
+and nothing goes to a third-party service.
+
+## Who is it for?
+
+- **Solo developers running several AI agents** who are tired of
+  babysitting terminals.
+- **Tech leads** who want a written record of *why* the code is the way it
+  is.
+- **Anyone juggling several projects.** One page shows what is waiting for you
+  across all of them.
+
+## Try it
+
+You need Claude Code and a Cloudflare account. The free tier is enough; it
+provides the login page that protects your inbox.
+
+    /plugin marketplace add MikeHeid/overture
+    /plugin install overture@overture
+    /overture:console-onboard
+
+The last command walks you through the rest, in your project. The full
+details are under [Install](#install).
+
+## Words you'll see
+
+| Word | Plain meaning |
+|---|---|
+| **Question** | Something an agent needs you to decide, with options and a recommended pick (★). |
+| **Lock** | "I'm sure." A locked answer becomes a lasting rule that every agent follows. |
+| **Ruling** | A locked answer. |
+| **Stale** | The code a ruling relied on has changed. Take another look. |
+| **Steward** | The one agent session that collects your answers and writes them into the project. |
+| **Round** | A batch of related questions you answer in one go. |
+| **Seats** | Optional advisor agents (security, UX, devil's advocate) that weigh in before you decide. They never decide for you. |
+
+## Where it's going
+
+| Stage | What it means for you | Status |
+|---|---|---|
+| **Wave 1: one person, many agents** | Inbox, rulings, stale warnings, multi-project view, automation | ✅ Shipped (v0.7 → v1.31) |
+| **Wave 2: faster setup, stronger rules** | Install in under 10 minutes without Cloudflare; a broken ruling can block a bad merge | 🟡 ~15% |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~10% |
+| **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | ⚪ ~5% |
+
+The detailed roadmap, with five development lanes, progress estimates and the
+reasoning behind them, is in [docs/STRATEGY.md](docs/STRATEGY.md). That
+document also covers what makes Overture hard to copy and why it could change
+how teams build with AI.
+
+---
 
 This README describes the kit as it is today. [CHANGELOG.md](CHANGELOG.md)
-says what each release added.
+says what each release added. Everything below is the full reference.
 
 ## Install
 
@@ -449,10 +524,23 @@ either side. A few traps worth knowing:
     .venv/bin/python test_build.py
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py   # needs playwright + browsers
 
+Three `test_kit.py` compatibility tests start older released kits, so they
+need the `v0.8.7` and `v0.8.8` tags; in a shallow or tag-less clone run
+`git fetch --tags` first, or they fail and name the missing tag.
+
 `test_server.py`'s syscall tests need `strace`, and FAIL when it is missing,
 so they cannot quietly not run. On a machine without it, set
 `OVERTURE_NO_STRACE=1` to skip them, and each is then reported, by name, as
 not run.
+
+To refresh the README screenshots after a UI change (needs Playwright and
+Chromium), run:
+
+    python3 docs/demo/screenshots.py
+
+The script renders the real console over `docs/demo/showcase.html`, an example
+dashboard with waves, phases and lanes, against a seeded store, in dark and
+light themes.
 
 To build the release zip:
 
