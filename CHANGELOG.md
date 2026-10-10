@@ -3025,3 +3025,26 @@ example dashboard.
   `gh release create` commands. A rebuilt `overture-1.31.0.zip`
   passes `claude plugin validate --strict` and installs as
   `overture@overture-local`.
+- **"Shipped:" and "Mentioned in" links work on anchored rulings.**
+  The backlink scan built the view with `{}` where the function that
+  checks rulings belongs. The first question with a `valid_if`
+  condition raised "'dict' object is not callable", the error was
+  swallowed, and every project with anchored rulings showed no PR or
+  issue links at all.
+- **Mermaid visuals render.** `/api/visual-render` compared the stored
+  format to `"mmd"`, the file suffix, but visuals are stored as
+  `"mermaid"`. So every diagram an agent drew answered 400, and the
+  owner saw an empty frame. This was broken since at least 1.0.0.
+- **Diagrams are styled and fill their frame.** The diagram frame's
+  CSP had `style-src 'nonce-…' 'unsafe-inline'`, and browsers ignore
+  `'unsafe-inline'` when a nonce is present. That refused the `<style>`
+  Mermaid injects, so diagrams drew as black boxes with dark edges.
+  `style-src` is now `'unsafe-inline'` alone, which is safe in an
+  opaque-origin frame with no network. Mermaid also follows the
+  light or dark scheme now. A diagram fits its frame on load, where it
+  used to collapse to a small size, and ⬚ re-fits it.
+- **README tour.** Each capability in "What you can do" has a
+  screenshot, and five GIFs show the interactive ones: answering a
+  round, Lock all, a stale ruling's diff, the command palette, and the
+  status flowchart. `docs/demo/screenshots.py` now drives the real
+  server.
