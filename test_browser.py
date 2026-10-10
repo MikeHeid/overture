@@ -164,6 +164,13 @@ STATE = """() => {
 }"""
 
 
+# 0.9.14 opens the inbox by default on a docked (wide) screen once the first /view lands, unless this
+# tab's session already closed it (sessionStorage `ck-inbox-closed`). The tests below drive the panel
+# from collapsed -- the strip, the button, an item badge -- so they start in the state an owner who
+# has closed it once is in: deterministic, and no race with the default-open landing mid-test.
+# The default-open itself is held by DockTests.test_a_docked_inbox_opens_by_default_until_closed.
+INBOX_CLOSED_THIS_SESSION = "try { sessionStorage.setItem('ck-inbox-closed', '1'); } catch (e) {}"
+
 FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 
@@ -173,6 +180,25 @@ def _expand(page, qid=None) -> None:
     while page.locator(sel).count():
         page.locator(sel).first.click()
 
+
+def _wait_for(page, expression: str, arg=None, timeout: float = 30000) -> None:
+    """`page.wait_for_function`, but under the console's CSP. Playwright polls that one by calling
+    `globalThis.eval` inside the page, which the 1.31 `script-src 'nonce-...'` policy refuses (as it
+    should: no 'unsafe-eval'), so every wait not already true on its first look failed with an
+    EvalError. `page.evaluate` goes over the devtools protocol, which the page's CSP does not govern.
+    Same contract: `expression` is an expression or a function of `arg`; a throw propagates."""
+    from playwright.sync_api import Error, TimeoutError
+    deadline = time.monotonic() + timeout / 1000
+    while True:
+        try:
+            if page.evaluate(expression, arg):
+                return
+        except Error as e:  # a navigation tore the context down mid-call: look again in the new one
+            if "context was destroyed" not in str(e) and "navigat" not in str(e):
+                raise
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"_wait_for: {timeout:.0f}ms exceeded waiting for {expression}")
+        page.wait_for_timeout(25)
 
 def _playwright():
     try:
@@ -204,16 +230,18 @@ class DockTests(unittest.TestCase):
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
-    def _page(self, kind: str, width: int, loaded: bool = True):
+    def _page(self, kind: str, width: int, loaded: bool = True, fresh_session: bool = False):
         browser = getattr(self.pw, kind).launch()
         self.addCleanup(browser.close)
         page = browser.new_page(viewport={"width": width, "height": 800})
+        if not fresh_session:
+            page.add_init_script(INBOX_CLOSED_THIS_SESSION)
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         self.addCleanup(lambda: self.assertEqual(errors, [], f"{kind}: page errors"))
         page.goto(self.url)
         if loaded:
-            page.wait_for_function("document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
+            _wait_for(page, "document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
         return page
 
     def _tab_path(self, page, presses: int) -> list[bool]:
@@ -246,6 +274,31 @@ class DockTests(unittest.TestCase):
                 self.assertTrue(s["focusInPanel"], s)
                 self.assertFalse(s["overflow"], s)
 
+    def test_a_docked_inbox_opens_by_default_until_closed(self):
+        # 0.9.14. Catches: the default-open lost (a fresh docked page left collapsed), applied to the
+        # overlay too (a modal over the page nobody asked for), or a close that does not stick for the
+        # session (the inbox springs open again on the next load).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind, width=1400):
+                page = self._page(kind, 1400, fresh_session=True)
+                _wait_for(page, "document.querySelector('.ck-panel').getAttribute('data-open') === 'true'")
+                s = self._state(page)
+                self.assertEqual((s["open"], s["panel"], s["strip"], s["expanded"]),
+                                 (True, [700, 1400], None, "true"), s)
+                self.assertEqual((s["modal"], s["backdrop"], s["bodyMargin"]), (None, False, "700px"), s)
+                page.focus(".ck-panel .ck-close-btn")
+                page.keyboard.press("Escape")
+                self.assertFalse(self._state(page)["open"])
+                page.reload()
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
+                s = self._state(page)
+                self.assertEqual((s["open"], s["strip"], s["expanded"]), (False, [1356, 1400], "false"), s)
+            with self.subTest(browser=kind, width=800):
+                page = self._page(kind, 800, fresh_session=True)
+                page.wait_for_timeout(500)                       # long enough for a default-open to land
+                s = self._state(page)
+                self.assertEqual((s["open"], s["inboxBtn"], s["backdrop"]), (False, True, False), s)
+
     # Owner, 2026-09-29: "on big monitors can you make it 50% of the screen until
     # closed". Catches: a fixed-width column, a column whose width and the page's
     # margin disagree (board text under the column), and a state chip that keeps
@@ -265,7 +318,7 @@ class DockTests(unittest.TestCase):
                     page.click(".ck-item-btn")  # an item's view, where question cards are drawn
                     page.wait_for_selector(".ck-panel .ck-q-header")
                     # the column slides in: measure once it has arrived at the right edge
-                    page.wait_for_function("Math.round(document.querySelector('.ck-panel').getBoundingClientRect().right) === innerWidth")
+                    _wait_for(page, "Math.round(document.querySelector('.ck-panel').getBoundingClientRect().right) === innerWidth")
                     got = page.evaluate(self.HALF)
                     self.assertEqual(got["panel"], [width // 2, width], got)
                     self.assertEqual(got["margin"], f"{width // 2}px", got)
@@ -519,13 +572,13 @@ class DockTests(unittest.TestCase):
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"], got["title"]), ("All answers", "false", "Inbox"), got)
                     page.click(".ck-sheet-toggle")
-                    page.wait_for_function("document.querySelector('.ck-title').textContent.startsWith('Answers')")
+                    _wait_for(page, "document.querySelector('.ck-title').textContent.startsWith('Answers')")
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"]), ("Inbox", "true"), got)
                     if width >= 1024:
                         self.assertFalse(got["backShown"], "the toggle is the only way back here")
                     page.click(".ck-sheet-toggle")
-                    page.wait_for_function("document.querySelector('.ck-title').textContent === 'Inbox'")
+                    _wait_for(page, "document.querySelector('.ck-title').textContent === 'Inbox'")
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"]), ("All answers", "false"), got)
                     focused = page.evaluate("document.activeElement === document.querySelector('.ck-title')")
@@ -559,7 +612,7 @@ class DockTests(unittest.TestCase):
                     page = self._page(kind, 1400)
                     page.click(".ck-dock-strip")
                     page.wait_for_selector(".ck-status-bar .ck-listening")
-                    page.wait_for_function("document.querySelector('.ck-listening').getAttribute('data-state') === %r"
+                    _wait_for(page, "document.querySelector('.ck-listening').getAttribute('data-state') === %r"
                                            % state)
                     got = page.evaluate(self.LISTENING)
                     self.assertTrue(got["text"].startswith(words), got)
@@ -572,7 +625,7 @@ class DockTests(unittest.TestCase):
                 page = self._page(kind, 1400)
                 page.emulate_media(reduced_motion="reduce")
                 page.click(".ck-dock-strip")
-                page.wait_for_function("(document.querySelector('.ck-listening') || {}).getAttribute && "
+                _wait_for(page, "(document.querySelector('.ck-listening') || {}).getAttribute && "
                                        "document.querySelector('.ck-listening').getAttribute('data-state') === 'listening'")
                 self.assertEqual(page.evaluate(self.LISTENING)["anim"], "none")
 
@@ -637,7 +690,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertNotEqual(before, want)  # the change is there to be made
                 _Handler.board = BOARD_B
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
                 self.assertEqual(page.evaluate(SIGNATURE), want)
 
     def test_an_unchanged_board_touches_nothing(self):
@@ -688,11 +741,11 @@ class LiveBoardTests(unittest.TestCase):
                     page.wait_for_selector(".ck-board-stale", timeout=5000)
                     if dock_open:
                         page.click(".ck-dock-strip")
-                        page.wait_for_function("document.documentElement.classList.contains('ck-dock-open')")
+                        _wait_for(page, "document.documentElement.classList.contains('ck-dock-open')")
                     # The lane board sets `scroll-behavior: smooth`, so a plain scrollTo animates:
                     # jump instead, then wait for the scroll itself, never a fixed time (PR #177 review).
                     page.evaluate("window.scrollTo({top: 2500, behavior: 'instant'})")
-                    page.wait_for_function("scrollY > 1000", timeout=5000)
+                    _wait_for(page, "scrollY > 1000", timeout=5000)
                     page.wait_for_timeout(250)  # the docked column's margin transition
                     got = page.evaluate(self.HIT)
                     self.assertGreater(got["scrolled"], 1000)  # the page really scrolled
@@ -721,7 +774,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertEqual(page.evaluate("window.__boardChanged"), 0)
                 _Handler.board_status = 200
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
 
     def test_a_value_that_is_not_a_percentage_never_reaches_a_style(self):
         # "150" is valid CSS, so only console.js's own check stops it; "50%;..." the
@@ -748,7 +801,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertTrue(page.evaluate(hidden))
                 _Handler.board = BOARD_B
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
                 self.assertFalse(page.evaluate(hidden))
 
     def test_a_page_without_live_marks_never_asks(self):
@@ -846,7 +899,7 @@ class AnswerFollowUpTests(unittest.TestCase):
                         card.screenshot(path=str(Path(os.environ["OVERTURE_SHOTS"]) / f"followup-{kind}-{width}.png"))
                     self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
                     form.get_by_role("button", name="Send follow-up").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-followup').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-followup').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -953,7 +1006,7 @@ class DeliberateOpenQuestionTests(unittest.TestCase):
                     form.get_by_label("Note for the seats (optional)").fill("Which survives a second site?")
                     self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
                     form.get_by_role("button", name="Send deliberation before answering").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-deliberate').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-deliberate').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -1094,7 +1147,7 @@ class WhyStaleTests(unittest.TestCase):
                             path=str(Path(os.environ["OVERTURE_SHOTS"]) / f"why-stale-{kind}-{width}.png"))
                     page.locator("button[aria-label^='Re-lock this answer as it stands']").click()
                     page.get_by_role("button", name="Re-lock as it stands").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-confirm').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-confirm').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -1241,6 +1294,7 @@ class LiveConsoleTests(unittest.TestCase):
         self.addCleanup(browser.close)
         ctx = browser.new_context(viewport={"width": width, "height": 900},
                                   reduced_motion="reduce" if reduced else "no-preference")
+        ctx.add_init_script(INBOX_CLOSED_THIS_SESSION)
         page = ctx.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -1262,7 +1316,7 @@ class LiveConsoleTests(unittest.TestCase):
         if block_live:  # routes run newest first: every long poll fails, so the page never updates itself
             page.route("**/api/wait*", lambda route: route.abort())
         page.goto(url)
-        page.wait_for_function("document.querySelector('.ck-inbox-count').textContent !== '?'")
+        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '?'")
         page.evaluate("window.__notReloaded = true")
         return page
 
@@ -1290,7 +1344,7 @@ class LiveConsoleTests(unittest.TestCase):
                 code, out = self.SV.agent_request(self.cfg.socket, "POST", "/items",
                                                   {"items": dict(LIVE_ITEMS), "seed_questions": [], "board": None})
                 self.assertEqual(code, 200, out)
-                page.wait_for_function("document.querySelector('.ck-items-note') === null", timeout=10000)
+                _wait_for(page, "document.querySelector('.ck-items-note') === null", timeout=10000)
                 self.assert_not_reloaded(page)
 
     def test_the_prs_tab_says_why_it_is_empty_then_renders_hostile_titles_as_text(self):
@@ -1354,7 +1408,7 @@ class LiveConsoleTests(unittest.TestCase):
             with self.subTest(browser=kind):
                 url = self.serve(page=html)
                 page = self.page(kind, 1280, url)
-                page.wait_for_function("document.body.dataset.pageScript === 'ran'", timeout=10000)
+                _wait_for(page, "document.body.dataset.pageScript === 'ran'", timeout=10000)
                 self.open_inbox(page, 1280)   # the console's own script built its dock and inbox
                 self.assertIn("(staged by the steward, published by you)",
                               page.locator(".ck-page-source").text_content())
@@ -1385,7 +1439,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertTrue(page.evaluate("document.body.dataset.pageScript === undefined"))
                 with page.expect_navigation():
                     page.click("dialog.ck-page-dialog[open] .ck-page-use")   # the dialog's own button publishes
-                page.wait_for_function("document.body.dataset.pageScript === 'ran'", timeout=10000)
+                _wait_for(page, "document.body.dataset.pageScript === 'ran'", timeout=10000)
                 self.assertEqual(page.locator("#staged-mark").count(), 1)   # published: served, its script runs
                 self.assertEqual(page.locator(".ck-page-proposed-line").count(), 0)
                 self.assertEqual(page.locator(".ck-page-waiting, dialog.ck-page-dialog").count(), 0)   # nothing left
@@ -1481,7 +1535,7 @@ class LiveConsoleTests(unittest.TestCase):
                         page.keyboard.press("Escape")
                     else:
                         page.click("dialog.ck-page-dialog[open] .ck-page-not-now")
-                    page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                    _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                     self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-page-waiting')"),
                                     close)
                     self.assertEqual((self.cfg.state / "page-snapshot.json").read_bytes(), self.published,
@@ -1491,7 +1545,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.open_inbox(page, 1280)
                 self.open_page_dialog(page)
                 page.keyboard.press("Escape")
-                page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                 self.assertEqual(page.locator(".ck-panel").get_attribute("data-open"), "true")   # inbox untouched
 
     def test_the_review_dialog_never_opens_on_load(self):
@@ -1540,13 +1594,13 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_timeout(1500)
                     self.assertEqual(page.locator(chip).text_content(), "")  # the owner's own write is not "new"
                     self.ask(2)
-                    page.wait_for_function(f"document.querySelector('{chip}').textContent === '1 new'", timeout=10000)
-                    page.wait_for_function("document.querySelector('.ck-inbox-count').textContent === '2'")
+                    _wait_for(page, f"document.querySelector('{chip}').textContent === '1 new'", timeout=10000)
+                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent === '2'")
                     label = page.locator(".ck-dock-strip" if width >= 1024 else ".ck-inbox-btn").get_attribute("aria-label")
                     self.assertIn("1 new since you last looked", label)
                     self.open_inbox(page, width)
                     page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q2']")
-                    page.wait_for_function(f"document.querySelector('{chip}').textContent === ''")
+                    _wait_for(page, f"document.querySelector('{chip}').textContent === ''")
                     # With the inbox open, the next question is drawn in place, and marked as arriving.
                     self.ask(3)
                     page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q3'].ck-arrived", timeout=10000)
@@ -1566,7 +1620,7 @@ class LiveConsoleTests(unittest.TestCase):
                     page.click("#ck-tab-feed")
                     page.wait_for_selector(".ck-feed-row[data-kind='question']")
                     self.ask(2)
-                    page.wait_for_function(
+                    _wait_for(page, 
                         "(() => { const r = document.querySelector('.ck-feed-row');"
                         " return r && r.textContent.includes('LANE.1/Q2') && r.dataset.kind === 'question'; })()",
                         timeout=10000)
@@ -1575,7 +1629,7 @@ class LiveConsoleTests(unittest.TestCase):
                                                       "nonce": "feedanswer1"}, "owner")
                     self.console.write("lock", {"qid": "LANE.1/Q1", "answer": a["id"], "nonce": "feedlock001"}, "owner")
                     page.select_option("#ck-feed-kind", "lock")
-                    page.wait_for_function("document.querySelectorAll('.ck-feed-row').length === 1"
+                    _wait_for(page, "document.querySelectorAll('.ck-feed-row').length === 1"
                                            " && document.querySelector('.ck-feed-row').dataset.kind === 'lock'",
                                            timeout=10000)
                     self.ask(3)  # a live update keeps the filter: still only locks
@@ -1620,10 +1674,10 @@ class LiveConsoleTests(unittest.TestCase):
                     page.fill("#ck-round-words", "Record it; the cap moves next quarter.")
                     page.locator(".ck-round-options input[value='record']").focus()
                     page.keyboard.press("ArrowRight")
-                    page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 3')")
+                    _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 3')")
                     page.keyboard.press("1")
                     page.keyboard.press("ArrowLeft")  # back: the draft is still there
-                    page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 1 of 3')")
+                    _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 1 of 3')")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
                     self.assertEqual(page.input_value("#ck-round-words"), "Record it; the cap moves next quarter.")
                     self.assertEqual(self.console.store.head("LANE.1/Q1"), None)  # nothing written by a pick
@@ -1633,7 +1687,7 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
                     page.reload()
-                    page.wait_for_function("document.querySelector('.ck-inbox-count').textContent !== '?'")
+                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '?'")
                     page.evaluate("ConsoleKit.openRound(%s)" % json.dumps(f["id"]))
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
@@ -1683,7 +1737,7 @@ class LiveConsoleTests(unittest.TestCase):
                 page.fill("#ck-round-words", "my reason for Q1")
                 page.locator(".ck-round-options input[value='fix']").focus()
                 page.keyboard.press("ArrowRight")
-                page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 2')")
+                _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 2')")
                 page.keyboard.press("2")
                 page.get_by_role("button", name="Review all").click()
                 # Meanwhile, another tab locks Q1 with a different answer.
@@ -1702,7 +1756,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertEqual(saved["drafts"]["LANE.1/Q2"]["picks"], ["record"])
                 # Brought up to date, the form shows Q1 as locked, and Lock all locks the rest.
                 page.evaluate("ConsoleKit.refresh()")
-                page.wait_for_function("document.querySelector('.ck-review-row').dataset.status === 'locked'")
+                _wait_for(page, "document.querySelector('.ck-review-row').dataset.status === 'locked'")
                 page.click(".ck-lock-all")
                 page.wait_for_selector(".ck-result-heading")
                 self.assertEqual(self.console.store.head("LANE.1/Q2")["picks"], ["record"])
@@ -1732,7 +1786,7 @@ class LiveConsoleTests(unittest.TestCase):
                                                  "nonce": "chatreply01"})
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']", timeout=10000)
                     self.assertIn("Green at abc123.", page.locator(".ck-chat-msg[data-by='agent']").text_content())
-                    page.wait_for_function("!document.querySelector('#ck-tab-chat .ck-tab-note')")  # no longer waiting
+                    _wait_for(page, "!document.querySelector('#ck-tab-chat .ck-tab-note')")  # no longer waiting
                     self.assertFalse(page.evaluate(OVERFLOW))
                     if os.environ.get("OVERTURE_SHOTS"):
                         page.locator(".ck-panel").screenshot(
@@ -1796,7 +1850,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertEqual(len(self.waits), n)
                 page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'});"
                               "document.dispatchEvent(new Event('visibilitychange'))")
-                page.wait_for_function("document.querySelector('.ck-inbox-count').textContent === '1'", timeout=10000)
+                _wait_for(page, "document.querySelector('.ck-inbox-count').textContent === '1'", timeout=10000)
                 # A server that fails: the loop backs off (2 s, 4 s, ...), never a tight loop.
                 page.route("**/api/wait*", lambda r: r.fulfill(status=503, body="{}", content_type="application/json"))
                 page.wait_for_timeout(300)
@@ -1811,7 +1865,7 @@ class LiveConsoleTests(unittest.TestCase):
                 url = self.serve()
                 page = self.page(kind, 1280, url, reduced=True)
                 self.ask(1)
-                page.wait_for_function("document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
                                        timeout=10000)
                 names = page.evaluate("""() => [document.querySelector('.ck-dock-strip .ck-new-count'),
                     document.querySelector('.ck-item-btn .ck-ring-arc')].map(e => {
@@ -1883,7 +1937,7 @@ class LiveConsoleTests(unittest.TestCase):
                                      ["LANE.1/Q1", "LANE.1/Q2"])
                     self.assertFalse(page.evaluate(OVERFLOW))
                     page.click(".ck-lock-answered-go")
-                    page.wait_for_function(
+                    _wait_for(page, 
                         "document.querySelectorAll(\".ck-q-state[data-state='locked']\").length === 2", timeout=10000)
                     self.assertEqual(locks(), ["LANE.1/Q1", "LANE.1/Q2"])  # Q3, unanswered, is not locked
                     self.assertEqual(page.locator(".ck-lock-answered-open").count(), 0)
@@ -2053,7 +2107,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertTrue(page.evaluate("document.querySelector('dialog.ck-page-dialog').matches(':modal')"))
                 self.assertTrue(page.evaluate(LiveConsoleTests.IN_DIALOG))
                 page.keyboard.press("Escape")
-                page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-board-show-proposal')"))
                 self.assert_not_reloaded(page)   # reviewing the proposal publishes nothing
 
@@ -2172,7 +2226,7 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.shot(page, "next-step-refine", kind, width)
                     self.assertFalse(page.evaluate(OVERFLOW))
                     form.get_by_role("button", name="Start the refine").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-step-form').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-step-form').length === 0")
                     [f] = self.forks()
                     self.assertEqual({k: f.get(k) for k in ("intent", "step", "about_qid", "mode", "roles", "text")},
                                      {"intent": "fork", "step": "refine", "about_qid": "LANE.1/Q1", "mode": "tighten",
@@ -2222,11 +2276,11 @@ class NextStepAndVisualTests(unittest.TestCase):
                         return form
 
                     roar_once()
-                    page.wait_for_function("document.querySelectorAll('.ck-followup').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-followup').length === 0")
                     [first] = self.forks()
                     self.assertEqual(first["roles"], ["roar"])
                     form = roar_once()
-                    page.wait_for_function("document.querySelector('.ck-followup .ck-error-msg').textContent !== ''")
+                    _wait_for(page, "document.querySelector('.ck-followup .ck-error-msg').textContent !== ''")
                     err = form.locator(".ck-error-msg").text_content()
                     self.assertIn(first["id"], err)
                     self.assertIn("at most once per lock", err)
@@ -2269,7 +2323,7 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.assertEqual(page.evaluate("window.__msgs"), [])
                     self.assertEqual(page.locator("#mock").count(), 0)            # nothing of it in the page itself
                     code = page.locator(".ck-visual[data-format='mermaid'] .ck-visual-code")
-                    page.wait_for_function("document.querySelector(\".ck-visual[data-format='mermaid'] "
+                    _wait_for(page, "document.querySelector(\".ck-visual[data-format='mermaid'] "
                                            ".ck-visual-code\").textContent.startsWith('graph TD')")
                     self.assertEqual(code.text_content(), MERMAID)                  # as text, markup and all
                     self.assertEqual(code.locator("img").count(), 0)
@@ -2329,7 +2383,7 @@ class InboxUXTests(unittest.TestCase):
         page.wait_for_selector(".ck-questions-heading")
 
     def said(self, page, text, timeout=3000):
-        page.wait_for_function("t => document.querySelector('.ck-live').textContent.includes(t)", arg=text,
+        _wait_for(page, "t => document.querySelector('.ck-live').textContent.includes(t)", arg=text,
                                timeout=timeout)
 
     def ask_as(self, n, agent, item="LANE.1", at=None, **over):
@@ -2365,7 +2419,7 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(3500)
                 self.assertEqual(self.locks(), [], "the lock reached the store before the countdown ended")
                 self.assertIn(page.locator(".ck-lock-left").text_content(), ("Locking in 2 s", "Locking in 1 s"))
-                page.wait_for_function("document.querySelector('.ck-lock-countdown') === null", timeout=6000)
+                _wait_for(page, "document.querySelector('.ck-lock-countdown') === null", timeout=6000)
                 self.assertTrue(self.locked("LANE.1/Q1"))
                 self.assertEqual(len(self.locks()), 1)
                 self.said(page, "Locked.")
@@ -2478,7 +2532,7 @@ class InboxUXTests(unittest.TestCase):
                     page.wait_for_timeout(200)   # not time.sleep: the sync route relaying POSTs runs only inside a Playwright call
                 self.assertTrue(self.locked("LANE.1/Q1"), page.evaluate("document.querySelector('.ck-live').textContent"))
                 # Not redrawn, yet not left saying "Locking in 1 s" over a question that is locked.
-                page.wait_for_function("document.querySelector('.ck-lock-left').textContent === 'Locked.'")
+                _wait_for(page, "document.querySelector('.ck-lock-left').textContent === 'Locked.'")
                 self.assertEqual(page.locator(".ck-lock-undo").get_attribute("aria-disabled"), "true")
                 self.assertEqual(box.input_value(), "half a thought")
                 self.assertTrue(page.evaluate("document.activeElement.tagName === 'TEXTAREA'"))
@@ -2558,7 +2612,7 @@ class InboxUXTests(unittest.TestCase):
                     page.wait_for_selector(".ck-send-bar", timeout=6000)
                     self.assertEqual(page.locator(".ck-send-bar-count").text_content(), "1 answered · 2 left")
                     self.answer("LANE.1/Q2", pick="leave")
-                    page.wait_for_function("document.querySelector('.ck-send-bar-count').textContent === "
+                    _wait_for(page, "document.querySelector('.ck-send-bar-count').textContent === "
                                            "'2 answered · 1 left'", timeout=6000)
                     self.assertEqual(page.get_by_role("button", name="Answers are in: process them").count(), 0)
                     # Under the panel's header, never covered: what is drawn at its centre is the bar.
@@ -2574,7 +2628,7 @@ class InboxUXTests(unittest.TestCase):
                     self.assertLess(geo["top"], 200, geo)
                     self.assertEqual([b for b in self.bell() if b.get("intent") == "process"], [])
                     page.click(".ck-send-bar-go")
-                    page.wait_for_function("document.querySelector('.ck-send-bar') === null", timeout=6000)
+                    _wait_for(page, "document.querySelector('.ck-send-bar') === null", timeout=6000)
                     sent = [r for r in self.console.store.records()
                             if r["type"] == "message" and r.get("intent") == "process"]
                     self.assertEqual([(r["item"], r["text"], r["by"]) for r in sent],
@@ -2584,7 +2638,7 @@ class InboxUXTests(unittest.TestCase):
                     self.assertFalse(page.evaluate("document.activeElement === document.body"))
                     # The next answer brings it back, counting only what came after the send.
                     self.answer("LANE.1/Q3")
-                    page.wait_for_function("document.querySelector('.ck-send-bar-count') && document.querySelector("
+                    _wait_for(page, "document.querySelector('.ck-send-bar-count') && document.querySelector("
                                            "'.ck-send-bar-count').textContent === '1 answered · 0 left'", timeout=6000)
 
     # -- Q34: a single pick moves on ----------------------------------------------------
@@ -2611,19 +2665,19 @@ class InboxUXTests(unittest.TestCase):
                 count = "document.querySelector('.ck-round-count').textContent"
                 at = lambda n: page.evaluate(count + f".startsWith('Question {n} of 5')")
                 page.click(".ck-round-dot >> nth=1")   # pick Q2 first: it moves on to Q3, the next unanswered
-                page.wait_for_function(count + ".startsWith('Question 2 of 5')")
+                _wait_for(page, count + ".startsWith('Question 2 of 5')")
                 # An ↑/↓ that changed nothing (its default prevented) must not make the next click a "walk".
                 page.eval_on_selector(".ck-round-options input[value='fix']", """r => {
                     for (const type of ['keydown', 'keyup'])
                         r.dispatchEvent(new KeyboardEvent(type, {key: 'ArrowDown', bubbles: true}));
                 }""")
                 page.click(".ck-round-options input[value='leave']")
-                page.wait_for_function(count + ".startsWith('Question 3 of 5')", timeout=3000)
+                _wait_for(page, count + ".startsWith('Question 3 of 5')", timeout=3000)
                 page.click(".ck-round-dot >> nth=0")
-                page.wait_for_function(count + ".startsWith('Question 1 of 5')")
+                _wait_for(page, count + ".startsWith('Question 1 of 5')")
                 page.click(".ck-round-options input[value='fix']")
                 # Q2 is picked already: the next UNANSWERED is Q3.
-                page.wait_for_function(count + ".startsWith('Question 3 of 5')", timeout=3000)
+                _wait_for(page, count + ".startsWith('Question 3 of 5')", timeout=3000)
                 self.said(page, "Moved on to question 3 of 5")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-round-qtext')"))
                 # Q3 is multi: a pick never moves (Q4 and Q5 are still open, so a move had somewhere to go).
@@ -2631,16 +2685,16 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(900)
                 self.assertTrue(at(3))
                 page.click(".ck-round-dot >> nth=3")
-                page.wait_for_function(count + ".startsWith('Question 4 of 5')")
+                _wait_for(page, count + ".startsWith('Question 4 of 5')")
                 # A step change puts focus on the question text in the next animation frame: wait for that, or
                 # it lands after the radio is focused below and the ↓ goes to the heading (a flake, 1 in 4).
-                page.wait_for_function("document.activeElement && document.activeElement.classList.contains("
+                _wait_for(page, "document.activeElement && document.activeElement.classList.contains("
                                        "'ck-round-qtext')")
                 # ↑/↓ walk Q4's options without moving on, though Q5 is open.
                 page.locator(".ck-round-options input[value='fix']").focus()
-                page.wait_for_function("document.activeElement && document.activeElement.value === 'fix'")
+                _wait_for(page, "document.activeElement && document.activeElement.value === 'fix'")
                 page.keyboard.press("ArrowDown")
-                page.wait_for_function("document.querySelector(\".ck-round-options input[value='record']\").checked")
+                _wait_for(page, "document.querySelector(\".ck-round-options input[value='record']\").checked")
                 page.wait_for_timeout(900)   # ADVANCE_MS is 400: a move would have happened by now
                 self.assertTrue(at(4))
                 # Commenting on Q4, then a pick: it stays.
@@ -2649,7 +2703,7 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(900)
                 self.assertTrue(at(4))
                 page.click(".ck-round-dot >> nth=4")
-                page.wait_for_function(count + ".startsWith('Question 5 of 5')")
+                _wait_for(page, count + ".startsWith('Question 5 of 5')")
                 # Every question picked now: a pick moves nowhere, and never onto the review page.
                 page.click(".ck-round-options input[value='fix']")
                 self.said(page, "Every question has a pick")
@@ -2803,7 +2857,7 @@ class ScanUITests(unittest.TestCase):
                 go = page.locator(".ck-scan-all-go")
                 self.assertEqual(go.text_content(), "Scan all stale (2)")
                 go.dblclick()
-                page.wait_for_function("!document.querySelector('.ck-scan-all-go')")
+                _wait_for(page, "!document.querySelector('.ck-scan-all-go')")
                 self.said(page, "Scan asked for 2 stale rulings")
                 self.assertEqual([(s["qids"], s["locks"]) for s in self.scans()],
                                  [([self.q1, self.q2], [self.l1, self.l2])])
