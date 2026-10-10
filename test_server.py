@@ -1991,6 +1991,22 @@ class Phase4Tests(_Live, unittest.TestCase):
         self.assertTrue(h["content-type"].startswith("text/plain"))
         self.assertIn("sandbox", h["content-security-policy"])
 
+    def test_a_mermaid_visual_renders_as_a_diagram_and_an_html_mock_does_not(self):
+        # Catches: visual-render checking the file suffix ("mmd") instead of the record's format
+        # ("mermaid"), which answered 400 for every Mermaid visual since 1.0.0.
+        req = self.visual_request()
+        code, out = self.post_visual(req["id"], content="graph TD\n  A-->B\n", fmt="mermaid")
+        self.assertEqual(code, 200, out)
+        code, h, body = self.raw(f"/api/visual-render?id={out['record']['id']}")
+        self.assertEqual(code, 200, body)
+        self.assertTrue(h["content-type"].startswith("text/html"))
+        self.assertIn("script-src 'nonce-", h["content-security-policy"])
+        self.assertIn(b"A--&gt;B", body)                  # the source, escaped into the wrapper
+        code, out = self.post_visual(req["id"])
+        self.assertEqual(code, 200, out)
+        code, _h, _body = self.raw(f"/api/visual-render?id={out['record']['id']}")
+        self.assertEqual(code, 400)
+
     def test_a_refused_visual_writes_no_file(self):
         # Catches: files written before the store's rules run (a refused visual would still land in
         # the project), and an oversized visual cut to fit.

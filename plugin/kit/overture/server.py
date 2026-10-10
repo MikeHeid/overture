@@ -1808,7 +1808,7 @@ class Console:
         rec = self.store.get(rid)
         if rec is None or rec["type"] != "visual":
             raise RequestError(404, f"no visual {rid}")
-        if rec["format"] != "mmd":
+        if rec["format"] != "mermaid":   # the record's format; .mmd is only the file's suffix
             raise RequestError(400, "visual-render is for Mermaid visuals; HTML mocks are served from /api/visual")
         try:
             source = VIS.read(self.cfg.state, rec).decode("utf-8", errors="replace")

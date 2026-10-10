@@ -1147,7 +1147,7 @@ class WhyStaleTests(unittest.TestCase):
                     page.goto(self.url)
                     page.click(".ck-item-btn")
                     page.wait_for_selector(".ck-stale-banner")
-                    why = page.locator("button[aria-label^='Why is this stale']")
+                    why = page.locator("button[aria-label^='See what changed under this ruling']")
                     why.focus()
                     page.keyboard.press("Enter")
                     page.wait_for_selector(".ck-why-diff")
@@ -1204,7 +1204,7 @@ class WhyStaleTests(unittest.TestCase):
                 page.goto(self.url)
                 page.click(".ck-item-btn")
                 page.wait_for_selector(".ck-stale-banner")
-                page.locator("button[aria-label^='Why is this stale']").click()
+                page.locator("button[aria-label^='See what changed under this ruling']").click()
                 page.wait_for_selector(".ck-why-list li")
                 words = page.locator(".ck-why").text_content()
                 self.assertIn(f"spec.md changed since this answer was locked. Git history is {NOGIT}", words)
@@ -1324,7 +1324,13 @@ class LiveConsoleTests(unittest.TestCase):
                 # A browser will not let a page's route rewrite Origin, so a write is
                 # re-sent from Playwright with the Origin the public hostname carries.
                 h["origin"] = self.origin
-                route.fulfill(response=route.fetch(headers=h))
+                try:
+                    route.fulfill(response=route.fetch(headers=h))
+                except Exception:
+                    # A write the page sends as its browser closes (a draft saved on the way out)
+                    # has no one left to answer; raised here, it would fail the NEXT test's first call.
+                    if not page.is_closed():
+                        raise
                 return
             route.continue_(headers=h)
         page.route("**/*", through_access)
@@ -2329,10 +2335,30 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.agent_post("/visual", {"request": req["id"], "format": "mermaid", "title": "Zones",
                                                 "content": MERMAID, "text": "Zones feed the grid.",
                                                 "nonce": "p4visual002"})
-                    frame_el = page.wait_for_selector("iframe.ck-visual-frame", timeout=10000)
+                    # 0.9.0: a Mermaid visual is drawn in a frame of its own too, so every visual frame
+                    # is checked: none may be same-origin, and only Mermaid's may run its vendored lib.
+                    html_sel = ".ck-visual[data-format='html'] iframe.ck-visual-frame"
+                    mmd_sel = ".ck-visual[data-format='mermaid'] iframe.ck-visual-frame"
+                    frame_el = page.wait_for_selector(html_sel, timeout=10000)
                     self.assertEqual(frame_el.get_attribute("sandbox"), "")          # grants nothing
-                    frame = page.frame_locator("iframe.ck-visual-frame")
+                    self.assertEqual(page.wait_for_selector(mmd_sel, timeout=10000).get_attribute("sandbox"),
+                                     "allow-scripts")                               # scripts, never same-origin
+                    sandboxes = page.locator("iframe.ck-visual-frame").evaluate_all(
+                        "fs => fs.map(f => f.hasAttribute('sandbox') ? f.getAttribute('sandbox') : null)")
+                    self.assertEqual(len(sandboxes), 2, sandboxes)                   # one frame per visual
+                    for sb in sandboxes:
+                        self.assertIsNotNone(sb, sandboxes)
+                        self.assertTrue(set(sb.split()) <= {"allow-scripts"}, sandboxes)
+                    frame = page.frame_locator(html_sel)
                     self.assertEqual(frame.locator("#mock").text_content(timeout=10000), "Grid mock")  # it rendered
+                    mmd = page.frame_locator(mmd_sel)
+                    mmd.locator(".mermaid svg").wait_for(timeout=10000)              # the diagram drew
+                    self.assertEqual(mmd.locator("body").evaluate(                  # Mermaid's strict sanitiser
+                        "b => [...b.querySelectorAll('*')].flatMap(e => e.getAttributeNames()"
+                        ".filter(a => a.startsWith('on')))"), [])                     # left no handler to run
+                    self.assertEqual(mmd.locator("body").evaluate(
+                        "() => { try { return String(parent.document.body); } catch (e) { return 'blocked'; } }"),
+                        "blocked")                                                  # an opaque origin
                     page.wait_for_timeout(500)                                      # time for any script to act
                     self.assertIsNone(frame.locator("body").get_attribute("data-ran"))
                     self.assertIsNone(page.evaluate("document.body.getAttribute('data-pwned')"))
@@ -2340,6 +2366,7 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.assertEqual(page.evaluate("window.__msgs"), [])
                     self.assertEqual(page.locator("#mock").count(), 0)            # nothing of it in the page itself
                     code = page.locator(".ck-visual[data-format='mermaid'] .ck-visual-code")
+                    page.locator(".ck-visual[data-format='mermaid'] .ck-visual-source-toggle").click()  # 0.9.0
                     _wait_for(page, "document.querySelector(\".ck-visual[data-format='mermaid'] "
                                            ".ck-visual-code\").textContent.startsWith('graph TD')")
                     self.assertEqual(code.text_content(), MERMAID)                  # as text, markup and all
