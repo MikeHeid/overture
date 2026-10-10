@@ -3017,3 +3017,11 @@ example dashboard.
   `docs/demo/screenshots.py` regenerates the screenshots from
   `docs/demo/showcase.html`, an example dashboard with waves, phases
   and lanes.
+- **Release zips.** The release assets for 1.23.0 through 1.31.0 were
+  copies of the repository, not the output of `build_zip.py`. So the
+  local install route in INSTALL.md (`overture@overture-local`, and
+  `~/overture/plugins/overture/kit/...`) did not work from them. The
+  last step that `release.py` prints now names the `build_zip.py` and
+  `gh release create` commands. A rebuilt `overture-1.31.0.zip`
+  passes `claude plugin validate --strict` and installs as
+  `overture@overture-local`.

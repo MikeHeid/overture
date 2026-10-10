@@ -92,7 +92,11 @@ def main(argv: list[str]) -> int:
     print("  3. git switch -c release-" + argv[1])
     print("  4. git add -A && git commit -m 'release: " + argv[1] + "'")
     print("  5. git push -u origin release-" + argv[1] + " && gh pr create ...")
-    print("  6. After merge: build zip (in WSL for LF endings) and `gh release create`.")
+    print("  6. After merge, build the zip with build_zip.py (in WSL for LF endings). Never zip the")
+    print("     repository itself: INSTALL.md's local route needs build_zip's plugins/overture/ layout")
+    print("     and its overture-local marketplace (1.23.0-1.31.0 shipped repo snapshots by mistake).")
+    print("       python3 build_zip.py --deny-file ~/my-deployment-values.txt")
+    print("       gh release create v" + argv[1] + " dist/overture-" + argv[1] + ".zip --title 'v" + argv[1] + " — <name>'")
     return 0
 
 
