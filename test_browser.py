@@ -1345,6 +1345,15 @@ class LiveConsoleTests(unittest.TestCase):
         page.click(".ck-dock-strip" if width >= 1024 else ".ck-inbox-btn")
         page.wait_for_selector(".ck-tabs")
 
+    def open_more_tab(self, page, label):
+        # 1.25.0: Favorite and Chat sit behind the tab bar's "More ▾" menu (no #ck-tab-chat any more); once
+        # chosen, "More" stands in for the tab, named after it and selected.
+        page.click(".ck-tab-more")
+        page.locator(".ck-more-menu .ck-more-item", has_text=label).click()
+        _wait_for(page, "label => { const b = document.querySelector('.ck-tab-more');"
+                        " return !!b && b.getAttribute('aria-selected') === 'true'"
+                        " && b.getAttribute('aria-label') === 'More tabs — currently in ' + label; }", label)
+
     def assert_not_reloaded(self, page):
         self.assertTrue(page.evaluate("window.__notReloaded === true"), "the page reloaded")
 
@@ -1353,19 +1362,23 @@ class LiveConsoleTests(unittest.TestCase):
     def test_before_the_first_items_push_the_inbox_says_why_the_board_is_empty(self):
         # Q24. Catches: a silent blank before the steward's first push (the server runs no adapter, so it has
         # no items until then), the note never rendered, and a note that stays after the push arrives.
+        # 1.24.0 put the note in the first-run hero (a labelled region), under its "How this works" disclosure.
         from overture import items as IT
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve(snapshot=True)
                 page = self.page(kind, 1280, url)
                 self.open_inbox(page, 1280)
-                note = page.wait_for_selector(".ck-items-note")
+                hero = page.wait_for_selector(".ck-firstrun")
+                self.assertEqual((hero.get_attribute("role"), hero.get_attribute("aria-label")),
+                                 ("region", "Welcome to Overture"))
+                page.click(".ck-firstrun-summary")
+                note = page.wait_for_selector(".ck-firstrun-note", state="visible")
                 self.assertEqual(note.text_content(), IT.NOT_PUSHED)
-                self.assertEqual(note.get_attribute("role"), "status")
                 code, out = self.SV.agent_request(self.cfg.socket, "POST", "/items",
                                                   {"items": dict(LIVE_ITEMS), "seed_questions": [], "board": None})
                 self.assertEqual(code, 200, out)
-                _wait_for(page, "document.querySelector('.ck-items-note') === null", timeout=10000)
+                _wait_for(page, "document.querySelector('.ck-firstrun') === null", timeout=10000)
                 self.assert_not_reloaded(page)
 
     def test_the_prs_tab_says_why_it_is_empty_then_renders_hostile_titles_as_text(self):
@@ -1794,10 +1807,11 @@ class LiveConsoleTests(unittest.TestCase):
                     url = self.serve()
                     page = self.page(kind, width, url)
                     self.open_inbox(page, width)
-                    page.click("#ck-tab-chat")
+                    self.open_more_tab(page, "Chat")
                     page.fill("#ck-chat-input", "Is the project build green?")
                     page.keyboard.press("Enter")
                     page.wait_for_selector(".ck-chat-msg[data-by='owner']")
+                    _wait_for(page, "(document.querySelector('.ck-tab-more .ck-tab-note') || {}).textContent === ' ●'")
                     woke = D.watch(self.cfg.inbox, 0, poll=0.05, timeout=5)
                     self.assertEqual([(w["intent"], w["item"]) for w in woke], [("chat", "@chat")])
                     msg = [r for r in self.console.store.records() if r["type"] == "message"][-1]
@@ -1807,7 +1821,7 @@ class LiveConsoleTests(unittest.TestCase):
                                                  "nonce": "chatreply01"})
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']", timeout=10000)
                     self.assertIn("Green at abc123.", page.locator(".ck-chat-msg[data-by='agent']").text_content())
-                    _wait_for(page, "!document.querySelector('#ck-tab-chat .ck-tab-note')")  # no longer waiting
+                    _wait_for(page, "!document.querySelector('.ck-tab-more .ck-tab-note')")  # no longer waiting
                     self.assertFalse(page.evaluate(OVERFLOW))
                     if os.environ.get("OVERTURE_SHOTS"):
                         page.locator(".ck-panel").screenshot(
@@ -1846,7 +1860,7 @@ class LiveConsoleTests(unittest.TestCase):
                     self.assertFalse(page.evaluate(OVERFLOW))
                     page = self.page(kind, width, url)       # a fresh page for the chat tab
                     self.open_inbox(page, width)
-                    page.click("#ck-tab-chat")
+                    self.open_more_tab(page, "Chat")
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']")
                     who = page.locator(".ck-chat-msg[data-by='agent'] .ck-chat-who").all_text_contents()
                     self.assertTrue(any(w.startswith("agent-6 · ") for w in who), who)
