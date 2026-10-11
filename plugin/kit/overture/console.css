@@ -3369,3 +3369,36 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-ticket-board .ck-ticket-id { font-size: 10.5px; }
 .ck-ticket-board .ck-ticket-body { display: none; }
 .ck-ticket-board .ck-btn { padding: 2px 8px; min-height: 0; font-size: 12px; }
+
+/* PR tab: each pull request is its own bordered card; the left edge says its state at a glance. */
+.ck-pr-row {
+  --pr-edge: var(--c-accent);
+  border: 1px solid var(--c-border); border-left: 4px solid var(--pr-edge);
+  border-radius: var(--radius-sm, 6px); padding: 8px 10px; margin: 0 0 8px;
+  background: var(--c-surface); list-style: none;
+}
+.ck-pr-row[data-state="open"][data-checks="failure"] { --pr-edge: var(--c-blocked); }
+.ck-pr-row[data-state="open"][data-checks="pending"] { --pr-edge: var(--c-claimed); }
+.ck-pr-row[data-draft="true"]                        { --pr-edge: var(--c-fg-muted); }
+.ck-pr-row[data-state="merged"]                      { --pr-edge: #8250df; }
+.ck-pr-row[data-state="closed"]                      { --pr-edge: var(--c-blocked); opacity: .8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ck-pr-row[data-state="merged"] { --pr-edge: #a371f7; } }
+:root[data-theme="dark"] .ck-pr-row[data-state="merged"] { --pr-edge: #a371f7; }
+.ck-prs-list { padding-left: 0; }
+
+/* Footer: the shortcut sheet's button, on the right. */
+.ck-footer-keys {
+  float: right; margin-left: 12px; font: inherit; font-size: 12px; cursor: pointer;
+  color: var(--c-fg-muted); background: transparent; border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm, 6px); padding: 0 8px;
+}
+.ck-footer-keys:hover, .ck-footer-keys:focus-visible { color: var(--c-fg); border-color: var(--c-accent); outline: none; }
+
+/* Chat ▾ split button and its action menu. */
+.ck-split { display: inline-flex; }
+.ck-split .ck-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ck-split .ck-split-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding-left: 8px; padding-right: 8px; }
+.ck-action-menu { min-width: 260px; }
+.ck-action-menu .ck-more-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+.ck-action-hint { font-size: 11.5px; }
+.ck-pr-row::before { display: none; }   /* the feed's row dot; the coloured edge replaces it */

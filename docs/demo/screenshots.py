@@ -521,6 +521,19 @@ def capture(demo: Demo) -> list[str]:
             pg.locator(".ck-ticket-chart").first.screenshot(path=str(OUT / "feature-ticket-graph.png"))
         shot("feature-ticket-graph", ticket_graph)
 
+        def chat_menu(pg):
+            item(pg, "API-2")
+            pg.locator(".ck-panel .ck-split-more").first.click()
+            pg.wait_for_timeout(500)
+            panel(pg, "feature-chat-menu")
+        shot("feature-chat-menu", chat_menu)
+
+        def footer_keys(pg):
+            pg.locator(".ck-footer-keys").click()
+            pg.wait_for_timeout(600)
+            pg.screenshot(path=str(OUT / "feature-footer-keys.png"))
+        shot("feature-footer-keys", footer_keys)
+
         def ribbon(pg):
             pg.locator(".ck-priority-ribbon").first.screenshot(path=str(OUT / "feature-priority.png"))
         shot("feature-priority", ribbon)
