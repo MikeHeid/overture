@@ -936,6 +936,14 @@ class PublishTests(unittest.TestCase):
         self.assertNotIn("I_N(", api)
         self.assertIn("style L_lane_api fill:transparent,stroke:#bf3989", src)
 
+    def test_the_status_chip_sits_in_the_header_row(self):
+        # Through 1.31 the chip floated at a fixed offset and covered the skin and theme toggles.
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        self.assertIn("hdr.insertBefore(statusChip, anchor);", js)
+        self.assertIn("placeStatusChip();", js)
+        self.assertIn(".ck-status-chip.ck-status-chip-inline { position: static;", css)
+
     def test_docked_column_fits_its_tab_row(self):
         # D9: the docked column is never narrower than its tab row, so tabs
         # keep icon and label on one line instead of wrapping or clipping.
