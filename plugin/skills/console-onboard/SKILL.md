@@ -51,6 +51,7 @@ these defaults, and let the user change every one:
 | AUD tag | none; the user pastes it | 64 hex characters, from the Access application (step 3 below) |
 | Hostname | `<name>-console.${user_config.zone}` if a zone is set | must be in a zone on their Cloudflare account |
 | Port | 4793 | the script checks it is free on 127.0.0.1 |
+| Master agent (steward) | `${user_config.steward}` if set | optional; the session that processes the owner's answers. Agent-name shape, e.g. `steward` or `agent-1` |
 
 - If a default in the table above is empty or still reads as a literal
   `${user_config...}`, the user has not set it in the plugin's settings. Just
@@ -69,7 +70,12 @@ these defaults, and let the user change every one:
 Run from the project root:
 
     python3 "KIT/onboard.py" write --project . --name NAME --team-domain TEAM \
-        --aud AUD --hostname HOST --port PORT
+        --aud AUD --hostname HOST --port PORT [--steward STEWARD]
+
+Pass `--steward` only when the user gave a master agent name. The script
+checks the name and prints it into the `register` step. It never writes the
+name into the project, because a repository must not be able to name the
+steward.
 
 - **Refused (exit 2):** the message names the bad value and says what it
   should be. Ask for that one value again. Never edit the files by hand to
@@ -87,7 +93,9 @@ Show the user the commands the script printed, **verbatim and in order**, and
 say plainly that each is theirs to run:
 
 1. `install.sh --start`: the loopback server;
-2. `agent.py register`: trust this project's console;
+2. `agent.py register`: trust this project's console and, with
+   `--steward`, name the master agent. The user then types
+   `/overture:as STEWARD` in that session;
 3. create the Access application;
 4. create the tunnel, `onboard.py tunnel --id`, route DNS **with `--config`**,
    then start the tunnel unit;
