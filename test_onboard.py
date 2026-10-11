@@ -400,5 +400,50 @@ class CliTests(Base):
                 self.assertFalse((self.project / ".overture/console.env").exists())
 
 
+class InstallNoticeTests(unittest.TestCase):
+    """The one-time banner after installing or upgrading the plugin (plugin/hooks/install_notice.py).
+
+    Catches: a banner whose commands do not exist. Until this test the first-install banner told new
+    users to run `~/.local/share/overture/kit/plugin/kit/agent.py register` (no such path, and
+    register needs --state and --project) and `systemctl --user start overture.service` (no such
+    unit), and never named /overture:console-onboard, so a fresh install left people lost.
+    """
+
+    HOOK = Path(__file__).resolve().parent / "plugin" / "hooks" / "install_notice.py"
+
+    def banner(self, prior: str | None = None) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            if prior:
+                (Path(td) / "overture").mkdir()
+                (Path(td) / "overture" / f"install-notice-seen-{prior}").write_text("x")
+            env = {**os.environ, "XDG_STATE_HOME": td}
+            return subprocess.run([sys.executable, str(self.HOOK)], env=env, capture_output=True,
+                                  text=True, timeout=30, check=True).stdout
+
+    def test_a_first_install_points_at_onboarding(self):
+        out = self.banner()
+        self.assertIn("/overture:console-onboard", out)
+        skill = self.HOOK.parent.parent / "skills" / "console-onboard" / "SKILL.md"
+        self.assertTrue(skill.is_file(), skill)
+        for wrong in ("overture.service", "kit/plugin/kit", "agent.py register"):
+            self.assertNotIn(wrong, out)
+
+    def test_an_upgrade_names_an_install_script_that_exists(self):
+        out = self.banner(prior="0.0.1")
+        self.assertIn("Upgraded to Overture", out)
+        line = next(l for l in out.splitlines() if "install.sh" in l and "bash" in l)
+        script = Path(line.split('"')[1])
+        self.assertTrue(script.is_file(), script)
+        self.assertNotIn("overture.service", out)
+
+    def test_it_shows_once_per_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {**os.environ, "XDG_STATE_HOME": td}
+            run = lambda: subprocess.run([sys.executable, str(self.HOOK)], env=env, capture_output=True,
+                                         text=True, timeout=30, check=True).stdout
+            self.assertIn("Welcome", run())
+            self.assertEqual(run(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
