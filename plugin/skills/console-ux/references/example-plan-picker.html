@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Plan picker: calm</title>
+<style>
+@layer tokens, base, component;
+@layer tokens {
+  :root {
+    color-scheme: light dark;
+    --blue-600: oklch(0.55 0.19 262);
+    --blue-300: oklch(0.78 0.11 262);
+    --color-bg: light-dark(oklch(0.985 0.003 262), oklch(0.20 0.01 262));
+    --color-surface: light-dark(#fff, oklch(0.25 0.012 262));
+    --color-text: light-dark(oklch(0.22 0.02 262), oklch(0.95 0.005 262));
+    --color-text-muted: light-dark(oklch(0.45 0.02 262), oklch(0.78 0.01 262));
+    --color-border: light-dark(oklch(0.80 0.01 262), oklch(0.42 0.015 262));
+    --color-accent: light-dark(var(--blue-600), var(--blue-300));
+    --color-accent-fg: light-dark(#fff, oklch(0.18 0.02 262));
+    --color-focus: light-dark(var(--blue-600), var(--blue-300));
+    --radius: 12px;
+    --space: 8px;
+  }
+}
+@layer base {
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: calc(var(--space) * 4); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--color-bg); color: var(--color-text); }
+  h1 { font-size: clamp(1.4rem, 1rem + 1.5vw, 1.9rem); line-height: 1.2; margin: 0 0 4px; text-wrap: balance; }
+  p { margin: 0; }
+  :focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+}
+@layer component {
+  .head { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .muted { color: var(--color-text-muted); }
+  .plans { container-type: inline-size; border: 0; padding: 0; margin: 0; }
+  .plans legend { font-weight: 600; margin-bottom: 12px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+  @container (min-width: 560px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+  .plan { position: relative; display: grid; gap: 4px; padding: 16px; min-height: 44px; border: 2px solid var(--color-border);
+          border-radius: var(--radius); background: var(--color-surface); cursor: pointer; }
+  .plan input { position: absolute; inset-block-start: 16px; inset-inline-end: 16px; inline-size: 20px; block-size: 20px;
+                accent-color: var(--color-accent); }
+  .plan:has(input:checked) { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+  .plan:has(input:focus-visible) { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+  .name { font-weight: 650; }
+  .price { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .badge { justify-self: start; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+           background: color-mix(in oklch, var(--color-accent) 16%, transparent); color: var(--color-accent); }
+  .actions { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
+  .btn { font: inherit; font-weight: 600; min-height: 44px; padding: 0 20px; border-radius: 10px; cursor: pointer;
+         border: 2px solid transparent; }
+  .btn--primary { background: var(--color-accent); color: var(--color-accent-fg); }
+  .btn--secondary { background: transparent; color: var(--color-text); border-color: var(--color-border); }
+  .trigger { anchor-name: --more; }
+  /* Anchored under its button; where anchor positioning is missing it falls back to the top layer's default. */
+  .menu { position-anchor: --more; position-area: block-end span-inline-start; position-try-fallbacks: flip-block;
+          margin: 6px 0 0; }
+  .menu { padding: 6px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface);
+          color: var(--color-text); min-width: 200px; }
+  .menu a { display: block; padding: 10px 12px; border-radius: 6px; color: inherit; text-decoration: none; }
+  .menu a:hover { background: color-mix(in oklch, var(--color-accent) 12%, transparent); }
+  /* Text that follows the choice, with no script: one span per option, shown by :has(). */
+  .when { display: none; }
+  main:has(input[value="starter"]:checked) .when--starter,
+  main:has(input[value="team"]:checked) .when--team,
+  main:has(input[value="org"]:checked) .when--org { display: inline; }
+  details { margin-top: 24px; border-top: 1px solid var(--color-border); padding-top: 12px; }
+  summary { cursor: pointer; font-weight: 600; min-height: 24px; }
+  dialog { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface);
+           color: var(--color-text); max-width: 420px; }
+  dialog::backdrop { background: oklch(0 0 0 / 0.45); }
+  @media (prefers-reduced-motion: no-preference) {
+    .plan { transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
+  }
+  @media (forced-colors: active) { .plan:has(input:checked) { border-color: Highlight; } }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="head">
+    <div>
+      <h1>Choose a plan</h1>
+      <p class="muted">You can change plans at any time. Prices are per seat, per month.</p>
+    </div>
+    <button class="btn btn--secondary trigger" type="button" popovertarget="more" aria-haspopup="true">More options</button>
+    <div id="more" popover class="menu" role="menu">
+      <a href="#compare" role="menuitem">Compare all features</a>
+      <a href="#billing" role="menuitem">Billing questions</a>
+    </div>
+  </div>
+  <fieldset class="plans">
+    <legend>Plan</legend>
+    <div class="grid">
+      <label class="plan"><input type="radio" name="plan" value="starter"><span class="name">Starter</span>
+        <span class="price">$0</span><span class="muted">Up to 3 projects</span></label>
+      <label class="plan"><input type="radio" name="plan" value="team" checked><span class="badge">Most teams pick this</span>
+        <span class="name">Team</span><span class="price">$12</span><span class="muted">Unlimited projects, shared rulings</span></label>
+      <label class="plan"><input type="radio" name="plan" value="org"><span class="name">Organization</span>
+        <span class="price">$29</span><span class="muted">SSO, audit log, priority support</span></label>
+    </div>
+  </fieldset>
+  <div class="actions">
+    <button class="btn btn--primary" type="button" commandfor="confirm" command="show-modal">Continue with
+      <span class="when when--starter">Starter</span><span class="when when--team">Team</span><span class="when when--org">Organization</span></button>
+    <button class="btn btn--secondary" type="button">Talk to us</button>
+  </div>
+  <dialog id="confirm" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">Switch to <span class="when when--starter">Starter</span><span class="when when--team">Team</span><span class="when when--org">Organization</span>?</h2>
+    <p class="muted">The new price applies from today. You can switch back within 14 days.</p>
+    <div class="actions">
+      <button class="btn btn--primary" type="button" commandfor="confirm" command="close">Switch plan</button>
+      <button class="btn btn--secondary" type="button" commandfor="confirm" command="close">Cancel</button>
+    </div>
+  </dialog>
+  <details name="faq"><summary>What counts as a seat?</summary><p class="muted">Anyone who can answer questions in the console.</p></details>
+  <details name="faq"><summary>Can I cancel?</summary><p class="muted">Yes. Your rulings stay in your repository.</p></details>
+</main>
+</body>
+</html>

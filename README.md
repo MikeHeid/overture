@@ -514,7 +514,7 @@ server cannot check it.
                                               state dir: store + doorbell
                                                      ▲
  Claude session ── SessionStart hook reads the doorbell (registered projects only)
-                └─ skills: console-process / console-fork / console-fold / console-ask / console-visual ── agent.py
+                └─ skills: console-process / console-fork / console-fold / console-ask / console-visual / console-ux ── agent.py
 ```
 
 - **`server.py`** serves the console, inside your published dashboard page if
