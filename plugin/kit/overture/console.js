@@ -5602,7 +5602,7 @@
     const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: 'hidden',
       'aria-label': 'Choose an image to attach to ' + itemId });
     const attachBtn = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
-      'aria-label': 'Attach an image to ' + itemId }, [icon('image') || '', 'Attach image']);
+      'aria-label': 'Attach an image to ' + itemId }, [icon('image') || '', ' Attach image']);
     attachBtn.addEventListener('click', () => fileInput.click());
     const doAttach = async file => {
       attachStatus.textContent = 'Attaching\u2026';
