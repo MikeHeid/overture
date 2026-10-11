@@ -50,7 +50,7 @@ import tempfile
 import time
 from pathlib import Path
 
-WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link")     # overture/doorbell.py
+WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link", "pr-merge")     # overture/doorbell.py
 CURSOR_FILE = "agent-cursor.json"      # overture/doorbell.py
 MAX_DOORBELL = 64 << 20                # overture/doorbell.py
 MAX_CURSOR = 4096                      # overture/doorbell.py

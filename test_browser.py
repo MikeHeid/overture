@@ -132,6 +132,16 @@ class _Handler(BaseHTTPRequestHandler):
             if _Handler.view_listening is not None:  # the watch heartbeat, as the server judged it
                 payload["cursor"] = {**payload.get("cursor", {}), "listening": _Handler.view_listening}
             body, ctype = json.dumps(payload), "application/json"
+        elif self.path.startswith("/api/prs"):
+            sha = "a" * 40
+            row = lambda n, **o: {"number": n, "title": f"PR {n}", "state": "open", "draft": False, "head": f"f{n}",
+                                  "base": "main", "author": "dev", "created_at": "2026-10-01T00:00:00Z",
+                                  "updated_at": "2026-10-01T00:00:00Z", "merged_at": None, "closed_at": None,
+                                  "url": f"https://github.com/acme/app/pull/{n}", "merge_commit": None,
+                                  "checks": "success", "head_sha": sha, **o}
+            body, ctype = json.dumps({"pushed": True, "note": None, "repo": "acme/app", "window_days": 30,
+                                      "pushed_at": "2026-10-11T10:00:00Z", "by": "steward",
+                                      "prs": [row(5), row(6, checks="pending"), row(8, draft=True), row(9, head_sha=None)]}), "application/json"
         elif self.path.startswith("/api/visual"):
             body, ctype = "<!doctype html><title>mock</title><h1>mock</h1>", "text/html"
         elif self.path.startswith("/api/board"):
@@ -679,6 +689,52 @@ class UxViewTests(unittest.TestCase):
         box = page.locator(".ck-ux-box").bounding_box()
         self.assertEqual(round(box["width"]), 375)
         self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
+
+
+class PrMergeButtonTests(unittest.TestCase):
+    """Merge from the PR tab (1.33): shown only on a ready, passing PR; confirmed inline; sends a pr-merge."""
+
+    @classmethod
+    def setUpClass(cls):
+        DockTests.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        DockTests.tearDownClass.__func__(cls)
+
+    setUp = DockTests.setUp
+    _page = DockTests._page
+
+    def _prs(self):
+        page = self._page("chromium", 1280)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.locator("#ck-tab-prs").click()
+        page.wait_for_selector(".ck-pr-row")
+        return page
+
+    def test_only_a_ready_passing_pr_with_a_known_head_gets_the_button(self):
+        page = self._prs()
+        row = lambda n: page.locator(f".ck-pr-row[data-number='{n}']")
+        self.assertEqual(row(5).get_by_role("button", name="Merge pull request 5 into main").count(), 1)
+        self.assertIn("Merge when checks pass", row(6).inner_text())
+        self.assertEqual(row(6).get_by_role("button").filter(has_text="Merge").count(), 0)
+        self.assertEqual(row(8).get_by_role("button").filter(has_text="Merge").count(), 0)
+        self.assertIn("prs-push", row(9).inner_text())
+
+    def test_it_confirms_inline_then_sends_the_request_naming_the_commit(self):
+        page = self._prs()
+        page.get_by_role("button", name="Merge pull request 5 into main").click()
+        self.assertIn("Merge #5 into main?", page.locator(".ck-pr-merge-confirm").inner_text())
+        page.get_by_role("button", name="Cancel").click()
+        self.assertEqual(page.locator(".ck-pr-merge-confirm").count(), 0)
+        self.assertEqual(_Handler.posts, [])
+        page.get_by_role("button", name="Merge pull request 5 into main").click()
+        page.locator(".ck-pr-merge-confirm").get_by_role("button", name="Merge", exact=True).click()
+        page.wait_for_timeout(400)
+        self.assertEqual([(m["item"], m["intent"], m["pr"], m["expected_head_sha"]) for m in _Handler.posts],
+                         [("@prs", "pr-merge", 5, "a" * 40)])
 
 
 class LiveBoardTests(unittest.TestCase):

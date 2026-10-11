@@ -3584,3 +3584,8 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   .ck-ux-view { padding: 0; }
   .ck-ux-box { width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; overflow: auto; }
 }
+
+/* Merge from the PR tab (1.33) */
+.ck-pr-merge { margin-top: 6px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.ck-pr-merge-confirm { border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 8px; background: var(--c-surface); }
+.ck-pr-merge-confirm .ck-actions { margin-top: 6px; }

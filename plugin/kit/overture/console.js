@@ -8700,6 +8700,66 @@
     return ['opened ', pr.created_at];
   }
 
+  // Merge from the PR tab (1.33, D7). The server merges nothing: Merge sends an owner message on @prs and the
+  // steward's session merges with its own gh, or says why not. Shown only for an open, ready, passing PR whose
+  // head commit the steward pushed; the owner confirms inline, and the request names that commit.
+  const prMergeAsking = new Set();      // PR numbers whose inline confirmation is open
+  function prMergeFacts(pr) {
+    const msgs = ((view && view.threads) || {})['@prs'] || [];
+    const reqs = msgs.filter(m => m.by === 'owner' && m.intent === 'pr-merge' && m.pr === pr.number)
+      .sort((x, y) => y.seq - x.seq);
+    const last = reqs[0] || null;
+    const reply = last ? msgs.filter(m => m.by === 'agent' && m.reply_to === last.id).sort((x, y) => y.seq - x.seq)[0] : null;
+    return { last, reply };
+  }
+  function refillPRs() { const box = panelEl && panelEl.querySelector('.ck-prs'); if (box) fillPRs(box); }
+  function renderPRMerge(pr) {
+    if (pr.state !== 'open') return null;
+    const f = prMergeFacts(pr);
+    const wrap = el('div', { className: 'ck-pr-merge' });
+    const status = el('span', { className: 'ck-muted ck-pr-merge-status', role: 'status', 'aria-live': 'polite' });
+    if (f.last && !f.reply) {
+      status.textContent = 'Merge requested ' + relTime(f.last.ts) + ' \u00b7 waiting for a session';
+      wrap.appendChild(status);
+      return wrap;
+    }
+    if (f.reply && f.last) {
+      status.textContent = String(f.reply.text || '').slice(0, 200);
+      wrap.appendChild(status);
+    }
+    if (pr.draft) return wrap.childNodes.length ? wrap : null;
+    if (pr.checks !== 'success' || !pr.head_sha) {
+      wrap.appendChild(el('span', { className: 'ck-muted' }, [pr.head_sha ? 'Merge when checks pass' : 'Merge needs the steward to push this PR again (agent.py prs-push)']));
+      return wrap;
+    }
+    if (!prMergeAsking.has(pr.number)) {
+      const btn = el('button', { type: 'button', className: 'ck-btn ck-pr-merge-btn',
+        'aria-label': 'Merge pull request ' + pr.number + ' into ' + pr.base }, [icon('git-branch') || '', 'Merge']);
+      btn.addEventListener('click', () => { prMergeAsking.add(pr.number); refillPRs(); });
+      wrap.appendChild(btn);
+      return wrap;
+    }
+    const q = el('div', { className: 'ck-pr-merge-confirm', role: 'group', 'aria-label': 'Confirm merge of ' + pr.number });
+    const href = prHref(pr.url);
+    q.appendChild(el('span', {}, ['Merge #' + pr.number + ' into ' + pr.base + '? The steward session merges it with its own GitHub access. ']));
+    if (href) q.appendChild(el('a', { href: href + '/files', target: '_blank', rel: 'noopener noreferrer' }, ['See the diff']));
+    const go = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Merge']);
+    const no = el('button', { type: 'button', className: 'ck-btn' }, ['Cancel']);
+    const err = el('p', { className: 'ck-error-msg', role: 'alert', hidden: 'hidden' });
+    no.addEventListener('click', () => { prMergeAsking.delete(pr.number); refillPRs(); });
+    go.addEventListener('click', async () => {
+      go.disabled = true; err.hidden = true;
+      const r = await apiPost('/message', { item: '@prs', intent: 'pr-merge', pr: pr.number, expected_head_sha: pr.head_sha,
+        text: 'Merge #' + pr.number + ' into ' + pr.base }, 'pr-merge-' + pr.number + '-' + pr.head_sha);
+      if (r.error) { go.disabled = false; err.textContent = 'Not sent: ' + r.error + ' Nothing was merged.'; err.hidden = false; announce('Error: ' + r.error); return; }
+      prMergeAsking.delete(pr.number); announce('Merge requested.'); refillPRs();
+    });
+    q.appendChild(el('div', { className: 'ck-actions' }, [go, no]));
+    q.appendChild(err);
+    wrap.appendChild(q);
+    return wrap;
+  }
+
   function renderPRRow(pr) {
     const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number),
       dataDraft: pr.draft ? 'true' : 'false', dataChecks: pr.checks || 'none' });
@@ -8721,6 +8781,8 @@
       el('span', { className: 'ck-feed-time', title: ts ? new Date(ts).toLocaleString() : '' }, [verb + relTime(ts)])
     ]);
     row.appendChild(meta);
+    const mergeBox = renderPRMerge(pr);
+    if (mergeBox) row.appendChild(mergeBox);
     const links = prLinks(pr);
     if (links.length) {
       const bar = el('div', { className: 'ck-pr-items' });

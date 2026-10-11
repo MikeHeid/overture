@@ -1509,6 +1509,66 @@ def tiny_png(w=2, h=2, seed=0) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+class PrMergeRequestTests(_Live, unittest.TestCase):
+    """1.33 (UX-VIEW.md, D7): the PR tab's Merge is an owner message on @prs; the server merges nothing."""
+    SHA = "c" * 40
+
+    def push(self, n=7, **over):
+        pr = {"number": n, "title": "t", "state": "open", "draft": False, "head": "feat/x", "base": "main",
+              "author": "dev", "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+              "merged_at": None, "closed_at": None, "url": f"https://github.com/acme/app/pull/{n}",
+              "merge_commit": None, "checks": "success", "head_sha": self.SHA}
+        pr.update(over)
+        code, out = self.agent_post("/prs", {"repo": "acme/app", "window_days": 30, "prs": [pr]})
+        self.assertEqual(code, 200, out)
+
+    def ask(self, n=7, sha=None, expect=200):
+        body = {"item": "@prs", "intent": "pr-merge", "pr": n, "expected_head_sha": sha or self.SHA,
+                "text": f"Merge #{n}", "nonce": "pm" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_a_request_for_a_ready_pr_is_stored_waits_in_todo_and_rings_the_doorbell(self):
+        from overture import view as V
+        from overture import doorbell as DB
+        self.push()
+        rec = self.ask()["record"]
+        self.assertEqual((rec["item"], rec["intent"], rec["pr"]), ("@prs", "pr-merge", 7))
+        todo = V.todo(self.console.payload()["view"])
+        self.assertEqual([m["id"] for m in todo["merge"]], [rec["id"]])
+        self.assertIn("pr-merge", DB.WAKE_INTENTS)
+        # One at a time: a second request for the same PR is refused until a session answers.
+        self.assertIn("already requested", self.ask(expect=409)["error"])
+        code, _ = self.agent_post("/message", {"item": "@prs", "text": "Merged #7", "reply_to": rec["id"],
+                                               "nonce": "r" + os.urandom(6).hex()})
+        self.assertEqual(code, 200)
+        self.assertEqual(V.todo(self.console.payload()["view"])["merge"], [])
+
+    def test_the_server_refuses_what_the_steward_would_refuse_and_says_nothing_was_merged(self):
+        self.push(checks="pending")
+        self.assertIn("not passing", self.ask(expect=409)["error"])
+        self.push(draft=True)
+        self.assertIn("a draft", self.ask(expect=409)["error"])
+        self.push(state="merged", merged_at="2026-10-02T00:00:00Z", merge_commit="d" * 40)
+        self.assertIn("merged", self.ask(expect=409)["error"])
+        self.push()
+        self.assertIn("moved since you looked", self.ask(sha="d" * 40, expect=409)["error"])
+        self.assertIn("not in the steward's last push", self.ask(n=99, expect=409)["error"])
+        self.assertEqual(len(self.console.payload()["view"]["threads"].get("@prs", [])), 0)
+
+    def test_nothing_pushed_yet_is_named(self):
+        self.assertIn("nothing to merge", self.ask(expect=409)["error"])
+
+    def test_an_agent_cannot_write_the_request_and_the_thread_takes_no_other_intent(self):
+        code, out = self.agent_post("/message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
+                                                 "expected_head_sha": self.SHA, "text": "x", "nonce": "ag" + os.urandom(6).hex()})
+        self.assertEqual(code, 400, out)
+        body = {"item": "@prs", "intent": "chat", "text": "hi", "nonce": "pm" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, 400, out)
+
+
 class UxViewStepOneTests(_Live, unittest.TestCase):
     """1.32 (UX-VIEW.md step 1): purpose on visual requests, ux-save and ux-link, todo.ux, /ux-export."""
 
@@ -7871,6 +7931,92 @@ class PrsPushCliTests(_SingleServer, unittest.TestCase):
             self.assertEqual(r.returncode, 1, extra)
             self.assertIn("refused, nothing sent", r.stderr)
         self.assertFalse(self.log.exists())
+
+
+FAKE_GH_MERGE = r"""#!{python}
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+if args[:2] == ["repo", "view"]:
+    print(json.dumps({{"nameWithOwner": "octo/repo"}}))
+elif args[:2] == ["pr", "view"]:
+    print(json.dumps({{"number": 7, "state": "OPEN", "isDraft": False, "baseRefName": "main",
+                      "headRefOid": os.environ.get("FAKE_HEAD", "{sha}"),
+                      "url": "https://github.com/octo/repo/pull/7",
+                      "statusCheckRollup": [{{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}}]}}))
+elif args[:2] == ["pr", "merge"]:
+    if os.environ.get("FAKE_MERGE_FAIL"):
+        sys.stderr.write("GraphQL: Head branch was modified\n")
+        sys.exit(1)
+"""
+
+
+class PrMergeCliTests(_SingleServer, unittest.TestCase):
+    """`agent.py pr-merge`, a separate process, merges with ITS gh after re-checking, and replies on @prs."""
+    SHA = "e" * 40
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(os.path.realpath(tmp.name))
+        self.single(self.base)
+        from overture import registry as R
+        reg = self.base / "cfg" / "overture" / "projects.json"
+        R.register(self.scfg.root, self.scfg.state, HERE / "plugin" / "kit", path=reg)
+        bindir = self.base / "bin"
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text(FAKE_GH_MERGE.format(python=sys.executable, sha=self.SHA))
+        gh.chmod(0o755)
+        self.log = self.base / "gh.log"
+        self.env = {**os.environ, "XDG_CONFIG_HOME": str(reg.parent.parent), "FAKE_GH_LOG": str(self.log),
+                    "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        self.env.pop("OVERTURE_AGENT", None)
+        pr = {"number": 7, "title": "t", "state": "open", "draft": False, "head": "f", "base": "main",
+              "author": "d", "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+              "merged_at": None, "closed_at": None, "url": "https://github.com/octo/repo/pull/7",
+              "merge_commit": None, "checks": "success", "head_sha": self.SHA}
+        self.sconsole.push_prs({"repo": "octo/repo", "window_days": 30, "prs": [pr]}, "steward")
+        self.req_id = self.sconsole.write("message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
+                                                      "expected_head_sha": self.SHA, "text": "Merge #7",
+                                                      "nonce": "pmcli00001"}, "owner")["id"]
+
+    def run_cli(self, *extra, **env):
+        return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "agent.py"), "--state",
+                               str(self.scfg.state), "pr-merge", "--project", str(self.scfg.root),
+                               "--request", self.req_id, *extra],
+                              capture_output=True, text=True, env={**self.env, **env}, timeout=120, cwd=self.scfg.root)
+
+    def replies(self):
+        return [m["text"] for m in self.sview()["view"]["threads"].get("@prs", []) if m["by"] == "agent"]
+
+    def test_a_dry_run_checks_and_merges_and_replies_to_nothing(self):
+        r = self.run_cli("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["would_merge"], 7)
+        self.assertFalse(any(json.loads(ln)[:2] == ["pr", "merge"] for ln in self.log.read_text().splitlines()))
+        self.assertEqual(self.replies(), [])
+
+    def test_it_merges_at_the_seen_commit_and_replies(self):
+        r = self.run_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = [json.loads(ln) for ln in self.log.read_text().splitlines()]
+        self.assertIn(["pr", "merge", "7", "--squash", "--match-head-commit", self.SHA], calls)
+        self.assertTrue(self.replies()[0].startswith("Merged #7"))
+        self.assertEqual(self.run_cli().returncode, 1)     # answered: it will not merge twice
+
+    def test_a_pr_that_moved_is_refused_by_name_and_the_reply_says_so(self):
+        r = self.run_cli(FAKE_HEAD="f" * 40)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("new commits", r.stderr)
+        self.assertFalse(any(json.loads(ln)[:2] == ["pr", "merge"] for ln in self.log.read_text().splitlines()))
+        self.assertIn("Nothing was merged", self.replies()[0])
+
+    def test_a_gh_merge_failure_is_replied_not_swallowed(self):
+        r = self.run_cli(FAKE_MERGE_FAIL="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Head branch was modified", self.replies()[0])
 
 
 class OneServerPrsTests(_OneServer, unittest.TestCase):

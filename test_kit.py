@@ -5600,6 +5600,90 @@ class MultiStoreTests(unittest.TestCase):
         self.assertEqual(bad.read_text(), '{"not": "a record"}\n')      # never repaired or rewritten
 
 
+class PrMergeTests(Tmp):
+    """1.33 (UX-VIEW.md, D7): head_sha in the snapshot, the @prs thread, and the steward's merge checks."""
+    SHA = "a" * 40
+
+    def row(self, **over):
+        row = {"number": 7, "state": "OPEN", "isDraft": False, "headRefOid": self.SHA, "baseRefName": "main",
+               "url": "https://github.com/octo/repo/pull/7",
+               "statusCheckRollup": [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}]}
+        row.update(over)
+        return row
+
+    def req(self, **over):
+        r = {"id": "m1", "pr": 7, "expected_head_sha": self.SHA, "ts": "2026-10-11T10:00:00Z"}
+        r.update(over)
+        return r
+
+    NOW = None
+
+    def check(self, row=None, **over):
+        import datetime as dt
+        from overture import prs as PR
+        now = dt.datetime(2026, 10, 11, 12, 0, tzinfo=dt.timezone.utc)
+        return PR.merge_problem(self.req(**over), self.row() if row is None else row, "octo/repo", now)
+
+    def test_a_ready_pr_at_the_seen_commit_may_merge(self):
+        self.assertIsNone(self.check())
+
+    def test_every_refusal_says_nothing_was_merged(self):
+        cases = [
+            ({"ts": "2026-10-10T09:00:00Z"}, None, "older than 24 hours"),
+            ({}, self.row(isDraft=True), "a draft"),
+            ({}, self.row(state="MERGED"), "merged"),
+            ({}, self.row(statusCheckRollup=[{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]), "failure"),
+            ({}, self.row(statusCheckRollup=[]), "none"),
+            ({}, self.row(headRefOid="b" * 40), "new commits"),
+            ({}, self.row(url="https://github.com/other/repo/pull/7"), "not in octo/repo"),
+            ({}, self.row(number=8), "did not return"),
+            ({}, "nope", "did not return"),
+        ]
+        for over, row, needle in cases:
+            why = self.check(row=row if row is not None else None, **over) if row is not None else self.check(**over)
+            self.assertIsNotNone(why, needle)
+            self.assertIn(needle, why)
+            self.assertIn("Nothing was merged", why)
+
+    def test_head_sha_is_optional_and_checked(self):
+        from overture import prs as PR
+        gh = PrsFromGhTests.gh_row(3)
+        self.assertNotIn("head_sha", PR.from_gh({"nameWithOwner": "octo/repo"}, [gh], [], 30)["prs"][0])
+        body = PR.from_gh({"nameWithOwner": "octo/repo"}, [dict(gh, headRefOid=self.SHA)], [], 30)
+        self.assertEqual(body["prs"][0]["head_sha"], self.SHA)
+        self.assertIsNone(PR.snapshot_problem(body))
+        body["prs"][0]["head_sha"] = "xyz"
+        self.assertIn("head_sha", PR.snapshot_problem(body))
+        self.assertIn("headRefOid", PR.GH_FIELDS)
+
+    def msg(self, **over):
+        rec = {"type": "message", "schemaVersion": 1, "item": "@prs", "text": "Merge #7", "by": "owner", "nonce": "n" * 10,
+               "intent": "pr-merge", "pr": 7, "expected_head_sha": self.SHA}
+        rec.update(over)
+        return rec
+
+    def test_the_schema_holds_pr_merge_to_the_prs_thread_and_the_owner(self):
+        from overture import schema as S
+        self.assertEqual(S.validate(self.msg()), [])
+        for bad, needle in [(self.msg(item="API-1"), "belongs to the thread"),
+                            (self.msg(by="agent"), "only the owner"),
+                            (self.msg(pr="7"), "names the pull request"),
+                            (self.msg(expected_head_sha="abc"), "head commit"),
+                            (self.msg(intent="chat"), "belongs to a pr-merge"),
+                            ({k: v for k, v in self.msg().items() if k != "intent"}, "carries intent 'pr-merge'")]:
+            self.assertTrue(any(needle in e for e in S.validate(bad)), (needle, S.validate(bad)))
+
+    def test_waiting_merges_lists_unanswered_requests_oldest_first(self):
+        from overture import view as V
+        base = {"type": "message", "item": "@prs", "by": "owner", "intent": "pr-merge", "expected_head_sha": self.SHA,
+                "ts": "2026-10-11T10:00:00Z", "text": "m"}
+        threads = {"@prs": [dict(base, id="a", seq=1, pr=1), dict(base, id="b", seq=2, pr=2),
+                            {"type": "message", "item": "@prs", "by": "agent", "id": "c", "seq": 3, "reply_to": "a",
+                             "ts": "x", "text": "Merged"}]}
+        self.assertEqual([w["id"] for w in V.waiting_merges(threads)], ["b"])
+        self.assertIn("pr-merge", __import__("overture.doorbell", fromlist=["x"]).WAKE_INTENTS)
+
+
 class PrsFromGhTests(Tmp):
     """`agent.py prs-push`'s parser: gh's JSON into the closed shape the server checks (no real gh is run)."""
 
@@ -5637,7 +5721,7 @@ class PrsFromGhTests(Tmp):
         self.assertEqual((five["draft"], five["checks"], five["merge_commit"]), (True, "pending", None))
         self.assertEqual((four["author"], four["checks"], four["merge_commit"]), (None, "failure", "d" * 40))
         self.assertEqual((two["merged_at"], two["closed_at"], two["checks"]), (None, "2026-09-20T00:00:00Z", "none"))
-        self.assertEqual(set(five), PR.PR_FIELDS)
+        self.assertEqual(set(five), PR.PR_REQUIRED)
 
     def test_a_pr_in_both_lists_is_kept_once(self):
         body = self.build([self.gh_row(7)], [self.gh_row(7, state="MERGED", mergedAt="2026-09-25T00:00:00Z",

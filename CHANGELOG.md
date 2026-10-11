@@ -2992,6 +2992,18 @@ on its own.
 
 ## Unreleased
 
+- **Merge from the PR tab (UX View step 3, D7).** An open, ready, passing
+  pull request gets a **Merge** button on the PR tab, confirmed inline. The
+  server merges nothing and holds no GitHub token: Merge sends an owner
+  request on the new reserved `@prs` thread naming the PR and the head commit
+  you saw, and the steward's session merges with its own `gh`:
+  `agent.py pr-merge --project WORKTREE --request ID`. It re-reads the PR,
+  refuses by name (not ready, checks failing, new commits since you asked,
+  request over 24 hours old) and replies on `@prs` either way; the merge uses
+  `--match-head-commit`. The PR snapshot gained an optional `head_sha`
+  (`prs-push` sends it), and a kit older than this refuses a store holding an
+  `@prs` message, by name.
+
 - **UX View (step 2: the modal).** On a UX item, **◫ UX View** opens a
   full-screen overlay (shortcut `u`; every HTML visual also has **Open in UX
   View**). It shows the item's HTML versions in an empty sandbox at Mobile,

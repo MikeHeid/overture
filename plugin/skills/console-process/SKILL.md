@@ -198,6 +198,21 @@ Save on a component (`ux-save`, with its `visual_id`) or linking a Claude
 Design (`ux-link`, with its `url`). Land each with the **console-ux** skill,
 step 7.
 
+**Merge requests** (1.33). Each entry of `todo.merge` is the owner pressing
+**Merge** on a pull request in the PR tab: `pr`, `expected_head_sha` (the
+commit they saw) and `ts`. The server merges nothing; you do, with your own
+`gh`, in a checkout of that repository:
+
+    A pr-merge --project WORKTREE --request <id>          # add --dry-run to only check
+
+It re-reads the PR from GitHub and refuses, replying on `@prs` with the reason,
+unless the PR is open, not a draft, passing, still at `expected_head_sha`, and
+the request is under 24 hours old. Then it runs
+`gh pr merge N --squash --match-head-commit <sha>` (`--method merge|rebase` if
+the repository prefers) and replies with what merged. Never merge by any other
+route, and never merge a request that `pr-merge` refused. After it merges, run
+`prs-push` so the PR tab shows it merged.
+
 ## 4b. Answer each scan for a resolve
 
 Each entry of `todo.scans` is the owner pressing **Scan for a resolve** on a
