@@ -1490,6 +1490,10 @@ class BacklinkTests(_Live, unittest.TestCase):
         style_src = [d for d in r.getheader("Content-Security-Policy").split(";") if "style-src" in d][0]
         self.assertIn("'unsafe-inline'", style_src)
         self.assertNotIn("nonce-", style_src)
+        # Opened in its own tab (not inside the parent's sandboxed iframe), the page must still be
+        # sandboxed: without the directive its script would run in the console's own origin.
+        directives = [d.strip() for d in r.getheader("Content-Security-Policy").split(";")]
+        self.assertIn("sandbox allow-scripts", directives)
 
 
 class TicketRouteTests(_Live, unittest.TestCase):

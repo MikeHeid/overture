@@ -3134,6 +3134,16 @@ example dashboard.
   width, Playbooks and Triggers moved behind **More ▾** (their `g`
   shortcuts still work), and the Portfolio tab's count no longer says
   `?you`. In the narrow overlay the row still scrolls sideways.
+- **Security: the console hears only its own chart frames.** The
+  console's `message` listener acted on any window's `postMessage`.
+  Another frame on the dashboard page, or a popup, could force an SVG
+  download or steer the panel to an item. Every frame the console makes
+  with `allow-scripts` is now marked, and a message is accepted only
+  from one of those frames' windows, with the opaque origin `null`.
+- **Security: the Mermaid render page sandboxes itself.** Its CSP now
+  starts with `sandbox allow-scripts`. Before, `/api/visual-render`
+  opened in its own tab ran its script in the console's real origin;
+  only the parent's iframe attribute sandboxed it.
 - **The published page's own scripts run again.** 1.31 served the
   console under `script-src 'nonce-…'`, and only the console's own
   script carried the nonce, so a published dashboard's inline scripts
