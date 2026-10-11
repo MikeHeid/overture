@@ -3144,3 +3144,5 @@ example dashboard.
   starts with `sandbox allow-scripts`. Before, `/api/visual-render`
   opened in its own tab ran its script in the console's real origin;
   only the parent's iframe attribute sandboxed it.
+- **MIT license.** `LICENSE` at the root and in `plugin/`, so the release
+  zip carries it, and `"license": "MIT"` in the plugin manifest.
