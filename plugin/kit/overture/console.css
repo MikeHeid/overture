@@ -3589,3 +3589,9 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-pr-merge { margin-top: 6px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
 .ck-pr-merge-confirm { border: 1px solid var(--c-border); border-radius: var(--radius-sm); padding: 8px; background: var(--c-surface); }
 .ck-pr-merge-confirm .ck-actions { margin-top: 6px; }
+
+/* UX View Scripts switch (1.33) */
+.ck-ux-scripts-badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: var(--c-claimed-bg, var(--c-surface-alt)); color: var(--c-claimed, var(--c-fg)); border: 1px solid var(--c-border); }
+.ck-ux-scripts-badge[hidden] { display: none; }
+.ck-ux-switch { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 6px 0; }

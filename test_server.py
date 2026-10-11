@@ -1509,6 +1509,90 @@ def tiny_png(w=2, h=2, seed=0) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+class ScriptsSwitchTests(_Live, unittest.TestCase):
+    """1.33 (UX-VIEW.md "Scripts in components"): raw source stored apart, run only while the owner's switch is on."""
+    def raw(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", path, headers={"Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        body = r.read()
+        headers = {k.lower(): v for k, v in r.getheaders()}
+        conn.close()
+        return r.status, headers, body
+
+    COMP = "<!doctype html><html><body><p>plain</p></body></html>"
+    RAW = "<!doctype html><html><body><p>plain</p><script>document.title='ran'</script></body></html>"
+
+    def drawn(self):
+        req = self.owner_msg(item="LANE.1", intent="visual", text="Draw it", purpose="ux")
+        code, out = self.agent_post("/visual", {"request": req["id"], "format": "html", "title": "Tabs", "content": self.COMP,
+                                                "text": "t", "nonce": "v" + os.urandom(6).hex()})
+        self.assertEqual(code, 200, out)
+        return out["record"]
+
+    def source(self, vid, content=None):
+        return self.agent_post("/component-source", {"visual_id": vid, "content": content or self.RAW,
+                                                     "nonce": "s" + os.urandom(6).hex()})
+
+    def switch(self, vid, on, expect=200):
+        body = {"item": "LANE.1", "intent": "ux-scripts", "visual_id": vid, "scripts": on, "text": "scripts",
+                "nonce": "sw" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_off_by_default_then_served_sealed_only_after_the_owners_switch(self):
+        vid = self.drawn()["id"]
+        code, out = self.source(vid)
+        self.assertEqual(code, 200, out)
+        code, _h, body = self.raw(f"/api/component-render?id={vid}")
+        self.assertEqual(code, 403)                       # stored, but never shown while the switch is off
+        self.assertNotIn(b"<script>", body)
+        self.switch(vid, True)
+        code, headers, body = self.raw(f"/api/component-render?id={vid}")
+        self.assertEqual(code, 200)
+        self.assertIn(b"document.title='ran'", body)
+        csp = headers["content-security-policy"]
+        for want in ("sandbox allow-scripts", "default-src 'none'", "connect-src 'none'", "form-action 'none'", "base-uri 'none'"):
+            self.assertIn(want, csp)
+        self.assertNotIn("allow-same-origin", csp)
+        self.switch(vid, False)
+        self.assertEqual(self.raw(f"/api/component-render?id={vid}")[0], 403)
+        # The ordinary visual route still serves only the sanitized, script-free version.
+        self.assertNotIn(b"<script", self.raw(f"/api/visual?id={vid}")[2])
+
+    def test_the_switch_needs_a_source_and_only_the_owner_flips_it(self):
+        vid = self.drawn()["id"]
+        self.assertIn("no scripted source", self.switch(vid, True, expect=409)["error"])
+        code, out = self.agent_post("/message", {"item": "LANE.1", "intent": "ux-scripts", "visual_id": vid,
+                                                 "scripts": True, "text": "x", "nonce": "ag" + os.urandom(6).hex()})
+        self.assertEqual(code, 400, out)
+        self.assertEqual(self.raw(f"/api/component-render?id={vid}")[0], 403)
+
+    def test_a_source_is_write_once_and_belongs_to_an_html_visual(self):
+        vid = self.drawn()["id"]
+        self.assertEqual(self.source(vid)[0], 200)
+        self.assertEqual(self.source(vid)[0], 200)                     # the same bytes again: fine
+        code, out = self.source(vid, self.RAW + "<!-- changed -->")
+        self.assertEqual(code, 409, out)
+        self.assertEqual(self.source("f" * 24)[0], 404)
+        self.assertEqual(self.agent_post("/component-source", {"visual_id": vid})[0], 400)
+
+    def test_export_carries_the_source_only_while_the_switch_is_on(self):
+        vid = self.drawn()["id"]
+        self.source(vid)
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save", visual_id=vid)
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual((code, out["scripts"], out["source"]), (200, False, None))
+        self.switch(vid, True)       # flipped AFTER the save, to preview: that save still exports without script
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual((out["scripts"], out["source"]), (False, None))
+        save2 = self.owner_msg(item="LANE.1", intent="ux-save", text="save again", visual_id=vid)
+        code, out = self.agent_post("/ux-export", {"save": save2["id"]})
+        self.assertEqual((out["scripts"], out["source"]), (True, self.RAW))
+        self.assertIn("frame-src 'self'", self.raw("/")[1].get("content-security-policy", ""))
+
+
 class PrMergeRequestTests(_Live, unittest.TestCase):
     """1.33 (UX-VIEW.md, D7): the PR tab's Merge is an owner message on @prs; the server merges nothing."""
     SHA = "c" * 40
@@ -3900,7 +3984,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
         self.assertIn("subprocess.Popen", seen)
 
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
-    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/visual-export",
+    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
                    "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
 

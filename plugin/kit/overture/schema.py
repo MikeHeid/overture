@@ -81,7 +81,7 @@ QUESTION_KINDS = ("single", "multi", "free")
 # becomes a locked ruling in the audit trail.
 # 1.32 (UX-VIEW.md, step 1): "ux-save" marks a visual as the item's component (the steward lands it by PR
 # with `agent.py ux-export`); "ux-link" ties the item to a Claude Design link (D13), or unties it with "".
-INTENTS = ("fork", "process", "chat", "visual", "move", "grill", "ux-save", "ux-link", "pr-merge")
+INTENTS = ("fork", "process", "chat", "visual", "move", "grill", "ux-save", "ux-link", "pr-merge", "ux-scripts")
 OWNER_INTENTS = frozenset(INTENTS)
 # The chat's thread (0.7.0). It is not a register item: it can never be one,
 # because ITEM_ID refuses a leading "@", so no project item can share its
@@ -218,7 +218,7 @@ OPTIONAL = {
     # 0.8.0: `step`. A kit before it refuses a message carrying it, by name.
     "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to",
                           # 1.32 (UX-VIEW.md): a visual request's purpose and source; ux-save and ux-link.
-                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base"}),
+                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base", "scripts"}),
     "answer": frozenset({"supersedes", "reason"}),
     # 0.5.0: the conditions a RE-lock was taken against, computed by the server.
     # Written only when they differ from the question's `valid_if`, so a store
@@ -530,14 +530,19 @@ def _check_ux(rec: dict, intent: object, chat: bool) -> list[str]:
         errs.append(f"purpose belongs to a visual request and is one of {', '.join(PURPOSES)}")
     if "from" in rec and (intent != "visual" or rec.get("purpose") != "ux" or rec["from"] not in FROMS):
         errs.append(f"from belongs to a visual request with purpose 'ux' and is one of {', '.join(FROMS)}")
-    if intent in ("ux-save", "ux-link") and chat:
+    if intent in ("ux-save", "ux-link", "ux-scripts") and chat:
         errs.append(f"intent {intent!r} belongs to an item's thread, not the chat")
-    if intent == "ux-save":
+    if intent in ("ux-save", "ux-scripts"):
         v = rec.get("visual_id")
         if not isinstance(v, str) or not RECORD_ID.match(v):
-            errs.append("a ux-save names the visual it saves: visual_id, a record id")
+            errs.append(f"a {intent} names the visual it is about: visual_id, a record id")
     elif "visual_id" in rec:
-        errs.append("visual_id belongs to a ux-save")
+        errs.append("visual_id belongs to a ux-save or ux-scripts")
+    if intent == "ux-scripts":
+        if not isinstance(rec.get("scripts"), bool):
+            errs.append("a ux-scripts says scripts: true or false")
+    elif "scripts" in rec:
+        errs.append("scripts belongs to a ux-scripts")
     if intent == "ux-link":
         if "url" not in rec:
             errs.append('a ux-link carries url: a Claude Design link, or "" to unlink')
