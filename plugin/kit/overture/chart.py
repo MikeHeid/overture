@@ -55,6 +55,85 @@ STATE_PREFIX = {
     "withdrawn": "x ",
 }
 
+# D10 lane colours, in the console's order (projectcfg.LANE_COLORS) and its light hex values: a chart is drawn
+# by the server, so only these fixed colours ever reach a `style` line, never a value from the repository.
+LANE_HEX = {"blue": "#0969da", "teal": "#0a7a73", "green": "#1a7f37", "amber": "#9a6700",
+            "orange": "#bc4c00", "red": "#cf222e", "purple": "#8250df", "pink": "#bf3989"}
+_LANE_ORDER = tuple(LANE_HEX)
+
+
+def item_lane(items: Mapping[str, Mapping], key: str) -> str:
+    """The `lane-…` segment of the item's section, inherited from the nearest parent that has a section."""
+    seen: set[str] = set()
+    node = key
+    while isinstance(node, str) and node in items and node not in seen:
+        seen.add(node)
+        section = (items.get(node) or {}).get("section")
+        if isinstance(section, str) and section:
+            for seg in reversed(section.split("/")):
+                if seg.startswith("lane-"):
+                    return seg
+            return ""
+        node = (items.get(node) or {}).get("parent")
+    return ""
+
+
+def _lane_hash(lane: str) -> int:
+    h = 0
+    for ch in lane:
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return h
+
+
+def lane_colors(lanes: Iterable[str], lanes_cfg: Mapping | None = None) -> dict[str, str]:
+    """One colour per lane, the same rule as console.js `laneColors`.
+
+    Configured colours first; then each other lane, in name order, takes its hash's colour or, when an
+    earlier lane already has it, the next free one. So two lanes share a colour only past 8 lanes, and a
+    lane's colour changes only if a new lane that collides with it sorts before it (pin it in config).
+    """
+    cfg = lanes_cfg or {}
+    out: dict[str, str] = {}
+    for lane in sorted(set(lanes)):
+        c = (cfg.get(lane) or {}).get("color")
+        if c in LANE_HEX:
+            out[lane] = c
+    used = set(out.values())
+    for lane in sorted(set(lanes)):
+        if lane in out:
+            continue
+        start = _lane_hash(lane) % len(_LANE_ORDER)
+        pick = _LANE_ORDER[start]
+        for k in range(len(_LANE_ORDER)):
+            cand = _LANE_ORDER[(start + k) % len(_LANE_ORDER)]
+            if cand not in used:
+                pick = cand
+                break
+        out[lane] = pick
+        used.add(pick)
+    return out
+
+
+def project_lanes(items: Mapping[str, Mapping], lanes_cfg: Mapping | None = None) -> list[str]:
+    """Every lane the project uses: from items' sections, and from the config."""
+    found = {item_lane(items, k) for k in items} | set(lanes_cfg or {})
+    return sorted(x for x in found if x)
+
+
+def lane_color(lane: str, lanes_cfg: Mapping | None = None, items: Mapping[str, Mapping] | None = None) -> str:
+    """A lane's colour within its project (`items`), or on its own when no project is given."""
+    lanes = project_lanes(items, lanes_cfg) if items is not None else [lane]
+    return lane_colors(lanes + [lane], lanes_cfg)[lane]
+
+
+def lane_words(lane: str, lanes_cfg: Mapping | None = None) -> str:
+    label = ((lanes_cfg or {}).get(lane) or {}).get("label")
+    if label:
+        return label
+    w = re.sub(r"[-_]+", " ", lane[len("lane-"):])
+    return w.upper() if len(w) <= 3 else w[:1].upper() + w[1:]
+
+
 _UNSAFE = re.compile(r'[\x00-\x1f"`\\]')
 
 
@@ -173,7 +252,9 @@ PROJECT_MAX_NODES = 120   # items on one project chart; past this a group is sho
 
 def build_project(view: Mapping, items: Mapping[str, Mapping], *, clickable: bool = False,
                   state_filter: str | None = None) -> str:
-    """A Mermaid flowchart (TD) of every item in the project, parent -> child, coloured by status roll-up.
+    """A Mermaid flowchart (LR) of every item in the project, parent -> child, coloured by status roll-up,
+    and boxed by lane (D10). Left to right: a wide, shallow tree (waves over many items) stacks its leaves
+    down the page instead of in one unreadable row.
 
     The roll-up on an item uses its own questions only (not its descendants'): awaiting_you dominates,
     then stale, then unlocked, then locked, then nothing. Clicking an item node opens it in the console.
@@ -212,7 +293,7 @@ def build_project(view: Mapping, items: Mapping[str, Mapping], *, clickable: boo
         visible_ids = matched | ancestors
         ancestor_only = ancestors - matched
 
-    lines: list[str] = ["flowchart TD"]
+    lines: list[str] = ["flowchart LR"]
     lines.extend(_classdefs())
 
     if not visible_ids:
@@ -224,7 +305,15 @@ def build_project(view: Mapping, items: Mapping[str, Mapping], *, clickable: boo
     kept = ordered[:PROJECT_MAX_NODES]
     kept_ids = {k for k, _ in kept}
 
+    # D10: items are grouped in one box per lane, its border in the lane's colour. Without lanes every
+    # top-level item sat in one long row; boxes give the map a shape and say where each item belongs.
+    lanes_cfg = (view.get("config") or {}).get("lanes") or {}
+    colours = lane_colors(project_lanes(items, lanes_cfg), lanes_cfg)
+    by_lane: dict[str, list] = {}
     for key, data in kept:
+        by_lane.setdefault(item_lane(items, key), []).append((key, data))
+
+    def node(key, data, indent):
         data = data or {}
         title = _safe(data.get("title") or "", 44)
         counts = by_item.get(key) or {}
@@ -233,9 +322,22 @@ def build_project(view: Mapping, items: Mapping[str, Mapping], *, clickable: boo
         suffix = _state_badge(counts)
         label = _safe(key, 44) + ("<br/>" + title if title else "") + (("<br/>" + suffix) if suffix else "")
         node_id = _node_id("I_", key)
-        lines.append(f'  {node_id}(["{label}"]):::{cls}')
+        lines.append(f'{indent}{node_id}(["{label}"]):::{cls}')
         if clickable:
-            lines.append(f'  click {node_id} call ckClick("item", "{_js(key)}")')
+            lines.append(f'{indent}click {node_id} call ckClick("item", "{_js(key)}")')
+
+    for lane, members in by_lane.items():
+        if not lane:
+            continue
+        box = _node_id("L_", lane)
+        lines.append(f'  subgraph {box}["{_safe(lane_words(lane, lanes_cfg), 40)}"]')
+        lines.append("    direction TB")
+        for key, data in members:
+            node(key, data, "    ")
+        lines.append("  end")
+        lines.append(f"  style {box} fill:transparent,stroke:{LANE_HEX[colours[lane]]},stroke-width:2px")
+    for key, data in by_lane.get("", []):
+        node(key, data, "  ")
 
     for key, data in kept:
         data = data or {}

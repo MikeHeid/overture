@@ -625,8 +625,13 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
           "var vb=svg.viewBox.baseVal;if(!vb.width||!vb.height){return;}"
           "svg.style.maxWidth='none';svg.style.width=vb.width+'px';svg.style.height=vb.height+'px';"
           "var r=stage.getBoundingClientRect();"
-          "scale=Math.max(0.1,Math.min(2,Math.min((r.width-24)/vb.width,(r.height-24)/vb.height)));"
-          "tx=0;ty=0;apply();};"
+          "var byW=(r.width-24)/vb.width,byH=(r.height-24)/vb.height;"
+          # A tall chart (the project map, drawn left to right) fits to WIDTH and starts at its top, so its
+          # labels stay readable; drag or the buttons move through the rest. Others fit whole.
+          "if(byH<byW*0.6){scale=Math.max(0.1,Math.min(1.2,byW));tx=0;"
+          "ty=Math.max(0,(vb.height*scale-(r.height-24))/2);}"
+          "else{scale=Math.max(0.1,Math.min(2,Math.min(byW,byH)));tx=0;ty=0;}"
+          "apply();};"
         "document.getElementById('ck-zoom-reset').addEventListener('click',function(){window.ckFit();});"
         "})();"
         "document.getElementById('ck-save').addEventListener('click',function(){"
@@ -1091,7 +1096,7 @@ class Console:
         view = V.build(self.store, items, holds, names=self.names.mapping())
         view["tags"] = self.tags(view, items)
         view["config"] = {"specs_dir": self.project.specs_dir, "visuals_dir": self.project.visuals_dir,
-                          "sections": self.project.sections}
+                          "sections": self.project.sections, "lanes": self.project.lanes}
         view["playbooks"] = [p.to_dict() for p in PB.load(self.cfg.root).values()]
         view["triggers"] = [t.to_public() for t in self.triggers.all().values()]
         view["trigger_log"] = self.triggers.recent(20)

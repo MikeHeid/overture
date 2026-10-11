@@ -1440,6 +1440,10 @@
       if (!data) return;
       const rc = rings[id];
       const t = data.total;
+      // D10: the dashboard can colour each item's block by its lane, from these attributes and the
+      // --ck-lane-<colour> custom properties console.css publishes.
+      const lane = laneOf(id);
+      if (lane) { det.setAttribute('data-ck-lane', lane); det.setAttribute('data-ck-lane-color', laneColor(lane)); }
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', t.awaiting_you + ' you']);
       if (t.awaiting_agent > 0) parts.push(['awaiting_agent', t.awaiting_agent + (agentActive(id) ? ' agent active' : ' agent')]);
@@ -1474,6 +1478,8 @@
       if (!id || !items[id]) return;
       const t = view.items && view.items[id] && view.items[id].total;
       if (!t) return;
+      const secLane = laneOf(id);
+      if (secLane) { el.setAttribute('data-ck-lane', secLane); el.setAttribute('data-ck-lane-color', laneColor(secLane)); }
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', String(t.awaiting_you)]);
       if (t.unlocked > 0) parts.push(['unlocked', String(t.unlocked)]);
@@ -2437,7 +2443,7 @@
         const row = el('div', { className: 'ck-inbox-item ck-inbox-item-visual', tabindex: '0',
           'aria-label': 'New visual on ' + it + (itemData ? ', ' + itemData.title : '') }, [
           el('span', { className: 'ck-q-state', dataState: 'visual' }, ['◫ ', vs.length === 1 ? 'drawn' : vs.length + ' drawn']),
-          renderItemRefTag(it),
+          renderItemRefTag(it), renderLaneChip(it),
           el('span', { className: 'ck-inbox-item-id' }, [it]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
           renderStarButton('item:' + it, 'this item')
@@ -2528,7 +2534,7 @@
         const row = el('div', { className: 'ck-inbox-item ck-inbox-item-answered', tabindex: '0',
           role: 'button', 'aria-label': 'Open item ' + it + ' (recently answered)' + (itemData ? ', ' + itemData.title : '') }, [
           el('span', { className: 'ck-q-state', dataState: 'locked' }, [stateMark('locked'), ' locked']),
-          renderItemRefTag(it),
+          renderItemRefTag(it), renderLaneChip(it),
           el('span', { className: 'ck-inbox-item-id' }, [it]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
           renderStarButton('item:' + it, 'this item')
@@ -2564,7 +2570,7 @@
           el('span', { className: 'ck-q-state', dataState: agentActive(itemId) ? 'agent_active' : 'awaiting_agent' }, [
             stateMark('awaiting_agent'), ' ' + agentWords(itemId)
           ]),
-          renderItemRefTag(itemId),
+          renderItemRefTag(itemId), renderLaneChip(itemId),
           el('span', { className: 'ck-inbox-item-id' }, [itemId]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : ''])
         ]);
@@ -2653,7 +2659,7 @@
       el('span', { className: 'ck-q-state', dataState: q.state }, [
         stateMark(q.state), ' ', q.state.replace('_', ' ')
       ]),
-      renderItemRefTag(q.question.item),
+      renderItemRefTag(q.question.item), renderLaneChip(q.question.item),
       el('span', { className: 'ck-inbox-item-id' }, [q.question.item]),
       el('span', { className: 'ck-inbox-item-qnum', title: qid }, ['Q' + qNum(qid)]),
       el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
@@ -2752,7 +2758,7 @@
     btn.addEventListener('click', () => openLooseRound(c));
     const card = el('div', { className: 'ck-cluster', dataCluster: c.id }, [
       el('div', { className: 'ck-cluster-head' }, [
-        renderItemRefTag(c.item),
+        renderItemRefTag(c.item), renderLaneChip(c.item),
         el('span', { className: 'ck-inbox-item-id' }, [c.item]),
         ' ' + n + ' questions from ' + c.agent + ' · asked ' + relTime(c.qs[n - 1].question.ts)]),
       btn
@@ -2853,6 +2859,8 @@
       qs.sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state));
 
       // Dashboard section links: `.overture.json` can map this item to one or more #anchors on the host page.
+      const laneTrail = renderLaneTrail(itemId);
+      if (laneTrail) body.appendChild(laneTrail);
       const sectionLinks = renderSectionLinks(itemId);
       if (sectionLinks) body.appendChild(sectionLinks);
       body.appendChild(renderItemTools(itemId));
@@ -7943,6 +7951,99 @@
     const data = items && items[id];
     return (data && typeof data.ref === 'string') ? data.ref : '';
   }
+  // ---- Lane colours (D10, owner 2026-10-11) ----------------------------------------------------
+  // A lane is the `lane-…` segment of an item's section (inherited from the nearest parent that has
+  // one). Its colour comes from `.overture.json` lanes[lane].color, or else a stable pick from the
+  // palette by the lane's name, so the same lane is always the same colour with no setup.
+  const LANE_COLORS = ['blue', 'teal', 'green', 'amber', 'orange', 'red', 'purple', 'pink'];
+  function itemSection(id) {
+    const seen = new Set();
+    let node = id;
+    while (node && items && items[node] && !seen.has(node)) {
+      seen.add(node);
+      if (items[node].section) return String(items[node].section);
+      node = items[node].parent;
+    }
+    return '';
+  }
+  function laneOf(id) {
+    const segs = itemSection(id).split('/');
+    for (let i = segs.length - 1; i >= 0; i--) if (segs[i].indexOf('lane-') === 0) return segs[i];
+    return '';
+  }
+  function laneConfig(lane) {
+    const cfg = view && view.config && view.config.lanes;
+    return (cfg && cfg[lane]) || {};
+  }
+  function laneHash(lane) {
+    let h = 0;
+    for (let i = 0; i < lane.length; i++) h = (h * 31 + lane.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  // One colour per lane, the same rule as chart.py `lane_colors`: configured colours first, then each
+  // other lane in name order takes its hash's colour or the next free one. Cached per items/config.
+  let laneCache = { items: null, cfg: null, map: {} };
+  function laneColors() {
+    const cfg = (view && view.config && view.config.lanes) || {};
+    if (laneCache.items === items && laneCache.cfg === cfg) return laneCache.map;
+    const all = new Set(Object.keys(cfg));
+    for (const id of Object.keys(items || {})) { const l = laneOf(id); if (l) all.add(l); }
+    const lanes = Array.from(all).sort();
+    const map = {};
+    const used = new Set();
+    for (const l of lanes) {
+      const c = (cfg[l] || {}).color;
+      if (LANE_COLORS.indexOf(c) >= 0) { map[l] = c; used.add(c); }
+    }
+    for (const l of lanes) {
+      if (map[l]) continue;
+      const start = laneHash(l) % LANE_COLORS.length;
+      let pick = LANE_COLORS[start];
+      for (let k = 0; k < LANE_COLORS.length; k++) {
+        const cand = LANE_COLORS[(start + k) % LANE_COLORS.length];
+        if (!used.has(cand)) { pick = cand; break; }
+      }
+      map[l] = pick;
+      used.add(pick);
+    }
+    laneCache = { items: items, cfg: cfg, map: map };
+    return map;
+  }
+  function laneColor(lane) {
+    return laneColors()[lane] || LANE_COLORS[laneHash(lane) % LANE_COLORS.length];
+  }
+  function segWords(seg) {
+    const m = /^(wave|phase|lane)-(.+)$/.exec(seg);
+    if (!m) return seg;
+    if (m[1] === 'lane') {
+      const label = laneConfig(seg).label;
+      if (label) return label;
+      const w = m[2].replace(/[-_]+/g, ' ');
+      return w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1);
+    }
+    return m[1].charAt(0).toUpperCase() + m[1].slice(1) + ' ' + m[2];
+  }
+  // A small chip naming the lane, coloured by it; null when the item has no lane.
+  function renderLaneChip(id) {
+    const lane = laneOf(id);
+    if (!lane) return null;
+    return el('span', { className: 'ck-lane-chip', dataLane: lane, dataLaneColor: laneColor(lane),
+      title: itemSection(id).split('/').map(segWords).join(' › ') }, [segWords(lane)]);
+  }
+  // The item's whole section as a trail, e.g. "Wave 2 › Phase 2.2 › API", at the top of its panel.
+  function renderLaneTrail(id) {
+    const section = itemSection(id);
+    if (!section) return null;
+    const lane = laneOf(id);
+    const trail = el('nav', { className: 'ck-lane-trail', 'aria-label': 'Where this item sits',
+      dataLaneColor: lane ? laneColor(lane) : null });
+    section.split('/').forEach((seg, i) => {
+      if (i) trail.appendChild(el('span', { className: 'ck-lane-sep', 'aria-hidden': 'true' }, [' › ']));
+      trail.appendChild(seg === lane ? renderLaneChip(id) : el('span', {}, [segWords(seg)]));
+    });
+    return trail;
+  }
+
   function renderItemRefTag(id) {
     const r = itemRef(id);
     if (!r) return null;
@@ -8144,6 +8245,7 @@
         el('span', { className: 'ck-priority-dot', dataHealth: health }, []),
         el('span', { className: 'ck-priority-project' }, [r.project]),
         el('span', { className: 'ck-priority-qid' }, [' · ' + r.qid]),
+        r.isSelf !== false ? renderLaneChip(r.item || qidItem(r.qid)) : null,
         r.text ? el('span', { className: 'ck-priority-text' }, [' · ' + r.text]) : null,
         el('span', { className: 'ck-priority-when ck-muted' }, [' · ' + relTime(r.ts)]),
         renderSnoozeMenu(r.project, r.qid)
@@ -8221,7 +8323,7 @@
       const itemData = items && items[id];
       const header = el('div', { className: 'ck-inbox-item ck-favorite-item', tabindex: '0' }, [
         el('span', { className: 'ck-star ck-star-on', 'aria-label': 'Starred item' }, ['★']),
-        renderItemRefTag(id),
+        renderItemRefTag(id), renderLaneChip(id),
         el('span', { className: 'ck-inbox-item-id' }, [id]),
         el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : ''])
       ]);

@@ -341,10 +341,32 @@ anything from the repository. See the module docstrings for the trust model.
   <img src="docs/screenshots/anim-flowchart.gif" alt="Expanding an item's status flowchart, zooming in, and fitting it back to the frame" width="400">
 
 - **Project map** at the top of the Inbox: a tree of every item, parent to
-  child, each node coloured by its own questions' roll-up (open > stale >
-  answered-but-unlocked > locked) with a short tally. Click an item to open
-  it. A chip row narrows the map to one state; ancestors stay drawn muted so
-  the tree is still a tree. Lazy, like the per-item chart.
+  child, drawn left to right.
+  - Each node is coloured by its own questions' roll-up (open > stale >
+    answered-but-unlocked > locked), with a short tally.
+  - Items are grouped in one box per **lane**, its border in the lane's
+    colour.
+  - Click an item to open it.
+  - A chip row narrows the map to one state; ancestors stay drawn muted, so
+    the tree is still a tree.
+  - It loads lazily, like the per-item chart.
+- **Lane colours.** A lane is the `lane-…` part of an item's section, for
+  example `wave-2/phase-2.2/lane-api`. An item without one inherits its
+  parent's.
+  - **Where it shows:** a chip coloured by the lane, on inbox and Priority
+    rows (with a matching left edge) and as a "Wave 2 › Phase 2.2 › API"
+    trail at the top of the item.
+  - **Colours are automatic.** They are drawn from 8 colours that read at
+    3:1 or better in light and dark, and two lanes share one only past 8.
+  - **To pin a colour or a label,** add it to `.overture.json`:
+    `"lanes": {"lane-api": {"color": "blue", "label": "API"}}`. Only
+    palette names are accepted: blue, teal, green, amber, orange, red,
+    purple or pink. `"ux": true` marks a lane's items as UX components for
+    the console-ux skill.
+  - **On your dashboard,** each item's `<details>` and each `data-ck-item`
+    block gets `data-ck-lane` and `data-ck-lane-color`, and console.css
+    publishes `--ck-lane-<colour>`, so your page can colour its own lane
+    blocks to match.
 - **Save SVG** on every chart and Mermaid visual. The rendered SVG is sent
   back to the parent and downloaded as a plain file; nothing goes back to
   the server.

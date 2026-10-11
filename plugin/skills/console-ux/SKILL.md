@@ -44,9 +44,10 @@ Your references:
     A view --item ITEM
 
 It is a **UX item** when the top-level `items[ITEM].section` has a
-`lane-ui` or `lane-ux` segment, for example `wave-2/phase-2.2/lane-ui`.
-*(Planned, not yet shipped: an item `ux: true` field, a request
-`purpose: "ux"`, and extra UX lanes set in `.overture.json`.)*
+`lane-ui` or `lane-ux` segment (for example `wave-2/phase-2.2/lane-ui`), or a
+lane that `view.config.lanes` marks `"ux": true`. That flag is set in the
+project's `.overture.json` → `lanes`. *(Planned, not yet shipped: an item
+`ux: true` field, and a request `purpose: "ux"`.)*
 
 From `view.threads[ITEM]`, read:
 
