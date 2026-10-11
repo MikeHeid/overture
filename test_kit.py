@@ -2357,6 +2357,29 @@ class StewardLockTests(_Steward):
         self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
         self.assertEqual(self.agent("--as", "agent-5", "watch", "--timeout", "0.1", agent="agent-6")[0], 3)
 
+    def test_a_worker_machine_never_runs_the_steward_even_under_its_name(self):
+        # D11: `role worker` in the registry, or the plugin's setting in the environment, turns the steward lock
+        # into a refusal for the steward's own name too; `steward` and no role change nothing; the projects stay.
+        self.register("--steward", "agent-5")
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        self.assertEqual(self.agent("role", "steward")[0], 0)
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        rc, out, _ = self.agent("role", "worker")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.agent("role")[1].strip(), "role: worker")
+        rc, _, err = self.agent("watch", "--timeout", "0.1", agent="agent-5")
+        self.assertEqual(rc, 1, err)
+        self.assertIn("role is `worker`", err)
+        self.assertIn("agent-5", self.registry()[next(iter(self.registry()))]["steward"])   # the registry kept it all
+        self.assertEqual(self.agent("role", "clear")[0], 0)
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        # The plugin's setting says the same to the CLI when Claude Code exports it, and the stricter wins.
+        r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.state), "synced", "--through", "1"],
+                           env=self.env("agent-5", CLAUDE_PLUGIN_OPTION_ROLE="worker"), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("role is `worker`", r.stderr)
+        self.assertEqual(self.agent("role", "bogus")[0], 2)
+
     def test_synced_refuses_all_but_the_steward_and_moves_no_cursor(self):
         self.register("--steward", "agent-5")
         rc, _, err = self.agent("--as", "agent-6", "synced", "--through", "7")
@@ -4430,6 +4453,39 @@ class SessionNameTests(_Steward):
         self.assertIsNotNone(self.ask(SID6, agent="agent-5"))       # the session's own name beats the variable
         self.prompt("/overture:as agent-5", sid=SID6)             # the last line for a session wins
         self.assertIsNone(self.ask(SID6))
+
+    def test_a_worker_machine_refuses_to_name_the_steward_blocks_asking_and_says_so(self):
+        # D11, in the three hooks: /overture:as <steward> is refused and writes nothing; a session started under
+        # the steward's name is told it is not the steward and may not ask live; other names work as before.
+        self.register("--steward", "agent-5")
+        self.assertEqual(self.agent("role", "worker")[0], 0)
+        why = self.prompt("/overture:as agent-5", sid=SID5)
+        self.assertIn("nothing recorded", why)
+        self.assertIn("role is `worker`", why)
+        self.assertFalse(self.file.exists())
+        self.assertIn("recorded", self.prompt("/overture:as agent-6", sid=SID6) or "this session is now agent-6")
+        self.assertEqual([r["agent"] for r in self.lines()], ["agent-6"])
+        blocked = self.ask(SID5, agent="agent-5")                      # started as the steward on a worker machine
+        self.assertIn("role is `worker`", blocked)
+        self.assertIn("--as agent-5 ask", blocked)
+        hook = self.hook_module()
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.cfg_home), "OVERTURE_AGENT": "agent-5"}):
+            e = hook.enclosing_entry({"cwd": str(self.project)})
+            note, mine = hook.steward_line(e, "agent", "agent-5")
+        self.assertFalse(mine)
+        self.assertIn("role is `worker`", note)
+        self.assertEqual(self.agent("role", "clear")[0], 0)
+        self.assertIn("this session is now agent-5", self.prompt("/overture:as agent-5", sid=SID5))
+        self.assertIsNone(self.ask(SID5, agent="agent-5"))
+
+    def test_the_plugin_setting_alone_makes_a_worker(self):
+        self.register("--steward", "agent-5")
+        out = self.run_hook(self.NAMER, {"session_id": SID5, "cwd": str(self.project), "hook_event_name":
+                                         "UserPromptSubmit", "prompt": "/overture:as agent-5"},
+                            CLAUDE_PLUGIN_OPTION_ROLE="worker")
+        self.assertIn("role is `worker`", out["additionalContext"])
+        self.assertFalse(self.file.exists())
 
     def test_the_environment_fallback_still_works(self):
         self.register("--steward", "agent-5")

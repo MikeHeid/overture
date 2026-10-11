@@ -75,6 +75,10 @@ def note_for(payload: object) -> str | None:
         return ("Owner console: nothing recorded: this project is not registered for an owner console "
                 "(`agent.py register`), so there is no console to name this session for.")
     state = Path(e["state"])
+    if name == e.get(SS.STEWARD) and SS.machine_role() == "worker":
+        return (f"Owner console: nothing recorded: {name} is this console's steward, and this machine's role is "
+                f"`worker` (the plugin's Machine role setting, or `agent.py role`), so no session here may be the "
+                f"steward. Name this session something else, e.g. agent-6, or run it on the steward's machine.")
     try:
         wrote = SS.record_session(state, sid, name)
     except (SS.Unsafe, OSError) as err:

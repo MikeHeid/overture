@@ -2992,6 +2992,14 @@ on its own.
 
 ## Unreleased
 
+- **Machine role (D11).** A new plugin setting, **Machine role**
+  (`steward` or `worker`), and `agent.py role worker|steward|clear` in your
+  registry. On a `worker` machine no session is the steward, whatever it is
+  named: `/overture:as <steward>` is refused, a session started under that
+  name is told so and cannot ask you live, and `watch`, `synced` and the fold
+  refuse. Use it when the steward runs on a home server and laptops only
+  work. If the plugin setting and the registry disagree, `worker` wins.
+
 - **Attach your own images (F2).** In an item's Discussion box, **Attach
   image** (or paste an image) puts your picture on that item beside the
   agents' screenshots, shown as "you" in the Feed. It is checked like an
