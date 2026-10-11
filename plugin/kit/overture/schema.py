@@ -102,6 +102,38 @@ DESIGN_URL = re.compile(r"^https://claude\.ai/design/p/[0-9a-f]{8}-[0-9a-f]{4}-[
 _DESIGN_LOOSE = re.compile(r"^https://claude\.ai/design/p/[0-9a-f-]{36}[?#]")
 
 
+# 1.33: a UX visual request may point at artifacts of the project's Claude Design (the owner's picker):
+# [{path, mode}], "inspire" (borrow the look) or "swap" (build the new version from that artifact).
+MAX_REFS = 10
+REF_MODES = ("inspire", "swap")
+PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .()/-]{0,199}\Z")
+
+
+def path_problem(p: object, where: str) -> str | None:
+    if not isinstance(p, str) or not PATH.match(p) or ".." in p.split("/") or "//" in p or p.endswith("/"):
+        return f"{where} must be a plain relative path (letters, digits, _ . ( ) - space and /), at most 200 characters"
+    return None
+
+
+def refs_problem(refs: object) -> str | None:
+    """Why a request's `refs` is not [{path, mode}] of at most MAX_REFS distinct artifacts; None when it is."""
+    if not isinstance(refs, list) or not refs or len(refs) > MAX_REFS:
+        return f"refs is a list of 1 to {MAX_REFS} of {{path, mode}}"
+    seen: set[str] = set()
+    for i, r in enumerate(refs):
+        if not isinstance(r, dict) or set(r) != {"path", "mode"}:
+            return f"refs[{i}] is {{path, mode}}"
+        why = path_problem(r["path"], f"refs[{i}].path")
+        if why:
+            return why
+        if r["mode"] not in REF_MODES:
+            return f"refs[{i}].mode is one of {', '.join(REF_MODES)}"
+        if r["path"] in seen:
+            return f"refs[{i}].path {r['path']!r} is listed twice"
+        seen.add(r["path"])
+    return None
+
+
 def design_url_problem(url: object) -> str | None:
     """Why `url` is not an accepted Claude Design link, or None. "" is accepted (it unlinks)."""
     if url == "":
@@ -218,7 +250,7 @@ OPTIONAL = {
     # 0.8.0: `step`. A kit before it refuses a message carrying it, by name.
     "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to",
                           # 1.32 (UX-VIEW.md): a visual request's purpose and source; ux-save and ux-link.
-                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base", "scripts"}),
+                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base", "scripts", "refs"}),
     "answer": frozenset({"supersedes", "reason"}),
     # 0.5.0: the conditions a RE-lock was taken against, computed by the server.
     # Written only when they differ from the question's `valid_if`, so a store
@@ -528,6 +560,13 @@ def _check_ux(rec: dict, intent: object, chat: bool) -> list[str]:
     errs = []
     if "purpose" in rec and (intent != "visual" or rec["purpose"] not in PURPOSES):
         errs.append(f"purpose belongs to a visual request and is one of {', '.join(PURPOSES)}")
+    if "refs" in rec:
+        if intent != "visual" or rec.get("purpose") != "ux":
+            errs.append("refs belongs to a visual request with purpose 'ux'")
+        else:
+            why = refs_problem(rec["refs"])
+            if why:
+                errs.append(why)
     if "from" in rec and (intent != "visual" or rec.get("purpose") != "ux" or rec["from"] not in FROMS):
         errs.append(f"from belongs to a visual request with purpose 'ux' and is one of {', '.join(FROMS)}")
     if intent in ("ux-save", "ux-link", "ux-scripts") and chat:

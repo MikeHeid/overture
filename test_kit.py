@@ -5690,6 +5690,44 @@ class MultiStoreTests(unittest.TestCase):
         self.assertEqual(bad.read_text(), '{"not": "a record"}\n')      # never repaired or rewritten
 
 
+class DesignInventoryTests(Tmp):
+    """designs.py (1.33): the artifact lists agents post for the UX View picker."""
+    URL = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+
+    def test_store_round_trips_replaces_and_stamps_who_and_when(self):
+        from overture import designs as DG
+        self.assertEqual(DG.load(self.dir), {})
+        DG.store(self.dir, self.URL, [{"path": "a.html", "title": "A"}], "agent-2", at="2026-10-11T08:00:00Z")
+        DG.store(self.dir, self.URL, [{"path": "b.html"}], "agent-3", at="2026-10-11T09:00:00Z")
+        got = DG.load(self.dir)[self.URL]
+        self.assertEqual((got["artifacts"], got["by"], got["pushed_at"]), ([{"path": "b.html"}], "agent-3", "2026-10-11T09:00:00Z"))
+
+    def test_only_the_newest_twenty_links_are_kept(self):
+        from overture import designs as DG
+        for i in range(DG.MAX_DESIGNS + 2):
+            url = f"https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-{i:012x}"
+            DG.store(self.dir, url, [{"path": "a.html"}], "x", at=f"2026-10-11T08:{i:02d}:00Z")
+        kept = DG.load(self.dir)
+        self.assertEqual(len(kept), DG.MAX_DESIGNS)
+        self.assertNotIn("https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-000000000000", kept)
+
+    def test_a_damaged_or_foreign_file_is_empty_never_an_error(self):
+        from overture import designs as DG
+        (self.dir / DG.FILE).write_text("not json")
+        self.assertEqual(DG.load(self.dir), {})
+        (self.dir / DG.FILE).write_text(json.dumps({"designs": {"https://evil.example/x": {"artifacts": [{"path": "a"}]},
+                                                                self.URL: {"artifacts": [{"path": "../x"}]}}}))
+        self.assertEqual(DG.load(self.dir), {})
+
+    def test_refs_have_a_closed_shape(self):
+        from overture import schema as S
+        ok = [{"path": "a/b.html", "mode": "inspire"}]
+        self.assertIsNone(S.refs_problem(ok))
+        for bad in ("x", [], [{"path": "a", "mode": "x"}], [{"path": "a"}], [{"path": "a", "mode": "swap", "x": 1}],
+                    ok * 2, [{"path": f"p{i}", "mode": "swap"} for i in range(S.MAX_REFS + 1)], [{"path": "/abs", "mode": "swap"}]):
+            self.assertIsNotNone(S.refs_problem(bad), bad)
+
+
 class PrMergeTests(Tmp):
     """1.33 (UX-VIEW.md, D7): head_sha in the snapshot, the @prs thread, and the steward's merge checks."""
     SHA = "a" * 40

@@ -1665,6 +1665,71 @@ class HostingTests(unittest.TestCase):
             self.assertIsNone(ss._server_down(self.t / "elsewhere", HERE / "plugin" / "kit"))
 
 
+class DesignPickerTests(_Live, unittest.TestCase):
+    """1.33: an agent lists a Claude Design project's artifacts; the owner references some in a UX request."""
+    URL = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+    ARTS = [{"path": "buttons/primary.html", "title": "Primary button"}, {"path": "cards/plan card.html"}]
+
+    def inventory(self, url=None, arts=None, expect=200):
+        code, out = self.agent_post("/design-inventory", {"url": url or self.URL, "artifacts": self.ARTS if arts is None else arts,
+                                                          "nonce": "di" + os.urandom(6).hex()})
+        self.assertEqual(code, expect, out)
+        return out
+
+    def link(self):
+        self.owner_msg(item="LANE.1", intent="ux-link", text="link", url=self.URL)
+
+    def ask(self, refs, expect=200, **over):
+        body = {"item": "LANE.1", "intent": "visual", "purpose": "ux", "text": "Draw it", "refs": refs,
+                "nonce": "rq" + os.urandom(6).hex(), **over}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_the_list_is_kept_shown_to_the_owner_and_replaced_by_the_next(self):
+        self.assertEqual(self.inventory()["artifacts"], 2)
+        _, view = self.get("/api/view")
+        got = view["view"]["designs"][self.URL]
+        self.assertEqual([a["path"] for a in got["artifacts"]], ["buttons/primary.html", "cards/plan card.html"])
+        self.inventory(arts=[{"path": "forms/login.html"}])
+        _, view = self.get("/api/view")
+        self.assertEqual([a["path"] for a in view["view"]["designs"][self.URL]["artifacts"]], ["forms/login.html"])
+        code, out = SV.agent_request(self.cfg.socket, "GET", "/view")
+        self.assertNotIn("designs", out["view"])                  # the owner's picker data never goes to the agent door
+
+    def test_a_bad_list_is_refused_by_name(self):
+        for arts, needle in (([{"path": "../etc/passwd"}], "plain relative path"), ([], "non-empty"),
+                             ([{"path": "a.html"}, {"path": "a.html"}], "twice"),
+                             ([{"path": "a.html", "title": "x\ny"}], "one line"),
+                             ([{"path": "a.html", "kind": "x"}], "{path, title?}"),
+                             ([{"path": f"p{i}.html"} for i in range(301)], "limit")):
+            self.assertIn(needle, self.inventory(arts=arts, expect=400)["error"])
+        self.assertIn("Claude Design link", self.inventory(url="https://evil.example/design", expect=400)["error"])
+
+    def test_refs_must_name_listed_artifacts_of_the_items_linked_design(self):
+        refs = [{"path": "buttons/primary.html", "mode": "inspire"}]
+        self.assertIn("link this item", self.ask(refs, expect=409)["error"])
+        self.link()
+        self.assertIn("no artifact list", self.ask(refs, expect=409)["error"])
+        self.inventory()
+        rec = self.ask(refs)["record"]
+        self.assertEqual(rec["refs"], refs)
+        self.assertIn("not in the design's artifact list", self.ask([{"path": "other.html", "mode": "swap"}], expect=409)["error"])
+
+    def test_the_schema_holds_refs_to_a_ux_visual_request(self):
+        self.link()
+        self.inventory()
+        good = [{"path": "buttons/primary.html", "mode": "swap"}]
+        for bad, over in (([{"path": "buttons/primary.html", "mode": "copy"}], {}), (good * 2, {}), ([], {}),
+                          (good, {"purpose": None}), (good, {"intent": "chat"})):
+            body = {"item": "LANE.1", "intent": "visual", "purpose": "ux", "text": "x", "refs": bad,
+                    "nonce": "bd" + os.urandom(6).hex()}
+            body.update(over)
+            body = {k: v for k, v in body.items() if v is not None}
+            code, out = self.req("POST", "/api/message", body, tok=token())
+            self.assertEqual(code, 400, (bad, over, out))
+
+
 class ScriptsSwitchTests(_Live, unittest.TestCase):
     """1.33 (UX-VIEW.md "Scripts in components"): raw source stored apart, run only while the owner's switch is on."""
     def raw(self, path):
@@ -4186,7 +4251,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
         self.assertIn("subprocess.Popen", seen)
 
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
-    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/visual-export",
+    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/design-inventory", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
                    "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
 

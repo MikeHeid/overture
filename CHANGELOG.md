@@ -2992,6 +2992,15 @@ on its own.
 
 ## Unreleased
 
+- **Design-system picker for UX View.** With a Claude Design linked, an
+  agent can list the project's artifacts (`agent.py design-inventory`), and
+  UX View's Settings then offers them: filter, tick up to 10, and choose
+  **inspire** (borrow the look) or **swap** (build the new version from that
+  artifact). **Generate** carries your picks as `refs`; the server refuses a
+  pick that is not on the agent's list. Nothing opens or fetches the design
+  from the console, and a swap is always a new version, never an overwrite.
+  Without a list, **Ask an agent to list it** posts the request on the item.
+
 - **Machine role (D11).** A new plugin setting, **Machine role**
   (`steward` or `worker`), and `agent.py role worker|steward|clear` in your
   registry. On a `worker` machine no session is the steward, whatever it is

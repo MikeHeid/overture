@@ -1369,6 +1369,14 @@ def main(argv=None) -> int:
     s.add_argument("--qid", help="the question it illustrates")
     s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
     s.add_argument("--ticket", help="the ticket it shows")
+    s = sub.add_parser("design-inventory", description=(
+        "List the artifacts of the owner's Claude Design project for UX View's picker (1.33). Open the design the "
+        "way you read it for a component (the owner's login), then send what is in it: FILE is JSON "
+        "([{\"path\": \"buttons/primary.html\", \"title\": \"Primary button\"}, ...]) or one path per line. "
+        "At most 300 artifacts; a new list replaces the last one for that link. The owner picks from it; the "
+        "console never reads or opens the design."))
+    s.add_argument("--url", required=True, help="the design link, https://claude.ai/design/p/<project id>")
+    s.add_argument("--file", type=Path, required=True)
     s = sub.add_parser("component-source", description=(
         "Store the raw, scripted source of an HTML visual you already posted (1.33, UX-VIEW.md): the visual stays "
         "the sanitized, script-free version, and this is its progressive enhancement. Nothing runs it until the "
@@ -1801,6 +1809,20 @@ def _run(a, bell: Path) -> int:
         return _ux_export(a.state, a.project, a.save)
     if a.cmd == "pr-merge":
         return _pr_merge(a)
+    if a.cmd == "design-inventory":
+        try:
+            text = a.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: cannot read {a.file}: {e}", file=sys.stderr)
+            return 1
+        try:
+            arts = json.loads(text)
+        except ValueError:
+            arts = [{"path": ln.strip()} for ln in text.splitlines() if ln.strip()]
+        if isinstance(arts, list):
+            arts = [{"path": x} if isinstance(x, str) else x for x in arts]
+        return _call(a.state, "POST", "/design-inventory", {"url": a.url, "artifacts": arts,
+                                                            "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
     if a.cmd == "component-source":
         try:
             text = a.file.read_text(encoding="utf-8")
