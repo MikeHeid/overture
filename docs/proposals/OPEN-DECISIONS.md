@@ -12,7 +12,7 @@ Each decision had lettered options and a ★ recommendation. A ★ the owner
 deferred to is recorded as an *architect default*, not as the owner's
 decision, so a later review can audit it.
 
-Status: **decided on 2026-10-11**, except D13. The owner's answers and
+Status: **decided on 2026-10-11.** D13, D14, S1, S2 and F1–F3 were answered "defaults" the same day, so each is an *architect default*. The owner's answers and
 amendments are below. The option tables after them are kept as the record of
 what was weighed.
 
@@ -30,7 +30,13 @@ what was weighed.
 | D10 | How lanes get colors | **A.** Automatic, with a named override. |
 | D11 | A per-machine steward role setting? | **B**, as an *architect default*: the owner deferred to the recommendation. |
 | D12 | What to build next | **A.** Icons and status indicators, then lane colors. |
-| D13 | How a UX item is tied to a Claude Design project | **Open.** Needs a real Claude Design link to pin the accepted URL shapes. |
+| D13 | How a UX item is tied to a Claude Design project | **A**, *architect default* (2026-10-11): the steward writes the link into front matter; agents read the design; the server never fetches it. The accepted URL shapes are pinned once a real link is available. |
+| D14 | Playbooks and Triggers behind More ▾ (made in #131 to keep D9's no-wrap rule at ~515px) | **A**, *architect default*: five tabs in the bar, four under More; `g` shortcuts reach all. |
+| S1 | Form controls in UX components (UX-VIEW.md) | **A**, *architect default*: allow `button`, `input`, `select`, `label`, `textarea` as inert tags. |
+| S2 | When a component's scripts start (UX-VIEW.md) | **A**, *architect default*: at once, with "recorded at next save" shown. |
+| F1 | Asset space full (FEED-ASSETS.md) | **A**, *architect default*: prune the oldest unstarred assets not linked to a PR, noted in the Feed. |
+| F2 | The owner attaching images (FEED-ASSETS.md) | **A**, *architect default*: later, in its own PR. |
+| F3 | When agents post screenshots (FEED-ASSETS.md) | **A**, *architect default*: a before and an after on every UX-item change and UI fix. |
 
 ### D1 as decided
 

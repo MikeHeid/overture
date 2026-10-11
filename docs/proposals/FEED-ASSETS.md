@@ -5,7 +5,7 @@ should show up in the **Feed** and on the item, the same way this session's
 before-and-after shots were shown while the icons were built. The owner sees
 what changed without opening a branch.
 
-Status: proposal. Three small choices are open, F1–F3 at the end.
+Status: accepted. F1–F3 took their ★ as *architect defaults* (2026-10-11).
 
 ---
 
@@ -118,7 +118,7 @@ newest first. The fold is shown only when the item has assets.
 Rollback: an older kit refuses a store with `asset` records, by name. The
 CHANGELOG says so.
 
-## Open choices
+## Choices (architect defaults, 2026-10-11)
 
 - **F1. When the project's asset space is full.**
   - **A ★** Delete the oldest assets that are not starred or linked to a
