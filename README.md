@@ -188,6 +188,21 @@ banner naming the new version and the commands most useful at that moment
 | [docs/DEPLOY.md](plugin/kit/docs/DEPLOY.md) | Installing, upgrading and rolling back the systemd services. |
 | [docs/RUNBOOK.md](plugin/kit/docs/RUNBOOK.md) | Symptoms, checks and fixes, starting with the loopback `/health` check. |
 
+## Keep the server running
+
+One server, `server.py --all`, hosts every project. Run it however suits the
+machine:
+
+    <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log
+    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
+    <py> <kit>/server.py status                    # which mode, pid, each project's port
+    <py> <kit>/server.py health                    # agent door, version skew, linger; clears stale files
+
+`status` and `health` only read; a daemon and a service refuse to run
+together. A plugin setting, **Machine role**, or `agent.py role worker` marks
+a machine where no session may be the steward (for laptops that only work
+while the steward runs on a home server). See [docs/JOIN.md](docs/JOIN.md).
+
 ## Name the session, bootstrap the dashboard
 
 **Set the agent id for a Claude session** — type this in Claude Code:
@@ -440,6 +455,12 @@ others with ◂ ▸ or the arrow keys.
 
 <img src="docs/screenshots/feature-assets.png" alt="The Feed's Screenshots filter: a UX component at 375px, and the tab bar before and after icons, side by side" width="400">
 
+You can add your own too. In an item's Discussion box, **Attach image** (or
+paste an image) puts your picture on that item, shown as "you", beside the
+agents' screenshots.
+
+<img src="docs/screenshots/feature-attach.png" alt="An item's Screenshots fold with an agent's plan picker and the owner's own sketch, and the Discussion box with Send and Attach image" width="400">
+
 - **Formats:** PNG, JPEG, WebP or GIF. The format is decided from the
   file's own bytes, never its name, and SVG is refused because it can carry
   script.
@@ -454,6 +475,33 @@ others with ◂ ▸ or the arrow keys.
   twice).
 - **Reduced motion:** with reduced motion turned on, a GIF waits for you to
   press play.
+
+### Design UI components in UX View
+
+On a UI or UX item, **◫ UX View** (or `u`) opens a full-screen workspace
+over the item's HTML mock-ups. You see each version in a sandbox at
+Mobile, Tablet, Desktop or Fit width, step through versions with ◂ ▸ (or `[`
+and `]`), and press **Generate** for another. **Save as component** asks the
+steward to land the version as `components/<item>.md` by pull request; a
+replaced component is kept in `components/.history/`.
+
+<img src="docs/screenshots/feature-ux-view.png" alt="UX View: a plan-picker component in a sandbox at desktop width, a version stepper, size buttons, Generate and Save as component" width="720">
+
+Settings, in the same window, hold the rest:
+
+- **Claude Design link.** Link the item to its Claude Design project
+  (`https://claude.ai/design/p/<id>`). The console never opens or fetches it;
+  the agent reads the design with your login.
+- **Design system artifacts.** An agent lists the design's artifacts
+  (`agent.py design-inventory`). You filter, tick up to 10, and mark each
+  **inspire** (borrow the look) or **swap** (build the new version from that
+  artifact); **Generate** carries your picks. A swap is always a new version,
+  never an overwrite.
+- **Scripts (this version).** Off by default. An agent may store a scripted
+  source beside the script-free version; only your switch lets it run, in a
+  sealed frame with no access to the console, its cookies or the network.
+
+<img src="docs/screenshots/feature-ux-picker.png" alt="UX View with Settings open: the Claude Design link, a list of design artifacts with two ticked, one marked swap, and the Scripts switch" width="720">
 
 ### Track work as tickets
 
@@ -512,6 +560,15 @@ server cannot check it.
   (`agent.py prs-push`), and the tab says when it last did.
 
   <img src="docs/screenshots/feature-prs.png" alt="The PRs tab: two open pull requests and three merged, each with checks and an Open button for its item" width="400">
+
+  An open, ready, passing pull request has a **Merge** button. It asks
+  first ("Merge #214 into main?", with a link to the diff), and then sends
+  your request to the steward, whose own session merges it, pinned to the
+  commit you saw. The console never merges anything and holds no GitHub
+  token. If the pull request changed since you looked, or the request is over
+  24 hours old, nothing is merged and the steward says why.
+
+  <img src="docs/screenshots/feature-pr-merge.png" alt="The PRs tab with Merge #214 into main? open: the diff link, Merge and Cancel" width="400">
 
 - The **Favorite** tab lists everything you starred, grouped by item.
 - **Cross-project priority ribbon.** The Inbox opens with up to six of the

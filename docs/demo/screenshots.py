@@ -569,7 +569,7 @@ def capture(demo: Demo) -> list[str]:
             boxes = pg.locator(".ck-ux-ref input[type=checkbox]")
             boxes.nth(0).check()
             boxes.nth(2).check()
-            pg.locator(".ck-ux-refmode").nth(1).select_option("swap")
+            pg.locator(".ck-ux-refmode").nth(2).select_option("swap")
             pg.wait_for_timeout(1200)
             pg.screenshot(path=str(OUT / "feature-ux-picker.png"))
         shot("feature-ux-picker", ux_picker)
