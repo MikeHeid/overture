@@ -335,3 +335,60 @@ def _classdefs() -> Iterable[str]:
         "  classDef withdrawn fill:#e9ecef,stroke:#495057,color:#495057,stroke-dasharray:4 2",
         "  classDef muted fill:#f8f9fa,stroke:#6c757d,color:#495057",
     ]
+
+
+# -- tickets ---------------------------------------------------------------
+TICKET_PREFIX = {"open": "○ ", "blocked": "⛔ ", "closed": "✓ "}
+TICKET_KIND = {"task": "task", "bug": "bug", "research": "research", "grilling": "grill"}
+
+
+def build_tickets(tickets_view: Mapping, items: Mapping[str, Mapping], item: str | None = None,
+                  *, clickable: bool = False, include_closed: bool = True) -> str:
+    """A Mermaid flowchart (LR) of tickets: one node per ticket, an edge from each blocker to what it blocks.
+
+    `tickets_view` is `view.tickets` (tickets.as_view): `{"by_item": {item: [rows]}, ...}`. With `item`,
+    only that item's tickets; without, every item's tickets, each item a subgraph. Titles are owner text,
+    so every label goes through `_safe`; node ids are derived, never taken from text. Clicking a ticket
+    opens its item in the console. Past PROJECT_MAX_NODES tickets an ellipsis node names how many more.
+    """
+    by_item = (tickets_view or {}).get("by_item") or {}
+    groups = [(k, by_item[k]) for k in ([item] if item else sorted(by_item)) if k in by_item]
+    lines = ["flowchart LR", *_classdefs(),
+             "  classDef topen fill:#ddf4ff,stroke:#0969da,color:#111",
+             "  classDef tblocked fill:#ffebe9,stroke:#cf222e,color:#111,stroke-width:2px",
+             "  classDef tclosed fill:#e9ecef,stroke:#6e7781,color:#57606a,stroke-dasharray:4 2"]
+    shown: dict[str, str] = {}   # ticket id -> node id
+    rows: list[dict] = []
+    for it, lst in groups:
+        for t in lst:
+            if include_closed or t.get("status") != "closed":
+                rows.append(t)
+    if not rows:
+        return "\n".join(lines) + '\n  EMPTY(["No tickets yet"]):::muted\n'
+    extra = max(0, len(rows) - PROJECT_MAX_NODES)
+    rows = rows[:PROJECT_MAX_NODES]
+    current = None
+    for t in sorted(rows, key=lambda r: (r.get("parent_item") or "", r.get("created_at") or "")):
+        it = t.get("parent_item") or ""
+        if item is None and it != current:
+            if current is not None:
+                lines.append("  end")
+            title = (items.get(it) or {}).get("title") or ""
+            lines.append(f'  subgraph {_node_id("g_", it)}["{_safe(it + (" · " + title if title else ""), 48)}"]')
+            current = it
+        nid = _node_id("t_", t["id"])
+        shown[t["id"]] = nid
+        st = t.get("status") if t.get("status") in TICKET_PREFIX else "open"
+        label = f'{TICKET_PREFIX[st]}{TICKET_KIND.get(t.get("kind"), "task")} · {t["id"]}<br/>{_safe(t.get("title", ""))}'
+        lines.append(f'  {nid}["{label}"]:::t{st}')
+        if clickable:
+            lines.append(f'  click {nid} call ckClick("item", "{_js(it)}")')
+    if item is None and current is not None:
+        lines.append("  end")
+    for t in rows:
+        for b in t.get("blocked_by") or []:
+            if b in shown and t["id"] in shown:
+                lines.append(f"  {shown[b]} -->|blocks| {shown[t['id']]}")
+    if extra:
+        lines.append(f'  MORE(["+{extra} more tickets"]):::muted')
+    return "\n".join(lines) + "\n"
