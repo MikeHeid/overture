@@ -16,12 +16,10 @@ Why move:
   the console. A pinned install changes only when you move the pin.
 - **It is where the kit is going.** The owner's ruling (CONSOLE-kit/Q13) is one
   user-level install of a pinned release, with one server that each project's
-  install links into through an API and a per-project token. **That server is
-  not built yet.** It is specified in the multi-project spec
-  (`overture-multiproject.md`, kept with the owner's architect docs). Today each project still
-  runs its own server process, and this guide only changes *which copy of the
-  kit* that process runs. When the one-server build ships, it will start from
-  the pinned install this guide sets up.
+  install links into through an API and a per-project token. That server now
+  ships as `server.py --all`, with per-project tokens. This guide only changes
+  *which copy of the kit* runs. To move projects onto the one server
+  afterwards, follow [JOIN.md](JOIN.md).
 
 The order of the steps matters. **The vendored copy is deleted last**, after the
 server, the registry and the Claude Code plugin all run from the pinned install

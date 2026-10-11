@@ -46,6 +46,9 @@ browser**, on your laptop or your phone.
   <img alt="An agent's question in Overture: three options, the recommended one starred, with a short explanation for each" src="docs/screenshots/question-dark.png">
 </picture>
 
+Most capabilities in [What you can do](#what-you-can-do) come with a screenshot
+or short animation.
+
 It docks beside any page you already have. The screenshots show it next to a
 project dashboard: waves, phases and lanes, with a live count of open
 questions on each card. It runs on your own machine behind your own login,
@@ -71,6 +74,9 @@ provides the login page that protects your inbox.
 
 The last command walks you through the rest, in your project. The full
 details are under [Install](#install).
+
+**Already running Overture for another project?** Join this one to the same
+server instead of starting a second one: [docs/JOIN.md](docs/JOIN.md).
 
 ## Words you'll see
 
@@ -175,6 +181,7 @@ banner naming the new version and the commands most useful at that moment
 |---|---|
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Start here: what the console is, the pinned install, your day and the agents' day, and tips for spending fewer tokens. |
 | [INSTALL.md](INSTALL.md) | Installing the plugin and onboarding a project. |
+| [docs/JOIN.md](docs/JOIN.md) | Joining another project to the main Overture server (one server, many projects). |
 | [docs/MIGRATION.md](docs/MIGRATION.md) | Upgrading. Covers moving a vendored kit onto one pinned install, and the one-off steps each release needs. |
 | [docs/CLOUDFLARE.md](plugin/kit/docs/CLOUDFLARE.md) | The Access application, the tunnel and DNS. |
 | [docs/ADAPTER.md](plugin/kit/docs/ADAPTER.md) | Connecting the console to your project's work items and decision log. |
@@ -267,13 +274,25 @@ anything from the repository. See the module docstrings for the trust model.
   Your own words on an answer travel with it. Locking turns an answer into a
   ruling. A round's questions open as one form: ←/→ to move, 1–9 to pick, then
   **Lock all & process**.
+
+  <img src="docs/screenshots/feature-answer.png" alt="A question card: options with descriptions, the recommended pick starred, cited file, a box for your own words" width="400">
+
 - **Lock with one tap.** **Lock this answer** sends the lock immediately
   (0.9.12). If the server refuses it (e.g. a condition is no longer true),
   the question card shows the reason and the Lock button comes back.
+- **Lock several at once.** When an item has more than one answered, unlocked
+  question, **Lock all N answers…** shows every answer it is about to lock,
+  then locks them in order and stops at the first refusal, naming it.
+
+  <img src="docs/screenshots/anim-lock-all.gif" alt="Lock all 2 answers: the confirmation lists both answers, then both lock" width="400">
+
 - **A round moves on by itself.** Pick a single-choice option and, after a
   moment, the form moves to the next question still without a pick, and says
   so. It stays put for multiple choice, for a question you are writing words
   on, and for ↑/↓ through the options. It never moves onto the Lock page.
+
+  <img src="docs/screenshots/anim-round.gif" alt="Answering a three-question round from the keyboard: press 1 for each, review, Lock all and process" width="400">
+
 - **Answer these together.** Loose questions on one item, asked by one named
   agent session within five minutes of each other, are grouped in the inbox
   and open as one form. Unnamed sessions are never grouped, because nothing
@@ -282,13 +301,22 @@ anything from the repository. See the module docstrings for the trust model.
   header shows "N answered · M left" and sends the agent the same "process
   them" signal as before. It goes once sent and comes back with the next
   answer.
+
+  <img src="docs/screenshots/feature-send.png" alt="The Send to agent bar: 1 answered, 0 left" width="400">
+
 - **Locked questions roll up** to one line (question, pick, state). Click or
   press Enter to open one. Open and stale questions stay whole. The slides and
   fades run only when your system does not ask for reduced motion.
+
+  <img src="docs/screenshots/feature-locked.png" alt="An item whose locked question has rolled up to a single line" width="400">
+
 - **Deliberate before answering.** On an open question, pick one to three
   seats (DevOps, UX, adversarial, security, architect, analyst, or one you
   name). They reply with a ★ and their reasons, and never answer or lock for
   you. The cost is shown first, at about 100k tokens a seat.
+
+  <img src="docs/screenshots/feature-deliberate.png" alt="The deliberation form: focus, explore or tighten, an optional note, Start the deliberation" width="400">
+
 - **Next step ▾** beside every locked answer:
   - **Follow up**: chosen seats look at that answer again.
   - **Roar**: a three-round panel, at most once per lock.
@@ -297,6 +325,9 @@ anything from the repository. See the module docstrings for the trust model.
 
   Each step comes back as questions for you to lock. Nothing is written into
   the project before you lock.
+
+  <img src="docs/screenshots/feature-next-step.png" alt="A locked answer with Next step open: Follow up, Refine, Drill" width="400">
+
 - **Status flowchart on every item.** Each item view carries a collapsible
   **Status flowchart** that the server builds from your questions and rounds:
   the item at the left, open/stale/locked questions coloured, rounds as their
@@ -305,6 +336,9 @@ anything from the repository. See the module docstrings for the trust model.
   expand it) and renders inside the same sandboxed Mermaid frame as a
   requested visual. **Click a node** to jump straight to that question's card
   (or open an item if it is an item node).
+
+  <img src="docs/screenshots/anim-flowchart.gif" alt="Expanding an item's status flowchart, zooming in, and fitting it back to the frame" width="400">
+
 - **Project map** at the top of the Inbox: a tree of every item, parent to
   child, each node coloured by its own questions' roll-up (open > stale >
   answered-but-unlocked > locked) with a short tally. Click an item to open
@@ -318,21 +352,31 @@ anything from the repository. See the module docstrings for the trust model.
   opaque origin and cannot touch the console's cookies, storage or network;
   **View source** still shows the raw `.mmd`), or with an HTML mock shown the
   same way, scripts off entirely.
+
+  <img src="docs/screenshots/feature-visual.png" alt="An agent's Mermaid diagram of a retry flow, rendered in the console with zoom and Save SVG" width="400">
+
 - **A short chime when a visual arrives**, the drawn item surfaces at the top
   of the Inbox under **New visuals**, and the Feed row says "Visual drawn".
   The badge on the inbox button and the Feed tab counts it too, until you look.
 - **Star what matters.** Tap ☆ on a visual or an item (the item view's title
   bar, the Inbox row, the New visuals row). The **Favorite** tab lists them,
   grouped by item, newest first. Only the owner can star.
+
+  <img src="docs/screenshots/feature-favorite.png" alt="The Favorite tab listing two starred items" width="400">
+
 - **Chat**, for a message not tied to a question. It wakes the watching
   session.
+
+  <img src="docs/screenshots/feature-chat.png" alt="The Chat tab: the owner asks if main is green, the steward answers" width="400">
 
 ### Keep rulings honest as the code moves
 
 A question says what must stay true for its answer to stand (`valid_if`):
 cited text (an `excerpt`), a whole file (`file_sha256`), or an item's status.
-When that stops holding, the answer reads **stale** and **Why stale?** says
-which check failed.
+When that stops holding, the answer reads **stale** and **What changed?** says
+which check failed, with a diff of the cited text against the file as it is now.
+
+<img src="docs/screenshots/anim-stale.gif" alt="A stale ruling: What changed? shows the cited line was edited from automated to manual" width="400">
 
 - **Still holds: re-lock…** keeps your answer and re-checks it against the
   files as they are now.
@@ -370,6 +414,9 @@ server cannot check it.
   redrawn under you.
 - The **Inbox** shows what waits for you, with an unread count. The **Feed**
   shows every question, answer, lock and reply, newest first.
+
+  <img src="docs/screenshots/feature-feed.png" alt="The Feed tab: chat, visuals and questions, newest first, filterable by kind and item" width="400">
+
 - The status bar says whether an agent session is listening right now.
   Optionally, a footer shows your Claude usage for the 5-hour and 7-day
   windows.
@@ -382,21 +429,33 @@ server cannot check it.
   badges, a link to each on GitHub, and an **Open** button for any item or
   question a title or branch names. The steward pushes the list
   (`agent.py prs-push`), and the tab says when it last did.
+
+  <img src="docs/screenshots/feature-prs.png" alt="The PRs tab: two open pull requests and three merged, each with checks and an Open button for its item" width="400">
+
 - The **Favorite** tab lists everything you starred, grouped by item.
 - **Cross-project priority ribbon.** The Inbox opens with up to six of the
   oldest awaiting questions across every console (self + each portfolio
   peer), each with a traffic-light dot (yellow < 1h, orange < 24h,
   red > 24h). Click a row to jump — local items open their panel; peer
   rows open the peer in a new tab.
+
+  <img src="docs/screenshots/feature-priority.png" alt="The priority ribbon: six questions waiting, oldest first, each with a traffic-light dot and a snooze button" width="400">
+
 - **Command palette.** Press **Ctrl+K** / **Cmd+K** on any page to open a
   search box over items, questions, playbooks, peers, tabs and actions.
   Type a few characters, press Enter: jumps to an item, runs a playbook,
   opens a peer in a new tab, or hops a tab.
+
+  <img src="docs/screenshots/anim-palette.gif" alt="Pressing Ctrl+K, typing retry, and jumping straight to the matching item" width="720">
+
 - **Keyboard shortcuts.** Press `?` on any page for the full list.
   `g i / f / p / s / o / c` hop to the Inbox / Feed / PRs / Favorite /
   Portfolio / Chat tab, `g b` closes the panel, `.` focuses the
   Delegate bar, `j / k` walk the rows, Enter / Space opens the focused
   row. Shortcuts never fire in a text input.
+
+  <img src="docs/screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
+
 - The **Portfolio** tab lists every other console you have configured, with
   its state tallies (`?you ~unl !stale ○lock`), last-activity and a click
   that opens it in a new tab. A bell button opts in to desktop
@@ -538,9 +597,13 @@ Chromium), run:
 
     python3 docs/demo/screenshots.py
 
-The script renders the real console over `docs/demo/showcase.html`, an example
-dashboard with waves, phases and lanes, against a seeded store, in dark and
-light themes.
+The script starts the real console server in-process, with a throwaway key
+standing in for Cloudflare Access. It publishes `docs/demo/showcase.html`, an
+example dashboard with waves, phases and lanes, as the project page. It seeds
+questions, rulings, a stale ruling, a round, a visual, chat and PRs through the
+same doors agents and the owner use. Then it captures every capability in this
+README: stills in `docs/screenshots/feature-*.png`, hero shots in dark and
+light, and short GIFs (`anim-*.gif`) of the interactive ones.
 
 To build the release zip:
 

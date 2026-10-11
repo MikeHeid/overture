@@ -1440,6 +1440,57 @@ class LiveWaitTests(_Live, unittest.TestCase):
         self.assertEqual(code, 429, body)
 
 
+class BacklinkTests(_Live, unittest.TestCase):
+    """PR backlinks ("Shipped:") on a ruling that rests on an anchor."""
+
+    def test_a_pr_naming_an_anchored_ruling_links_back_to_it(self):
+        # Catches: the backlink scan built the view with `holds={}`, so the first question
+        # carrying a valid_if condition raised "'dict' object is not callable", the error was
+        # swallowed, and every project with an anchored ruling showed no backlinks at all.
+        Path(self.cfg.root, "queue.sql").write_text("SELECT 1 FOR UPDATE SKIP LOCKED;\n")
+        code, out = self.agent_post("/question", self.seed_q(
+            qid="LANE.1/Q2", nonce="anchoredq0001",
+            valid_if=[{"kind": "excerpt", "path": "queue.sql", "text": "SKIP LOCKED"}]))
+        self.assertEqual(code, 200, out)
+        repo = "acme/app"
+        pr = {"number": 7, "title": "LANE.1/Q2: queue on Postgres", "state": "open", "draft": False,
+              "head": "feat/q", "base": "main", "author": "dev", "created_at": "2026-10-01T00:00:00Z",
+              "updated_at": "2026-10-01T00:00:00Z", "merged_at": None, "closed_at": None,
+              "url": f"https://github.com/{repo}/pull/7", "merge_commit": None, "checks": "success"}
+        code, out = self.agent_post("/prs", {"repo": repo, "window_days": 30, "prs": [pr]})
+        self.assertEqual(code, 200, out)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, body = self.get("/api/view")
+        self.assertEqual(code, 200)
+        self.assertNotIn("pr_backlinks", err.getvalue())
+        links = body["view"]["pr_backlinks"]
+        self.assertEqual([l["number"] for l in links.get("LANE.1/Q2", [])], [7], links)
+
+    def test_a_mermaid_visual_renders(self):
+        # Catches: /api/visual-render compared the stored format against "mmd" (the file suffix)
+        # while visuals are stored as "mermaid", so every Mermaid visual answered 400 and the
+        # owner saw an empty frame instead of the diagram.
+        req = self.owner_msg(item="LANE.1", intent="visual", text="Draw the flow")
+        code, out = self.agent_post("/visual", {"request": req["id"], "format": "mermaid", "title": "Flow",
+                                                "content": "flowchart LR\n  A --> B\n", "text": "A to B.",
+                                                "nonce": "visualnonce01"})
+        self.assertEqual(code, 200, out)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/visual-render?id=" + out["record"]["id"],
+                     headers={"Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        page = r.read().decode()
+        conn.close()
+        self.assertEqual(r.status, 200, page)
+        self.assertIn("A --&gt; B", page.replace("-->", "--&gt;"))
+        # Mermaid styles its SVG with an injected <style>; a nonce in style-src would make the
+        # browser ignore 'unsafe-inline' and refuse it, leaving the diagram unstyled.
+        style_src = [d for d in r.getheader("Content-Security-Policy").split(";") if "style-src" in d][0]
+        self.assertIn("'unsafe-inline'", style_src)
+        self.assertNotIn("nonce-", style_src)
+
+
 class FeedTests(_Live, unittest.TestCase):
     """GET /api/feed: every store record as an event, newest first, filterable."""
 

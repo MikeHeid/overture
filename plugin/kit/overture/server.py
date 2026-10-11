@@ -152,7 +152,10 @@ VISUAL_TEXT_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'"
 VISUAL_RENDER_CSP_TMPL = (
     "default-src 'none'; "
     "script-src 'nonce-{nonce}'; "
-    "style-src 'nonce-{nonce}' 'unsafe-inline'; "
+    # No nonce here: with a nonce present, browsers ignore 'unsafe-inline', which refused the <style>
+    # Mermaid injects into its SVG and left every diagram unstyled (black boxes, black edges). Inline
+    # style is harmless in this frame: an opaque origin with no network (default-src 'none').
+    "style-src 'unsafe-inline'; "
     "img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
 )
 # The vendored mermaid.min.js is served from this path, same origin as /api/visual-render.
@@ -538,7 +541,7 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
         "<div class=\"ck-wrapper-bar\">"
         "  <div class=\"ck-zoom\" aria-label=\"Zoom\">"
         "    <button type=\"button\" id=\"ck-zoom-out\" title=\"Zoom out\" aria-label=\"Zoom out\">−</button>"
-        "    <button type=\"button\" id=\"ck-zoom-reset\" title=\"Reset view\" aria-label=\"Reset view\">⬚</button>"
+        "    <button type=\"button\" id=\"ck-zoom-reset\" title=\"Fit to frame\" aria-label=\"Fit to frame\">⬚</button>"
         "    <button type=\"button\" id=\"ck-zoom-in\" title=\"Zoom in\" aria-label=\"Zoom in\">+</button>"
         "  </div>"
         "  <button type=\"button\" class=\"ck-wrapper-save\" id=\"ck-save\" title=\"Download as SVG\">Save SVG</button>"
@@ -557,9 +560,13 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
         "var ckLoaded=function(){var l=document.getElementById('ck-loading');if(l){l.hidden=true;}};"
         "if(typeof mermaid==='undefined'){ckShowErr('mermaid is not defined after the inlined lib ran; check the server log.');}"
         f"else{{try{{"
-        f"mermaid.initialize({{startOnLoad:false,theme:'neutral',securityLevel:'{level}'}});"
+        # The frame follows the OS scheme (the wrapper CSS does too): 'neutral' drew black nodes and
+        # dark edges that vanished on the dark stage.
+        "var ckDark=!!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);"
+        f"mermaid.initialize({{startOnLoad:false,theme:ckDark?'dark':'neutral',securityLevel:'{level}'}});"
         "var r=mermaid.run();"
-        "if(r&&typeof r.then==='function'){r.then(ckLoaded,function(e){ckShowErr((e&&e.message)||e);});}else{ckLoaded();}"
+        "var ckDone=function(){ckLoaded();if(window.ckFit){window.ckFit();}};"
+        "if(r&&typeof r.then==='function'){r.then(ckDone,function(e){ckShowErr((e&&e.message)||e);});}else{ckDone();}"
         "}catch(e){ckShowErr((e&&e.message)||e);}}"
         # Zoom + pan: CSS transform on .ck-pan; wheel scales, buttons step, drag translates.
         # Zoom + pan: wheel zooms to cursor (clamped 0.1x..20x); drag pans anywhere, including over nodes.
@@ -599,7 +606,16 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
         "stage.addEventListener('pointerup',stop);stage.addEventListener('pointercancel',stop);"
         "document.getElementById('ck-zoom-in').addEventListener('click',function(){var r=stage.getBoundingClientRect();zoomAt(r.left+r.width/2,r.top+r.height/2,1.25);});"
         "document.getElementById('ck-zoom-out').addEventListener('click',function(){var r=stage.getBoundingClientRect();zoomAt(r.left+r.width/2,r.top+r.height/2,1/1.25);});"
-        "document.getElementById('ck-zoom-reset').addEventListener('click',function(){scale=1;tx=0;ty=0;apply();});"
+        # Fit: size the SVG to its own viewBox (Mermaid's width:100% collapses inside the shrink-to-fit
+        # pan box, which left every diagram tiny), then scale it to fill the stage. Reset re-fits.
+        "window.ckFit=function(){"
+          "var svg=pan.querySelector('svg');if(!svg||!svg.viewBox||!svg.viewBox.baseVal){return;}"
+          "var vb=svg.viewBox.baseVal;if(!vb.width||!vb.height){return;}"
+          "svg.style.maxWidth='none';svg.style.width=vb.width+'px';svg.style.height=vb.height+'px';"
+          "var r=stage.getBoundingClientRect();"
+          "scale=Math.max(0.1,Math.min(2,Math.min((r.width-24)/vb.width,(r.height-24)/vb.height)));"
+          "tx=0;ty=0;apply();};"
+        "document.getElementById('ck-zoom-reset').addEventListener('click',function(){window.ckFit();});"
         "})();"
         "document.getElementById('ck-save').addEventListener('click',function(){"
         "var svg=document.querySelector('.mermaid svg');"
@@ -1189,7 +1205,11 @@ class Console:
 
     def _live_qids(self) -> set[str]:
         """Current qids off the live view — shared across pr_backlinks and issue_backlinks."""
-        return set(V.build(self.store, self.items(), {}, names=self.names.mapping()).get("questions", {}).keys())
+        # Only the qids are read, so every condition "holds": building the view must not
+        # evaluate anchors here. (`holds` is called per valid_if condition; passing a dict
+        # made every project with an anchored ruling lose all its backlinks.)
+        return set(V.build(self.store, self.items(), lambda _c: True,
+                           names=self.names.mapping()).get("questions", {}).keys())
 
     def _compute_issue_backlinks(self) -> dict:
         """scan every stored issue's title AND body for qid literals. The body is
@@ -1234,9 +1254,7 @@ class Console:
         prs = prs_doc.get("prs") if isinstance(prs_doc, dict) else None
         if not isinstance(prs, list):
             return {}
-        qids: set[str] = set()
-        for q in V.build(self.store, self.items(), {}, names=self.names.mapping()).get("questions", {}).keys():
-            qids.add(q)
+        qids = self._live_qids()
         if not qids:
             return {}
         out: dict[str, list[dict]] = {}
@@ -1808,7 +1826,7 @@ class Console:
         rec = self.store.get(rid)
         if rec is None or rec["type"] != "visual":
             raise RequestError(404, f"no visual {rid}")
-        if rec["format"] != "mermaid":   # the record's format; .mmd is only the file's suffix
+        if rec["format"] != "mermaid":   # the stored name (schema.VISUAL_FORMATS); ".mmd" is only the file suffix
             raise RequestError(400, "visual-render is for Mermaid visuals; HTML mocks are served from /api/visual")
         try:
             source = VIS.read(self.cfg.state, rec).decode("utf-8", errors="replace")

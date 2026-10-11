@@ -3025,3 +3025,50 @@ example dashboard.
   `gh release create` commands. A rebuilt `overture-1.31.0.zip`
   passes `claude plugin validate --strict` and installs as
   `overture@overture-local`.
+- **"Shipped:" and "Mentioned in" links work on anchored rulings.**
+  The backlink scan built the view with `{}` where the function that
+  checks rulings belongs. The first question with a `valid_if`
+  condition raised "'dict' object is not callable", the error was
+  swallowed, and every project with anchored rulings showed no PR or
+  issue links at all.
+- **Mermaid visuals render.** `/api/visual-render` compared the stored
+  format to `"mmd"`, the file suffix, but visuals are stored as
+  `"mermaid"`. So every diagram an agent drew answered 400, and the
+  owner saw an empty frame. This was broken since at least 1.0.0.
+- **Diagrams are styled and fill their frame.** The diagram frame's
+  CSP had `style-src 'nonce-…' 'unsafe-inline'`, and browsers ignore
+  `'unsafe-inline'` when a nonce is present. That refused the `<style>`
+  Mermaid injects, so diagrams drew as black boxes with dark edges.
+  `style-src` is now `'unsafe-inline'` alone, which is safe in an
+  opaque-origin frame with no network. Mermaid also follows the
+  light or dark scheme now. A diagram fits its frame on load, where it
+  used to collapse to a small size, and ⬚ re-fits it.
+- **README tour.** Each capability in "What you can do" has a
+  screenshot, and five GIFs show the interactive ones: answering a
+  round, Lock all, a stale ruling's diff, the command palette, and the
+  status flowchart. `docs/demo/screenshots.py` now drives the real
+  server.
+- **Master agent name in the plugin settings.** A new `steward` field
+  (`/plugin` → overture → configure) gives onboarding its default
+  master agent. `onboard.py write --steward NAME` checks the name and
+  prints it into the `register` step, followed by the
+  `/overture:as NAME` reminder. The name is never written into the
+  project, so a repository still cannot name the steward.
+- **docs/JOIN.md.** How to join another project to the main server
+  (`server.py --all`): a one-time systemd unit, then per project
+  `register`, the Cloudflare app and tunnel rule, `server add`, a
+  restart, and `health`. Every command was run in a sandbox first.
+  MIGRATION.md no longer says the shared server is unbuilt.
+- **docs/proposals/SERVER-HOSTING.md.** A write-up on running the
+  server: a per-OS user service (recommended), not one started from a
+  Claude session, plus a read-only session check.
+- **The first-run banner points to onboarding.** After a plugin install,
+  the banner told users to run
+  `~/.local/share/overture/kit/plugin/kit/agent.py register`. That path
+  does not exist, and `register` needs `--state` and `--project`. It
+  also told them to run `systemctl --user start overture.service`, a
+  unit that does not exist. It never mentioned
+  `/overture:console-onboard`. It now names that one next step, how the
+  server gets installed, and the join guide. The upgrade banner names
+  the real `install.sh` path and the units that exist. Tests check
+  that every command it prints is real.
