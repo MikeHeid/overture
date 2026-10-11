@@ -39,7 +39,17 @@ Status:
   than a Thread tab, and the Scripts switch is left to step 4 (the panel says
   so).
 
-  Next: step 3, Merge from the PR tab.
+- **Step 3 shipped (Merge from the PR tab):** `head_sha` in the PR snapshot
+  (optional; `prs-push` sends it); the reserved `@prs` thread and the owner's
+  `pr-merge` intent; the server stores a request only for a PR the steward's
+  last push shows open, not draft, passing and still at the commit the owner
+  saw, one pending request per PR; the PR tab's **Merge** button with its
+  inline two-step confirmation and the states "Merge requested … waiting for
+  a session" and the steward's reply; `todo.merge`; and `agent.py pr-merge`,
+  which re-reads the PR with the steward's own `gh`, refuses by name (24-hour
+  expiry included), merges with `--match-head-commit`, and replies on `@prs`.
+
+  Next: step 4, the Scripts switch (its own security review).
 
 ---
 
