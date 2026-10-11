@@ -12,11 +12,13 @@ keeps its own:
 They all run in one process, `server.py --all`. That process reads its
 project list from `~/.config/overture/server.json`.
 
-This guide has two parts:
+This guide has three parts:
 
 - **Part A** sets up the main server, once per machine. Skip it if a main
   server is already running.
 - **Part B** joins a project to it. Repeat it for each project.
+- **Part C** makes one console the **primary**, which watches the others
+  (the **secondaries**) in its Portfolio tab.
 
 Every command below was run against the kit, in this order, before it was
 written down. **You** run them in a terminal, not a Claude session.
@@ -164,6 +166,63 @@ sign in, then the console loads.
     <py> <kit>/agent.py --state <state> prs-push        # needs gh, logged in
 
 Then press **Use this page** in the console.
+
+---
+
+## Part C: one primary, many secondaries (the Portfolio)
+
+The **primary** is the console you watch. Its **Portfolio** tab and its
+priority ribbon show every other console's waiting questions, stale rulings
+and last activity. The **secondaries** are the consoles it reads. They can
+share the main server or run on other machines.
+
+The primary's server fetches each secondary's small summary itself, using a
+Cloudflare Access service token. Your browser never sees a secondary's
+secret. Do this once per secondary, on the primary's side:
+
+**1. Create a service token.** In Zero Trust → Access → Service Auth, create
+a token. Note its **Client ID** (it ends in `.access`) and its **secret**.
+
+**2. Let it in on the secondary.** On the secondary console's Access
+application, add a policy with the **Service Auth** action that allows that
+token.
+
+**3. Store the secret beside the primary's state** (mode 0600, never in a
+repository):
+
+    mkdir -p <primary state>/portfolio-secrets
+    printf '{"client_secret": "%s"}\n' '<secret>' > <primary state>/portfolio-secrets/<peer>.json
+    chmod 600 <primary state>/portfolio-secrets/<peer>.json
+
+**4. Hash the secret together with the secondary's URL.** If someone later
+edits the URL without re-signing, the secret no longer matches and the
+secondary is refused.
+
+    python3 -c 'import hashlib,sys; s,u=sys.argv[1:3]; print(hashlib.sha256(s.encode()+b"\0"+u.encode()).hexdigest())' \
+        '<secret>' 'https://<peer host>'
+
+**5. List the secondary in the primary project's `.overture/portfolio.json`.**
+This file is safe to commit: it holds only the hash, never the secret.
+
+    {"peers": {"<peer>": {"url": "https://<peer host>",
+                          "client_id": "<id>.access",
+                          "token_sha256": "<the hash from step 4>"}}}
+
+Open the primary's **Portfolio** tab. Each secondary shows its counts and a
+status dot, and the bell button turns on desktop notifications.
+`agent.py portfolio-token` prints this same recipe.
+
+Limits:
+
+- A primary can list up to 32 secondaries.
+- A secondary's URL must be a public `https://` hostname. Loopback,
+  private-network and `.local` addresses are refused, so the token is never
+  sent anywhere you did not mean.
+- A secret that doesn't match its hash is refused by name.
+
+For a quick look without any setup, run `agent.py portfolio`. It lists every
+project registered on this machine with its open questions, read straight
+from their state directories.
 
 ---
 
