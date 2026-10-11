@@ -55,8 +55,10 @@ It copies the kit to `~/.local/share/overture/kit` and creates
 **2. Join your first project** with Part B, steps 1 to 3, so `server.json`
 exists.
 
-**3. Create the main server's unit.** Write
-`~/.config/systemd/user/overture-console.service`:
+**3. Create the main server's unit.** Run `<py> <kit>/server.py service
+install` (add `--start` to start it too). It writes the unit below, reloads
+systemd and enables it. Or write
+`~/.config/systemd/user/overture-console.service` yourself:
 
     [Unit]
     Description=Overture console server (every project in server.json; loopback only)
@@ -88,7 +90,16 @@ another server holds.
 
 On WSL, run `loginctl enable-linger $USER` so the server keeps running after
 you close your WSL terminal. To try the server without a unit, run
-`<py> <kit>/server.py --all` in a terminal and leave it open.
+`<py> <kit>/server.py --all` in a terminal and leave it open, or detach it
+with `<py> <kit>/server.py daemon start` (`daemon stop` ends it).
+
+**Ask how it is.** `<py> <kit>/server.py status` says which mode runs it
+(service, daemon or none), its pid, each project's port and when it started.
+`<py> <kit>/server.py health` adds the agent door, version skew against the
+installed kit, and whether linger is on; it also removes a stale pid or
+socket file a dead server left. Both only read: neither starts anything. A
+daemon and a service refuse to run together, and each message names the
+other.
 
 ---
 
