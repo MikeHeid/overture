@@ -582,6 +582,49 @@ class PublishTests(unittest.TestCase):
         css = (KIT / "overture" / "console.css").read_text()
         self.assertIn(".ck-snooze-menu[hidden] { display: none; }", css)
 
+    def test_every_icon_used_is_bundled(self):
+        # D8: icons are a bundled Lucide subset. A name with no entry in ICONS
+        # draws nothing, so every name the console asks for must be there.
+        js = (KIT / "overture" / "console.js").read_text()
+        block = re.search(r"const ICONS = \{\n(.*?)\n  \};", js, re.S)
+        self.assertIsNotNone(block, "console.js no longer declares ICONS")
+        bundled = set(re.findall(r"^    '([a-z-]+)':", block.group(1), re.M))
+        used = set(re.findall(r"\bicon\('([a-z-]+)'", js))
+        for name in ("TAB_ICON", "STATE_ICON"):
+            m = re.search(name + r" = \{(.*?)\};", js, re.S)
+            self.assertIsNotNone(m, name)
+            used |= set(re.findall(r":\s*'([a-z-]+)'", m.group(1)))
+        menu = re.search(r"openActionMenu\(chatMore, \[(.*?)\]\)\);", js, re.S)
+        used |= set(re.findall(r"\[\s*'([a-z-]+)',", menu.group(1)))
+        self.assertTrue(used)
+        self.assertEqual(used - bundled, set())
+        self.assertTrue((KIT / "overture" / "vendor" / "LUCIDE-LICENSE.txt").is_file())
+
+    def test_every_tab_and_state_has_an_icon(self):
+        # D8/D9: every tab shows an icon and a label; every question state has
+        # its own shape, so colour is never the only signal.
+        js = (KIT / "overture" / "console.js").read_text()
+        tabs = set(re.findall(r"^    \['([a-z]+)', '[A-Za-z]+'\]", re.search(
+            r"const TABS = \[(.*?)\];", js, re.S).group(1), re.M))
+        tab_icons = set(re.findall(r"(\w+): '", re.search(r"TAB_ICON = \{(.*?)\};", js, re.S).group(1)))
+        self.assertEqual(tabs, tab_icons)
+        glyph_states = set(re.findall(r"^    (\w+): '", re.search(
+            r"const GLYPH = \{(.*?)\};", js, re.S).group(1), re.M))
+        state_icons = re.search(r"STATE_ICON = \{(.*?)\};", js, re.S).group(1)
+        self.assertLessEqual(glyph_states, set(re.findall(r"(\w+): '", state_icons)))
+        # Distinct shapes for the states the owner acts on.
+        shapes = dict(re.findall(r"(\w+): '([a-z-]+)'", state_icons))
+        acted = [shapes[s] for s in ("awaiting_you", "unlocked", "locked", "stale")]
+        self.assertEqual(len(set(acted)), len(acted))
+
+    def test_docked_column_fits_its_tab_row(self):
+        # D9: the docked column is never narrower than its tab row, so tabs
+        # keep icon and label on one line instead of wrapping or clipping.
+        js = (KIT / "overture" / "console.js").read_text()
+        self.assertIn("function fitDockToTabs(bar)", js)
+        self.assertIn("return Math.max(DOCK_W_MIN, dockTabsW);", js)
+        self.assertEqual(js.count("fitDockToTabs("), 3)  # the definition and both draws
+
     def test_dock_breakpoint_is_one_number_in_js_and_css(self):
         # AB-2/Q2: console.js decides docked-or-overlay from DOCK_QUERY and
         # console.css styles the dock under its own @media. If they drift, a

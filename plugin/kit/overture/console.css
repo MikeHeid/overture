@@ -3399,6 +3399,32 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-split .ck-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .ck-split .ck-split-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding-left: 8px; padding-right: 8px; }
 .ck-action-menu { min-width: 260px; }
-.ck-action-menu .ck-more-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+.ck-action-menu .ck-more-item {
+  display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; row-gap: 1px; align-items: center; text-align: left;
+}
+.ck-action-menu .ck-more-item .ck-action-hint { grid-column: 2; }
 .ck-action-hint { font-size: 11.5px; }
 .ck-pr-row::before { display: none; }   /* the feed's row dot; the coloured edge replaces it */
+
+/* --- D8/D9: Lucide icons and state marks (2026-10-11) --- */
+.ck-icon { width: 1em; height: 1em; flex: 0 0 auto; vertical-align: -0.125em; }
+.ck-tab, .ck-more-item:not(.ck-action-menu .ck-more-item), .ck-footer-keys, .ck-split-main, .ck-split-more, .ck-inbox-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.ck-tab { gap: 5px; padding: 10px 8px; }
+.ck-tab .ck-icon { width: 15px; height: 15px; }
+.ck-tab-more-caret { display: inline-flex; }
+.ck-mark { display: inline-flex; align-items: center; }
+/* Outside a coloured state chip the mark carries the state's colour; inside one it inherits it. */
+.ck-mark[data-state="awaiting_you"] { color: var(--c-claimed); }
+.ck-mark[data-state="awaiting_agent"], .ck-mark[data-state="agent_active"] { color: var(--c-accent); }
+.ck-mark[data-state="unlocked"] { color: var(--c-open); }
+.ck-mark[data-state="locked"] { color: var(--c-built); }
+.ck-mark[data-state="stale"] { color: var(--c-blocked); }
+.ck-mark[data-state="withdrawn"], .ck-mark[data-state="superseded"] { color: var(--c-deferred); }
+.ck-q-state .ck-mark { color: inherit; }
+.ck-item-btn .ck-mark { margin-right: 2px; }
+.ck-section-badge .ck-mark { margin: 0 2px 0 1px; }
+.ck-section-badge .ck-mark .ck-icon { width: 11px; height: 11px; }
+.ck-portfolio-tally { display: inline-flex; align-items: center; gap: 3px; }
+.ck-living-rulings-glyph .ck-icon { color: var(--c-blocked); }

@@ -245,7 +245,8 @@ The 0.9.11 fallback palette is Primer-aligned (`#0969da` accent on light,
   `{"sections": {"AB-2": ["#features/rollout", "#features/timeline"]}}`.
   The item view renders chips linking to each anchor.
 - Add in-place state badges by marking any `<section data-ck-item="X">`
-  on the dashboard. The console injects a `"X ◐ 2 ◑ 1 ◌ 3 ○ 4"` badge
+  on the dashboard. The console injects an `X 2 1 3 4` badge, each count
+  behind its state's icon (awaiting you, unlocked, stale, locked),
   in-place, updated on every live wake; clicking it opens the panel on X.
 
 ## Hooks the plugin ships (doorbell + command guards)
@@ -487,7 +488,8 @@ server cannot check it.
   <img src="docs/screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
 
 - The **Portfolio** tab lists every other console you have configured, with
-  its state tallies (`?you ~unl !stale ○lock`), last-activity and a click
+  its state tallies (`2 you`, `1 unlocked`, `1 stale`, `9 locked`, each with its
+  state icon), last-activity and a click
   that opens it in a new tab. A bell button opts in to desktop
   notifications so a sibling's new `?you` or `!stale` reaches you even
   when the tab is in the background; a Snooze button sets a 1-hour DND
