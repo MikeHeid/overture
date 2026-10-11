@@ -14,7 +14,7 @@ its styles. The modal's footer has three actions:
 When a UX item is created, it is added to the right wave, phase and lane on
 the dashboard automatically.
 
-Status: proposal, for the owner to decide.
+Status: decided on 2026-10-11 (D4–D7, with amendments). D13, the Claude Design link, is still open. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
 
 ---
 

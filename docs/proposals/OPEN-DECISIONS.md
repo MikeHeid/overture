@@ -1,4 +1,4 @@
-# Open decisions: one deliberation
+# Owner decisions: one deliberation
 
 Every question still waiting on the owner, in one place. They come from:
 
@@ -8,29 +8,78 @@ Every question still waiting on the owner, in one place. They come from:
 - the steward-role question raised with the **Master agent name** setting;
 - what to build next.
 
-**How to answer.** Each decision has lettered options and a ★ recommendation.
-Reply with the ids and letters, for example `D1 A, D4 B, D8 ★`. You can also
-edit an option or veto one. **"defaults"** means take every ★. Each ★ taken
-that way is recorded as an *architect default*, not as your decision, so a
-later review can audit it. Nothing is built until you answer.
+Each decision had lettered options and a ★ recommendation. A ★ the owner
+deferred to is recorded as an *architect default*, not as the owner's
+decision, so a later review can audit it.
 
-Status: waiting on the owner.
+Status: **decided on 2026-10-11**, except D13. The owner's answers and
+amendments are below. The option tables after them are kept as the record of
+what was weighed.
 
-| # | Decision | ★ |
+| # | Decision | Outcome |
 |---|---|---|
-| D1 | How the server runs | A: a service, plus a session check |
-| D2 | When macOS gets a service installer | B: right after Linux/WSL |
-| D3 | One main server for new installs? | A: yes, `--all` by default |
-| D4 | What a saved UX component is | A: one self-contained HTML document |
-| D5 | Where components are saved | A: `components/<item>.md` |
-| D6 | Which items get UX View | B: default lanes, configurable |
-| D7 | How a saved component reaches the repository | A: steward and a PR |
-| D13 | How a UX item is tied to a Claude Design project | A: front matter via the steward; agents read, the server never fetches |
-| D8 | Where the icons come from | A: a Lucide subset, bundled |
-| D9 | How tabs show icons | A: icon plus label, icon-only when narrow |
-| D10 | How lanes get colors | A: automatic, with a named override |
-| D11 | A per-machine steward role setting? | B: not now |
-| D12 | What to build next | A: icons and status indicators |
+| D1 | How the server runs | **A, amended.** One command runs the server in the foreground, detaches it as a daemon, installs or removes it as a service, and reports status and health (see "D1 as decided"). Same command shape as `lean-ctx`. |
+| D2 | When macOS gets a service installer | **B.** Right after Linux/WSL, as its own PR. |
+| D3 | One main server for new installs? | **A.** `--all` by default. |
+| D4 | What a saved UX component is | **A, amended.** One self-contained HTML document, scripts off by default. A switch turns scripts on for one component (see "D4 as decided"). |
+| D5 | Where components are saved | **A.** `components/<item>.md`, with backups in `components/.history/`. |
+| D6 | Which items get UX View | **B.** Default lanes, configurable. |
+| D7 | How a saved component reaches the repository | **A, amended.** Through the steward and a PR, and the PR can be merged from the console's PR tab (see "D7 as decided"). |
+| D8 | Where the icons come from | **A.** A Lucide subset, bundled. |
+| D9 | How tabs show icons | **B, amended.** Always icon plus label. The inbox column is always wide enough to show the menus without wrapping. |
+| D10 | How lanes get colors | **A.** Automatic, with a named override. |
+| D11 | A per-machine steward role setting? | **B**, as an *architect default*: the owner deferred to the recommendation. |
+| D12 | What to build next | **A.** Icons and status indicators, then lane colors. |
+| D13 | How a UX item is tied to a Claude Design project | **Open.** Needs a real Claude Design link to pin the accepted URL shapes. |
+
+### D1 as decided
+
+One entry point with five modes, modelled on `lean-ctx`:
+
+    <py> <kit>/server.py --all                     # foreground; Ctrl+C stops it
+    <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log file
+    <py> <kit>/server.py service install|uninstall # systemd user unit (Linux, WSL); launchd next (D2)
+    <py> <kit>/server.py status                    # running? which mode? pid, port per project, last restart
+    <py> <kit>/server.py health                    # per project: store lock, tunnel reachable, version skew, linger
+
+- `daemon start` refuses when a service is already installed and running,
+  and the reverse. Both name the other mode.
+- `status` and `health` read the pid file, the unit state and the agent
+  socket. They never start anything.
+- Following `lean-ctx doctor`, `health` warns when linger is off, reports
+  the restart count, and cleans up a stale pid or socket file left by a dead
+  process.
+- The SessionStart hook still only reads: when the server is down, it
+  prints the one-line `status` hint.
+
+### D4 as decided
+
+- Components render with scripts **off** by default.
+- A **Scripts** switch in the UX View modal turns them on for that component
+  only.
+- The switch is an owner act: it is sent as a message, so it is in the audit
+  trail. The steward records it in the component's front matter as
+  `scripts: true`.
+- With scripts on, the frame changes from `sandbox=""` to
+  `sandbox="allow-scripts"`, never with `allow-same-origin`, so it runs in an
+  opaque origin. That is the same arrangement as today's Mermaid frame.
+- Its CSP sets `connect-src 'none'` and allows no outside script sources, so
+  a component's script can't reach the network, the console or its cookies.
+
+### D7 as decided
+
+- Saving still goes through the steward and a PR.
+- The PR tab gets a **Merge** button on a PR whose checks pass.
+- The server runs no git and holds no GitHub token, so the button does not
+  merge anything itself. It sends an owner message with `intent: "pr-merge"`
+  and the PR number, and the doorbell rings.
+- The Claude Code session that runs that repository merges the PR with its
+  own GitHub access. That session is the steward, or the session for that
+  repository when a primary console watches several.
+- The PR row shows "merge requested", then "merged" after the next
+  `prs-push`.
+- If no session for that repository is running, the request waits in its
+  inbox, like any other owner message.
 
 ---
 
