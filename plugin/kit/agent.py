@@ -1415,6 +1415,11 @@ def main(argv=None) -> int:
     s.add_argument("--project", type=Path, required=True)
     s.add_argument("--steward", metavar="NAME",
                    help="the one session that may watch, sync and fold this console (0.8.3; default: keep it)")
+    s = sub.add_parser("role", description="Show or set what THIS machine is for (D11, 1.33): `worker` means no "
+                       "session on this machine is ever the steward, whatever it is named; `steward` says the steward "
+                       "runs here; `clear` removes it. Stored in your own registry; the plugin's Machine role setting "
+                       "says the same thing to the hooks, and the stricter of the two holds.")
+    s.add_argument("value", nargs="?", choices=("steward", "worker", "clear"))
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1566,7 +1571,7 @@ def main(argv=None) -> int:
         _DOOR = None
 
 
-USER_COMMANDS = ("register", "steward", "server", "costs", "next-step")
+USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1580,6 +1585,10 @@ def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
     stewards: a lock the user set does not quietly switch itself off.
     """
     name = R.steward_for_state(state)
+    if name is not None and agent == name and R.machine_role() == "worker":
+        return (f"refused: {what} belongs to this console's steward, {name}, and this machine's role is `worker`, so "
+                f"no session here is the steward, even one named {name}. Run it on the steward's machine. (The role "
+                f"is set with `agent.py role` and the plugin's Machine role setting.)")
     if name is None or agent == name:
         return None
     who = f"this session ({agent})" if agent else "this session (unnamed)"
@@ -1595,6 +1604,14 @@ def _run(a, bell: Path) -> int:
         e = R.register(a.project, a.state, Path(__file__).resolve().parent, steward=a.steward)
         print(f"registered {Path(a.project).resolve()}: state {e['state']}, kit {e['kit']}"
               + (f", steward {e[R.STEWARD]}" if R.STEWARD in e else "") + f" in {R.location()}")
+        return 0
+    if a.cmd == "role":
+        if a.value is None:
+            r = R.machine_role()
+            print(f"role: {r}" if r else "no role: any session here may be the steward, as the registry names it")
+            return 0
+        R.set_machine_role(None if a.value == "clear" else a.value)
+        print(f"role {a.value}" if a.value != "clear" else "role cleared", f"in {R.location()}")
         return 0
     if a.cmd == "steward":
         if a.name is None and not a.clear:

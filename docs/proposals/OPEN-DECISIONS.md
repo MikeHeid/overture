@@ -28,7 +28,7 @@ what was weighed.
 | D8 | Where the icons come from | **A.** A Lucide subset, bundled. |
 | D9 | How tabs show icons | **B, amended.** Always icon plus label. The inbox column is always wide enough to show the menus without wrapping. |
 | D10 | How lanes get colors | **A.** Automatic, with a named override. *Shipped in 1.32*: when two lane names hash to the same colour, the later one in name order takes the next free colour, so lanes collide only past 8. |
-| D11 | A per-machine steward role setting? | **B**, as an *architect default*: the owner deferred to the recommendation. |
+| D11 | A per-machine steward role setting? | **A**, built in 1.33 at the owner's request ("Steward role setting"). It had been **B**, an architect default the owner deferred to. |
 | D12 | What to build next | **A.** Icons and status indicators, then lane colors. |
 | D13 | How a UX item is tied to a Claude Design project | **A**, *architect default* (2026-10-11): the steward writes the link into front matter; agents read the design; the server never fetches it. The accepted shape is pinned from the owner's real link: `https://claude.ai/design/p/<uuid>` (a `?via=share` suffix is cleaned off when pasted). |
 | D14 | Playbooks and Triggers behind More ▾ (made in #131 to keep D9's no-wrap rule at ~515px) | **A**, *architect default*: five tabs in the bar, four under More; `g` shortcuts reach all. |
@@ -299,9 +299,21 @@ name** setting supplies the name.
 | A Add `role: steward \| worker` to the plugin settings | A plugin `userConfig` field. With `worker`, `/overture:as <steward>` is refused on that machine. | Enforces "the steward only runs on the home server". | Applies to every session on the machine; one more setting to explain. |
 | **B ★** Not now; keep it by session name | Today's behaviour | Nothing new to build or explain. | A laptop session can still name itself the steward. |
 
-**Why B:** a plugin setting applies machine-wide, so it can't express "this
-session is the steward". It only helps if the steward runs on a separate
-machine.
+**Built (1.33), option A.** The plugin has a **Machine role** setting
+(`steward` or `worker`); `agent.py role worker|steward|clear` sets the same
+thing in your registry, and if either says `worker`, the machine is a worker.
+On a worker, `/overture:as <steward name>` is refused and records nothing, a
+session started under the steward's name is told it is not the steward and
+may not ask you live, and `watch`, `synced` and the fold refuse even for that
+name. `steward` or no setting changes nothing. It is a guardrail between your
+own sessions, not a security boundary: anything running as you can edit the
+registry. (The plugin setting reaches hooks as `CLAUDE_PLUGIN_OPTION_ROLE`;
+the command line reads it if Claude Code exports it there, and always reads
+the registry.)
+
+**Why it had been B:** a plugin setting applies machine-wide, so it can't
+express "this session is the steward". It only helps if the steward runs on a
+separate machine.
 **What would change it:** if you run the steward on a home server and only
 workers on laptops, A is worth adding.
 
