@@ -1133,6 +1133,97 @@ def _prs_push(a) -> int:
     return 0
 
 
+def _pr_merge(a) -> int:
+    """`pr-merge`: merge the pull request the owner asked for from the PR tab (1.33, D7), with THIS process's gh.
+
+    Re-reads the PR from GitHub now, refuses by name when it is not open, ready, passing and still at the
+    commit the owner saw (or the request is over 24 hours old), merges with `--match-head-commit`, and replies
+    on @prs either way. `--dry-run` checks and prints, merges and replies to nothing. 0 merged (or dry run ok);
+    1 refused (and the reply says why); 2 the server cannot be reached.
+    """
+    import datetime as dt
+    from overture import prs as PR
+    from overture import schema as S
+    state = os.path.realpath(a.state)
+    found = R.enclosing(a.project)
+    if found is None or found[1].get("state") != state:
+        print(f"refused: {Path(a.project).resolve()} is not a project registered on the console at {state}", file=sys.stderr)
+        return 1
+    root = Path(found[0])
+    try:
+        code, view = _req(state, "GET", "/view", None, agent=a.agent)
+    except OSError as e:
+        print(f"cannot reach the console server at {_where(state)}: {e}", file=sys.stderr)
+        return 2
+    if code != 200:
+        print(f"refused: {view.get('error', view)}", file=sys.stderr)
+        return 1
+    msgs = (view.get("view") or view).get("threads", {}).get(S.PRS_ITEM, [])
+    req = next((m for m in msgs if m["id"] == a.request), None)
+    if req is None or req["by"] != "owner" or req.get("intent") != "pr-merge":
+        print(f"refused: {a.request} is not an owner pr-merge request on {S.PRS_ITEM}", file=sys.stderr)
+        return 1
+    if any(m["by"] == "agent" and m.get("reply_to") == req["id"] for m in msgs):
+        print(f"refused: {a.request} already has an answer", file=sys.stderr)
+        return 1
+
+    def reply(text: str) -> bool:
+        if a.dry_run:
+            return True
+        try:
+            code, out = _req(state, "POST", "/message", {"item": S.PRS_ITEM, "text": text[:2000], "reply_to": req["id"],
+                                                          "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+        except OSError as e:
+            code, out = 0, {"error": str(e)}
+        if code != 200:
+            print(f"warning: the reply on {S.PRS_ITEM} was not stored ({out.get('error', code)}); say so to the "
+                  f"owner, the request is still unanswered", file=sys.stderr)
+        return code == 200
+
+    def gh_json(args: list[str]):
+        out = G.gh(args, root)
+        if isinstance(out, G.Unavailable):
+            return None, f"gh is {out.reason}"
+        rc, stdout, stderr = out
+        if rc != 0:
+            return None, f"`gh {' '.join(args[:3])}` failed ({rc}): {stderr.strip()[:300] or 'no message'}"
+        try:
+            return json.loads(stdout), None
+        except ValueError as e:
+            return None, f"`gh {' '.join(args[:3])}` did not print JSON: {e}"
+
+    def refuse(why: str) -> int:
+        reply(why if why.startswith("Merge refused") else f"Merge refused: {why}. Nothing was merged")
+        print(f"refused: {why}", file=sys.stderr)
+        return 1
+
+    repo_doc, why = gh_json(["repo", "view", "--json", "nameWithOwner"])
+    if why:
+        return refuse(why)
+    repo = repo_doc.get("nameWithOwner") if isinstance(repo_doc, dict) else None
+    if not isinstance(repo, str) or not PR.REPO.match(repo):
+        return refuse("gh gave no repository name")
+    row, why = gh_json(["pr", "view", str(req["pr"]), "--json", PR.GH_MERGE_FIELDS])
+    if why:
+        return refuse(why)
+    why = PR.merge_problem(req, row, repo, dt.datetime.now(dt.timezone.utc))
+    if why:
+        return refuse(why)
+    if a.dry_run:
+        print(_json({"would_merge": req["pr"], "repo": repo, "head": req["expected_head_sha"], "method": a.method}))
+        return 0
+    out = G.gh(["pr", "merge", str(req["pr"]), f"--{a.method}", "--match-head-commit", req["expected_head_sha"]], root)
+    if isinstance(out, G.Unavailable):
+        return refuse(f"gh is {out.reason}")
+    rc, _stdout, stderr = out
+    if rc != 0:
+        return refuse(f"gh refused the merge ({rc}): {stderr.strip()[:300] or 'no message'}")
+    stored = reply(f"Merged #{req['pr']} \"{str(row.get('title'))[:120]}\" into {row.get('baseRefName')} "
+                   f"({a.method}), head {req['expected_head_sha'][:8]}.")
+    print(_json({"merged": req["pr"], "repo": repo, "method": a.method, "replied": stored}))
+    return 0 if stored else 3
+
+
 def _issues_push(a) -> int:
     """`issues-push`: mirror of `_prs_push` against gh issue list. See prs-push for the full contract."""
     from overture import issues as IS
@@ -1278,6 +1369,15 @@ def main(argv=None) -> int:
     s.add_argument("--qid", help="the question it illustrates")
     s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
     s.add_argument("--ticket", help="the ticket it shows")
+    s = sub.add_parser("pr-merge", description=(
+        "Merge the pull request the owner asked for from the PR tab (1.33, UX-VIEW.md D7), using YOUR gh in "
+        "PROJECT's checkout. It re-reads the PR from GitHub, refuses (and replies on @prs saying why) unless it is "
+        "open, not a draft, passing, still at the head commit the owner saw, and the request is under 24 hours "
+        "old; then runs `gh pr merge --match-head-commit`. The console server merges nothing."))
+    s.add_argument("--project", type=Path, required=True, help="a checkout of the repository, registered on the console")
+    s.add_argument("--request", required=True, metavar="MESSAGE_ID", help="the owner's pr-merge message id (todo.merge)")
+    s.add_argument("--method", default="squash", choices=("squash", "merge", "rebase"))
+    s.add_argument("--dry-run", action="store_true", help="check and print; merge and reply to nothing")
     s = sub.add_parser("ux-export", description=(
         "Land the owner's ux-save (1.32, UX-VIEW.md): write components/<item>.md and components/<item>.css into "
         "PROJECT, the top of YOUR git worktree on a branch (never the server's checkout). A previous version is "
@@ -1675,6 +1775,8 @@ def _run(a, bell: Path) -> int:
         return _call(a.state, "POST", "/asset", body, agent=a.agent)
     if a.cmd == "ux-export":
         return _ux_export(a.state, a.project, a.save)
+    if a.cmd == "pr-merge":
+        return _pr_merge(a)
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":

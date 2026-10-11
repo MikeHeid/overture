@@ -196,7 +196,7 @@ class Store:
         item = rec.get("item")
         # The chat's thread (0.7.0) is not a register item, and the schema admits it
         # only on a message; every other record still names a register item (R7).
-        if item == S.CHAT_ITEM and kind == "message":
+        if item in (S.CHAT_ITEM, S.PRS_ITEM) and kind == "message":
             pass
         elif item is not None and self.known_items is not None and item not in self.known_items:
             # 0.9.1: name the push the owner needs to run; before this, the refusal was silent about it.

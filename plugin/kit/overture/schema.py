@@ -81,13 +81,16 @@ QUESTION_KINDS = ("single", "multi", "free")
 # becomes a locked ruling in the audit trail.
 # 1.32 (UX-VIEW.md, step 1): "ux-save" marks a visual as the item's component (the steward lands it by PR
 # with `agent.py ux-export`); "ux-link" ties the item to a Claude Design link (D13), or unties it with "".
-INTENTS = ("fork", "process", "chat", "visual", "move", "grill", "ux-save", "ux-link")
+INTENTS = ("fork", "process", "chat", "visual", "move", "grill", "ux-save", "ux-link", "pr-merge")
 OWNER_INTENTS = frozenset(INTENTS)
 # The chat's thread (0.7.0). It is not a register item: it can never be one,
 # because ITEM_ID refuses a leading "@", so no project item can share its
 # thread. A kit before 0.7.0 refuses a store holding it BY NAME (the item id
 # and the intent), rather than reading the chat as some item's thread.
 CHAT_ITEM = "@chat"
+# 1.33 (D7): the owner's request that the steward merge a pull request lives on a second reserved thread, for
+# the same reason as the chat: it is no register item, and ITEM_ID refuses the leading "@".
+PRS_ITEM = "@prs"
 MAX_CHAT = 4000          # characters in one chat message: a question, not a document
 # 1.32: a visual request may say what it is for, and where to start from.
 PURPOSES = ("ux",)
@@ -215,7 +218,7 @@ OPTIONAL = {
     # 0.8.0: `step`. A kit before it refuses a message carrying it, by name.
     "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to",
                           # 1.32 (UX-VIEW.md): a visual request's purpose and source; ux-save and ux-link.
-                          "purpose", "from", "visual_id", "url"}),
+                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base"}),
     "answer": frozenset({"supersedes", "reason"}),
     # 0.5.0: the conditions a RE-lock was taken against, computed by the server.
     # Written only when they differ from the question's `valid_if`, so a store
@@ -467,7 +470,8 @@ def _check_condition(c: object) -> list[str]:
 def _check_message(rec: dict) -> list[str]:
     errs = _text(rec, "text")
     chat = rec["item"] == CHAT_ITEM
-    if not chat and (not isinstance(rec["item"], str) or not ITEM_ID.match(rec["item"])):
+    prs = rec["item"] == PRS_ITEM
+    if not chat and not prs and (not isinstance(rec["item"], str) or not ITEM_ID.match(rec["item"])):
         errs.append(f"item {rec['item']!r} is not an item id")
     if "reply_to" in rec and not isinstance(rec["reply_to"], str):
         errs.append("reply_to must be a record id")
@@ -510,6 +514,7 @@ def _check_message(rec: dict) -> list[str]:
         if present:
             errs.append(f"{', '.join(present)} belong(s) to a fork or move: set the right intent or leave them out")
     errs += _check_ux(rec, intent, chat)
+    errs += _check_pr_merge(rec, intent, prs)
     if "focus" in rec and rec["focus"] not in FOCUSES:
         errs.append(f"focus {rec['focus']!r} is not one of {', '.join(FOCUSES)}")
     if "mode" in rec and rec["mode"] not in MODES:
@@ -542,6 +547,30 @@ def _check_ux(rec: dict, intent: object, chat: bool) -> list[str]:
                 errs.append(why)
     elif "url" in rec:
         errs.append("url belongs to a ux-link")
+    return errs
+
+
+def _check_pr_merge(rec: dict, intent: object, prs: bool) -> list[str]:
+    """1.33 (D7): `pr-merge` is the owner's, on @prs, naming the PR and the head commit the owner saw."""
+    errs = []
+    if intent == "pr-merge":
+        if not prs:
+            errs.append(f"intent 'pr-merge' belongs to the thread {PRS_ITEM!r}")
+        n = rec.get("pr")
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 10**9:
+            errs.append("a pr-merge names the pull request: pr, a whole number from 1")
+        base = rec.get("base")
+        if not isinstance(base, str) or not base or len(base) > 255 or re.search(r"[\x00-\x1f\x7f]", base):
+            errs.append("a pr-merge names the branch the owner saw it merge into: base, a branch name")
+        sha = rec.get("expected_head_sha")
+        if not isinstance(sha, str) or not re.match(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z", sha):
+            errs.append("a pr-merge names the head commit the owner saw: expected_head_sha, a full commit id")
+    else:
+        for k in ("pr", "expected_head_sha", "base"):
+            if k in rec:
+                errs.append(f"{k} belongs to a pr-merge")
+        if prs and rec["by"] == "owner":
+            errs.append(f"an owner message on {PRS_ITEM} carries intent 'pr-merge'")
     return errs
 
 

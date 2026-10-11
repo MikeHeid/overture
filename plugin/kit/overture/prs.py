@@ -42,8 +42,11 @@ STATES = ("open", "merged", "closed")
 CHECKS = ("success", "failure", "pending", "none")
 PUSH_FIELDS = {"repo", "window_days", "prs"}
 STORED_FIELDS = PUSH_FIELDS | {"pushed_at", "by"}
-PR_FIELDS = {"number", "title", "state", "draft", "head", "base", "author", "created_at", "updated_at",
-             "merged_at", "closed_at", "url", "merge_commit", "checks"}
+PR_REQUIRED = {"number", "title", "state", "draft", "head", "base", "author", "created_at", "updated_at",
+               "merged_at", "closed_at", "url", "merge_commit", "checks"}
+# 1.33 (UX-VIEW.md, D7): the commit a PR's head is at, so a merge request names the exact code the owner saw.
+# Optional: a push from an older agent.py has none, and its PRs just show no Merge button.
+PR_FIELDS = PR_REQUIRED | {"head_sha"}
 REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z")
 TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -58,7 +61,7 @@ UNREADABLE = ("The stored pull requests cannot be read, so none are shown: the s
 
 # What `agent.py prs-push` asks gh for: the fields `from_gh` reads, and nothing else.
 GH_FIELDS = ("number,title,state,isDraft,headRefName,baseRefName,author,createdAt,updatedAt,mergedAt,closedAt,"
-             "url,mergeCommit,statusCheckRollup")
+             "url,mergeCommit,statusCheckRollup,headRefOid")
 
 
 class PushError(ValueError):
@@ -88,8 +91,8 @@ def pr_problem(pr: object, n: int, repo: str) -> str | None:
     where = f"prs[{n}]"
     if not isinstance(pr, dict):
         return f"{where} is not an object"
-    if set(pr) != PR_FIELDS:
-        extra, missing = sorted(set(pr) - PR_FIELDS), sorted(PR_FIELDS - set(pr))
+    if not PR_REQUIRED <= set(pr) <= PR_FIELDS:
+        extra, missing = sorted(set(pr) - PR_FIELDS), sorted(PR_REQUIRED - set(pr))
         return (f"{where} has unknown fields {extra[:5]}" if extra else f"{where} is missing {missing[:5]}") + \
             f"; known: {sorted(PR_FIELDS)}"
     num = pr["number"]
@@ -118,6 +121,9 @@ def pr_problem(pr: object, n: int, repo: str) -> str | None:
         return f"{where}.merge_commit is null or a full commit id in lowercase hex"
     if pr["checks"] not in CHECKS:
         return f"{where}.checks is one of {', '.join(CHECKS)}"
+    hs = pr.get("head_sha")
+    if hs is not None and (not isinstance(hs, str) or not COMMIT.match(hs)):
+        return f"{where}.head_sha is a full commit id in lowercase hex"
     if pr["state"] == "merged" and pr["merged_at"] is None:
         return f"{where} is merged, so merged_at is a time"
     if pr["state"] == "open" and (pr["merged_at"] is not None or pr["closed_at"] is not None):
@@ -283,7 +289,7 @@ def _gh_time(v: object, name: str) -> str | None:
 def _one(row: object, repo: str) -> dict:
     if not isinstance(row, dict):
         raise PushError("a row of gh's output is not an object")
-    missing = [f for f in GH_FIELDS.split(",") if f not in row]
+    missing = [f for f in GH_FIELDS.split(",") if f not in row and f != "headRefOid"]   # 1.33: optional
     if missing:
         raise PushError(f"gh's output has no {', '.join(missing)}: is gh too old?")
     num = row["number"]
@@ -299,6 +305,9 @@ def _one(row: object, repo: str) -> dict:
           "closed_at": _gh_time(row["closedAt"], f"#{num} closedAt"),
           "url": row["url"], "merge_commit": mc.get("oid") if isinstance(mc, dict) else None,
           "checks": rollup(row["statusCheckRollup"])}
+    oid = row.get("headRefOid")
+    if isinstance(oid, str) and COMMIT.match(oid):
+        pr["head_sha"] = oid
     if pr["state"] != "merged":
         pr["merge_commit"] = None   # GitHub can name a test-merge commit on an open PR: it was never merged
     return pr
@@ -328,6 +337,46 @@ def from_gh(repo: object, open_rows: object, recent_rows: object, window_days: i
         seen.add(pr["number"])
         prs.append(pr)
     return {"repo": name, "window_days": window_days, "prs": prs}
+
+
+# -- merging (1.33, D7): the steward's checks before `gh pr merge`, in one place so they are tested ---------
+
+MERGE_MAX_AGE = dt.timedelta(hours=24)   # a click made days ago never lands on new code
+GH_MERGE_FIELDS = "number,title,state,isDraft,headRefOid,statusCheckRollup,url,baseRefName"
+
+
+def merge_problem(req: dict, row: object, repo: str, now: dt.datetime) -> str | None:
+    """Why the owner's pr-merge `req` must not be merged now, in words for the reply; None when it may.
+
+    `row` is `gh pr view N --json GH_MERGE_FIELDS`, read in the steward's process just now (never the
+    server's older snapshot). Every refusal says "Nothing was merged".
+    """
+    n = req.get("pr")
+    try:
+        asked = dt.datetime.fromisoformat(str(req.get("ts", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return "Merge refused: the request has no readable time. Nothing was merged"
+    if now - asked > MERGE_MAX_AGE:
+        return f"Merge refused: the request for #{n} is older than 24 hours; ask again from the PR tab. Nothing was merged"
+    if not isinstance(row, dict) or row.get("number") != n:
+        return f"Merge refused: gh did not return #{n}. Nothing was merged"
+    if row.get("url") != f"https://github.com/{repo}/pull/{n}":
+        return f"Merge refused: #{n} is not in {repo}. Nothing was merged"
+    if str(row.get("state")).upper() != "OPEN" or row.get("isDraft"):
+        return f"Merge refused: #{n} is {'a draft' if row.get('isDraft') else str(row.get('state')).lower()}. Nothing was merged"
+    try:
+        checks = rollup(row.get("statusCheckRollup"))
+    except PushError as e:
+        return f"Merge refused: #{n}'s checks are unreadable ({e}). Nothing was merged"
+    if checks != "success":
+        return f"Merge refused: checks on #{n} are {checks}, not passing. Nothing was merged"
+    if row.get("baseRefName") != req.get("base"):
+        return (f"Merge refused: #{n} now merges into {row.get('baseRefName')}, not {req.get('base')} as you saw. "
+                f"Nothing was merged")
+    if row.get("headRefOid") != req.get("expected_head_sha"):
+        return (f"Merge refused: #{n} has new commits since you asked (head is now "
+                f"{str(row.get('headRefOid'))[:8]}, you saw {str(req.get('expected_head_sha'))[:8]}). Nothing was merged")
+    return None
 
 
 def gh_lists(window_days: int, limit: int, today: dt.date | None = None) -> tuple[list[str], list[str], list[str]]:

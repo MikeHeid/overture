@@ -30,7 +30,7 @@ from typing import Callable
 
 from .registry import read_regular
 
-WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link")   # 1.32: UX View
+WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link", "pr-merge")   # 1.32: UX View; 1.33: Merge
 CURSOR_FILE = "agent-cursor.json"
 MAX_DOORBELL = 64 << 20  # one short line per owner write; far past any real console
 MAX_CURSOR = 4096
