@@ -143,6 +143,12 @@ AGENT_ROUTES = {"/question": "question", "/message": "message", "/transcript": "
 AGENT_MAX_BODY = 2 << 20
 # An asset arrives base64 in JSON: an 8 MiB GIF is about 10.7 MiB of body. Raised on /asset only.
 ASSET_MAX_BODY = 12 << 20
+# 1.33 (UX-VIEW.md "Scripts in components"): the one place an agent's script runs. The frame is sandboxed
+# (allow-scripts only: no same-origin, forms, popups or top navigation), so it is an opaque origin; the policy
+# blocks every fetch and any outside source. Served only while the owner's ux-scripts switch is on.
+COMPONENT_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                 "img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; "
+                 "frame-ancestors 'self'")
 # A stored asset opened in its own tab runs nothing and loads nothing.
 ASSET_CSP = "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'"
 # /view's answer when a stored file fails its check: what to do, never where the file is.
@@ -1940,6 +1946,57 @@ class Console:
                 "so it has nowhere to land in the repository")
         return {"record": stored, "land": land}
 
+    def scripts_on(self, visual_id: str) -> bool:
+        """Whether the owner's newest ux-scripts for this visual says scripts are on. The owner's record only."""
+        on = False
+        for r in self.store.records():
+            if r["type"] == "message" and r["by"] == "owner" and r.get("intent") == "ux-scripts" \
+                    and r.get("visual_id") == visual_id:
+                on = r["scripts"] is True
+        return on
+
+    def add_component_source(self, body: object, agent: str | None = None) -> dict:
+        """1.33: keep an agent's raw, scripted source for an existing HTML visual, beside its sanitized version.
+
+        Nothing runs it until the owner switches scripts on for that visual (`component_render`). It is
+        write-once: a different source for the same visual is refused, so a switched-on version cannot change.
+        """
+        keys = {"visual_id", "content", "nonce"}
+        if not isinstance(body, dict) or set(body) != keys:
+            raise RequestError(400, f"component-source takes exactly {', '.join(sorted(keys))}")
+        vid, content = body["visual_id"], body["content"]
+        if not isinstance(vid, str) or not S.RECORD_ID.match(vid):
+            raise RequestError(400, "visual_id must be a visual's record id")
+        if not isinstance(content, str) or not content.strip():
+            raise RequestError(400, "content must be the scripted HTML document")
+        data = content.encode("utf-8")
+        if len(data) > S.MAX_VISUAL:
+            raise RequestError(413, f"the source is {len(data)} bytes; the limit is {S.MAX_VISUAL}")
+        with self._lock:
+            rec = self.store.get(vid)
+            if rec is None or rec["type"] != "visual" or rec["format"] != "html":
+                raise RequestError(404, f"no HTML visual {vid}")
+            try:
+                written = VIS.store_source(self.cfg.state, rec, data)
+            except (VIS.VisualError, OSError) as e:
+                raise RequestError(409, f"the source was not stored: {e}") from None
+        return {"stored": True, "written": written, "visual_id": vid, "bytes": len(data),
+                "note": "it runs only when the owner switches Scripts on for this version in UX View"}
+
+    def component_render(self, rid: str) -> bytes:
+        rec = self.store.get(rid)
+        if rec is None or rec["type"] != "visual" or rec["format"] != "html":
+            raise RequestError(404, f"no HTML visual {rid}")
+        if not self.scripts_on(rid):
+            raise RequestError(403, "scripts are off for this version; the owner turns them on in UX View")
+        try:
+            data = VIS.read_source(self.cfg.state, rec)
+        except VIS.VisualError as e:
+            raise RequestError(409, str(e)) from None
+        if data is None:
+            raise RequestError(404, "this version has no scripted source")
+        return data
+
     def visual(self, rid: str) -> tuple[bytes, str]:
         """A stored visual's bytes and format, read from STATE and checked now; refused by name when changed."""
         rec = self.store.get(rid)
@@ -2166,12 +2223,21 @@ class Console:
             doc = VIS.read_doc(self.cfg.state, rec, req.get("text", ""))
         except (VIS.VisualError, UnicodeDecodeError) as e:
             raise RequestError(409, f"visual {rec['id']} cannot be exported: {e}") from None
+        scripts = self.scripts_on(rec["id"])
+        source = None
+        if scripts:   # the owner switched scripts on for this exact version: the component carries its source
+            try:
+                raw = VIS.read_source(self.cfg.state, rec)
+            except VIS.VisualError as e:
+                raise RequestError(409, f"visual {rec['id']}'s scripted source cannot be exported: {e}") from None
+            source = raw.decode("utf-8") if raw is not None else None
         design = (self.items().get(msg["item"]) or {}).get("design") or None
         for r in self.store.records():
             if r["type"] == "message" and r.get("intent") == "ux-link" and r["item"] == msg["item"] and r["by"] == "owner":
                 design = r["url"] or None     # newest wins; "" unlinks
         return {"root": str(Path(self.cfg.root).resolve()), "item": msg["item"], "save": msg,
-                "visual": {**rec, "content": content, "doc": doc}, "design_url": design}
+                "visual": {**rec, "content": content, "doc": doc}, "design_url": design,
+                "scripts": source is not None, "source": source}
 
     @staticmethod
     def _status(items: dict[str, dict]) -> dict[str, str | None]:
@@ -2947,6 +3013,16 @@ class Console:
             chat = kind == "message" and by == "owner" and body.get("item") == S.CHAT_ITEM
             if chat and self.store.existing({**body, "type": kind, "by": by}) is None:
                 self._chat_gate()  # a retry of a message already stored is not a new message
+            if kind == "message" and by == "owner" and body.get("intent") == "ux-scripts" and body.get("scripts") is True:
+                vrec = self.store.get(body.get("visual_id")) if isinstance(body.get("visual_id"), str) else None
+                try:
+                    has = vrec is not None and vrec["type"] == "visual" and vrec["format"] == "html" \
+                        and VIS.read_source(self.cfg.state, vrec) is not None
+                except VIS.VisualError:
+                    has = False
+                if vrec is not None and not has:
+                    raise RequestError(409, "this version has no scripted source to switch on; ask for one "
+                                            "(Generate with notes: add a progressive-enhancement script)")
             if (kind == "message" and by == "owner" and body.get("intent") == "pr-merge"
                     and self.store.existing({**body, "type": kind, "by": by}) is None):
                 self._merge_gate(body)
@@ -3467,7 +3543,7 @@ class OwnerHandler(_Handler):
                 return self._send(e.code, {"error": str(e)})
         live = {"/api/wait": self._wait, "/api/feed": self._feed, "/api/evidence": self._evidence,
                 "/api/visual": self._visual, "/api/visual-render": self._visual_render, "/api/asset": self._asset,
-                "/api/item-chart": self._item_chart, "/api/impact-graph": self._impact_graph}.get(route)
+                "/api/component-render": self._component_render, "/api/item-chart": self._item_chart, "/api/impact-graph": self._impact_graph}.get(route)
         if live is not None and query is not None:
             try:
                 return live(query)
@@ -3563,6 +3639,14 @@ class OwnerHandler(_Handler):
         data, mime = self.console.asset(query.get("id", ""))
         # Same-origin: the page loads assets as <img>, never from a sandboxed frame.
         self._send_raw(200, data, mime, ASSET_CSP, corp="same-origin")
+
+    def _component_render(self, query: dict[str, str]) -> None:
+        """1.33: a visual's scripted source, only while the owner's switch is on for it, under COMPONENT_CSP."""
+        self._only(query, {"id"}, "/api/component-render")
+        rid = query.get("id")
+        if not isinstance(rid, str) or not S.RECORD_ID.match(rid):
+            raise RequestError(400, "id must be a visual's record id (24 lowercase hex)")
+        self._send_raw(200, self.console.component_render(rid), "text/html; charset=utf-8", COMPONENT_CSP)
 
     def _visual_render(self, query: dict[str, str]) -> None:
         """0.8.19: a Mermaid visual rendered as a diagram inside the console's sandboxed iframe."""
@@ -3765,6 +3849,8 @@ class AgentHandler(_Handler):
             if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)
                 self.max_body = ASSET_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
                 return self._send(200, self.console.add_asset(self._body(), agent))
+            if self.path == "/component-source":  # 1.33: the raw scripted source of an HTML visual, stored apart
+                return self._send(200, self.console.add_component_source(self._body(), agent))
             if self.path == "/ux-export":  # 1.32: a read; agent.py writes components/<item>.md in its own worktree
                 return self._send(200, self.console.ux_export(self._body()))
             if self.path == "/visual-export":  # 0.8.1: a read; agent.py writes into the agent's own worktree

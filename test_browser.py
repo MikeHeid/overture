@@ -104,6 +104,7 @@ class _Handler(BaseHTTPRequestHandler):
     view_multiline = False  # /view carries a thread whose messages span several lines (0.8.4)
     view_working = False  # ...and the cursor says an agent is working on it
     view_listening = None  # the cursor's `listening`; None leaves it out, as a pre-0.6.0 server
+    view_scripts = False  # ...and its newest version has the owner's Scripts switch on (1.33)
     view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
     posts: list = []    # the JSON bodies POSTed to /api/message
     board: object = None   # what /api/board answers; None is 404, as a project with no board()
@@ -127,6 +128,11 @@ class _Handler(BaseHTTPRequestHandler):
                        "format": "html", "title": "Save button", "text": f"Version {n}", "path": f"p{n}.html",
                        "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"} for n in (1, 2)]
                 payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
+                if _Handler.view_scripts:
+                    sw = {"id": "s" * 24, "seq": 99, "ts": "2026-10-11T09:00:00Z", "item": "LANE.1", "by": "owner",
+                          "type": "message", "intent": "ux-scripts", "visual_id": "v2", "scripts": True, "text": "on"}
+                    thr = payload["view"].get("threads", {})
+                    payload["view"] = {**payload["view"], "threads": {**thr, "LANE.1": [*thr.get("LANE.1", []), sw]}}
             if _Handler.view_working:  # an agent has marked this item id as in hand
                 payload["cursor"] = {"working": {_Handler.view_working: "2026-09-29T10:00:00Z"}}
             if _Handler.view_listening is not None:  # the watch heartbeat, as the server judged it
@@ -142,6 +148,10 @@ class _Handler(BaseHTTPRequestHandler):
             body, ctype = json.dumps({"pushed": True, "note": None, "repo": "acme/app", "window_days": 30,
                                       "pushed_at": "2026-10-11T10:00:00Z", "by": "steward",
                                       "prs": [row(5), row(6, checks="pending"), row(8, draft=True), row(9, head_sha=None)]}), "application/json"
+        elif self.path.startswith("/api/component-render"):
+            from overture import server as SV
+            body, ctype = SCRIPTED, "text/html"
+            csp = SV.COMPONENT_CSP
         elif self.path.startswith("/api/visual"):
             body, ctype = "<!doctype html><title>mock</title><h1>mock</h1>", "text/html"
         elif self.path.startswith("/api/board"):
@@ -154,6 +164,8 @@ class _Handler(BaseHTTPRequestHandler):
             body, ctype = PAGE, "text/html"
         data = body.encode()
         self.send_response(status)
+        if self.path.startswith("/api/component-render"):
+            self.send_header("Content-Security-Policy", csp)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -170,6 +182,19 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+
+# A hostile scripted component: every way out of the sealed frame it can think of, recorded in the DOM.
+SCRIPTED = """<!doctype html><html><body><p id="out">pending</p><script>
+const r = {};
+const t = (k, f) => { try { f(); r[k] = 'reached'; } catch (e) { r[k] = 'blocked'; } };
+t('parent', () => { parent.document.title; });
+t('storage', () => { localStorage.getItem('x'); });
+t('cookie', () => { if (document.cookie === undefined) throw 1; document.cookie; });
+t('top', () => { top.location.href = 'http://127.0.0.1:1/'; top.location.href; });
+parent.postMessage({type: 'ck-chart-export', svg: '<svg xmlns="http://www.w3.org/2000/svg"/>', filename: 'pwned'}, '*');
+fetch('/api/view').then(() => { r.fetch = 'reached'; }, () => { r.fetch = 'blocked'; }).then(() => {
+  document.getElementById('out').textContent = JSON.stringify(r); });
+</script></body></html>"""
 
 STATE = """() => {
   const q = s => document.querySelector(s);
@@ -232,7 +257,7 @@ class DockTests(unittest.TestCase):
         cls.server.shutdown()
 
     def setUp(self):
-        _Handler.view_ux, _Handler.posts = False, []
+        _Handler.view_ux, _Handler.view_scripts, _Handler.posts = False, False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
@@ -683,6 +708,23 @@ class UxViewTests(unittest.TestCase):
         page.wait_for_timeout(300)
         link = [m for m in _Handler.posts if m.get("intent") == "ux-link"]
         self.assertEqual([m["url"] for m in link], ["https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"])
+
+    def test_a_scripted_component_runs_sealed_and_reaches_nothing(self):
+        _Handler.view_scripts = True
+        page = self._open()
+        frame_el = page.locator(".ck-ux-frame")
+        self.assertEqual(frame_el.get_attribute("sandbox"), "allow-scripts")
+        self.assertIn("component-render", frame_el.get_attribute("src"))
+        self.assertTrue(page.locator(".ck-ux-scripts-badge").is_visible())
+        frame = next(f for f in page.frames if "component-render" in f.url)
+        frame.wait_for_function("document.getElementById('out').textContent !== 'pending'")
+        got = json.loads(frame.evaluate("document.getElementById('out').textContent"))
+        self.assertEqual(got, {"parent": "blocked", "storage": "blocked", "cookie": "blocked",
+                               "top": "blocked", "fetch": "blocked"})
+        page.wait_for_timeout(300)
+        # The console ignored the frame's message (it is not one of the console's own chart frames).
+        self.assertNotIn("pwned", page.evaluate("document.body.innerText"))
+        self.assertEqual(page.evaluate("document.querySelectorAll('a[download]').length"), 0)
 
     def test_full_screen_and_no_overflow_on_a_phone(self):
         page = self._open(width=375)

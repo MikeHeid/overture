@@ -371,6 +371,40 @@ class ComponentTests(Tmp):
         self.assertIn("````html\n", md)             # a longer fence than any run inside the content
         self.assertIn(".a > b{x:1}", css)
 
+    def test_a_component_switched_to_scripts_carries_its_source_and_says_so(self):
+        from overture import components as CO
+        ex = self.export("<p>plain</p>")
+        plain, _ = CO.render("UI-2", ex)
+        self.assertNotIn("scripts: true", plain)
+        self.assertNotIn("scripts: true", CO.render("UI-2", dict(ex, scripts=False, source="<script>1</script>"))[0])
+        md, _ = CO.render("UI-2", dict(ex, scripts=True, source="<p>x</p><script>go()</script>"))
+        self.assertIn("scripts: true", md)
+        self.assertIn("<script>go()</script>", md)
+        self.assertNotIn("<p>plain</p>", md)
+
+    def test_the_scripted_source_is_stored_beside_the_visual_write_once_and_jailed(self):
+        from overture import visuals as VIS
+        path, doc = VIS.paths("UI-2", "a" * 24, "html", "e" * 64)
+        rec = {"item": "UI-2", "request": "a" * 24, "format": "html", "sha256": "e" * 64, "path": path, "doc_path": doc}
+        self.assertIsNone(VIS.read_source(self.dir, rec))
+        self.assertTrue(VIS.store_source(self.dir, rec, b"<script>1</script>"))
+        self.assertFalse(VIS.store_source(self.dir, rec, b"<script>1</script>"))     # same bytes: nothing to do
+        self.assertEqual(VIS.read_source(self.dir, rec), b"<script>1</script>")
+        with self.assertRaises(VIS.VisualError):
+            VIS.store_source(self.dir, rec, b"<script>2</script>")                    # never replaced
+        with self.assertRaises(VIS.VisualError):
+            VIS.store_source(self.dir, dict(rec, format="mermaid"), b"x")
+
+    def test_ux_scripts_is_the_owners_on_off_for_one_visual(self):
+        from overture import schema as S
+        base = {"type": "message", "schemaVersion": 1, "item": "UI-2", "text": "on", "by": "owner",
+                "nonce": "n" * 10, "intent": "ux-scripts", "visual_id": "a" * 24, "scripts": True}
+        self.assertEqual(S.validate(base), [])
+        self.assertTrue(any("only the owner" in e for e in S.validate(dict(base, by="agent"))))
+        self.assertTrue(any("scripts: true or false" in e for e in S.validate(dict(base, scripts="yes"))))
+        self.assertTrue(any("names the visual" in e for e in S.validate({k: v for k, v in base.items() if k != "visual_id"})))
+        self.assertTrue(any("belongs to a ux-scripts" in e for e in S.validate(dict(base, intent="ux-save"))))
+
     def test_writes_backs_up_by_hash_is_idempotent_and_keeps_ten(self):
         from overture import components as CO
         top = self.dir

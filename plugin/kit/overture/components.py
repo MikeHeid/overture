@@ -39,9 +39,14 @@ def render(item: str, export: dict) -> tuple[str, str | None]:
     vis = export["visual"]
     save = export["save"]
     content = vis["content"]
+    source = export.get("source") if export.get("scripts") else None
+    if source:     # the owner switched scripts on for this version: the component is its scripted source
+        content = source
     sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
     front = ["---", f"item: {_yaml_str(item)}", f"visual: {vis['id']}", f"save: {save['id']}",
              f"saved_by: {save['by']}", f"saved_at: {_yaml_str(save.get('ts', ''))}", f"sha256: {sha}"]
+    if source:
+        front.append("scripts: true")
     if export.get("design_url"):
         front += ["design:", f"  url: {_yaml_str(export['design_url'])}"]
     front.append("---")

@@ -49,7 +49,20 @@ Status:
   which re-reads the PR with the steward's own `gh`, refuses by name (24-hour
   expiry included), merges with `--match-head-commit`, and replies on `@prs`.
 
-  Next: step 4, the Scripts switch (its own security review).
+- **Step 4 shipped (the Scripts switch):** the owner-only `ux-scripts` intent
+  (per visual, `visual_id` + `scripts`); an agent's raw scripted source stored
+  write-once beside the visual (`agent.py component-source`, route
+  `/component-source`); `/api/component-render`, which serves that source only
+  while the owner's newest switch for the visual is on, under
+  `COMPONENT_CSP` (sandbox allow-scripts, default-src 'none', connect-src
+  'none'); the modal frame with `sandbox="allow-scripts"` and the "⚡ Scripts
+  on" badge; `ux-export` landing the source with `scripts: true`. Differences
+  from the plan above: the scripted source is a file beside the visual, not a
+  new visual record; the switch is per version; and it refuses to turn on
+  without a stored source. A browser test runs a hostile component and shows
+  it reaches nothing.
+
+  Next: the hosting commands (`server.py daemon|service|status|health`).
 
 ---
 

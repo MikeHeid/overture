@@ -1369,6 +1369,13 @@ def main(argv=None) -> int:
     s.add_argument("--qid", help="the question it illustrates")
     s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
     s.add_argument("--ticket", help="the ticket it shows")
+    s = sub.add_parser("component-source", description=(
+        "Store the raw, scripted source of an HTML visual you already posted (1.33, UX-VIEW.md): the visual stays "
+        "the sanitized, script-free version, and this is its progressive enhancement. Nothing runs it until the "
+        "owner switches Scripts on for that version in UX View. Write-once per visual; see the console-ux skill's "
+        "scripts.md for how to write it."))
+    s.add_argument("--visual", required=True, metavar="ID", help="the HTML visual's record id")
+    s.add_argument("--file", type=Path, required=True, help="the scripted HTML document")
     s = sub.add_parser("pr-merge", description=(
         "Merge the pull request the owner asked for from the PR tab (1.33, UX-VIEW.md D7), using YOUR gh in "
         "PROJECT's checkout. It re-reads the PR from GitHub, refuses (and replies on @prs saying why) unless it is "
@@ -1777,6 +1784,14 @@ def _run(a, bell: Path) -> int:
         return _ux_export(a.state, a.project, a.save)
     if a.cmd == "pr-merge":
         return _pr_merge(a)
+    if a.cmd == "component-source":
+        try:
+            text = a.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: cannot read {a.file}: {e}", file=sys.stderr)
+            return 1
+        return _call(a.state, "POST", "/component-source", {"visual_id": a.visual, "content": text,
+                                                            "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":

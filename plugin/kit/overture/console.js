@@ -5949,6 +5949,12 @@
     return { visuals, save, reply, design: design || '', waiting, linkWaiting: ((view && view.waiting_ux) || [])
       .some(w => w.item === id && w.intent === 'ux-link') };
   }
+  // The owner's newest ux-scripts for a visual: true only if their record says so (never an agent's field).
+  function uxScriptsOn(id, visualId) {
+    const on = uxThread(id).filter(m => m.by === 'owner' && m.intent === 'ux-scripts' && m.visual_id === visualId)
+      .sort((a, b) => a.seq - b.seq);
+    return on.length > 0 && on[on.length - 1].scripts === true;
+  }
   function uxStatus(f, idx) {
     const n = f.visuals.length;
     if (!n) return f.waiting ? 'Asked an agent · waiting for a session…'
@@ -5984,6 +5990,7 @@
     const prev = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Previous version' }, ['◂']);
     const next = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Next version' }, ['▸']);
     const vlabel = el('span', { className: 'ck-ux-vlabel', 'aria-live': 'polite' });
+    const scriptsBadge = el('span', { className: 'ck-ux-scripts-badge', hidden: 'hidden' }, ['\u26a1 Scripts on']);
     const sizes = el('div', { className: 'ck-ux-sizes', role: 'radiogroup', 'aria-label': 'Preview width' });
     const radios = {};
     for (const [key, label, px] of UX_SIZES) {
@@ -5992,7 +5999,7 @@
       r.addEventListener('click', () => { st.size = key; try { localStorage.setItem('ck-ux-size', key); } catch (_e) { /* ok */ } paint(); });
       radios[key] = r; sizes.appendChild(r);
     }
-    box.appendChild(el('div', { className: 'ck-ux-bar' }, [prev, vlabel, next, sizes]));
+    box.appendChild(el('div', { className: 'ck-ux-bar' }, [prev, vlabel, next, scriptsBadge, sizes]));
     const stage = el('div', { className: 'ck-ux-stage' });
     const scaleNote = el('div', { className: 'ck-ux-scale ck-muted' });
     const side = el('aside', { className: 'ck-ux-side', 'aria-label': 'Component' });
@@ -6021,16 +6028,20 @@
       const cur = n ? f.visuals[st.idx] : null;
       const px = (UX_SIZES.find(x => x[0] === st.size) || [])[2] || 0;
       for (const k of Object.keys(radios)) radios[k].setAttribute('aria-checked', k === st.size ? 'true' : 'false');
+      scriptsBadge.hidden = !(cur && uxScriptsOn(itemId, cur.id));
       vlabel.textContent = n ? 'v' + (st.idx + 1) + ' of ' + n + (cur.agent ? ' · by ' + cur.agent : '') + ' · ' + relTime(cur.ts) : 'No versions';
       prev.disabled = !(n && st.idx > 0); next.disabled = !(n && st.idx < n - 1);
       stage.textContent = '';
       if (cur) {
         const frame = document.createElement('iframe');
-        frame.setAttribute('sandbox', '');                        // no scripts, forms, popups or same-origin
+        // Scripts off: an empty sandbox. Scripts on (the owner's switch): allow-scripts and nothing else, so the
+        // frame is an opaque origin that cannot reach the console, its cookies or its storage.
+        const scripted = uxScriptsOn(itemId, cur.id);
+        frame.setAttribute('sandbox', scripted ? 'allow-scripts' : '');
         frame.setAttribute('referrerpolicy', 'no-referrer');
-        frame.setAttribute('title', (cur.title || itemId) + ' v' + (st.idx + 1) + (px ? ', ' + px + 'px' : ', fit'));
+        frame.setAttribute('title', (cur.title || itemId) + ' v' + (st.idx + 1) + (px ? ', ' + px + 'px' : ', fit') + (scripted ? ', scripts on' : ''));
         frame.className = 'ck-ux-frame';
-        frame.src = config.api + '/visual?id=' + encodeURIComponent(cur.id);
+        frame.src = config.api + (scripted ? '/component-render?id=' : '/visual?id=') + encodeURIComponent(cur.id);
         stage.appendChild(frame);
         const fit = () => {
           const w = stage.clientWidth || 1, s = px ? Math.min(1, w / px) : 1;
@@ -6068,7 +6079,31 @@
       det.appendChild(el('div', { className: 'ck-actions' }, [linkSave, unlink]));
       det.appendChild(el('p', { className: 'ck-muted' }, [f.linkWaiting ? 'Link sent · waiting for the steward to record it.'
         : 'The console never opens or fetches this link. The agent reads the design with your login.']));
-      det.appendChild(el('p', { className: 'ck-muted' }, ['Scripts in components: off. Switching them on arrives in a later step.']));
+      if (cur) {
+        const on = uxScriptsOn(itemId, cur.id);
+        const swId = 'ck-ux-scripts';
+        const sw = el('input', { type: 'checkbox', id: swId, role: 'switch', checked: on ? '' : null });
+        sw.checked = on;
+        det.appendChild(el('div', { className: 'ck-ux-switch' }, [sw, el('label', { for: swId }, ['Scripts (this version)'])]));
+        const seen = (() => { try { return localStorage.getItem('ck-ux-scripts-seen') === '1'; } catch (_e) { return true; } })();
+        const note = el('p', { className: 'ck-muted ck-ux-scripts-note', hidden: st.scriptsNote ? null : 'hidden' }, [
+          'Scripts run in a sealed frame with no access to the console or its cookies. Turn on only for components you need to see working.']);
+        det.appendChild(note);
+        det.appendChild(el('p', { className: 'ck-muted' }, [on ? 'Recorded at the next save.'
+          : 'Needs a scripted source for this version; ask for one with Generate with notes.']));
+        sw.addEventListener('change', async () => {
+          err.hidden = true;
+          const want = sw.checked;
+          if (want && !seen) { st.scriptsNote = true; note.hidden = false; try { localStorage.setItem('ck-ux-scripts-seen', '1'); } catch (_e) { /* ok */ } }
+          const r = await apiPost('/message', { item: itemId, intent: 'ux-scripts', visual_id: cur.id, scripts: want,
+            text: 'Scripts ' + (want ? 'on' : 'off') + ' for v' + (st.idx + 1) + ' of ' + (cur.title || itemId) }, 'ux-scripts-' + cur.id + '-' + want);
+          if (r.error) { sw.checked = !want; err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+          else announce('Scripts ' + (want ? 'on' : 'off') + '.');
+          if (!r.error) { st.settingsOpen = true; paint(); }
+        });
+      } else {
+        det.appendChild(el('p', { className: 'ck-muted' }, ['Scripts: no version to switch yet.']));
+      }
       const sendLink = async url => {
         err.hidden = true;
         const r = await apiPost('/message', { item: itemId, intent: 'ux-link', url, text: url ? 'Link the Claude Design project' : 'Unlink the Claude Design project' }, 'ux-link-' + itemId);
