@@ -3108,3 +3108,29 @@ example dashboard.
   modal with Save, Generate and Generate with input; components saved
   to `components/<item>.md` with a dated backup, through the steward;
   new UX items placed into their lane automatically.
+- **Icons (D8).** A bundled subset of 23 Lucide icons (lucide-static
+  0.460.0, ISC; the licence is in `vendor/LUCIDE-LICENSE.txt`), drawn
+  inline with `currentColor`, so there is no icon font, no CDN and no
+  request. Every tab, the More menu, the Chat ▾ menu and the footer's
+  Shortcuts button show one.
+- **State marks.** The near-identical circles (◐ ◑ ○ ◌) are replaced by a
+  distinct shape per state, and each keeps its colour and its words:
+  - awaiting you: a dotted circle;
+  - awaiting an agent: a bot;
+  - answered, not locked: an open lock;
+  - locked: a lock;
+  - stale: a warning triangle;
+  - withdrawn: a ban sign;
+  - superseded: crossed arrows.
+
+  They appear on question chips, inbox rows, the filter chips, the
+  dashboard's item buttons and section badges, the answers sheet,
+  round cards and the Portfolio tallies. The Portfolio tallies now read
+  `3 you`, `1 stale` instead of `?you`, `!stale`. Markdown exports and
+  desktop notifications keep their text marks.
+- **Tabs fit on one line (D9).** Tabs show an icon and a label. The
+  docked column is never narrower than its tab row: it measures the row
+  after each draw and widens if needed. To keep that near the old
+  width, Playbooks and Triggers moved behind **More ▾** (their `g`
+  shortcuts still work), and the Portfolio tab's count no longer says
+  `?you`. In the narrow overlay the row still scrolls sideways.
