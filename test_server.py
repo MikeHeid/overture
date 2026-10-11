@@ -2042,6 +2042,22 @@ class Phase4Tests(_Live, unittest.TestCase):
         self.assertTrue(h["content-type"].startswith("text/plain"))
         self.assertIn("sandbox", h["content-security-policy"])
 
+    def test_a_mermaid_visual_renders_as_a_diagram_and_an_html_mock_does_not(self):
+        # Catches: visual-render checking the file suffix ("mmd") instead of the record's format
+        # ("mermaid"), which answered 400 for every Mermaid visual since 1.0.0.
+        req = self.visual_request()
+        code, out = self.post_visual(req["id"], content="graph TD\n  A-->B\n", fmt="mermaid")
+        self.assertEqual(code, 200, out)
+        code, h, body = self.raw(f"/api/visual-render?id={out['record']['id']}")
+        self.assertEqual(code, 200, body)
+        self.assertTrue(h["content-type"].startswith("text/html"))
+        self.assertIn("script-src 'nonce-", h["content-security-policy"])
+        self.assertIn(b"A--&gt;B", body)                  # the source, escaped into the wrapper
+        code, out = self.post_visual(req["id"])
+        self.assertEqual(code, 200, out)
+        code, _h, _body = self.raw(f"/api/visual-render?id={out['record']['id']}")
+        self.assertEqual(code, 400)
+
     def test_a_refused_visual_writes_no_file(self):
         # Catches: files written before the store's rules run (a refused visual would still land in
         # the project), and an oversized visual cut to fit.
@@ -6366,6 +6382,29 @@ class PageStagePublishTests(_Live, unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertEqual(body, DASH.encode())
         self.assertIsNone(self.served())   # a preview publishes nothing
+
+    def test_the_main_page_csp_allows_the_published_pages_own_scripts_by_hash_only(self):
+        # Q28 point 4 under 1.31's nonce CSP. Catches: the published page's inline script refused (the dashboard
+        # breaks), a staged page's script allowed before it is published, the page's bytes edited to carry the
+        # nonce (R8), and an allowance wider than the exact reviewed body ('unsafe-inline', a second hash).
+        import base64
+        import hashlib
+        import re
+        body = 'document.body.dataset.pageScript = "ran";'
+        sha = "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+        script_src = lambda h: re.search(r"script-src ([^;]*)", h["Content-Security-Policy"]).group(1).split()
+        self.stage()
+        code, headers, html = self.raw_get("/")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(script_src(headers)), 1)   # staged only: the console's nonce, nothing for its script
+        self.assertEqual(self.publish({"commit": self.C1})[0], 200)
+        code, headers, html = self.raw_get("/")
+        nonce, *rest = script_src(headers)
+        self.assertEqual(rest, [sha])
+        self.assertTrue(nonce.startswith("'nonce-"))
+        self.assertIn(f'<script nonce="{nonce[7:-1]}">', html.decode())   # the console's own carries it
+        page, _ = P.strip(html.decode()).split('<p class="ck-page-source"')   # the page's own bytes, unedited
+        self.assertEqual(page + "</body></html>\n", DASH)
 
     def test_publish_takes_the_staged_commit_and_refuses_a_mismatch_by_name(self):
         # Point 2. Catches: a publish with nothing staged, a stale page's button publishing a newer staging the

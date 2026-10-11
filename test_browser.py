@@ -164,7 +164,21 @@ STATE = """() => {
 }"""
 
 
+# 0.9.14 opens the inbox by default on a docked (wide) screen once the first /view lands, unless this
+# tab's session already closed it (sessionStorage `ck-inbox-closed`). The tests below drive the panel
+# from collapsed -- the strip, the button, an item badge -- so they start in the state an owner who
+# has closed it once is in: deterministic, and no race with the default-open landing mid-test.
+# The default-open itself is held by DockTests.test_a_docked_inbox_opens_by_default_until_closed.
+INBOX_CLOSED_THIS_SESSION = "try { sessionStorage.setItem('ck-inbox-closed', '1'); } catch (e) {}"
+
 FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+
+# The open docked column's width with nothing stored. 1.24.0 replaced the 50vw default (it "ate half of
+# a 27" monitor on first open") with a fixed one, clamped to [320px, 60vw] (DOCK_W_MIN / DOCK_W_MAX_FRAC);
+# the Unreleased fixes after 1.31.0 widened it from 420px to 480px, where the eight-tab strip fits.
+# console.js DOCK_W_DEFAULT and console.css --ck-col. Every docked width the tests use (1024px and up)
+# has 60vw >= 614px, so the clamp never bites and the column is exactly this wide.
+DOCK_COL = 480
 
 
 def _expand(page, qid=None) -> None:
@@ -173,6 +187,25 @@ def _expand(page, qid=None) -> None:
     while page.locator(sel).count():
         page.locator(sel).first.click()
 
+
+def _wait_for(page, expression: str, arg=None, timeout: float = 30000) -> None:
+    """`page.wait_for_function`, but under the console's CSP. Playwright polls that one by calling
+    `globalThis.eval` inside the page, which the 1.31 `script-src 'nonce-...'` policy refuses (as it
+    should: no 'unsafe-eval'), so every wait not already true on its first look failed with an
+    EvalError. `page.evaluate` goes over the devtools protocol, which the page's CSP does not govern.
+    Same contract: `expression` is an expression or a function of `arg`; a throw propagates."""
+    from playwright.sync_api import Error, TimeoutError
+    deadline = time.monotonic() + timeout / 1000
+    while True:
+        try:
+            if page.evaluate(expression, arg):
+                return
+        except Error as e:  # a navigation tore the context down mid-call: look again in the new one
+            if "context was destroyed" not in str(e) and "navigat" not in str(e):
+                raise
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"_wait_for: {timeout:.0f}ms exceeded waiting for {expression}")
+        page.wait_for_timeout(25)
 
 def _playwright():
     try:
@@ -204,16 +237,18 @@ class DockTests(unittest.TestCase):
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
-    def _page(self, kind: str, width: int, loaded: bool = True):
+    def _page(self, kind: str, width: int, loaded: bool = True, fresh_session: bool = False):
         browser = getattr(self.pw, kind).launch()
         self.addCleanup(browser.close)
         page = browser.new_page(viewport={"width": width, "height": 800})
+        if not fresh_session:
+            page.add_init_script(INBOX_CLOSED_THIS_SESSION)
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         self.addCleanup(lambda: self.assertEqual(errors, [], f"{kind}: page errors"))
         page.goto(self.url)
         if loaded:
-            page.wait_for_function("document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
+            _wait_for(page, "document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
         return page
 
     def _tab_path(self, page, presses: int) -> list[bool]:
@@ -239,25 +274,53 @@ class DockTests(unittest.TestCase):
                 self.assertEqual(s["bodyMargin"], "44px", s)          # the board keeps clear of the strip
                 page.click(".ck-dock-strip")
                 s = self._state(page)
-                self.assertEqual(s["panel"], [700, 1400], s)          # one click: a column half the screen
+                self.assertEqual(s["panel"], [1400 - DOCK_COL, 1400], s)  # one click: a column, 1.24's default width
                 self.assertEqual((s["modal"], s["backdrop"]), (None, False), s)
                 self.assertEqual((s["role"], s["inert"]), ("complementary", False), s)  # a landmark
-                self.assertEqual((s["strip"], s["expanded"], s["bodyMargin"]), (None, "true", "700px"), s)
+                self.assertEqual((s["strip"], s["expanded"], s["bodyMargin"]), (None, "true", f"{DOCK_COL}px"), s)
                 self.assertTrue(s["focusInPanel"], s)
                 self.assertFalse(s["overflow"], s)
 
+    def test_a_docked_inbox_opens_by_default_until_closed(self):
+        # 0.9.14. Catches: the default-open lost (a fresh docked page left collapsed), applied to the
+        # overlay too (a modal over the page nobody asked for), or a close that does not stick for the
+        # session (the inbox springs open again on the next load).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind, width=1400):
+                page = self._page(kind, 1400, fresh_session=True)
+                _wait_for(page, "document.querySelector('.ck-panel').getAttribute('data-open') === 'true'")
+                s = self._state(page)
+                self.assertEqual((s["open"], s["panel"], s["strip"], s["expanded"]),
+                                 (True, [1400 - DOCK_COL, 1400], None, "true"), s)
+                self.assertEqual((s["modal"], s["backdrop"], s["bodyMargin"]), (None, False, f"{DOCK_COL}px"), s)
+                page.focus(".ck-panel .ck-close-btn")
+                page.keyboard.press("Escape")
+                self.assertFalse(self._state(page)["open"])
+                page.reload()
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-inbox-count').textContent === '2'")
+                s = self._state(page)
+                self.assertEqual((s["open"], s["strip"], s["expanded"]), (False, [1356, 1400], "false"), s)
+            with self.subTest(browser=kind, width=800):
+                page = self._page(kind, 800, fresh_session=True)
+                page.wait_for_timeout(500)                       # long enough for a default-open to land
+                s = self._state(page)
+                self.assertEqual((s["open"], s["inboxBtn"], s["backdrop"]), (False, True, False), s)
+
     # Owner, 2026-09-29: "on big monitors can you make it 50% of the screen until
-    # closed". Catches: a fixed-width column, a column whose width and the page's
-    # margin disagree (board text under the column), and a state chip that keeps
-    # its own column beside the question and squeezes the text into a strip.
-    HALF = """() => { const p = document.querySelector('.ck-panel').getBoundingClientRect();
+    # closed"; 1.24.0 reversed that (the 50vw dock "ate half of a 27" monitor on first
+    # open, which operators closed reflexively") for a fixed default the owner can drag,
+    # 480px since the fixes after 1.31.0. Catches: a column that still scales with the
+    # screen, a column whose width and the page's margin disagree (board text under the
+    # column), and a state chip that keeps its own column beside the question and
+    # squeezes the text into a strip.
+    COLUMN = """() => { const p = document.querySelector('.ck-panel').getBoundingClientRect();
       const qs = Array.from(document.querySelectorAll('.ck-panel .ck-q-header')).map(h => {
         const c = h.querySelector('.ck-q-state').getBoundingClientRect(), t = h.querySelector('.ck-q-textcol').getBoundingClientRect();
         return { chipAbove: c.bottom <= t.top + 1, textWide: t.width >= h.getBoundingClientRect().width - 30 }; });
       return { panel: [Math.round(p.left), Math.round(p.right)], margin: getComputedStyle(document.body).marginRight,
                overflow: document.documentElement.scrollWidth > innerWidth, qs }; }"""
 
-    def test_an_open_docked_column_is_half_the_screen(self):
+    def test_an_open_docked_column_has_the_default_width(self):
         for kind in BROWSERS:
             for width in (1024, 1400, 1920):
                 with self.subTest(browser=kind, width=width):
@@ -265,10 +328,10 @@ class DockTests(unittest.TestCase):
                     page.click(".ck-item-btn")  # an item's view, where question cards are drawn
                     page.wait_for_selector(".ck-panel .ck-q-header")
                     # the column slides in: measure once it has arrived at the right edge
-                    page.wait_for_function("Math.round(document.querySelector('.ck-panel').getBoundingClientRect().right) === innerWidth")
-                    got = page.evaluate(self.HALF)
-                    self.assertEqual(got["panel"], [width // 2, width], got)
-                    self.assertEqual(got["margin"], f"{width // 2}px", got)
+                    _wait_for(page, "Math.round(document.querySelector('.ck-panel').getBoundingClientRect().right) === innerWidth")
+                    got = page.evaluate(self.COLUMN)
+                    self.assertEqual(got["panel"], [width - DOCK_COL, width], got)
+                    self.assertEqual(got["margin"], f"{DOCK_COL}px", got)
                     self.assertFalse(got["overflow"], got)
                     self.assertTrue(got["qs"], got)  # the inbox really shows questions
                     for q in got["qs"]:
@@ -297,7 +360,7 @@ class DockTests(unittest.TestCase):
                 page = self._page(kind, 1400)
                 page.click(".ck-item-btn")
                 s = self._state(page)
-                self.assertEqual((s["panel"], s["modal"], s["backdrop"]), ([700, 1400], None, False), s)
+                self.assertEqual((s["panel"], s["modal"], s["backdrop"]), ([1400 - DOCK_COL, 1400], None, False), s)
                 self.assertEqual(page.get_attribute(".ck-panel", "aria-label"), "Console: LANE.1")
 
     # 0.8.4, owner: messages and agent replies lost their line breaks. The text goes in by
@@ -349,7 +412,7 @@ class DockTests(unittest.TestCase):
                 self.assertEqual((s["modal"], s["backdrop"], s["focusInPanel"]), ("true", True, True), s)
                 page.set_viewport_size({"width": 1400, "height": 800})
                 s = self._state(page)
-                self.assertEqual((s["modal"], s["backdrop"], s["panel"]), (None, False, [700, 1400]), s)
+                self.assertEqual((s["modal"], s["backdrop"], s["panel"]), (None, False, [1400 - DOCK_COL, 1400]), s)
 
 
     def test_shift_tab_leaves_an_open_docked_column(self):
@@ -425,8 +488,12 @@ class DockTests(unittest.TestCase):
                 _Handler.view_fails = True
                 page = self._page(kind, 1400, loaded=False)
                 page.wait_for_timeout(500)
-                self.assertEqual(page.text_content(".ck-dock-strip .ck-inbox-count"), "?")
-                self.assertIn("not loaded", page.get_attribute(".ck-dock-strip", "aria-label"))
+                # 1.24.0: the pre-load "?" became a muted, decorative inbox glyph; never "0", which would
+                # read as "nothing waiting". The label, not the glyph, says the count is unknown.
+                self.assertEqual(page.text_content(".ck-dock-strip .ck-inbox-count"), "✉")
+                self.assertEqual(page.get_attribute(".ck-dock-strip .ck-inbox-glyph", "aria-hidden"), "true")
+                self.assertEqual(page.get_attribute(".ck-dock-strip", "data-loaded"), "false")
+                self.assertEqual(page.get_attribute(".ck-dock-strip", "aria-label"), "Open inbox (loading)")
                 self.assertEqual(page.get_attribute(".ck-dock-strip", "aria-controls"), "ck-panel")
                 _Handler.view_fails = False
 
@@ -505,11 +572,13 @@ class DockTests(unittest.TestCase):
     TOGGLE = """() => { const b = document.querySelector('.ck-sheet-toggle'), t = document.querySelector('.ck-title');
       const back = document.querySelector('.ck-back-btn');
       return { text: b && b.textContent, pressed: b && b.getAttribute('aria-pressed'), title: t && t.textContent,
-               backShown: !!back && getComputedStyle(back).display !== 'none' }; }"""
+               backShown: !!back && getComputedStyle(back).display !== 'none', backLabel: back && back.getAttribute('aria-label') }; }"""
 
     def test_all_answers_is_a_toggle_back_to_the_inbox(self):
-        # Catches: a sheet with no way back on a desktop, where the header's Back button is hidden
-        # (the reported bug), or a toggle that goes somewhere other than the inbox.
+        # Catches: a sheet with no way back on a desktop (the reported bug), a toggle that goes
+        # somewhere other than the inbox, or a header Back that is hidden or leads elsewhere. 0.9.0
+        # stopped hiding the header's Back at desktop widths, so the toggle is no longer the only
+        # way back: both lead to the inbox, at every width.
         for kind in BROWSERS:
             for width, opener in ((1400, ".ck-dock-strip"), (800, ".ck-inbox-btn")):
                 with self.subTest(browser=kind, width=width):
@@ -519,13 +588,12 @@ class DockTests(unittest.TestCase):
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"], got["title"]), ("All answers", "false", "Inbox"), got)
                     page.click(".ck-sheet-toggle")
-                    page.wait_for_function("document.querySelector('.ck-title').textContent.startsWith('Answers')")
+                    _wait_for(page, "document.querySelector('.ck-title').textContent.startsWith('Answers')")
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"]), ("Inbox", "true"), got)
-                    if width >= 1024:
-                        self.assertFalse(got["backShown"], "the toggle is the only way back here")
+                    self.assertEqual((got["backShown"], got["backLabel"]), (True, "Back to inbox"), got)
                     page.click(".ck-sheet-toggle")
-                    page.wait_for_function("document.querySelector('.ck-title').textContent === 'Inbox'")
+                    _wait_for(page, "document.querySelector('.ck-title').textContent === 'Inbox'")
                     got = page.evaluate(self.TOGGLE)
                     self.assertEqual((got["text"], got["pressed"]), ("All answers", "false"), got)
                     focused = page.evaluate("document.activeElement === document.querySelector('.ck-title')")
@@ -559,7 +627,7 @@ class DockTests(unittest.TestCase):
                     page = self._page(kind, 1400)
                     page.click(".ck-dock-strip")
                     page.wait_for_selector(".ck-status-bar .ck-listening")
-                    page.wait_for_function("document.querySelector('.ck-listening').getAttribute('data-state') === %r"
+                    _wait_for(page, "document.querySelector('.ck-listening').getAttribute('data-state') === %r"
                                            % state)
                     got = page.evaluate(self.LISTENING)
                     self.assertTrue(got["text"].startswith(words), got)
@@ -572,7 +640,7 @@ class DockTests(unittest.TestCase):
                 page = self._page(kind, 1400)
                 page.emulate_media(reduced_motion="reduce")
                 page.click(".ck-dock-strip")
-                page.wait_for_function("(document.querySelector('.ck-listening') || {}).getAttribute && "
+                _wait_for(page, "(document.querySelector('.ck-listening') || {}).getAttribute && "
                                        "document.querySelector('.ck-listening').getAttribute('data-state') === 'listening'")
                 self.assertEqual(page.evaluate(self.LISTENING)["anim"], "none")
 
@@ -637,7 +705,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertNotEqual(before, want)  # the change is there to be made
                 _Handler.board = BOARD_B
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
                 self.assertEqual(page.evaluate(SIGNATURE), want)
 
     def test_an_unchanged_board_touches_nothing(self):
@@ -688,11 +756,11 @@ class LiveBoardTests(unittest.TestCase):
                     page.wait_for_selector(".ck-board-stale", timeout=5000)
                     if dock_open:
                         page.click(".ck-dock-strip")
-                        page.wait_for_function("document.documentElement.classList.contains('ck-dock-open')")
+                        _wait_for(page, "document.documentElement.classList.contains('ck-dock-open')")
                     # The lane board sets `scroll-behavior: smooth`, so a plain scrollTo animates:
                     # jump instead, then wait for the scroll itself, never a fixed time (PR #177 review).
                     page.evaluate("window.scrollTo({top: 2500, behavior: 'instant'})")
-                    page.wait_for_function("scrollY > 1000", timeout=5000)
+                    _wait_for(page, "scrollY > 1000", timeout=5000)
                     page.wait_for_timeout(250)  # the docked column's margin transition
                     got = page.evaluate(self.HIT)
                     self.assertGreater(got["scrolled"], 1000)  # the page really scrolled
@@ -721,7 +789,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertEqual(page.evaluate("window.__boardChanged"), 0)
                 _Handler.board_status = 200
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
 
     def test_a_value_that_is_not_a_percentage_never_reaches_a_style(self):
         # "150" is valid CSS, so only console.js's own check stops it; "50%;..." the
@@ -748,7 +816,7 @@ class LiveBoardTests(unittest.TestCase):
                 self.assertTrue(page.evaluate(hidden))
                 _Handler.board = BOARD_B
                 page.evaluate("window.ConsoleKit.refreshBoard()")
-                page.wait_for_function("window.__boardChanged > 0")
+                _wait_for(page, "window.__boardChanged > 0")
                 self.assertFalse(page.evaluate(hidden))
 
     def test_a_page_without_live_marks_never_asks(self):
@@ -846,7 +914,7 @@ class AnswerFollowUpTests(unittest.TestCase):
                         card.screenshot(path=str(Path(os.environ["OVERTURE_SHOTS"]) / f"followup-{kind}-{width}.png"))
                     self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
                     form.get_by_role("button", name="Send follow-up").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-followup').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-followup').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -953,7 +1021,7 @@ class DeliberateOpenQuestionTests(unittest.TestCase):
                     form.get_by_label("Note for the seats (optional)").fill("Which survives a second site?")
                     self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
                     form.get_by_role("button", name="Send deliberation before answering").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-deliberate').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-deliberate').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -1079,7 +1147,7 @@ class WhyStaleTests(unittest.TestCase):
                     page.goto(self.url)
                     page.click(".ck-item-btn")
                     page.wait_for_selector(".ck-stale-banner")
-                    why = page.locator("button[aria-label^='Why is this stale']")
+                    why = page.locator("button[aria-label^='See what changed under this ruling']")
                     why.focus()
                     page.keyboard.press("Enter")
                     page.wait_for_selector(".ck-why-diff")
@@ -1094,7 +1162,7 @@ class WhyStaleTests(unittest.TestCase):
                             path=str(Path(os.environ["OVERTURE_SHOTS"]) / f"why-stale-{kind}-{width}.png"))
                     page.locator("button[aria-label^='Re-lock this answer as it stands']").click()
                     page.get_by_role("button", name="Re-lock as it stands").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-confirm').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-confirm').length === 0")
                     self.assertEqual(len(posted), 1)
                     body = dict(posted[0])
                     self.assertTrue(body.pop("nonce"))
@@ -1136,7 +1204,7 @@ class WhyStaleTests(unittest.TestCase):
                 page.goto(self.url)
                 page.click(".ck-item-btn")
                 page.wait_for_selector(".ck-stale-banner")
-                page.locator("button[aria-label^='Why is this stale']").click()
+                page.locator("button[aria-label^='See what changed under this ruling']").click()
                 page.wait_for_selector(".ck-why-list li")
                 words = page.locator(".ck-why").text_content()
                 self.assertIn(f"spec.md changed since this answer was locked. Git history is {NOGIT}", words)
@@ -1241,6 +1309,7 @@ class LiveConsoleTests(unittest.TestCase):
         self.addCleanup(browser.close)
         ctx = browser.new_context(viewport={"width": width, "height": 900},
                                   reduced_motion="reduce" if reduced else "no-preference")
+        ctx.add_init_script(INBOX_CLOSED_THIS_SESSION)
         page = ctx.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -1255,20 +1324,35 @@ class LiveConsoleTests(unittest.TestCase):
                 # A browser will not let a page's route rewrite Origin, so a write is
                 # re-sent from Playwright with the Origin the public hostname carries.
                 h["origin"] = self.origin
-                route.fulfill(response=route.fetch(headers=h))
+                try:
+                    route.fulfill(response=route.fetch(headers=h))
+                except Exception:
+                    # A write the page sends as its browser closes (a draft saved on the way out)
+                    # has no one left to answer; raised here, it would fail the NEXT test's first call.
+                    if not page.is_closed():
+                        raise
                 return
             route.continue_(headers=h)
         page.route("**/*", through_access)
         if block_live:  # routes run newest first: every long poll fails, so the page never updates itself
             page.route("**/api/wait*", lambda route: route.abort())
         page.goto(url)
-        page.wait_for_function("document.querySelector('.ck-inbox-count').textContent !== '?'")
+        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
         page.evaluate("window.__notReloaded = true")
         return page
 
     def open_inbox(self, page, width):
         page.click(".ck-dock-strip" if width >= 1024 else ".ck-inbox-btn")
         page.wait_for_selector(".ck-tabs")
+
+    def open_more_tab(self, page, label):
+        # 1.25.0: Favorite and Chat sit behind the tab bar's "More ▾" menu (no #ck-tab-chat any more); once
+        # chosen, "More" stands in for the tab, named after it and selected.
+        page.click(".ck-tab-more")
+        page.locator(".ck-more-menu .ck-more-item", has_text=label).click()
+        _wait_for(page, "label => { const b = document.querySelector('.ck-tab-more');"
+                        " return !!b && b.getAttribute('aria-selected') === 'true'"
+                        " && b.getAttribute('aria-label') === 'More tabs — currently in ' + label; }", label)
 
     def assert_not_reloaded(self, page):
         self.assertTrue(page.evaluate("window.__notReloaded === true"), "the page reloaded")
@@ -1278,19 +1362,23 @@ class LiveConsoleTests(unittest.TestCase):
     def test_before_the_first_items_push_the_inbox_says_why_the_board_is_empty(self):
         # Q24. Catches: a silent blank before the steward's first push (the server runs no adapter, so it has
         # no items until then), the note never rendered, and a note that stays after the push arrives.
+        # 1.24.0 put the note in the first-run hero (a labelled region), under its "How this works" disclosure.
         from overture import items as IT
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve(snapshot=True)
                 page = self.page(kind, 1280, url)
                 self.open_inbox(page, 1280)
-                note = page.wait_for_selector(".ck-items-note")
+                hero = page.wait_for_selector(".ck-firstrun")
+                self.assertEqual((hero.get_attribute("role"), hero.get_attribute("aria-label")),
+                                 ("region", "Welcome to Overture"))
+                page.click(".ck-firstrun-summary")
+                note = page.wait_for_selector(".ck-firstrun-note", state="visible")
                 self.assertEqual(note.text_content(), IT.NOT_PUSHED)
-                self.assertEqual(note.get_attribute("role"), "status")
                 code, out = self.SV.agent_request(self.cfg.socket, "POST", "/items",
                                                   {"items": dict(LIVE_ITEMS), "seed_questions": [], "board": None})
                 self.assertEqual(code, 200, out)
-                page.wait_for_function("document.querySelector('.ck-items-note') === null", timeout=10000)
+                _wait_for(page, "document.querySelector('.ck-firstrun') === null", timeout=10000)
                 self.assert_not_reloaded(page)
 
     def test_the_prs_tab_says_why_it_is_empty_then_renders_hostile_titles_as_text(self):
@@ -1354,7 +1442,7 @@ class LiveConsoleTests(unittest.TestCase):
             with self.subTest(browser=kind):
                 url = self.serve(page=html)
                 page = self.page(kind, 1280, url)
-                page.wait_for_function("document.body.dataset.pageScript === 'ran'", timeout=10000)
+                _wait_for(page, "document.body.dataset.pageScript === 'ran'", timeout=10000)
                 self.open_inbox(page, 1280)   # the console's own script built its dock and inbox
                 self.assertIn("(staged by the steward, published by you)",
                               page.locator(".ck-page-source").text_content())
@@ -1385,7 +1473,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertTrue(page.evaluate("document.body.dataset.pageScript === undefined"))
                 with page.expect_navigation():
                     page.click("dialog.ck-page-dialog[open] .ck-page-use")   # the dialog's own button publishes
-                page.wait_for_function("document.body.dataset.pageScript === 'ran'", timeout=10000)
+                _wait_for(page, "document.body.dataset.pageScript === 'ran'", timeout=10000)
                 self.assertEqual(page.locator("#staged-mark").count(), 1)   # published: served, its script runs
                 self.assertEqual(page.locator(".ck-page-proposed-line").count(), 0)
                 self.assertEqual(page.locator(".ck-page-waiting, dialog.ck-page-dialog").count(), 0)   # nothing left
@@ -1481,7 +1569,7 @@ class LiveConsoleTests(unittest.TestCase):
                         page.keyboard.press("Escape")
                     else:
                         page.click("dialog.ck-page-dialog[open] .ck-page-not-now")
-                    page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                    _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                     self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-page-waiting')"),
                                     close)
                     self.assertEqual((self.cfg.state / "page-snapshot.json").read_bytes(), self.published,
@@ -1491,7 +1579,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.open_inbox(page, 1280)
                 self.open_page_dialog(page)
                 page.keyboard.press("Escape")
-                page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                 self.assertEqual(page.locator(".ck-panel").get_attribute("data-open"), "true")   # inbox untouched
 
     def test_the_review_dialog_never_opens_on_load(self):
@@ -1540,13 +1628,13 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_timeout(1500)
                     self.assertEqual(page.locator(chip).text_content(), "")  # the owner's own write is not "new"
                     self.ask(2)
-                    page.wait_for_function(f"document.querySelector('{chip}').textContent === '1 new'", timeout=10000)
-                    page.wait_for_function("document.querySelector('.ck-inbox-count').textContent === '2'")
+                    _wait_for(page, f"document.querySelector('{chip}').textContent === '1 new'", timeout=10000)
+                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent === '2'")
                     label = page.locator(".ck-dock-strip" if width >= 1024 else ".ck-inbox-btn").get_attribute("aria-label")
                     self.assertIn("1 new since you last looked", label)
                     self.open_inbox(page, width)
                     page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q2']")
-                    page.wait_for_function(f"document.querySelector('{chip}').textContent === ''")
+                    _wait_for(page, f"document.querySelector('{chip}').textContent === ''")
                     # With the inbox open, the next question is drawn in place, and marked as arriving.
                     self.ask(3)
                     page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q3'].ck-arrived", timeout=10000)
@@ -1566,7 +1654,7 @@ class LiveConsoleTests(unittest.TestCase):
                     page.click("#ck-tab-feed")
                     page.wait_for_selector(".ck-feed-row[data-kind='question']")
                     self.ask(2)
-                    page.wait_for_function(
+                    _wait_for(page, 
                         "(() => { const r = document.querySelector('.ck-feed-row');"
                         " return r && r.textContent.includes('LANE.1/Q2') && r.dataset.kind === 'question'; })()",
                         timeout=10000)
@@ -1575,7 +1663,7 @@ class LiveConsoleTests(unittest.TestCase):
                                                       "nonce": "feedanswer1"}, "owner")
                     self.console.write("lock", {"qid": "LANE.1/Q1", "answer": a["id"], "nonce": "feedlock001"}, "owner")
                     page.select_option("#ck-feed-kind", "lock")
-                    page.wait_for_function("document.querySelectorAll('.ck-feed-row').length === 1"
+                    _wait_for(page, "document.querySelectorAll('.ck-feed-row').length === 1"
                                            " && document.querySelector('.ck-feed-row').dataset.kind === 'lock'",
                                            timeout=10000)
                     self.ask(3)  # a live update keeps the filter: still only locks
@@ -1620,10 +1708,10 @@ class LiveConsoleTests(unittest.TestCase):
                     page.fill("#ck-round-words", "Record it; the cap moves next quarter.")
                     page.locator(".ck-round-options input[value='record']").focus()
                     page.keyboard.press("ArrowRight")
-                    page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 3')")
+                    _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 3')")
                     page.keyboard.press("1")
                     page.keyboard.press("ArrowLeft")  # back: the draft is still there
-                    page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 1 of 3')")
+                    _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 1 of 3')")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
                     self.assertEqual(page.input_value("#ck-round-words"), "Record it; the cap moves next quarter.")
                     self.assertEqual(self.console.store.head("LANE.1/Q1"), None)  # nothing written by a pick
@@ -1633,7 +1721,7 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
                     page.reload()
-                    page.wait_for_function("document.querySelector('.ck-inbox-count').textContent !== '?'")
+                    _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
                     page.evaluate("ConsoleKit.openRound(%s)" % json.dumps(f["id"]))
                     page.wait_for_selector(".ck-round-step")
                     self.assertTrue(page.locator(".ck-round-options input[value='record']").is_checked())
@@ -1683,7 +1771,7 @@ class LiveConsoleTests(unittest.TestCase):
                 page.fill("#ck-round-words", "my reason for Q1")
                 page.locator(".ck-round-options input[value='fix']").focus()
                 page.keyboard.press("ArrowRight")
-                page.wait_for_function("document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 2')")
+                _wait_for(page, "document.querySelector('.ck-round-count').textContent.startsWith('Question 2 of 2')")
                 page.keyboard.press("2")
                 page.get_by_role("button", name="Review all").click()
                 # Meanwhile, another tab locks Q1 with a different answer.
@@ -1702,7 +1790,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertEqual(saved["drafts"]["LANE.1/Q2"]["picks"], ["record"])
                 # Brought up to date, the form shows Q1 as locked, and Lock all locks the rest.
                 page.evaluate("ConsoleKit.refresh()")
-                page.wait_for_function("document.querySelector('.ck-review-row').dataset.status === 'locked'")
+                _wait_for(page, "document.querySelector('.ck-review-row').dataset.status === 'locked'")
                 page.click(".ck-lock-all")
                 page.wait_for_selector(".ck-result-heading")
                 self.assertEqual(self.console.store.head("LANE.1/Q2")["picks"], ["record"])
@@ -1719,10 +1807,11 @@ class LiveConsoleTests(unittest.TestCase):
                     url = self.serve()
                     page = self.page(kind, width, url)
                     self.open_inbox(page, width)
-                    page.click("#ck-tab-chat")
+                    self.open_more_tab(page, "Chat")
                     page.fill("#ck-chat-input", "Is the project build green?")
                     page.keyboard.press("Enter")
                     page.wait_for_selector(".ck-chat-msg[data-by='owner']")
+                    _wait_for(page, "(document.querySelector('.ck-tab-more .ck-tab-note') || {}).textContent === ' ●'")
                     woke = D.watch(self.cfg.inbox, 0, poll=0.05, timeout=5)
                     self.assertEqual([(w["intent"], w["item"]) for w in woke], [("chat", "@chat")])
                     msg = [r for r in self.console.store.records() if r["type"] == "message"][-1]
@@ -1732,7 +1821,7 @@ class LiveConsoleTests(unittest.TestCase):
                                                  "nonce": "chatreply01"})
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']", timeout=10000)
                     self.assertIn("Green at abc123.", page.locator(".ck-chat-msg[data-by='agent']").text_content())
-                    page.wait_for_function("!document.querySelector('#ck-tab-chat .ck-tab-note')")  # no longer waiting
+                    _wait_for(page, "!document.querySelector('.ck-tab-more .ck-tab-note')")  # no longer waiting
                     self.assertFalse(page.evaluate(OVERFLOW))
                     if os.environ.get("OVERTURE_SHOTS"):
                         page.locator(".ck-panel").screenshot(
@@ -1771,7 +1860,7 @@ class LiveConsoleTests(unittest.TestCase):
                     self.assertFalse(page.evaluate(OVERFLOW))
                     page = self.page(kind, width, url)       # a fresh page for the chat tab
                     self.open_inbox(page, width)
-                    page.click("#ck-tab-chat")
+                    self.open_more_tab(page, "Chat")
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']")
                     who = page.locator(".ck-chat-msg[data-by='agent'] .ck-chat-who").all_text_contents()
                     self.assertTrue(any(w.startswith("agent-6 · ") for w in who), who)
@@ -1796,7 +1885,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertEqual(len(self.waits), n)
                 page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'});"
                               "document.dispatchEvent(new Event('visibilitychange'))")
-                page.wait_for_function("document.querySelector('.ck-inbox-count').textContent === '1'", timeout=10000)
+                _wait_for(page, "document.querySelector('.ck-inbox-count').textContent === '1'", timeout=10000)
                 # A server that fails: the loop backs off (2 s, 4 s, ...), never a tight loop.
                 page.route("**/api/wait*", lambda r: r.fulfill(status=503, body="{}", content_type="application/json"))
                 page.wait_for_timeout(300)
@@ -1811,7 +1900,7 @@ class LiveConsoleTests(unittest.TestCase):
                 url = self.serve()
                 page = self.page(kind, 1280, url, reduced=True)
                 self.ask(1)
-                page.wait_for_function("document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
                                        timeout=10000)
                 names = page.evaluate("""() => [document.querySelector('.ck-dock-strip .ck-new-count'),
                     document.querySelector('.ck-item-btn .ck-ring-arc')].map(e => {
@@ -1842,12 +1931,14 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-tabs")
                     self.assertEqual(page.get_attribute(".ck-panel", "data-open"), "true")
                     self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-qid')"), "LANE.1/Q1")
-                    # Opened from the board, the same item keeps the board's Back (narrow screens only).
+                    # Opened from the board, the same item keeps the board's Back, at every width since 0.9.0
+                    # ("the ← Back button no longer hides at desktop widths").
                     page.evaluate("window.ConsoleKit.open('LANE.1')")
                     page.wait_for_selector(".ck-title-id")
                     back = page.locator(".ck-panel .ck-back-btn")
                     self.assertEqual(back.get_attribute("aria-label"), "Back to board")
-                    self.assertEqual(back.is_visible(), width < 400)
+                    self.assertTrue(back.is_visible())
+                    self.assertEqual(back.text_content(), "← Back")
                     self.assertFalse(page.evaluate(OVERFLOW))
                     self.assert_not_reloaded(page)
 
@@ -1883,7 +1974,7 @@ class LiveConsoleTests(unittest.TestCase):
                                      ["LANE.1/Q1", "LANE.1/Q2"])
                     self.assertFalse(page.evaluate(OVERFLOW))
                     page.click(".ck-lock-answered-go")
-                    page.wait_for_function(
+                    _wait_for(page, 
                         "document.querySelectorAll(\".ck-q-state[data-state='locked']\").length === 2", timeout=10000)
                     self.assertEqual(locks(), ["LANE.1/Q1", "LANE.1/Q2"])  # Q3, unanswered, is not locked
                     self.assertEqual(page.locator(".ck-lock-answered-open").count(), 0)
@@ -2053,7 +2144,7 @@ class LiveConsoleTests(unittest.TestCase):
                 self.assertTrue(page.evaluate("document.querySelector('dialog.ck-page-dialog').matches(':modal')"))
                 self.assertTrue(page.evaluate(LiveConsoleTests.IN_DIALOG))
                 page.keyboard.press("Escape")
-                page.wait_for_function("!document.querySelector('dialog.ck-page-dialog').open")
+                _wait_for(page, "!document.querySelector('dialog.ck-page-dialog').open")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-board-show-proposal')"))
                 self.assert_not_reloaded(page)   # reviewing the proposal publishes nothing
 
@@ -2172,7 +2263,7 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.shot(page, "next-step-refine", kind, width)
                     self.assertFalse(page.evaluate(OVERFLOW))
                     form.get_by_role("button", name="Start the refine").click()
-                    page.wait_for_function("document.querySelectorAll('.ck-step-form').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-step-form').length === 0")
                     [f] = self.forks()
                     self.assertEqual({k: f.get(k) for k in ("intent", "step", "about_qid", "mode", "roles", "text")},
                                      {"intent": "fork", "step": "refine", "about_qid": "LANE.1/Q1", "mode": "tighten",
@@ -2222,11 +2313,11 @@ class NextStepAndVisualTests(unittest.TestCase):
                         return form
 
                     roar_once()
-                    page.wait_for_function("document.querySelectorAll('.ck-followup').length === 0")
+                    _wait_for(page, "document.querySelectorAll('.ck-followup').length === 0")
                     [first] = self.forks()
                     self.assertEqual(first["roles"], ["roar"])
                     form = roar_once()
-                    page.wait_for_function("document.querySelector('.ck-followup .ck-error-msg').textContent !== ''")
+                    _wait_for(page, "document.querySelector('.ck-followup .ck-error-msg').textContent !== ''")
                     err = form.locator(".ck-error-msg").text_content()
                     self.assertIn(first["id"], err)
                     self.assertIn("at most once per lock", err)
@@ -2258,10 +2349,30 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.agent_post("/visual", {"request": req["id"], "format": "mermaid", "title": "Zones",
                                                 "content": MERMAID, "text": "Zones feed the grid.",
                                                 "nonce": "p4visual002"})
-                    frame_el = page.wait_for_selector("iframe.ck-visual-frame", timeout=10000)
+                    # 0.9.0: a Mermaid visual is drawn in a frame of its own too, so every visual frame
+                    # is checked: none may be same-origin, and only Mermaid's may run its vendored lib.
+                    html_sel = ".ck-visual[data-format='html'] iframe.ck-visual-frame"
+                    mmd_sel = ".ck-visual[data-format='mermaid'] iframe.ck-visual-frame"
+                    frame_el = page.wait_for_selector(html_sel, timeout=10000)
                     self.assertEqual(frame_el.get_attribute("sandbox"), "")          # grants nothing
-                    frame = page.frame_locator("iframe.ck-visual-frame")
+                    self.assertEqual(page.wait_for_selector(mmd_sel, timeout=10000).get_attribute("sandbox"),
+                                     "allow-scripts")                               # scripts, never same-origin
+                    sandboxes = page.locator("iframe.ck-visual-frame").evaluate_all(
+                        "fs => fs.map(f => f.hasAttribute('sandbox') ? f.getAttribute('sandbox') : null)")
+                    self.assertEqual(len(sandboxes), 2, sandboxes)                   # one frame per visual
+                    for sb in sandboxes:
+                        self.assertIsNotNone(sb, sandboxes)
+                        self.assertTrue(set(sb.split()) <= {"allow-scripts"}, sandboxes)
+                    frame = page.frame_locator(html_sel)
                     self.assertEqual(frame.locator("#mock").text_content(timeout=10000), "Grid mock")  # it rendered
+                    mmd = page.frame_locator(mmd_sel)
+                    mmd.locator(".mermaid svg").wait_for(timeout=10000)              # the diagram drew
+                    self.assertEqual(mmd.locator("body").evaluate(                  # Mermaid's strict sanitiser
+                        "b => [...b.querySelectorAll('*')].flatMap(e => e.getAttributeNames()"
+                        ".filter(a => a.startsWith('on')))"), [])                     # left no handler to run
+                    self.assertEqual(mmd.locator("body").evaluate(
+                        "() => { try { return String(parent.document.body); } catch (e) { return 'blocked'; } }"),
+                        "blocked")                                                  # an opaque origin
                     page.wait_for_timeout(500)                                      # time for any script to act
                     self.assertIsNone(frame.locator("body").get_attribute("data-ran"))
                     self.assertIsNone(page.evaluate("document.body.getAttribute('data-pwned')"))
@@ -2269,7 +2380,8 @@ class NextStepAndVisualTests(unittest.TestCase):
                     self.assertEqual(page.evaluate("window.__msgs"), [])
                     self.assertEqual(page.locator("#mock").count(), 0)            # nothing of it in the page itself
                     code = page.locator(".ck-visual[data-format='mermaid'] .ck-visual-code")
-                    page.wait_for_function("document.querySelector(\".ck-visual[data-format='mermaid'] "
+                    page.locator(".ck-visual[data-format='mermaid'] .ck-visual-source-toggle").click()  # 0.9.0
+                    _wait_for(page, "document.querySelector(\".ck-visual[data-format='mermaid'] "
                                            ".ck-visual-code\").textContent.startsWith('graph TD')")
                     self.assertEqual(code.text_content(), MERMAID)                  # as text, markup and all
                     self.assertEqual(code.locator("img").count(), 0)
@@ -2329,7 +2441,7 @@ class InboxUXTests(unittest.TestCase):
         page.wait_for_selector(".ck-questions-heading")
 
     def said(self, page, text, timeout=3000):
-        page.wait_for_function("t => document.querySelector('.ck-live').textContent.includes(t)", arg=text,
+        _wait_for(page, "t => document.querySelector('.ck-live').textContent.includes(t)", arg=text,
                                timeout=timeout)
 
     def ask_as(self, n, agent, item="LANE.1", at=None, **over):
@@ -2343,12 +2455,13 @@ class InboxUXTests(unittest.TestCase):
         body.update(over)
         return self.console.write("question", body, "agent", agent=agent)
 
-    # -- Q33: one tap, a countdown, then the lock --------------------------------------
+    # -- Q33: one tap locks, at once (0.9.12 removed the countdown) ---------------------
 
-    def test_q33_one_tap_locks_only_when_the_countdown_ends(self):
-        # Catches: a lock sent at the tap with a cosmetic countdown (nothing may reach the store before it ends);
-        # a countdown that never sends; a second confirm step left in (one tap must be enough); and an Undo
-        # that is not where focus lands, so a keyboard owner cannot stop it.
+    def test_q33_one_tap_locks_at_once_with_no_countdown_or_confirm(self):
+        # 0.9.12 ("The 5-second lock countdown is gone"): Lock this answer sends at the tap.
+        # Catches: a countdown or Undo left in (nothing may stand between the tap and the lock); a second
+        # confirm step left in (one tap must be enough); a tap that locks twice or not at all; and focus
+        # left on the Lock button the lock removed, so a keyboard owner is dropped on the board.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
@@ -2356,27 +2469,26 @@ class InboxUXTests(unittest.TestCase):
                 self.answer("LANE.1/Q1")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                self.assertIn("Locking in 5 s", page.locator(".ck-lock-countdown").text_content())
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-undo')"))
-                self.said(page, "Locking in 5 seconds")
-                self.assertEqual(page.locator(".ck-confirm").count(), 0, "a second confirmation step is left in")
-                page.wait_for_timeout(3500)
-                self.assertEqual(self.locks(), [], "the lock reached the store before the countdown ended")
-                self.assertIn(page.locator(".ck-lock-left").text_content(), ("Locking in 2 s", "Locking in 1 s"))
-                page.wait_for_function("document.querySelector('.ck-lock-countdown') === null", timeout=6000)
+                self.assertEqual(self.locks(), [], "a lock reached the store before the tap")
+                page.focus(".ck-lock-one")
+                page.keyboard.press("Enter")
+                self.said(page, "Locked.")
                 self.assertTrue(self.locked("LANE.1/Q1"))
                 self.assertEqual(len(self.locks()), 1)
-                self.said(page, "Locked.")
-                # Focus was on the Undo the lock removed: it lands on the question's own line.
+                self.assertEqual(page.locator(".ck-confirm").count(), 0, "a second confirmation step is left in")
+                self.assertEqual(page.locator(".ck-lock-countdown, .ck-lock-undo").count(), 0,
+                                 "a countdown or Undo is left in")
+                # Focus was on the Lock button the lock removed: it lands on the question's own line.
                 page.wait_for_selector(".ck-q-line[data-qid='LANE.1/Q1']")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-q-line')"))
+                self.assertEqual(page.locator(".ck-lock-one").count(), 0)
+                page.wait_for_timeout(1000)   # nothing deferred lands a second lock later
+                self.assertEqual(len(self.locks()), 1)
 
-    def test_q33_undo_leaving_the_question_and_leaving_the_page_send_nothing(self):
-        # Catches: an Undo that hides the countdown but lets its timer fire; a countdown that keeps running
-        # after the owner left the question (a lock from a place they can no longer see); and a page that
-        # sends the lock as it unloads (a beacon or fetch keepalive on pagehide).
+    def test_q33_leaving_the_question_and_leaving_the_page_without_a_tap_send_nothing(self):
+        # Catches: a lock sent without the tap (an answer is not a lock); a page that sends a lock as it
+        # unloads (a beacon or fetch keepalive on pagehide, where the countdown's drop handler was); and a
+        # Lock button that leaving the question or the page breaks, so the tap after it does nothing.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
@@ -2384,104 +2496,94 @@ class InboxUXTests(unittest.TestCase):
                 self.answer("LANE.1/Q1")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                # 1. Undo, by keyboard: Enter on the focused Undo.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-undo")
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-one")
-                self.said(page, "Nothing was sent")
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-one')"))
-                # A second tap after an Undo counts the full five seconds again (no timer left running from the first).
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-undo")
-                page.wait_for_timeout(3200)
-                self.assertEqual(self.locks(), [], "a timer left from the undone count ran the new one fast")
-                page.keyboard.press("Enter")
-                page.wait_for_selector(".ck-lock-one")
-                # 2. Leaving the question: another item mid-count.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
+                # 1. Leaving the question: another item, then back.
                 page.evaluate("ConsoleKit.open('LANE')")
-                self.said(page, "you left the question")
-                # 3. Leaving the page mid-count and coming back from the back/forward cache. The page and its
-                # timers live on (navigating away for real would kill them and prove nothing): only the pagehide
-                # handler can stop this lock from landing on return.
+                page.wait_for_timeout(500)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
+                # 2. Leaving the page and coming back from the back/forward cache. The page and its
+                # handlers live on (navigating away for real would kill them and prove nothing).
                 page.evaluate("""() => {
                     window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
                     window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
                 }""")
-                self.said(page, "you left the page before it locked")
-                page.wait_for_selector(".ck-lock-one")
-                page.wait_for_timeout(6500)   # past every countdown above
-                self.assertEqual(self.locks(), [], "a lock was sent without the countdown ending on show")
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 0)
-
-    def test_q33_hiding_the_tab_or_closing_the_panel_mid_count_sends_nothing(self):
-        # Review MEDIUMs. Catches: a countdown that keeps running in a background tab (the lock would land
-        # where the owner cannot see it), and one that survives the panel being closed over it.
-        for kind in BROWSERS:
-            with self.subTest(browser=kind):
-                url = self.serve()
-                self.ask(1)
-                self.answer("LANE.1/Q1")
-                page = self.page(kind, 1280, url)
-                self.open_item(page)
-                # 1. The tab is hidden (switching tabs, minimising), then shown again.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                page.evaluate("""() => {
-                    const set = v => Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => v});
-                    set('hidden'); document.dispatchEvent(new Event('visibilitychange'));
-                    set('visible'); document.dispatchEvent(new Event('visibilitychange'));
-                }""")
-                self.said(page, "you left the page before it locked")
-                page.wait_for_selector(".ck-lock-one")
-                page.wait_for_timeout(6500)
-                self.assertEqual(self.locks(), [], "a hidden tab kept counting and locked")
-                # 2. The panel is closed mid-count, then opened again.
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                page.click(".ck-close-btn")
-                self.said(page, "you left the question before it locked")
-                page.wait_for_timeout(6500)
-                self.assertEqual(self.locks(), [], "a closed panel kept counting and locked")
-                self.open_item(page)
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 0)
+                page.wait_for_timeout(1000)
+                self.assertEqual(self.locks(), [], "a lock was sent without a tap")
                 self.assertEqual(page.locator(".ck-lock-one").count(), 1)
+                # 3. The Lock button still works after all that, once.
+                page.click(".ck-lock-one")
+                self.said(page, "Locked.")
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertEqual(len(self.locks()), 1)
 
-    def test_q33_a_live_redraw_mid_count_keeps_the_countdown_and_the_undo_focus(self):
-        # Catches: a countdown lost to a live redraw (it would lock with nothing on show, or not at all), focus
-        # thrown off the Undo by the redraw, and a lock landing under a box the owner is typing in.
+    def test_q33_hiding_the_tab_or_closing_the_panel_sends_nothing_and_keeps_a_lock_once(self):
+        # Review MEDIUMs, after 0.9.12. Catches: a hidden tab or a closed panel that sends a lock the owner
+        # never tapped; and a lock tapped just before the tab hides that is then lost, sent twice, or
+        # reported as dropped (it already went: "you left the page before it locked" would be a lie).
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
                 self.ask(1)
                 self.ask(2)
                 self.answer("LANE.1/Q1")
+                self.answer("LANE.1/Q2")
                 page = self.page(kind, 1280, url)
                 self.open_item(page)
-                page.click(".ck-lock-one")
-                page.wait_for_selector(".ck-lock-countdown")
-                self.ask(3)   # arrives live while the count runs
-                page.wait_for_selector(".ck-question:has-text('Question 3')", timeout=6000)
-                self.assertEqual(page.locator(".ck-lock-countdown").count(), 1)
-                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-lock-undo')"))
-                # Now type in Q2's own-words box while the lock lands: the box is not redrawn under the owner.
+                hide_and_show = """() => {
+                    const set = v => Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => v});
+                    set('hidden'); document.dispatchEvent(new Event('visibilitychange'));
+                    set('visible'); document.dispatchEvent(new Event('visibilitychange'));
+                }"""
+                # 1. The tab is hidden (switching tabs, minimising), then shown again.
+                page.evaluate(hide_and_show)
+                # 2. The panel is closed, then opened again.
+                page.click(".ck-close-btn")
+                page.wait_for_timeout(1000)
+                self.assertEqual(self.locks(), [], "hiding the tab or closing the panel sent a lock")
+                self.open_item(page)
+                self.assertEqual(page.locator(".ck-lock-one").count(), 2)
+                # 3. A tap, then the tab hides at once: the lock already went, exactly once.
+                page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one").click()
+                page.evaluate(hide_and_show)
+                self.said(page, "Locked.")
+                page.wait_for_timeout(1000)
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertFalse(self.locked("LANE.1/Q2"))
+                self.assertEqual(len(self.locks()), 1)
+                self.assertNotIn("before it locked", page.evaluate("document.querySelector('.ck-live').textContent"))
+
+    def test_q33_a_live_redraw_after_the_lock_keeps_focus_and_the_box_being_typed_in(self):
+        # Catches: focus thrown off the locked question's line by a live redraw (Enter would land somewhere
+        # else), the lock undone or doubled by the redraw, and a live change (a lock landing from elsewhere)
+        # redrawing a box the owner is typing in.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                self.ask(2)
+                self.ask(3)
+                self.answer("LANE.1/Q1")
+                self.answer("LANE.1/Q3")
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one").click()
+                self.said(page, "Locked.")
+                page.wait_for_selector(".ck-q-line[data-qid='LANE.1/Q1']")
+                self.ask(4)   # arrives live after the lock
+                page.wait_for_selector(".ck-question:has-text('Question 4')", timeout=6000)
+                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-q-line') && "
+                                              "document.activeElement.dataset.qid === 'LANE.1/Q1'"))
+                self.assertTrue(self.locked("LANE.1/Q1"))
+                self.assertEqual(len(self.locks()), 1)
+                # Now type in Q2's own-words box while a lock on Q3 lands live: the box is not redrawn under the owner.
                 box = page.locator(".ck-question:has-text('Question 2') textarea").first
                 box.click()
                 box.type("half a thought")
-                deadline = time.monotonic() + 9
-                while not self.locked("LANE.1/Q1") and time.monotonic() < deadline:
-                    page.wait_for_timeout(200)   # not time.sleep: the sync route relaying POSTs runs only inside a Playwright call
-                self.assertTrue(self.locked("LANE.1/Q1"), page.evaluate("document.querySelector('.ck-live').textContent"))
-                # Not redrawn, yet not left saying "Locking in 1 s" over a question that is locked.
-                page.wait_for_function("document.querySelector('.ck-lock-left').textContent === 'Locked.'")
-                self.assertEqual(page.locator(".ck-lock-undo").get_attribute("aria-disabled"), "true")
+                self.lock("LANE.1/Q3")
+                self.ask(5)   # after the lock in the store: its "Show" note says the page has both
+                page.wait_for_selector(".ck-live-note", timeout=6000)   # the change waits behind "Show"
                 self.assertEqual(box.input_value(), "half a thought")
                 self.assertTrue(page.evaluate("document.activeElement.tagName === 'TEXTAREA'"))
+                self.assertEqual(len(self.locks()), 2)
 
     # -- Q37: a settled question is one line ------------------------------------------
 
@@ -2558,7 +2660,7 @@ class InboxUXTests(unittest.TestCase):
                     page.wait_for_selector(".ck-send-bar", timeout=6000)
                     self.assertEqual(page.locator(".ck-send-bar-count").text_content(), "1 answered · 2 left")
                     self.answer("LANE.1/Q2", pick="leave")
-                    page.wait_for_function("document.querySelector('.ck-send-bar-count').textContent === "
+                    _wait_for(page, "document.querySelector('.ck-send-bar-count').textContent === "
                                            "'2 answered · 1 left'", timeout=6000)
                     self.assertEqual(page.get_by_role("button", name="Answers are in: process them").count(), 0)
                     # Under the panel's header, never covered: what is drawn at its centre is the bar.
@@ -2574,7 +2676,7 @@ class InboxUXTests(unittest.TestCase):
                     self.assertLess(geo["top"], 200, geo)
                     self.assertEqual([b for b in self.bell() if b.get("intent") == "process"], [])
                     page.click(".ck-send-bar-go")
-                    page.wait_for_function("document.querySelector('.ck-send-bar') === null", timeout=6000)
+                    _wait_for(page, "document.querySelector('.ck-send-bar') === null", timeout=6000)
                     sent = [r for r in self.console.store.records()
                             if r["type"] == "message" and r.get("intent") == "process"]
                     self.assertEqual([(r["item"], r["text"], r["by"]) for r in sent],
@@ -2584,7 +2686,7 @@ class InboxUXTests(unittest.TestCase):
                     self.assertFalse(page.evaluate("document.activeElement === document.body"))
                     # The next answer brings it back, counting only what came after the send.
                     self.answer("LANE.1/Q3")
-                    page.wait_for_function("document.querySelector('.ck-send-bar-count') && document.querySelector("
+                    _wait_for(page, "document.querySelector('.ck-send-bar-count') && document.querySelector("
                                            "'.ck-send-bar-count').textContent === '1 answered · 0 left'", timeout=6000)
 
     # -- Q34: a single pick moves on ----------------------------------------------------
@@ -2611,19 +2713,19 @@ class InboxUXTests(unittest.TestCase):
                 count = "document.querySelector('.ck-round-count').textContent"
                 at = lambda n: page.evaluate(count + f".startsWith('Question {n} of 5')")
                 page.click(".ck-round-dot >> nth=1")   # pick Q2 first: it moves on to Q3, the next unanswered
-                page.wait_for_function(count + ".startsWith('Question 2 of 5')")
+                _wait_for(page, count + ".startsWith('Question 2 of 5')")
                 # An ↑/↓ that changed nothing (its default prevented) must not make the next click a "walk".
                 page.eval_on_selector(".ck-round-options input[value='fix']", """r => {
                     for (const type of ['keydown', 'keyup'])
                         r.dispatchEvent(new KeyboardEvent(type, {key: 'ArrowDown', bubbles: true}));
                 }""")
                 page.click(".ck-round-options input[value='leave']")
-                page.wait_for_function(count + ".startsWith('Question 3 of 5')", timeout=3000)
+                _wait_for(page, count + ".startsWith('Question 3 of 5')", timeout=3000)
                 page.click(".ck-round-dot >> nth=0")
-                page.wait_for_function(count + ".startsWith('Question 1 of 5')")
+                _wait_for(page, count + ".startsWith('Question 1 of 5')")
                 page.click(".ck-round-options input[value='fix']")
                 # Q2 is picked already: the next UNANSWERED is Q3.
-                page.wait_for_function(count + ".startsWith('Question 3 of 5')", timeout=3000)
+                _wait_for(page, count + ".startsWith('Question 3 of 5')", timeout=3000)
                 self.said(page, "Moved on to question 3 of 5")
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-round-qtext')"))
                 # Q3 is multi: a pick never moves (Q4 and Q5 are still open, so a move had somewhere to go).
@@ -2631,16 +2733,16 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(900)
                 self.assertTrue(at(3))
                 page.click(".ck-round-dot >> nth=3")
-                page.wait_for_function(count + ".startsWith('Question 4 of 5')")
+                _wait_for(page, count + ".startsWith('Question 4 of 5')")
                 # A step change puts focus on the question text in the next animation frame: wait for that, or
                 # it lands after the radio is focused below and the ↓ goes to the heading (a flake, 1 in 4).
-                page.wait_for_function("document.activeElement && document.activeElement.classList.contains("
+                _wait_for(page, "document.activeElement && document.activeElement.classList.contains("
                                        "'ck-round-qtext')")
                 # ↑/↓ walk Q4's options without moving on, though Q5 is open.
                 page.locator(".ck-round-options input[value='fix']").focus()
-                page.wait_for_function("document.activeElement && document.activeElement.value === 'fix'")
+                _wait_for(page, "document.activeElement && document.activeElement.value === 'fix'")
                 page.keyboard.press("ArrowDown")
-                page.wait_for_function("document.querySelector(\".ck-round-options input[value='record']\").checked")
+                _wait_for(page, "document.querySelector(\".ck-round-options input[value='record']\").checked")
                 page.wait_for_timeout(900)   # ADVANCE_MS is 400: a move would have happened by now
                 self.assertTrue(at(4))
                 # Commenting on Q4, then a pick: it stays.
@@ -2649,7 +2751,7 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(900)
                 self.assertTrue(at(4))
                 page.click(".ck-round-dot >> nth=4")
-                page.wait_for_function(count + ".startsWith('Question 5 of 5')")
+                _wait_for(page, count + ".startsWith('Question 5 of 5')")
                 # Every question picked now: a pick moves nowhere, and never onto the review page.
                 page.click(".ck-round-options input[value='fix']")
                 self.said(page, "Every question has a pick")
@@ -2803,7 +2905,7 @@ class ScanUITests(unittest.TestCase):
                 go = page.locator(".ck-scan-all-go")
                 self.assertEqual(go.text_content(), "Scan all stale (2)")
                 go.dblclick()
-                page.wait_for_function("!document.querySelector('.ck-scan-all-go')")
+                _wait_for(page, "!document.querySelector('.ck-scan-all-go')")
                 self.said(page, "Scan asked for 2 stale rulings")
                 self.assertEqual([(s["qids"], s["locks"]) for s in self.scans()],
                                  [([self.q1, self.q2], [self.l1, self.l2])])

@@ -2220,17 +2220,20 @@ class Console:
         kernel. The owner-door handler uses `page_with_nonce()` instead, which carries the
         per-request CSP nonce for the inline script.
         """
-        html, _nonce = self.page_with_nonce()
+        html, _nonce, _hashes = self.page_with_nonce()
         return html
 
-    def page_with_nonce(self) -> tuple[str, str]:
-        """returns `(html, nonce)` so the owner-door GET handler can set a matching
-        `Content-Security-Policy: ...; script-src 'nonce-<nonce>'` on the response. Pre-1.31
+    def page_with_nonce(self) -> tuple[str, str, list[str]]:
+        """returns `(html, nonce, hashes)` so the owner-door GET handler can set a matching
+        `Content-Security-Policy: ...; script-src 'nonce-<nonce>' <hashes>` on the response. Pre-1.31
         the inline `<script>` ran under the main-page CSP's implicit `script-src *` (there was
         no `script-src` directive, only `frame-ancestors`), which meant any same-origin
         DOM-XSS could read `config.csrf` and read/write everything the owner could. With the
         nonce, the inline script runs only because it carries the right nonce attribute; a
         DOM-injected `<script>` without the nonce is refused by the browser.
+
+        `hashes` are the published page's own inline scripts (Q28: they run once the owner publishes
+        the page), each allowed by its exact body; the page's bytes are not edited to carry the nonce.
         """
         nonce = secrets.token_urlsafe(16)
         # `version` is the running kit's, the value /health reports: the footer shows it (owner, 2026-10-01).
@@ -2240,7 +2243,8 @@ class Console:
                         "version": __version__, "csrf": self._csrf}),
             nonce=nonce,
         )
-        return PS.render(self.cfg.state, block), nonce
+        html, hashes = PS.render_with_hashes(self.cfg.state, block)
+        return html, nonce, hashes
 
     def push_page_snapshot(self, body: object) -> dict:
         """`page-snapshot` (Q28): a page the steward read from a commit, as data.
@@ -3182,12 +3186,13 @@ class OwnerHandler(_Handler):
         if not self._gate():
             return
         if self.path in ("/", "/index.html"):
-            # page_with_nonce() returns (html, nonce); the response's CSP carries
+            # page_with_nonce() returns (html, nonce, hashes); the response's CSP carries
             # `script-src 'nonce-<nonce>'` so the inline <script> runs ONLY because it carries
             # the matching nonce attribute. A DOM-injected <script> without the nonce is
             # refused by the browser. This closes the "any same-origin DOM-XSS reads
-            # config.csrf" seam the adversarial reviewer flagged.
-            html, nonce = self.console.page_with_nonce()
+            # config.csrf" seam the adversarial reviewer flagged. `hashes` let the published
+            # page's own inline scripts run (Q28), each by its exact reviewed body.
+            html, nonce, hashes = self.console.page_with_nonce()
             data = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3199,7 +3204,7 @@ class OwnerHandler(_Handler):
             self.send_header(
                 "Content-Security-Policy",
                 "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; "
-                f"script-src 'nonce-{nonce}'",
+                f"script-src 'nonce-{nonce}'" + "".join(" " + h for h in hashes),
             )
             self.end_headers()
             self.wfile.write(data)

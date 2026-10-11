@@ -3072,3 +3072,26 @@ example dashboard.
   server gets installed, and the join guide. The upgrade banner names
   the real `install.sh` path and the units that exist. Tests check
   that every command it prints is real.
+- **The published page's own scripts run again.** 1.31 served the
+  console under `script-src 'nonce-…'`, and only the console's own
+  script carried the nonce, so a published dashboard's inline scripts
+  were refused. 0.8.12 had promised that a page's own scripts run once
+  published. The server now adds one `'sha256-…'` source per inline
+  script in the published page. Each one allows exactly that reviewed
+  script body. A script injected into the page with any other body is
+  still refused, there is no `'unsafe-inline'`, the page's bytes are
+  not changed, and a page that is only staged gets nothing. `src=`
+  scripts and inline handlers such as `onclick=` stay blocked.
+- **The browser suite is green again.** `OVERTURE_BROWSER=1 python3
+  test_browser.py` was mostly red on 1.31.0, and CI skips it. Two
+  causes:
+  - Playwright's `wait_for_function` checks its condition with `eval`
+    inside the page, which the 1.31 CSP refuses. The tests now poll
+    with `page.evaluate`, which the CSP does not govern. The CSP is
+    unchanged.
+  - The tests expected UI that has since changed on purpose: the inbox
+    opening by default (0.9.14), the 480px column and the `✉` badge
+    (1.24), Back at every width (0.9.0), the immediate lock with no
+    countdown (0.9.12), Chat behind "More" and "What changed?"
+    (1.25). They now check the current behaviour, with one new test
+    for the default-open inbox.
