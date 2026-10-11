@@ -30,6 +30,9 @@
     --c-deferred-bg: #f6f8fa;
     --c-bar-bg: #e6e9ec;
     --c-bar-fill: #1a7f37;
+    /* D10 lane palette: every colour is at least 3:1 against the surface (test_kit checks it). */
+    --ck-lane-blue: #0969da; --ck-lane-teal: #0a7a73; --ck-lane-green: #1a7f37; --ck-lane-amber: #9a6700;
+    --ck-lane-orange: #bc4c00; --ck-lane-red: #cf222e; --ck-lane-purple: #8250df; --ck-lane-pink: #bf3989;
     --tree-line: #d0d7de;
     --radius-sm: 6px;
     --radius-md: 10px;
@@ -60,6 +63,8 @@
       --c-deferred-bg: #21262d;
       --c-bar-bg: #30363d;
       --c-bar-fill: #3fb950;
+    --ck-lane-blue: #58a6ff; --ck-lane-teal: #39c5bb; --ck-lane-green: #3fb950; --ck-lane-amber: #d29922;
+    --ck-lane-orange: #f0883e; --ck-lane-red: #f85149; --ck-lane-purple: #bc8cff; --ck-lane-pink: #f778ba;
       --tree-line: #30363d;
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
       --shadow-md: 0 3px 8px rgba(0, 0, 0, 0.4);
@@ -88,6 +93,8 @@
     --c-deferred-bg: #21262d;
     --c-bar-bg: #30363d;
     --c-bar-fill: #3fb950;
+    --ck-lane-blue: #58a6ff; --ck-lane-teal: #39c5bb; --ck-lane-green: #3fb950; --ck-lane-amber: #d29922;
+    --ck-lane-orange: #f0883e; --ck-lane-red: #f85149; --ck-lane-purple: #bc8cff; --ck-lane-pink: #f778ba;
     --tree-line: #30363d;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 3px 8px rgba(0, 0, 0, 0.4);
@@ -3473,3 +3480,40 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 @media (forced-colors: active) { .ck-asset-thumb { border-color: CanvasText; } }
 .ck-asset-view-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .ck-asset-view-box { grid-template-rows: auto minmax(0, 1fr) auto auto; }
+
+/* --- Lane colours (D10, 2026-10-11) --- */
+[data-lane-color="blue"], [data-ck-lane-color="blue"] { --ck-lane: var(--ck-lane-blue); }
+[data-lane-color="teal"], [data-ck-lane-color="teal"] { --ck-lane: var(--ck-lane-teal); }
+[data-lane-color="green"], [data-ck-lane-color="green"] { --ck-lane: var(--ck-lane-green); }
+[data-lane-color="amber"], [data-ck-lane-color="amber"] { --ck-lane: var(--ck-lane-amber); }
+[data-lane-color="orange"], [data-ck-lane-color="orange"] { --ck-lane: var(--ck-lane-orange); }
+[data-lane-color="red"], [data-ck-lane-color="red"] { --ck-lane: var(--ck-lane-red); }
+[data-lane-color="purple"], [data-ck-lane-color="purple"] { --ck-lane: var(--ck-lane-purple); }
+[data-lane-color="pink"], [data-ck-lane-color="pink"] { --ck-lane: var(--ck-lane-pink); }
+.ck-lane-chip {
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap;
+  font-size: 11px; font-weight: 600; line-height: 1.6; padding: 0 8px; border-radius: 999px;
+  color: var(--ck-lane); border: 1px solid var(--ck-lane);
+  background: color-mix(in srgb, var(--ck-lane) 12%, transparent);
+}
+.ck-lane-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ck-lane); }
+/* A row carries its lane on its left edge as well as in the chip, so colour is never the only signal. */
+.ck-inbox-item:has(> .ck-lane-chip) { box-shadow: inset 3px 0 0 var(--ck-lane-edge, transparent); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="blue"]) { --ck-lane-edge: var(--ck-lane-blue); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="teal"]) { --ck-lane-edge: var(--ck-lane-teal); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="green"]) { --ck-lane-edge: var(--ck-lane-green); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="amber"]) { --ck-lane-edge: var(--ck-lane-amber); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="orange"]) { --ck-lane-edge: var(--ck-lane-orange); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="red"]) { --ck-lane-edge: var(--ck-lane-red); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="purple"]) { --ck-lane-edge: var(--ck-lane-purple); }
+.ck-inbox-item:has(> .ck-lane-chip[data-lane-color="pink"]) { --ck-lane-edge: var(--ck-lane-pink); }
+.ck-lane-trail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 8px 16px 0; font-size: 12px;
+  color: var(--c-fg-muted);
+}
+.ck-lane-sep { color: var(--c-border); }
+@media (forced-colors: active) {
+  .ck-lane-chip { color: CanvasText; border-color: CanvasText; background: Canvas; }
+  .ck-lane-chip::before { background: CanvasText; }
+}
+.ck-priority-row .ck-lane-chip { margin: 0 4px; }

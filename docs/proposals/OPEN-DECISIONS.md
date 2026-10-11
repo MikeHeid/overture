@@ -27,7 +27,7 @@ what was weighed.
 | D7 | How a saved component reaches the repository | **A, amended.** Through the steward and a PR, and the PR can be merged from the console's PR tab (see "D7 as decided"). |
 | D8 | Where the icons come from | **A.** A Lucide subset, bundled. |
 | D9 | How tabs show icons | **B, amended.** Always icon plus label. The inbox column is always wide enough to show the menus without wrapping. |
-| D10 | How lanes get colors | **A.** Automatic, with a named override. |
+| D10 | How lanes get colors | **A.** Automatic, with a named override. *Shipped in 1.32*: when two lane names hash to the same colour, the later one in name order takes the next free colour, so lanes collide only past 8. |
 | D11 | A per-machine steward role setting? | **B**, as an *architect default*: the owner deferred to the recommendation. |
 | D12 | What to build next | **A.** Icons and status indicators, then lane colors. |
 | D13 | How a UX item is tied to a Claude Design project | **A**, *architect default* (2026-10-11): the steward writes the link into front matter; agents read the design; the server never fetches it. The accepted URL shapes are pinned once a real link is available. |

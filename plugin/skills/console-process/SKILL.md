@@ -174,8 +174,8 @@ with `intent: "visual"` that nothing in `view.visuals[ITEM]` answers yet) is
 a picture to draw: use the
 **console-visual** skill for each. An entry carries only `{id, item}`, so read
 the item first (`A view --item ITEM`): when the top-level `items[ITEM].section`
-has a `lane-ui` or `lane-ux` segment, it is a **UX item** and the request is a
-component. Use the **console-ux** skill for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
+has a `lane-ui` or `lane-ux` segment, or a lane `view.config.lanes` marks
+`"ux": true`, it is a **UX item** and the request is a component. Use the **console-ux** skill for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
 woke you.
 
 **Show your work** (1.32, FEED-ASSETS.md F3). When anything you change is

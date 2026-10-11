@@ -2134,7 +2134,7 @@ class Phase4Tests(_Live, unittest.TestCase):
         # Catches: tags computed only in a test (never served), or config that never reaches the page.
         self.lock_seed()          # the seed cites architect/40-specs/..., outside this specs_dir: no refine
         view = self.get("/api/view")[1]["view"]
-        self.assertEqual(view["config"], {"specs_dir": "specs", "visuals_dir": "visuals", "sections": {}})
+        self.assertEqual(view["config"], {"specs_dir": "specs", "visuals_dir": "visuals", "sections": {}, "lanes": {}})
         self.assertIn("questions", view["tags"])
         # The seed picked "a" against the ★ "b": deliberate, with its reason.
         [t] = view["tags"]["questions"]["LANE.1/Q1"]

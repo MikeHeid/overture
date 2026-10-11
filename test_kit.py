@@ -876,6 +876,66 @@ class PublishTests(unittest.TestCase):
         acted = [shapes[s] for s in ("awaiting_you", "unlocked", "locked", "stale")]
         self.assertEqual(len(set(acted)), len(acted))
 
+    def test_lane_palette_is_one_list_and_readable_in_both_themes(self):
+        # D10: the console and the config parser agree on the palette, and every lane colour is
+        # at least 3:1 against the surfaces it sits on (WCAG 1.4.11), in light and in dark.
+        from overture import projectcfg as PC
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        js_list = re.findall(r"'([a-z]+)'", re.search(r"const LANE_COLORS = \[(.*?)\];", js).group(1))
+        self.assertEqual(tuple(js_list), PC.LANE_COLORS)
+
+        def lum(hexc):
+            rgb = [int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+            return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+        def ratio(a, b):
+            la, lb = sorted((lum(a), lum(b)), reverse=True)
+            return (la + 0.05) / (lb + 0.05)
+        blocks = re.findall(r"(--ck-lane-blue:.*?--ck-lane-pink: #[0-9a-f]{6};)", css, re.S)
+        self.assertEqual(len(blocks), 3)   # light, dark by preference, dark by choice
+        for block, surfaces in ((blocks[0], ("#ffffff", "#f4f6f8")), (blocks[1], ("#161b22", "#0d1117")),
+                                (blocks[2], ("#161b22", "#0d1117"))):
+            colours = dict(re.findall(r"--ck-lane-([a-z]+): (#[0-9a-f]{6})", block))
+            self.assertEqual(set(colours), set(PC.LANE_COLORS))
+            for name, c in colours.items():
+                for bg in surfaces:
+                    self.assertGreaterEqual(ratio(c, bg), 3.0, f"{name} {c} on {bg}")
+
+    def test_the_chart_and_the_console_pick_the_same_lane_colour(self):
+        # D10: the project map (chart.py) and the console (console.js) hash a lane name to the
+        # same palette colour, so a lane looks the same in the map, the inbox and the dashboard.
+        import shutil
+        from overture import chart as CH
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = (KIT / "overture" / "console.js").read_text()
+        body = js[js.index("const LANE_COLORS"):js.index("  function segWords")]
+        names = ["lane-api", "lane-ui", "lane-data", "lane-infra", "lane-security", "lane-ops", "lane-web-ui"]
+        items = {f"I{i}": {"title": n, "parent": None, "section": "wave-1/" + n} for i, n in enumerate(names)}
+        cfg = {"lane-ops": {"color": "pink"}}
+        script = (f"let view = {{config: {{lanes: {json.dumps(cfg)}}}}}; let items = {json.dumps(items)};" + body
+                  + "console.log(JSON.stringify(" + json.dumps(names) + ".map(laneColor)));")
+        out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout
+        want = CH.lane_colors(CH.project_lanes(items, cfg), cfg)
+        self.assertEqual(json.loads(out), [want[n] for n in names])
+        self.assertEqual(want["lane-ops"], "pink")
+        self.assertEqual(len(set(want.values())), len(names))   # 7 lanes, 7 colours: no collision
+
+    def test_the_project_map_boxes_items_by_lane(self):
+        from overture import chart as CH
+        items = {"A": {"title": "Api", "parent": None, "section": "wave-2/lane-api"},
+                 "A1": {"title": "child", "parent": "A"},
+                 "N": {"title": "no lane", "parent": None}}
+        src = CH.build_project({"questions": {}, "config": {"lanes": {"lane-api": {"color": "pink"}}}}, items)
+        api = src[src.index('subgraph L_lane_api["API"]'):src.index("  end")]
+        self.assertIn("I_A(", api)
+        self.assertIn("I_A1(", api)               # inherits its parent's lane
+        self.assertNotIn("I_N(", api)
+        self.assertIn("style L_lane_api fill:transparent,stroke:#bf3989", src)
+
     def test_docked_column_fits_its_tab_row(self):
         # D9: the docked column is never narrower than its tab row, so tabs
         # keep icon and label on one line instead of wrapping or clipping.
@@ -3582,6 +3642,24 @@ class ProjectConfigTests(Tmp):
         from overture import projectcfg as PC
         (self.dir / ".overture.json").write_text(json.dumps(doc))
         return PC.load(self.dir)
+
+    def test_lanes_take_palette_names_only(self):
+        # D10: a repository's config names a colour from the palette, never raw CSS.
+        from overture import projectcfg as PC
+        cfg = self.load({"lanes": {"lane-api": {"color": "blue", "label": "API", "ux": False},
+                                   "lane-ui": {"ux": True}}})
+        self.assertEqual(cfg.lanes, {"lane-api": {"color": "blue", "label": "API", "ux": False},
+                                     "lane-ui": {"ux": True}})
+        self.assertEqual(self.load({}).lanes, {})
+        for bad, why in (({"lane-api": {"color": "#f00"}}, "must be one of"),
+                         ({"lane-api": {"color": "red; background:url(x)"}}, "must be one of"),
+                         ({"api": {"color": "red"}}, "lane segment"),
+                         ({"lane-api": {"style": "x"}}, "takes only"),
+                         ({"lane-api": {"label": "a\nb"}}, "one line"),
+                         ({"lane-api": {"ux": "yes"}}, "true or false")):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(PC.ConfigError, why):
+                    self.load({"lanes": bad})
 
     def test_dirs_are_jailed_and_refused_by_name(self):
         # Catches: a visuals_dir that writes outside the project, into .git, over the root's own
