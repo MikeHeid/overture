@@ -35,9 +35,14 @@ Status: decided on 2026-10-11, with amendments. See [OPEN-DECISIONS.md](OPEN-DEC
 One command installs and manages the server and its tunnel as a user-level
 service:
 
-    <py> <kit>/onboard.py service install [--all]   # the main server, or one project
-    <py> <kit>/onboard.py service status
-    <py> <kit>/onboard.py service uninstall
+    <py> <kit>/server.py --all                     # foreground; Ctrl+C stops it
+    <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log file
+    <py> <kit>/server.py service install|uninstall # a user service
+    <py> <kit>/server.py status                    # running? which mode? pid, ports
+    <py> <kit>/server.py health                    # store locks, tunnel unit state, version skew, linger
+
+(As decided in D1. `health` reads the tunnel's unit state or cloudflared's
+local metrics; it never makes an outbound request.)
 
 | OS | Service manager | Notes |
 |---|---|---|
@@ -96,7 +101,7 @@ the existing SessionStart hook, which already reads the doorbell:
   For example:
 
       Overture: the console server is not running. Start it with
-      `systemctl --user start overture-console` (or `onboard.py service status`).
+      `systemctl --user start overture-console` (or `server.py status`).
 
 - When the installed kit is older than the plugin, it says so. Today's
   upgrade banner partly does this already.
@@ -115,7 +120,7 @@ someone decides to keep Overture.
 
 ## Proposed work, in order
 
-1. **`onboard.py service install|status|uninstall`** for Linux and WSL
+1. **`server.py daemon|service|status|health`** for Linux and WSL
    (systemd, `--all`). It moves today's `install.sh` unit rendering behind
    one command and adds the main-server unit from [JOIN.md](../JOIN.md).
 2. **macOS launchd** behind the same command.
