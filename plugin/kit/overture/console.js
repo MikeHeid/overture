@@ -2203,6 +2203,36 @@
     setTimeout(() => document.addEventListener('click', onOutside, true), 0);
     moreMenuOpen = { menu, anchor, onOutside };
   }
+  // A small action menu (Chat ▾): same keyboard and outside-click behaviour as More ▾.
+  function openActionMenu(anchor, entries) {
+    closeMoreMenu();
+    const menu = el('div', { className: 'ck-more-menu ck-action-menu', role: 'menu' });
+    for (const [label, hint, fn] of entries) {
+      const item = el('button', { type: 'button', className: 'ck-more-item', role: 'menuitem', title: hint },
+        [label, el('span', { className: 'ck-muted ck-action-hint' }, [hint])]);
+      item.addEventListener('click', () => { closeMoreMenu(); fn(); });
+      menu.appendChild(item);
+    }
+    anchor.setAttribute('aria-expanded', 'true');
+    anchor.parentNode.appendChild(menu);
+    const rect = anchor.getBoundingClientRect();
+    const panelRect = panelEl.getBoundingClientRect();
+    menu.style.left = Math.max(8, rect.right - panelRect.left - 260) + 'px';
+    menu.style.top = (rect.bottom - panelRect.top + 4) + 'px';
+    const items = menu.querySelectorAll('.ck-more-item');
+    if (items.length) items[0].focus();
+    menu.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeMoreMenu(); anchor.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const idx = Array.prototype.indexOf.call(items, document.activeElement);
+        items[e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length].focus();
+      }
+    });
+    const onOutside = e => { if (!menu.contains(e.target) && e.target !== anchor) closeMoreMenu(); };
+    setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+    moreMenuOpen = { menu, anchor, onOutside };
+  }
   function closeMoreMenu() {
     if (!moreMenuOpen) return;
     const { menu, anchor, onOutside } = moreMenuOpen;
@@ -3424,6 +3454,7 @@
   // without first opening an item. Reuses existing /api/message endpoints — no new server routes.
   // Posting is handled client-side; the collapsed <details> state persists across live wakes via a module var.
   let delegateOpen = false;
+  let delegateItem = null;   // Chat ▾ → Delegate preselects the item it came from, once
   function renderDelegateBar() {
     const wrap = el('details', { className: 'ck-delegate-bar' });
     if (delegateOpen) wrap.setAttribute('open', '');
@@ -3459,6 +3490,7 @@
       const data = items[id] || {};
       itemSel.appendChild(el('option', { value: id }, [id + (data.title ? ' — ' + truncateText(data.title, 60) : '')]));
     }
+    if (delegateItem && items && items[delegateItem]) { itemSel.value = delegateItem; delegateItem = null; }
     body.appendChild(el('div', { className: 'ck-field ck-del-itemrow' }, [
       el('label', { for: 'ck-del-item', className: 'ck-field-label' }, ['On item']),
       itemSel
@@ -5756,7 +5788,30 @@
     const branchBtn = el('button', { className: 'ck-btn ck-launch-btn', type: 'button',
       'aria-label': 'Branch out on a topic under ' + itemId }, ['⌁ Branch out']);
     branchBtn.addEventListener('click', () => openBranchOut(itemId));
-    wrap.appendChild(el('div', { className: 'ck-actions' }, [launchBtn, branchBtn, answersBtn, forkBtn, visBtn]));
+    // Chat ▾: a split button. The face jumps to this item's Discussion box; the arrow lists the
+    // ways to get an agent thinking about this item, each the existing feature, scoped here.
+    const chatSplit = el('span', { className: 'ck-split' });
+    const chatBtn = el('button', { className: 'ck-btn ck-split-main', type: 'button',
+      'aria-label': 'Chat about ' + itemId }, ['💬 Chat']);
+    chatBtn.addEventListener('click', () => {
+      const ta = panelEl.querySelector('.ck-thread .ck-textarea');
+      if (ta) { ta.scrollIntoView({ block: 'center', behavior: (reducedMotion && reducedMotion.matches) ? 'auto' : 'smooth' }); ta.focus(); }
+    });
+    const chatMore = el('button', { className: 'ck-btn ck-split-more', type: 'button', 'aria-haspopup': 'menu',
+      'aria-expanded': 'false', 'aria-label': 'More ways to engage an agent on ' + itemId }, ['▾']);
+    chatMore.addEventListener('click', () => openActionMenu(chatMore, [
+      ['⌁ Branch out', 'Turn a topic into a deliberated brief', () => openBranchOut(itemId)],
+      ['🔥 Grill', 'Five adversarial questions before you commit', () => {
+        openLaunchIdea(itemId); launchIdeaState.step = 2; renderLaunchIdea(); }],
+      ['⑂ Advise', 'Ask the seats for a recommendation (deliberate)', () => {
+        if (slot.hidden || !slot.childElementCount) forkBtn.click();
+        forkBtn.scrollIntoView({ block: 'center' }); }],
+      ['⚑ Delegate', 'Start a round, request a visual, run a playbook', () => {
+        delegateOpen = true; delegateItem = itemId; currentTab = 'inbox'; backToInbox(); }],
+    ]));
+    chatSplit.appendChild(chatBtn);
+    chatSplit.appendChild(chatMore);
+    wrap.appendChild(el('div', { className: 'ck-actions' }, [launchBtn, branchBtn, chatSplit, answersBtn, forkBtn, visBtn]));
     wrap.appendChild(slot);
     wrap.appendChild(visSlot);
     // Q36: while the send bar is up it is the one way to send; two controls for one signal would only differ.
@@ -7955,7 +8010,8 @@
   }
 
   function renderPRRow(pr) {
-    const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number) });
+    const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number),
+      dataDraft: pr.draft ? 'true' : 'false', dataChecks: pr.checks || 'none' });
     const href = prHref(pr.url);
     const titleKids = [el('span', { className: 'ck-pr-num' }, ['#' + pr.number]), ' ',
       el('span', { className: 'ck-pr-title' }, [String(pr.title)])];
@@ -8496,6 +8552,11 @@
     if (usage.account) parts.push(usage.account);
     if (version) parts.push('overture ' + version);
     footerEl.textContent = parts.join(' · ');
+    // The shortcut sheet is one press of `?` away, but nobody finds `?`: give it a button.
+    const keys = el('button', { type: 'button', className: 'ck-footer-keys',
+      title: 'Keyboard shortcuts (?)', 'aria-label': 'Show keyboard shortcuts' }, ['⌨ Shortcuts']);
+    keys.addEventListener('click', () => openShortcutHelp());
+    footerEl.appendChild(keys);
     footerEl.setAttribute('data-stale', stale ? 'true' : 'false');
     // The host page gets room for the footer at whatever height it wrapped to.
     root.style.setProperty('--ck-footer-h', footerEl.offsetHeight + 'px');

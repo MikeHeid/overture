@@ -3095,3 +3095,16 @@ example dashboard.
   unit tests and 5 route tests cover create, update and close,
   blocking, cycles, field checks, the view, the chart and the owner
   gate.
+- **PR cards.** Each pull request on the PRs tab is a bordered card whose
+  left edge shows its state: open, checks running, checks failing,
+  draft, merged or closed.
+- **Shortcuts button.** The footer has a **⌨ Shortcuts** button that
+  opens the shortcut sheet, so `?` is no longer the only way in.
+- **Chat ▾ on items.** A split button on every item: **Chat** jumps to
+  the item's discussion. Its menu routes to **Branch out**, **Grill**
+  (Launch Idea's grill step), **Advise** (the deliberation form) and
+  **Delegate** (the Delegate bar, with the item preselected).
+- **docs/proposals/UX-VIEW.md.** A proposal for UX View: a component
+  modal with Save, Generate and Generate with input; components saved
+  to `components/<item>.md` with a dated backup, through the steward;
+  new UX items placed into their lane automatically.

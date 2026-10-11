@@ -365,9 +365,13 @@ anything from the repository. See the module docstrings for the trust model.
   <img src="docs/screenshots/feature-favorite.png" alt="The Favorite tab listing two starred items" width="400">
 
 - **Chat**, for a message not tied to a question. It wakes the watching
-  session.
+  session. On an item, **💬 Chat ▾** jumps to that item's discussion. Its
+  menu offers **Branch out**, **Grill**, **Advise** (deliberate) and
+  **Delegate**, each already scoped to the item.
 
   <img src="docs/screenshots/feature-chat.png" alt="The Chat tab: the owner asks if main is green, the steward answers" width="400">
+
+  <img src="docs/screenshots/feature-chat-menu.png" alt="The Chat ▾ menu on an item: Branch out, Grill, Advise, Delegate" width="400">
 
 ### Keep rulings honest as the code moves
 
@@ -447,7 +451,9 @@ server cannot check it.
   agent-6`). One of them, the **steward**, named in your own registry, is the
   only one that processes your requests and folds your answers. The others
   post their questions to your inbox instead of asking you directly.
-- The **PRs** tab lists the project's open pull requests, then those
+- The **PRs** tab shows each pull request as its own card. The left edge
+  shows its state: blue open, amber checks running, red checks failing,
+  gray draft, purple merged. It lists the project's open pull requests, then those
   merged or closed in the last 30 days (`--days` changes it), with checks, draft and merged
   badges, a link to each on GitHub, and an **Open** button for any item or
   question a title or branch names. The steward pushes the list
@@ -471,9 +477,10 @@ server cannot check it.
 
   <img src="docs/screenshots/anim-palette.gif" alt="Pressing Ctrl+K, typing retry, and jumping straight to the matching item" width="720">
 
-- **Keyboard shortcuts.** Press `?` on any page for the full list.
-  `g i / f / p / s / o / c` hop to the Inbox / Feed / PRs / Favorite /
-  Portfolio / Chat tab, `g b` closes the panel, `.` focuses the
+- **Keyboard shortcuts.** Press `?`, or the **⌨ Shortcuts** button in the
+  footer, for the full list.
+  `g i / f / k / p / s / o / c` hop to the Inbox / Feed / Tickets / PRs /
+  Favorite / Portfolio / Chat tab, `g b` closes the panel, `.` focuses the
   Delegate bar, `j / k` walk the rows, Enter / Space opens the focused
   row. Shortcuts never fire in a text input.
 
