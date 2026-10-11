@@ -25,6 +25,7 @@ Status: waiting on the owner.
 | D5 | Where components are saved | A: `components/<item>.md` |
 | D6 | Which items get UX View | B: default lanes, configurable |
 | D7 | How a saved component reaches the repository | A: steward and a PR |
+| D13 | How a UX item is tied to a Claude Design project | A: front matter via the steward; agents read, the server never fetches |
 | D8 | Where the icons come from | A: a Lucide subset, bundled |
 | D9 | How tabs show icons | A: icon plus label, icon-only when narrow |
 | D10 | How lanes get colors | A: automatic, with a named override |
@@ -154,6 +155,29 @@ repository without a PR you merge.
 **Why A:** rule 1 in UX-VIEW.md, and the README's trust section. The modal
 can show "saved, PR #N pending" so the delay is visible.
 **What would change it:** nothing short of dropping the trust model.
+
+### D13. How a UX item is tied to a Claude Design project
+
+**What depends on it:**
+
+- whether the tie survives outside the console;
+- whether agents can build from the design;
+- whether the server gains an outbound door.
+
+The full design is in [UX-VIEW.md](UX-VIEW.md), "Linking a Claude Design
+project".
+
+| Option | In this project | Upside | Cost |
+|---|---|---|---|
+| **A ★** A link stored in the component's front matter by the steward's PR, and shown on the item. Agents read the design; the server never opens it. | `ux-link` intent → `ux-export` writes `design: {url, kind, synced_version}`; an exact-shape URL check like `prs.py` | Visible in the repository and in git history. Drift raises a question, like stale rulings. No new server network access. | Linking takes effect at merge, like Save. |
+| B The link kept only in console state | A field on the item in STATE | Instant | Lost outside the console: other tools and a fresh clone never see it. |
+| C The server fetches and previews the design | The server calls claude.ai | A live preview in the modal | The server would need a claude.ai login, and it gets an outbound fetch door. Breaks the trust model. |
+
+**Why A:** the server holding no credentials and never fetching what a page
+gives it is the same rule that makes PR links exact-shape (`prs.py`). The
+repository is where the component lives, so it is where its source belongs.
+**What would change it:** if links are only scratch notes and never need to
+outlive the console, B is simpler.
 
 ---
 

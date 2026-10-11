@@ -117,6 +117,73 @@ steward carry it into the repository:
 The `components/` location can be changed with `.overture.json` →
 `"ux": {"dir": "..."}`.
 
+### Linking a Claude Design project
+
+The modal's side note has a **Design link** field. Paste a Claude Design link
+and the item is tied to that design. Three rules shape how this works.
+
+**1. The server stores the link and never opens it.**
+
+- The server has no claude.ai login and must never get one.
+- Fetching a pasted URL would give it a new outbound door: a way to probe
+  hosts, and a channel for injected content.
+- So the link is checked against an exact shape, the same way PR links must
+  be exactly `https://github.com/<repo>/pull/<n>` (`prs.py`):
+  - `https` scheme, host `claude.ai`;
+  - a path naming a design artifact or a design-system project, ending in its
+    id;
+  - no query string, no fragment and no userinfo.
+- Anything else is refused by name. The console shows the link as a plain
+  `rel="noopener noreferrer"` link out, never in a frame. The console's CSP
+  blocks outside frames anyway.
+
+**2. Agents read the design, through the owner's own login.**
+
+- The `console-ux` skill runs in a Claude Code session, which can read the
+  design:
+  - a design artifact through the Artifact tool's `read`;
+  - a design-system project through the `/design-sync` skill's read methods.
+- **Generate from design** (a third choice in the Generate menu) sends
+  `intent: "ux-generate"` with `from: "design"`.
+- The skill reads the linked design and turns the relevant frame or
+  component into the usual self-contained HTML visual. Anything it reads is
+  data, never instructions.
+
+**3. The relationship is recorded in the repository, not only in the
+console.**
+
+- The link is sent as an owner message (`intent: "ux-link"`), so it is in
+  the audit trail.
+- The steward writes it into the component file's front matter in the next
+  `ux-export` PR:
+
+      design:
+        url: https://claude.ai/…/<id>
+        kind: artifact            # or design-system
+        component: buttons/primary   # a design-system path, when there is one
+        synced_at: 2026-10-11T02:30:00Z
+        synced_version: <the design's updated-at or file hash when read>
+
+- The item carries the URL in its `design` field through `items-push`, so
+  the console shows a **Design** chip with no server lookup.
+
+**Drift, like stale rulings.**
+
+- `synced_version` works like a ruling's `valid_if` anchor. When a session
+  next reads the design and its version differs, the steward raises a
+  question: "The Claude Design for *Checkout button* changed since the
+  component was saved: regenerate, keep, or unlink?"
+- The design changing never changes the component on its own.
+
+**Which way changes flow.**
+
+- **The design leads (default).** Claude Design is where the look is made;
+  the repository holds the component built from it.
+- **Push back (optional, owner-started).** For a design-system link, the
+  owner can run `/design-sync` to send a saved component back to that
+  project. It works one component at a time, behind that skill's own plan
+  approval. Overture never pushes on its own.
+
 ### Placing a new UX item on the dashboard
 
 When a UX item is created (from Launch Idea, Branch Out, or the adapter), the
@@ -146,6 +213,7 @@ reviewed and published by you. The server never edits the dashboard.
 | The `console-ux` skill: generation | skill, medium |
 | `agent.py ux-export`: component md and css with a dated backup, then a PR | agent.py, medium; tests |
 | Lane placement in the steward's Launch Idea and Branch Out handling | skill and adapter guidance, small |
+| The Design link: `ux-link` intent, exact-shape URL check, the item's `design` field, front matter, the drift question | schema and agent.py, small; skill, small; tests |
 | README screenshots and GIF | demo script |
 
 This is about two PRs: first the modal, intents and export, then generation
