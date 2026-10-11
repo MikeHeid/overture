@@ -15,11 +15,22 @@ the dashboard automatically.
 Status:
 
 - Decided on 2026-10-11 (D4–D7, with amendments). D13, the Claude Design
-  link, took its ★ as an architect default; its URL shapes wait on a real
-  link. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
+  link, took its ★ as an architect default; its URL shape is now pinned from a
+  real link. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
 - Revised the same day after an advisor, a DevOps and a UX review. Their
   findings are folded in; the list is at the end.
 - S1 and S2 below took their ★ as *architect defaults* (2026-10-11).
+- **Step 1 shipped in 1.32:**
+  - `purpose`/`from` on visual requests;
+  - the `ux-save` and `ux-link` owner intents, which wake the doorbell and
+    are listed in `todo.ux`;
+  - the item fields `ux` and `design`;
+  - the `/ux-export` read;
+  - `agent.py ux-export`, which writes `components/<item>.md` and `.css`
+    with hash-named backups, keeping 10;
+  - the console-ux skill's save path.
+
+  Next: step 2, the modal.
 
 ---
 
@@ -285,12 +296,15 @@ refusal names the rule it broke.
 - The link is checked against an exact shape, the same way PR links must be
   exactly `https://github.com/<repo>/pull/<n>` (`prs.py`):
   - `https` scheme, host `claude.ai`;
-  - a path naming a design artifact or a design-system project, ending in
-    its id;
-  - no query string, fragment or userinfo, and at most 200 characters.
+  - the path `/design/p/` and a project uuid;
+  - no query string, fragment or userinfo, and at most 200 characters;
 - Share and token URLs are refused by name. The link is written into git,
   and a public repository would publish it.
-- The exact pattern is pinned once a real link is available.
+- **The pinned shape** (from a real link the owner gave, 2026-10-11) is
+  `https://claude.ai/design/p/<project uuid>`. A shared copy ends in
+  `?via=share`: the form cleans that off when it is pasted (the server's
+  `design_url_clean`), and the server itself refuses a link that still
+  carries a query or fragment, naming it.
 - The console shows it as a plain `rel="noopener noreferrer"` link out,
   never in a frame.
 

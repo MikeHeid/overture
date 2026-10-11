@@ -2110,6 +2110,35 @@ class Console:
         return {"root": str(Path(self.cfg.root).resolve()), "visuals_dir": vdir, "visuals": out,
                 "refused": refused, "records": records}
 
+    def ux_export(self, body: object) -> dict:
+        """1.32 (UX-VIEW.md): what `agent.py ux-export` needs to land one owner ux-save. Writes nothing.
+
+        `save` names the owner's ux-save message. The answer carries the saved HTML visual (read from STATE and
+        re-checked, like visual-export), its doc, the item's Claude Design link (its newest ux-link, else the
+        item's own `design` field), and `root` so the agent can refuse to write into the server's checkout.
+        """
+        if not isinstance(body, dict) or set(body) != {"save"} or not isinstance(body["save"], str) \
+                or not S.RECORD_ID.match(body["save"]):
+            raise RequestError(400, "ux-export takes exactly save: the record id of an owner ux-save message")
+        msg = self.store.get(body["save"])
+        if not msg or msg["type"] != "message" or msg.get("intent") != "ux-save" or msg["by"] != "owner":
+            raise RequestError(404, f"no owner ux-save {body['save']}")
+        rec = self.store.get(msg["visual_id"])
+        if not rec or rec["type"] != "visual":
+            raise RequestError(404, f"no visual {msg['visual_id']}")
+        req = self.store.get(rec["request"]) or {}
+        try:
+            content = VIS.read(self.cfg.state, rec).decode("utf-8")
+            doc = VIS.read_doc(self.cfg.state, rec, req.get("text", ""))
+        except (VIS.VisualError, UnicodeDecodeError) as e:
+            raise RequestError(409, f"visual {rec['id']} cannot be exported: {e}") from None
+        design = (self.items().get(msg["item"]) or {}).get("design") or None
+        for r in self.store.records():
+            if r["type"] == "message" and r.get("intent") == "ux-link" and r["item"] == msg["item"] and r["by"] == "owner":
+                design = r["url"] or None     # newest wins; "" unlinks
+        return {"root": str(Path(self.cfg.root).resolve()), "item": msg["item"], "save": msg,
+                "visual": {**rec, "content": content, "doc": doc}, "design_url": design}
+
     @staticmethod
     def _status(items: dict[str, dict]) -> dict[str, str | None]:
         return {k: v.get("status") for k, v in items.items()}
@@ -3699,6 +3728,8 @@ class AgentHandler(_Handler):
             if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)
                 self.max_body = ASSET_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
                 return self._send(200, self.console.add_asset(self._body(), agent))
+            if self.path == "/ux-export":  # 1.32: a read; agent.py writes components/<item>.md in its own worktree
+                return self._send(200, self.console.ux_export(self._body()))
             if self.path == "/visual-export":  # 0.8.1: a read; agent.py writes into the agent's own worktree
                 return self._send(200, self.console.visual_export(self._body()))
             if self.path == "/history-blob":   # Q23 part 2: one past version, proved by its own hash
