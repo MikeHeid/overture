@@ -5995,6 +5995,73 @@
     return 'desktop';
   }
 
+  // The artifacts the owner ticked in UX View's picker that the agent's list still holds, as [{path, mode}].
+  function uxPickedRefs(itemId, st) {
+    const f = uxFacts(itemId);
+    const list = ((((view && view.designs) || {})[f.design] || {}).artifacts) || [];
+    const have = new Set(list.map(a => a.path));
+    return Array.from((st.refs || new Map()).entries()).filter(([p]) => have.has(p)).slice(0, 10)
+      .map(([path, mode]) => ({ path, mode }));
+  }
+  function renderRefPicker(itemId, f, st, onChange) {
+    const wrap = el('div', { className: 'ck-ux-refs' });
+    wrap.appendChild(el('h4', { className: 'ck-ux-h4' }, ['Design system artifacts']));
+    if (!f.design) {
+      wrap.appendChild(el('p', { className: 'ck-muted' }, ['Link a Claude Design project above to pick its artifacts.']));
+      return wrap;
+    }
+    const inv = ((view && view.designs) || {})[f.design];
+    if (!inv || !(inv.artifacts || []).length) {
+      wrap.appendChild(el('p', { className: 'ck-muted' }, ['No artifact list yet. An agent that can open the design lists it for you.']));
+      const ask = el('button', { type: 'button', className: 'ck-btn' }, ['Ask an agent to list it']);
+      ask.addEventListener('click', async () => {
+        ask.disabled = true;
+        const r = await apiPost('/message', { item: itemId, text: 'Please list the artifacts of the linked Claude Design project '
+          + '(agent.py design-inventory --url ' + f.design + ' --file LIST) so UX View can offer them.' }, 'ux-inv-' + itemId);
+        announce(r.error ? 'Not sent: ' + r.error : 'Asked an agent to list the design.');
+        ask.textContent = r.error ? 'Ask again' : 'Asked';
+        ask.disabled = !!r.error ? false : true;
+      });
+      wrap.appendChild(ask);
+      return wrap;
+    }
+    if (!st.refs) st.refs = new Map();
+    const arts = inv.artifacts;
+    wrap.appendChild(el('p', { className: 'ck-muted' }, [arts.length + ' listed ' + relTime(inv.pushed_at) +
+      '. Inspire borrows the look; swap builds the new version from that artifact.']));
+    const filter = el('input', { type: 'search', className: 'ck-input', 'aria-label': 'Filter design artifacts',
+      placeholder: 'Filter', value: st.refFilter || '' });
+    const count = el('p', { className: 'ck-muted', role: 'status', 'aria-live': 'polite' });
+    const list = el('div', { className: 'ck-ux-reflist', role: 'group', 'aria-label': 'Design artifacts' });
+    const sync = () => { count.textContent = st.refs.size + ' of 10 picked'; onChange(); };
+    const draw = () => {
+      list.textContent = '';
+      const q = (filter.value || '').toLowerCase();
+      for (const a of arts) {
+        if (q && (a.path + ' ' + (a.title || '')).toLowerCase().indexOf(q) < 0) continue;
+        const id = 'ck-ref-' + arts.indexOf(a);
+        const cb = el('input', { type: 'checkbox', id });
+        cb.checked = st.refs.has(a.path);
+        const mode = el('select', { className: 'ck-ux-refmode', 'aria-label': 'How to use ' + a.path, hidden: cb.checked ? null : 'hidden' }, [
+          el('option', { value: 'inspire' }, ['inspire']), el('option', { value: 'swap' }, ['swap'])]);
+        mode.value = st.refs.get(a.path) || 'inspire';
+        cb.addEventListener('change', () => {
+          if (cb.checked && st.refs.size >= 10) { cb.checked = false; announce('At most 10 artifacts.'); return; }
+          if (cb.checked) st.refs.set(a.path, mode.value); else st.refs.delete(a.path);
+          mode.hidden = !cb.checked; sync();
+        });
+        mode.addEventListener('change', () => { if (st.refs.has(a.path)) { st.refs.set(a.path, mode.value); sync(); } });
+        list.appendChild(el('div', { className: 'ck-ux-ref' }, [cb,
+          el('label', { for: id }, [a.title ? a.title : a.path.split('/').pop(), el('span', { className: 'ck-muted ck-ux-refpath' }, [a.path])]), mode]));
+      }
+      if (!list.childNodes.length) list.appendChild(el('p', { className: 'ck-muted' }, ['Nothing matches.']));
+    };
+    filter.addEventListener('input', () => { st.refFilter = filter.value; draw(); });
+    wrap.appendChild(filter); wrap.appendChild(list); wrap.appendChild(count);
+    draw(); sync();
+    return wrap;
+  }
+
   function openUxView(itemId) {
     if (document.getElementById('ck-ux-view')) return;
     const opener = document.activeElement;
@@ -6032,6 +6099,14 @@
     const notes = el('textarea', { className: 'ck-textarea ck-ux-notes', rows: '3', hidden: 'hidden',
       'aria-label': 'Notes for the agent', placeholder: 'What should change? Name design artifacts to use, e.g. buttons/primary.html' });
     box.appendChild(notes);
+    const refsLine = el('p', { className: 'ck-muted ck-ux-refs-line', hidden: 'hidden' });
+    box.appendChild(refsLine);
+    const refsNote = () => {
+      const picked = uxPickedRefs(itemId, st);
+      refsLine.hidden = !picked.length;
+      refsLine.textContent = picked.length ? 'The next Generate uses ' + picked.length + ' design artifact' + (picked.length === 1 ? '' : 's') + ': '
+        + picked.map(r => r.path.split('/').pop() + ' (' + r.mode + ')').join(', ') : '';
+    };
     const genFace = el('button', { type: 'button', className: 'ck-btn ck-split-main' }, ['Generate']);
     const genMore = el('button', { type: 'button', className: 'ck-btn ck-split-more', 'aria-haspopup': 'menu',
       'aria-expanded': 'false', 'aria-label': 'More ways to generate' }, [icon('chevron-down') || '▾']);
@@ -6083,6 +6158,7 @@
         scaleNote.textContent = '';
       }
       status.textContent = uxStatus(f, st.idx);
+      refsNote();
       // Component panel + settings
       side.textContent = '';
       side.appendChild(el('h3', { className: 'ck-ux-h3' }, ['Component']));
@@ -6104,6 +6180,8 @@
       det.appendChild(el('div', { className: 'ck-actions' }, [linkSave, unlink]));
       det.appendChild(el('p', { className: 'ck-muted' }, [f.linkWaiting ? 'Link sent · waiting for the steward to record it.'
         : 'The console never opens or fetches this link. The agent reads the design with your login.']));
+      // The design system's artifacts, as an agent listed them: pick up to 10 to reference in the next Generate.
+      det.appendChild(renderRefPicker(itemId, f, st, () => refsNote()));
       if (cur) {
         const on = uxScriptsOn(itemId, cur.id);
         const swId = 'ck-ux-scripts';
@@ -6180,6 +6258,8 @@
       const text = typed || ('Draw the component for ' + itemId + (itemTitle ? ' (' + itemTitle + ')' : '') + '.');
       const body = { item: itemId, intent: 'visual', purpose: 'ux', text };
       if (fromDesign) body.from = 'design';
+      const picked = uxPickedRefs(itemId, st);
+      if (picked.length) body.refs = picked;
       st.busy = true; paint();
       const r = await apiPost('/message', body, 'ux-gen-' + itemId);
       st.busy = false;

@@ -89,6 +89,7 @@ from . import items as IT
 from . import pagesnap as PS
 from . import playbooks as PB
 from . import triggers as TR
+from . import designs as DG
 from . import prs as PR
 from . import issues as IS
 from . import tickets as TK
@@ -1182,6 +1183,8 @@ class Console:
         except (TK.TicketError, OSError) as e:
             sys.stderr.write(f"console tickets: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "tickets": {"by_item": {}, "counts": {}}}
+        # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
+        out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
         # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
         try:
             out["view"] = {**out["view"], "assets": AS.as_view(AS.load(self.cfg.state))}
@@ -1949,6 +1952,50 @@ class Console:
                 "so it has nowhere to land in the repository")
         return {"record": stored, "land": land}
 
+    def _item_design(self, item: str) -> str | None:
+        """The item's Claude Design link: its newest owner ux-link ("" unlinks), else the item's own `design`."""
+        design = (self.items().get(item) or {}).get("design") or None
+        for r in self.store.records():
+            if r["type"] == "message" and r.get("intent") == "ux-link" and r["item"] == item and r["by"] == "owner":
+                design = r["url"] or None
+        return design
+
+    def add_design_inventory(self, body: object, agent: str | None = None) -> dict:
+        """1.33: keep an agent's list of the artifacts in a Claude Design project, for the owner's picker.
+
+        The server never reads or fetches the design; this is only what the agent says is in it, checked against
+        the closed shape (`designs.py`) and shown to the owner as text."""
+        keys = {"url", "artifacts", "nonce"}
+        if not isinstance(body, dict) or set(body) != keys:
+            raise RequestError(400, f"design-inventory takes exactly {', '.join(sorted(keys))}")
+        with self._lock:
+            try:
+                doc = DG.store(self.cfg.state, body["url"], body["artifacts"], agent)
+            except DG.DesignError as e:
+                raise RequestError(400, str(e)) from None
+            except OSError as e:
+                sys.stderr.write(f"console designs: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not store the list; see server log") from None
+        self._bump()
+        return {"stored": True, "url": body["url"], "artifacts": len(doc["artifacts"])}
+
+    def _refs_gate(self, body: dict) -> None:
+        """An owner's UX request that references design artifacts must name ones the agent listed for the item's
+        linked design: the picker cannot offer anything else, so a path outside the list is a stale or forged ask."""
+        refs = body.get("refs")
+        if refs is None or S.refs_problem(refs):
+            return                      # no refs, or a shape the store refuses with its own words
+        url = self._item_design(body.get("item")) if isinstance(body.get("item"), str) else None
+        if not url:
+            raise RequestError(409, "link this item to a Claude Design project before referencing its artifacts")
+        listed = {a["path"] for a in DG.load(self.cfg.state).get(url, {}).get("artifacts", [])}
+        if not listed:
+            raise RequestError(409, "no artifact list has been posted for this design yet; ask an agent to run "
+                                    "`agent.py design-inventory`")
+        missing = [r["path"] for r in refs if r["path"] not in listed]
+        if missing:
+            raise RequestError(409, f"{missing[0]!r} is not in the design's artifact list; reload UX View")
+
     def scripts_on(self, visual_id: str, before_seq: int | None = None) -> bool:
         """Whether the owner's newest ux-scripts for this visual says scripts are on. The owner's record only.
 
@@ -2237,10 +2284,7 @@ class Console:
             except VIS.VisualError as e:
                 raise RequestError(409, f"visual {rec['id']}'s scripted source cannot be exported: {e}") from None
             source = raw.decode("utf-8") if raw is not None else None
-        design = (self.items().get(msg["item"]) or {}).get("design") or None
-        for r in self.store.records():
-            if r["type"] == "message" and r.get("intent") == "ux-link" and r["item"] == msg["item"] and r["by"] == "owner":
-                design = r["url"] or None     # newest wins; "" unlinks
+        design = self._item_design(msg["item"])
         return {"root": str(Path(self.cfg.root).resolve()), "item": msg["item"], "save": msg,
                 "visual": {**rec, "content": content, "doc": doc}, "design_url": design,
                 "scripts": source is not None, "source": source}
@@ -3019,6 +3063,8 @@ class Console:
             chat = kind == "message" and by == "owner" and body.get("item") == S.CHAT_ITEM
             if chat and self.store.existing({**body, "type": kind, "by": by}) is None:
                 self._chat_gate()  # a retry of a message already stored is not a new message
+            if kind == "message" and by == "owner" and body.get("intent") == "visual" and "refs" in body:
+                self._refs_gate(body)
             if kind == "message" and by == "owner" and body.get("intent") == "ux-scripts" and body.get("scripts") is True:
                 vrec = self.store.get(body.get("visual_id")) if isinstance(body.get("visual_id"), str) else None
                 try:
@@ -3861,6 +3907,8 @@ class AgentHandler(_Handler):
             if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)
                 self.max_body = ASSET_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
                 return self._send(200, self.console.add_asset(self._body(), agent))
+            if self.path == "/design-inventory":  # 1.33: what an agent says is in the owner's Claude Design project
+                return self._send(200, self.console.add_design_inventory(self._body(), agent))
             if self.path == "/component-source":  # 1.33: the raw scripted source of an HTML visual, stored apart
                 return self._send(200, self.console.add_component_source(self._body(), agent))
             if self.path == "/ux-export":  # 1.32: a read; agent.py writes components/<item>.md in its own worktree

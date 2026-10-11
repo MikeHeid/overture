@@ -63,6 +63,17 @@ Status:
   it reaches nothing.
 
   Next: the hosting commands (`server.py daemon|service|status|health`).
+- **The design-system picker shipped later (1.33), at the owner's request,
+  reversing the reviewers' earlier "don't build".** An agent lists the
+  design's artifacts (`agent.py design-inventory`; `designs.py`, route
+  `/design-inventory`, at most 300 plain relative paths, kept per design
+  link); the owner ticks up to 10 in the modal's Settings, each **inspire**
+  or **swap**; Generate carries them as `refs`. The server cross-checks every
+  ref against the list for the item's linked design (409 naming what is
+  wrong), never reads or opens the design, and draws the list as text. Swap
+  makes a new version from that artifact; it never overwrites a saved
+  component or the design. The cheap text-path route in "Pointing at
+  artifacts" still works beside it.
 
 ---
 

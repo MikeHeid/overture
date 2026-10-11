@@ -104,6 +104,7 @@ class _Handler(BaseHTTPRequestHandler):
     view_multiline = False  # /view carries a thread whose messages span several lines (0.8.4)
     view_working = False  # ...and the cursor says an agent is working on it
     view_listening = None  # the cursor's `listening`; None leaves it out, as a pre-0.6.0 server
+    view_designs = False  # ...and it links a Claude Design whose artifact list an agent posted (1.33)
     view_scripts = False  # ...and its newest version has the owner's Scripts switch on (1.33)
     view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
     posts: list = []    # the JSON bodies POSTed to /api/message
@@ -129,6 +130,11 @@ class _Handler(BaseHTTPRequestHandler):
                        "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"}
                        for n in range(1, (_Handler.view_ux if isinstance(_Handler.view_ux, int) and _Handler.view_ux > 1 else 2) + 1)]
                 payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
+                if _Handler.view_designs:
+                    url = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+                    payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "design": url}}
+                    arts = [{"path": f"buttons/b{i}.html", "title": f"Button {i}"} for i in range(12)]
+                    payload["view"] = {**payload["view"], "designs": {url: {"artifacts": arts, "pushed_at": "2026-10-11T08:00:00Z", "by": "agent-2"}}}
                 if _Handler.view_scripts:
                     sw = {"id": "s" * 24, "seq": 99, "ts": "2026-10-11T09:00:00Z", "item": "LANE.1", "by": "owner",
                           "type": "message", "intent": "ux-scripts", "visual_id": "v2", "scripts": True, "text": "on"}
@@ -258,7 +264,7 @@ class DockTests(unittest.TestCase):
         cls.server.shutdown()
 
     def setUp(self):
-        _Handler.view_ux, _Handler.view_scripts, _Handler.posts = False, False, []
+        _Handler.view_ux, _Handler.view_scripts, _Handler.view_designs, _Handler.posts = False, False, False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
@@ -778,6 +784,39 @@ class UxViewTests(unittest.TestCase):
         page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "x.txt", "mimeType": "text/plain", "buffer": b"hi"}])
         page.wait_for_timeout(300)
         self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+
+    def test_the_owner_picks_design_artifacts_and_generate_sends_them(self):
+        _Handler.view_designs = True
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        self.assertIn("12 listed", page.locator(".ck-ux-refs").inner_text())
+        page.fill("[aria-label='Filter design artifacts']", "Button 1")          # Button 1, 10 and 11
+        self.assertEqual(page.locator(".ck-ux-ref").count(), 3)
+        page.fill("[aria-label='Filter design artifacts']", "")
+        page.locator(".ck-ux-ref input[type=checkbox]").nth(0).check()
+        page.locator(".ck-ux-ref input[type=checkbox]").nth(1).check()
+        page.locator(".ck-ux-refmode").nth(1).select_option("swap")
+        self.assertIn("2 of 10 picked", page.locator(".ck-ux-refs").inner_text())
+        self.assertIn("The next Generate uses 2 design artifacts", page.locator(".ck-ux-refs-line").inner_text())
+        page.get_by_role("button", name="Generate", exact=True).click()
+        page.wait_for_timeout(400)
+        gen = [m for m in _Handler.posts if m.get("intent") == "visual"]
+        self.assertEqual(gen[0]["refs"], [{"path": "buttons/b0.html", "mode": "inspire"}, {"path": "buttons/b1.html", "mode": "swap"}])
+
+    def test_no_more_than_ten_artifacts_can_be_picked(self):
+        _Handler.view_designs = True
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        boxes = page.locator(".ck-ux-ref input[type=checkbox]")
+        for i in range(12):
+            boxes.nth(i).check() if i < 10 else boxes.nth(i).evaluate("e => { e.checked = true; e.dispatchEvent(new Event('change')); }")
+        self.assertIn("10 of 10 picked", page.locator(".ck-ux-refs").inner_text())
+        self.assertFalse(boxes.nth(11).is_checked())
+
+    def test_without_a_design_link_the_picker_says_so(self):
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        self.assertIn("Link a Claude Design project", page.locator(".ck-ux-refs").inner_text())
 
     def test_a_link_being_typed_survives_a_live_refresh(self):
         page = self._open()
