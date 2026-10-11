@@ -3600,3 +3600,13 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .ck-attach-row .ck-btn-primary { margin-top: 0 !important; }
 .ck-attach-status { font-size: 12px; }
+
+/* UX View design-system picker (1.33) */
+.ck-ux-h4 { margin: 8px 0 2px; font-size: 12px; }
+.ck-ux-reflist { max-height: 200px; overflow: auto; border: 1px solid var(--c-border-light); border-radius: var(--radius-sm); padding: 4px; }
+.ck-ux-ref { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; min-height: 24px; padding: 2px 0; }
+.ck-ux-ref label { display: flex; flex-direction: column; font-size: 12px; overflow-wrap: anywhere; }
+.ck-ux-refpath { font-size: 11px; }
+.ck-ux-refmode { font-size: 12px; }
+.ck-ux-refs-line { margin: 0; font-size: 12px; }
+.ck-ux-refs-line[hidden] { display: none; }
