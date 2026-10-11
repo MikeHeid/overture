@@ -3214,3 +3214,26 @@ example dashboard.
     post a before and an after for every visible change.
 - **The Feed's filter row stays on one line (D9).** Its selects now shrink
   instead of wrapping.
+- **Lane colours (D10).** A lane is the `lane-…` segment of an item's
+  section, inherited from its parent. Each lane gets a colour from an
+  8-colour palette, checked at 3:1 or better against the surfaces in light
+  and dark.
+  - **How colours are picked:** configured colours first, then each other
+    lane in name order takes its hash's colour or the next free one. The
+    console and the project map use the same rule, and two lanes share a
+    colour only past 8.
+  - **Where they show:** a lane chip with a matching left edge on inbox and
+    Priority rows, and a "Wave › Phase › Lane" trail on the item.
+  - **Your dashboard:** items get `data-ck-lane` and `data-ck-lane-color`,
+    plus `--ck-lane-<colour>` custom properties to style with.
+  - **Config:** `.overture.json` takes `lanes: {"lane-x": {"color", "label",
+    "ux"}}`, with palette names only and anything else refused by name.
+    `ux: true` makes the lane a UX lane for console-ux and console-process.
+- **The project map is boxed by lane and drawn left to right.** A wide,
+  shallow tree (waves over many items) used to render as one unreadable
+  row, the bug logged earlier. Now its leaves stack down the page, grouped
+  in lane-coloured boxes.
+- **Tall charts fit to width.** A chart much taller than its frame (the
+  project map, now drawn left to right) is scaled to the frame's width and
+  opens at its top, so its labels stay readable. Shorter charts still fit
+  whole.
