@@ -353,6 +353,89 @@ class AssetTests(Tmp):
             self.add(1)
 
 
+class ComponentTests(Tmp):
+    """components.py (1.32, UX-VIEW.md "Saving"): components/<item>.md with hash-named backups."""
+
+    def export(self, html, vid="a" * 24, design=None):
+        return {"item": "UI-2", "design_url": design,
+                "save": {"id": "b" * 24, "by": "owner", "ts": "2026-10-11T10:00:00Z"},
+                "visual": {"id": vid, "title": "Save button", "doc": "A primary button.", "content": html}}
+
+    def test_render_has_front_matter_doc_fenced_html_and_css(self):
+        from overture import components as CO
+        md, css = CO.render("UI-2", self.export("<style>.a > b{x:1}</style><p>```odd```</p>",
+                                                design="https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"))
+        self.assertTrue(md.startswith("---\nitem: \"UI-2\"\nvisual: " + "a" * 24))
+        self.assertIn('design:\n  url: "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"', md)
+        self.assertIn("# Save button\n\nA primary button.", md)
+        self.assertIn("````html\n", md)             # a longer fence than any run inside the content
+        self.assertIn(".a > b{x:1}", css)
+
+    def test_writes_backs_up_by_hash_is_idempotent_and_keeps_ten(self):
+        from overture import components as CO
+        top = self.dir
+        first = CO.write(top, "UI-2", self.export("<style>p{a:1}</style><p>v1</p>"))
+        self.assertEqual(first["written"], ["components/UI-2.md", "components/UI-2.css"])
+        self.assertTrue(CO.write(top, "UI-2", self.export("<style>p{a:1}</style><p>v1</p>"))["unchanged"])
+        second = CO.write(top, "UI-2", self.export("<p>v2, no styles</p>", vid="c" * 24))
+        self.assertEqual(len(second["backed_up"]), 2)              # the old .md and .css
+        self.assertIn("components/UI-2.css (removed)", second["written"])
+        self.assertFalse((top / "components" / "UI-2.css").exists())
+        for n in range(3, 15):
+            CO.write(top, "UI-2", self.export(f"<p>v{n}</p>", vid=f"{n:024x}"))
+        kept = list((top / "components" / ".history").glob("UI-2-*.md"))
+        self.assertEqual(len(kept), CO.HISTORY_KEEP)
+
+    def test_a_symlinked_components_folder_is_refused(self):
+        from overture import components as CO
+        other = self.dir / "elsewhere"
+        other.mkdir()
+        (self.dir / "components").symlink_to(other)
+        with self.assertRaisesRegex(CO.ComponentError, "symlink"):
+            CO.write(self.dir, "UI-2", self.export("<p>x</p>"))
+        self.assertEqual(list(other.iterdir()), [])
+
+
+class DesignLinkTests(unittest.TestCase):
+    """D13 (pinned from a real link, 2026-10-11): https://claude.ai/design/p/<uuid>, nothing after it."""
+
+    U = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+
+    def test_the_exact_shape_is_accepted_and_a_share_link_is_cleaned_not_stored(self):
+        self.assertIsNone(S.design_url_problem(self.U))
+        self.assertIsNone(S.design_url_problem(""))                      # unlinks
+        self.assertIn("without its query", S.design_url_problem(self.U + "?via=share"))
+        self.assertEqual(S.design_url_clean(self.U + "?via=share"), self.U)
+        self.assertEqual(S.design_url_clean("  " + self.U + "  "), self.U)
+
+    def test_everything_else_is_refused(self):
+        for bad in ("http://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://claude.ai.evil.example/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://evil.example/https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://claude.ai/design/p/not-a-uuid", "https://claude.ai/design/abc123",
+                    "https://user@claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    self.U + "/x", self.U + "\n", 5, None):
+            with self.subTest(bad=bad):
+                self.assertIsNotNone(S.design_url_problem(bad))
+        self.assertIsNone(S.design_url_clean("https://claude.ai/design/abc123"))
+        self.assertIsNone(S.design_url_clean(self.U + "/x"))
+
+
+class UxItemFieldTests(unittest.TestCase):
+    """1.32: an item may say it is a UX component (`ux`) and carry its Claude Design link (`design`)."""
+
+    def test_ux_and_design_fields(self):
+        from overture import items as IT
+        ok = {"items": {"UI-2": {"title": "t", "ux": True, "design": "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"}}}
+        self.assertIsNone(IT.snapshot_problem(ok))
+        for bad, word in (({"ux": "yes"}, "ux"), ({"design": "https://figma.com/x"}, "Claude Design link"),
+                          ({"design": "https://claude.ai/design/abc?x=1"}, "Claude Design link")):
+            with self.subTest(bad=bad):
+                why = IT.snapshot_problem({"items": {"UI-2": {"title": "t", **bad}}})
+                self.assertIsNotNone(why)
+                self.assertIn(word, why)
+
+
 class SchemaTests(unittest.TestCase):
     def test_well_formed_records_pass(self):
         for r in (question(), question(kind="free"), question(kind="multi"), answer(), message()):

@@ -216,6 +216,15 @@ class Store:
                 self._check_about(rec)
             if S.ROAR in (rec.get("roles") or ()):
                 self._check_roar_once(rec)
+            if rec.get("intent") == "ux-save":
+                # 1.32: a ux-save names an HTML visual on the same item; anything else could not be a component.
+                v = self._by_id.get(rec["visual_id"])
+                if v is None or v["type"] != "visual":
+                    raise StoreError(f"visual_id {rec['visual_id']!r} names no visual")
+                if v["item"] != rec["item"]:
+                    raise StoreError(f"visual {v['id']} is on item {v['item']!r}; save it from that item")
+                if v["format"] != "html":
+                    raise StoreError(f"visual {v['id']} is {v['format']}; only an HTML visual can be a component")
         elif kind == "answer":
             self._check_answer(rec)
         elif kind == "lock":

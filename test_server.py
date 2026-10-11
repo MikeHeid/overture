@@ -1509,6 +1509,85 @@ def tiny_png(w=2, h=2, seed=0) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+class UxViewStepOneTests(_Live, unittest.TestCase):
+    """1.32 (UX-VIEW.md step 1): purpose on visual requests, ux-save and ux-link, todo.ux, /ux-export."""
+
+    COMP = ("<!doctype html><html><head><style>.btn > span{color:#0969da}</style></head>"
+            "<body><button class=\"btn\" type=\"button\"><span>Save</span></button></body></html>")
+
+    def drawn(self, fmt="html", content=None, item="LANE.1"):
+        req = self.owner_msg(item=item, intent="visual", text="Draw the save button", purpose="ux")
+        body = {"request": req["id"], "format": fmt, "title": "Save button",
+                "content": content or (self.COMP if fmt == "html" else "flowchart LR\n  A --> B\n"),
+                "text": "A primary button.", "nonce": "v" + os.urandom(6).hex()}
+        code, out = self.agent_post("/visual", body)
+        self.assertEqual(code, 200, out)
+        return out["record"]
+
+    def test_save_appears_in_todo_and_exports_as_a_component(self):
+        from overture import view as V
+        vis = self.drawn()
+        self.owner_msg(item="LANE.1", intent="ux-link", text="the design", url="https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1")
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save this one", visual_id=vis["id"])
+        todo = V.todo(self.console.payload()["view"])
+        self.assertIn({"id": save["id"], "item": "LANE.1", "intent": "ux-save", "visual_id": vis["id"]}, todo["ux"])
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual(code, 200, out)
+        self.assertEqual((out["item"], out["design_url"]), ("LANE.1", "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"))
+        self.assertIn(".btn > span{color:#0969da}", out["visual"]["content"])
+        # An agent reply naming the save takes it off the list.
+        code, _ = self.agent_post("/message", {"item": "LANE.1", "text": "Landed in PR #9", "reply_to": save["id"],
+                                               "nonce": "r" + os.urandom(6).hex()})
+        self.assertEqual(code, 200)
+        self.assertNotIn(save["id"], [u["id"] for u in V.todo(self.console.payload()["view"])["ux"]])
+        # The doorbell wakes a watching session for it.
+        from overture import doorbell as DB
+        self.assertIn("ux-save", DB.WAKE_INTENTS)
+
+    def test_the_cli_writes_the_component_into_a_worktree_and_never_the_servers(self):
+        import subprocess as sp
+        vis = self.drawn()
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save", visual_id=vis["id"])
+        with tempfile.TemporaryDirectory() as wt:
+            sp.run(["git", "init", "-q", wt], check=True)
+            rc, out, err = self.agent_cli("ux-export", "--project", wt, "--save", save["id"])
+            self.assertEqual(rc, 0, err)
+            md = (Path(wt) / "components" / "LANE.1.md").read_text()
+            self.assertIn(f"visual: {vis['id']}", md)
+            self.assertIn(".btn > span{color:#0969da}", (Path(wt) / "components" / "LANE.1.css").read_text())
+            rc, out, err = self.agent_cli("ux-export", "--project", wt, "--save", save["id"])
+            self.assertEqual(rc, 0, err)
+            self.assertTrue(json.loads(out)["unchanged"])
+            rc, _, err = self.agent_cli("ux-export", "--project", str(Path(wt) / "components"), "--save", save["id"])
+            self.assertEqual(rc, 1)
+            self.assertIn("top of your own git worktree", err)
+
+    def test_refusals_are_named(self):
+        mermaid = self.drawn(fmt="mermaid")
+        for body, word in (({"intent": "ux-save", "visual_id": mermaid["id"]}, "only an HTML visual"),
+                           ({"intent": "ux-save", "visual_id": "0" * 24}, "names no visual"),
+                           ({"intent": "ux-save"}, "visual_id"),
+                           ({"intent": "ux-link", "url": "https://evil.example/design/x"}, "Claude Design link"),
+                           ({"intent": "ux-link", "url": "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1?via=share"}, "without its query"),
+                           ({"intent": "chat", "purpose": "ux"}, "purpose belongs"),
+                           ({"intent": "visual", "purpose": "ux", "from": "figma"}, "from belongs")):
+            with self.subTest(body=body):
+                body = {"item": "LANE.1", "text": "x", "nonce": "o" + os.urandom(6).hex(), **body}
+                if body.get("intent") == "chat":
+                    body["item"] = "@chat"
+                code, out = self.req("POST", "/api/message", body, tok=token())
+                self.assertEqual(code, 400, out)
+                self.assertIn(word, out["error"])
+        # Only the owner saves: an agent's ux-save is refused by the schema.
+        vis = self.drawn()
+        code, out = self.agent_post("/message", {"item": "LANE.1", "text": "x", "intent": "ux-save",
+                                                 "visual_id": vis["id"], "nonce": "a" + os.urandom(6).hex()})
+        self.assertEqual(code, 400)
+        self.assertIn("only the owner", out["error"])
+        code, out = self.agent_post("/ux-export", {"save": vis["id"]})
+        self.assertEqual(code, 404)
+
+
 class ClientGoneTests(unittest.TestCase):
     """A client that hangs up mid-answer is not an error (logged as a traceback through 1.31)."""
 
@@ -3760,7 +3839,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
         self.assertIn("subprocess.Popen", seen)
 
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
-    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/visual-export",
+    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
                    "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
 
