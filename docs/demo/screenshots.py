@@ -296,6 +296,26 @@ class Demo:
         self.agent("/message", {"item": "@chat", "text": "Yes. CI green on 4f2c9e1; 212 tests, 0 failures.",
                                 "reply_to": chat["id"]}, "steward")
 
+        # Tickets, with blocking chains: the schema blocks the migration, which blocks the backfill.
+        def ticket(item, title, kind="task", blocked_by=None, body=""):
+            b = {"parent_item": item, "title": title, "kind": kind, "body": body}
+            if blocked_by:
+                b["blocked_by"] = blocked_by
+            return self.owner("/api/ticket-create", b)["ticket"]["id"]
+        schema = ticket("DATA-2", "Ledger schema: integer cents")
+        migrate = ticket("DATA-2", "Migration for the ledger", blocked_by=[schema])
+        ticket("DATA-2", "Backfill last 90 days of invoices", blocked_by=[migrate])
+        dlq = ticket("API-2", "dead_jobs table + replay endpoint")
+        ticket("API-2", "Alert the owner when a job dead-letters", blocked_by=[dlq])
+        ticket("API-2", "Retries hammer Stripe on 5xx", kind="bug")
+        roles = ticket("SEC-2", "Owner / Admin / Member roles", body="Admins cannot delete the workspace.")
+        ticket("UI-4", "Team invites screen", blocked_by=[roles])
+        ticket("OPS-3", "Compare eu-west-1 vs ap-southeast-2 latency", kind="research")
+        ticket("UI-3", "Grill: is a checklist better than a sample project?", kind="grilling")
+        done = ticket("UI-1", "Dark-mode tokens")
+        self.owner("/api/ticket-close", {"id": done})
+        self.ticket_ids = {"schema": schema, "migrate": migrate}
+
         # Stars.
         for key in ("item:API-2", "item:OPS-2"):
             self.owner("/api/favorite", {"id": key})
@@ -487,6 +507,20 @@ def capture(demo: Demo) -> list[str]:
             panel(pg, "feature-stale")
         shot("feature-stale", stale)
 
+        def tickets_tab(pg):
+            pg.locator("#ck-tab-tickets").click()
+            pg.wait_for_timeout(900)
+            panel(pg, "feature-tickets")
+        shot("feature-tickets", tickets_tab)
+
+        def ticket_graph(pg):
+            pg.locator("#ck-tab-tickets").click()
+            pg.wait_for_timeout(600)
+            pg.locator(".ck-panel summary", has_text="What blocks what").first.click()
+            pg.wait_for_timeout(3500)
+            pg.locator(".ck-ticket-chart").first.screenshot(path=str(OUT / "feature-ticket-graph.png"))
+        shot("feature-ticket-graph", ticket_graph)
+
         def ribbon(pg):
             pg.locator(".ck-priority-ribbon").first.screenshot(path=str(OUT / "feature-priority.png"))
         shot("feature-priority", ribbon)
@@ -597,6 +631,19 @@ def record_gifs(browser, url: str, problems: list[str]) -> None:
         (typed("ry"), 1100),
         (key("Enter", 1300), 2200),
     ], target=None)
+    # Tickets: close the blocker; the ticket it blocked moves from Blocked to Open.
+    def close_schema(pg):
+        card = pg.locator(".ck-ticket-col[data-status='open'] .ck-ticket", has_text="Ledger schema").first
+        card.locator("button", has_text="Close").click()
+        pg.wait_for_timeout(500)
+        return card
+
+    rec("anim-tickets", [
+        (lambda pg: (pg.locator("#ck-tab-tickets").click(), pg.wait_for_timeout(900)), 1600),
+        (lambda pg: (close_schema(pg), None), 1100),
+        (lambda pg: (pg.locator(".ck-ticket-col[data-status='open'] .ck-ticket", has_text="Ledger schema")
+                     .first.locator("button", has_text="Click again").click(), pg.wait_for_timeout(1500)), 2800),
+    ])
     # Status flowchart: expand, zoom, fit.
     rec("anim-flowchart", [
         (go("OPS-3"), 700),

@@ -215,7 +215,9 @@ def _check_blocked_by(blocked_by: object, tickets: dict, self_id: str | None) ->
             cur_t = tickets.get(cur)
             if isinstance(cur_t, dict):
                 stack.extend(cur_t.get("blocked_by") or [])
-    return out
+    # A closed ticket blocks nothing: drop it here, as `close` drops itself from its dependents.
+    # Kept, it would mark the ticket "blocked" with no close left to ever unblock it.
+    return [b for b in out if (tickets.get(b) or {}).get("status") != "closed"]
 
 
 def create(state: Path, body: dict, by: str, now_iso: str, agent: str | None = None) -> dict:
@@ -292,6 +294,8 @@ def close(state: Path, tid: str, now_iso: str) -> dict:
     row = tickets.get(tid)
     if row is None:
         raise TicketError(f"no ticket {tid!r}")
+    if row.get("status") == "closed":
+        return row   # already closed: keep the first close time, write nothing
     patched = dict(row)
     patched["status"] = "closed"
     patched["closed_at"] = now_iso

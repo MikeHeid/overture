@@ -3354,3 +3354,18 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   /* Snooze menu: pin to the right edge of the row so it doesn't overflow the panel. */
   .ck-snooze-menu { right: auto; left: 0; min-width: 180px; }
 }
+
+/* Tickets tab: a board, one column per status. Columns wrap in a narrow dock. */
+.ck-ticket-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+.ck-ticket-col { min-width: 0; background: var(--c-surface-alt); border: 1px solid var(--c-border); border-radius: var(--radius-md, 10px); padding: 8px; }
+.ck-ticket-col-h { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+.ck-ticket-col[data-status="blocked"] .ck-ticket-col-h { color: var(--c-blocked); }
+.ck-ticket-col .ck-ticket { margin: 0 0 6px; }
+.ck-ticket-item { display: inline-block; margin: 0 0 4px; font-size: 11px; }
+.ck-ticket-filters { margin: 6px 0; }
+.ck-ticket-board .ck-ticket { padding: 6px 8px; font-size: 12.5px; }
+.ck-ticket-board .ck-ticket-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.ck-ticket-board .ck-ticket-title { flex-basis: 100%; font-size: 13px; margin-top: 2px; }
+.ck-ticket-board .ck-ticket-id { font-size: 10.5px; }
+.ck-ticket-board .ck-ticket-body { display: none; }
+.ck-ticket-board .ck-btn { padding: 2px 8px; min-height: 0; font-size: 12px; }
