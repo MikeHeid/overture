@@ -175,7 +175,9 @@ a picture to draw: use the
 **console-visual** skill for each. An entry carries only `{id, item}`, so read
 the item first (`A view --item ITEM`): when the top-level `items[ITEM].section`
 has a `lane-ui` or `lane-ux` segment, or a lane `view.config.lanes` marks
-`"ux": true`, it is a **UX item** and the request is a component. Use the **console-ux** skill for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
+`"ux": true`, or the item or the request says `ux`, it is a **UX item**: the
+item sets `"ux": true`, or the request carries `"purpose": "ux"`. The request
+is a component. Use the **console-ux** skill for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
 woke you.
 
 **Show your work** (1.32, FEED-ASSETS.md F3). When anything you change is
@@ -190,6 +192,11 @@ screenshot on its item, from your own browser run (Playwright, or
   for a GIF.
 - **Don't screenshot backend-only changes:** there is nothing to see.
 - **Linking a PR** with `--pr` keeps the asset when space runs short.
+
+**UX saves and links** (1.32). Each entry of `todo.ux` is the owner pressing
+Save on a component (`ux-save`, with its `visual_id`) or linking a Claude
+Design (`ux-link`, with its `url`). Land each with the **console-ux** skill,
+step 7.
 
 ## 4b. Answer each scan for a resolve
 

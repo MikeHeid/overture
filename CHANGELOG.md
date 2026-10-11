@@ -3247,3 +3247,38 @@ example dashboard.
   keep their width and the title shrinks with an ellipsis instead.
 - **Project map filter chips use the state icons** (D8), instead of the old
   `? ! ~ o` text marks.
+- **UX View, step 1: the save path, without the console yet**
+  (UX-VIEW.md).
+  - **Visual requests** may say `purpose: "ux"` and `from: "design"`.
+  - **Two new owner intents:**
+    - **`ux-save`** names an HTML visual on the same item as the
+      component. An owner-only message; the store refuses a Mermaid visual,
+      another item's visual, or a missing one.
+    - **`ux-link`** carries a Claude Design `url`, or `""` to unlink. The
+      URL is held to the exact shape `https://claude.ai/design/p/<uuid>`
+      (pinned from a real link): no query, fragment or other host. A pasted
+      share link (`?via=share`) is cleaned, not stored. The server never
+      fetches it.
+  - **Delivery to agents:** both wake the doorbell and are listed in
+    `todo.ux` until an agent replies to them.
+  - **Items** may carry `ux: true` and a `design` link, checked the same way.
+  - **`/ux-export`** (agent door, a read) returns the saved visual, its doc
+    and the item's newest Design link.
+  - **`agent.py ux-export --project WORKTREE --save ID`** writes
+    `components/<item>.md` (front matter, doc, fenced HTML) and
+    `components/<item>.css` in the agent's own worktree, never the server's
+    checkout.
+    - A previous version moves to `components/.history/<item>-<hash>.md`,
+      and the newest 10 are kept.
+    - Running it twice changes nothing.
+    - The steward opens the PR.
+  - **The skills:** console-ux step 7 and console-process now land saves
+    and links.
+  - **Rollback:** a kit older than 1.32 refuses a store holding `ux-save`
+    or `ux-link` messages (or `purpose`, `from`, `visual_id` or `url`) by
+    name, and an `items.json` with `ux` or `design`. To go back, upgrade
+    again, or set those records aside.
+  - **Pointing at design-system artifacts.** The console-ux skill reads
+    named paths first, borrows the look and never the bytes, names its
+    sources, and treats a design file's instructions as noise. A catalog
+    picker and a "swap" were reviewed and not built (UX-VIEW.md).

@@ -32,6 +32,10 @@ ITEM_FIELDS = {"title": (str,), "parent": (str, type(None)), "status": (str, typ
                # "wave-1/phase-2/lane-ui". The scaffold materialises each path segment as a nested
                # <details> on the dashboard, so a new item lands under its already-visible section.
                "section": (str, type(None)),
+               # 1.32 (UX-VIEW.md): this item is a UX component, whatever its lane; and its Claude Design link
+               # (D13), checked like a ux-link's url. Optional; an older kit refuses them by name.
+               "ux": (bool,),
+               "design": (str, type(None)),
                # 1.7.0: a dotted-number reference like "1", "1.2". Optional; the server auto-
                # assigns under each parent when absent. Lives in STATE/refs.json too — see refs.py.
                "ref": (str, type(None)),
@@ -86,6 +90,10 @@ def snapshot_problem(doc: object) -> str | None:
                 if not SECTION_SEG.match(seg):
                     return (f"items.{k}.section segment {seg!r} must be a slug "
                             f"(a-z, 0-9, dot, dash, underscore; starts alnum; up to 64 chars)")
+        if isinstance(v.get("design"), str):
+            why = S.design_url_problem(v["design"])
+            if why:
+                return f"items.{k}.design: {why}"
         if isinstance(v.get("kind"), str) and v["kind"] not in KINDS:
             return f"items.{k}.kind must be one of {', '.join(KINDS)}"
     if seeds is None:

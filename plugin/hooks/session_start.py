@@ -50,7 +50,7 @@ import tempfile
 import time
 from pathlib import Path
 
-WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan")     # overture/doorbell.py
+WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link")     # overture/doorbell.py
 CURSOR_FILE = "agent-cursor.json"      # overture/doorbell.py
 MAX_DOORBELL = 64 << 20                # overture/doorbell.py
 MAX_CURSOR = 4096                      # overture/doorbell.py
@@ -551,14 +551,16 @@ def context(project: Path, sid: str | None = None) -> str | None:
                          + (f" ({n} stale ruling{'' if n == 1 else 's'})" if isinstance(n, int) and
                             not isinstance(n, bool) else ""))
             continue
-        what = {"process": "process the answers", "visual": "draw the visual the owner asked for"}.get(
+        what = {"process": "process the answers", "visual": "draw the visual the owner asked for",
+                "ux-save": "land the component the owner saved", "ux-link": "note the owner's Claude Design link"}.get(
             r["intent"], "run a deliberation round")
         lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): {what} on `{_shown(r.get('item'), ITEM_ID)}`")
     if len(wake) > MAX_LISTED:
         lines.append(f"- … and {len(wake) - MAX_LISTED} more (`{agent} inbox`)")
     lines += ["",
               "Use the console-process skill for `process`, `chat` and `scan`, the console-fork skill for "
-              "`fork`, and the console-visual skill for `visual`. "
+              "`fork`, the console-visual skill for `visual` (console-ux on a UX item), and the console-ux "
+              "skill for `ux-save` and `ux-link`. "
               f"`{agent} inbox` lists them; after handling one, `{agent} synced --through SEQ` "
               "(a scan: `--rx-through RX`) records it so it is not offered again.", "", ask]
     return "\n".join(lines)

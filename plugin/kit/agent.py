@@ -38,6 +38,10 @@
                                                 post a screenshot or recording on an item (1.32): PNG,
                                                 JPEG, WebP or GIF, judged by its bytes; it shows in the
                                                 Feed and on the item. The server stores it in STATE.
+    agent.py --state DIR ux-export --project WORKTREE --save MESSAGE_ID
+                                                land an owner's ux-save (1.32): write components/<item>.md
+                                                (+ .css) in YOUR worktree, the old version kept under
+                                                components/.history/; then open the PR yourself
     agent.py --state DIR visual-export --project WORKTREE [--visual ID ...]
                                                 copy stored visuals (default: all; identical files are
                                                 skipped) into WORKTREE/<visuals_dir>/ and regenerate its
@@ -470,6 +474,36 @@ def _git_top(d: Path) -> Path | None:
     if len(lines) != 2 or lines[0].strip() != "true":
         return None
     return Path(lines[1]).resolve()
+
+
+def _ux_export(state: Path, project: Path, save: str) -> int:
+    """Write the owner's saved component into PROJECT/components (1.32). 0 written or unchanged; 1 refused; 2 no server."""
+    from overture import components as CO
+    dest = Path(project).resolve()
+    top = _git_top(dest)
+    if top is None or top != dest:
+        print(f"refused: {project} must be the top of your own git worktree, on a branch", file=sys.stderr)
+        return 1
+    try:
+        code, out = _req(state, "POST", "/ux-export", {"save": save})
+    except OSError as e:
+        print(f"cannot reach the console server at {_where(state)}: {e}", file=sys.stderr)
+        return 2
+    if code != 200:
+        print(f"refused: {out.get('error', out)}", file=sys.stderr)
+        return 1
+    server_root = Path(out["root"]).resolve()
+    if dest in (server_root, _git_top(server_root)):
+        print(f"refused: {project} is the directory the console server runs from ({server_root}); write into "
+              f"your own worktree on a branch and land it by PR", file=sys.stderr)
+        return 1
+    try:
+        done = CO.write(dest, out["item"], out)
+    except (CO.ComponentError, OSError) as e:
+        print(f"refused, nothing overwritten: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(_json({"project": str(dest), "item": out["item"], **done}))
+    return 0
 
 
 def _visual_export(state: Path, project: Path, ids: list[str]) -> int:
@@ -1244,6 +1278,13 @@ def main(argv=None) -> int:
     s.add_argument("--qid", help="the question it illustrates")
     s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
     s.add_argument("--ticket", help="the ticket it shows")
+    s = sub.add_parser("ux-export", description=(
+        "Land the owner's ux-save (1.32, UX-VIEW.md): write components/<item>.md and components/<item>.css into "
+        "PROJECT, the top of YOUR git worktree on a branch (never the server's checkout). A previous version is "
+        "moved to components/.history/<item>-<hash>.md first; running it twice changes nothing. It writes files "
+        "only: commit them and open the pull request yourself."))
+    s.add_argument("--project", type=Path, required=True)
+    s.add_argument("--save", required=True, metavar="MESSAGE_ID", help="the owner's ux-save message id (from todo.ux)")
     s = sub.add_parser("visual-export", description=(
         "Copy stored visuals into PROJECT/<visuals_dir>/ and regenerate its INDEX.md, to land by PR. PROJECT "
         "must be the top of your own git work tree (visuals_dir is a path from the repository's top), never a "
@@ -1632,6 +1673,8 @@ def _run(a, bell: Path) -> int:
             if getattr(a, k) is not None:
                 body[k] = getattr(a, k)
         return _call(a.state, "POST", "/asset", body, agent=a.agent)
+    if a.cmd == "ux-export":
+        return _ux_export(a.state, a.project, a.save)
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":
