@@ -15,10 +15,11 @@ the dashboard automatically.
 Status:
 
 - Decided on 2026-10-11 (D4–D7, with amendments). D13, the Claude Design
-  link, is still open. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
+  link, took its ★ as an architect default; its URL shapes wait on a real
+  link. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
 - Revised the same day after an advisor, a DevOps and a UX review. Their
   findings are folded in; the list is at the end.
-- Two small sub-decisions are open: [S1 and S2](#open-sub-decisions).
+- S1 and S2 below took their ★ as *architect defaults* (2026-10-11).
 
 ---
 
@@ -267,7 +268,7 @@ scripted components take a separate path:
   - "Merge refused: checks failed since you asked.";
   - "Merge refused: conflicts with main."
 
-## Linking a Claude Design project (D13, open)
+## Linking a Claude Design project (D13, architect default)
 
 The Settings panel has a **Design link** field. Paste a Claude Design link
 and the item is tied to that design. It is validated as you type, and a
@@ -378,7 +379,7 @@ steward:
    parent, navigate the top window, or post messages the console accepts.
 5. **The Design link**, once D13 is decided.
 
-## Open sub-decisions
+## Sub-decisions (architect defaults, 2026-10-11)
 
 - **S1. Form controls.** The sanitizer drops `button`, `input`, `select`,
   `label` and `textarea`.
