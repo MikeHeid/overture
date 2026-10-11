@@ -8749,7 +8749,7 @@
     no.addEventListener('click', () => { prMergeAsking.delete(pr.number); refillPRs(); });
     go.addEventListener('click', async () => {
       go.disabled = true; err.hidden = true;
-      const r = await apiPost('/message', { item: '@prs', intent: 'pr-merge', pr: pr.number, expected_head_sha: pr.head_sha,
+      const r = await apiPost('/message', { item: '@prs', intent: 'pr-merge', pr: pr.number, expected_head_sha: pr.head_sha, base: pr.base,
         text: 'Merge #' + pr.number + ' into ' + pr.base }, 'pr-merge-' + pr.number + '-' + pr.head_sha);
       if (r.error) { go.disabled = false; err.textContent = 'Not sent: ' + r.error + ' Nothing was merged.'; err.hidden = false; announce('Error: ' + r.error); return; }
       prMergeAsking.delete(pr.number); announce('Merge requested.'); refillPRs();

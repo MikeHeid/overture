@@ -342,7 +342,7 @@ def from_gh(repo: object, open_rows: object, recent_rows: object, window_days: i
 # -- merging (1.33, D7): the steward's checks before `gh pr merge`, in one place so they are tested ---------
 
 MERGE_MAX_AGE = dt.timedelta(hours=24)   # a click made days ago never lands on new code
-GH_MERGE_FIELDS = "number,state,isDraft,headRefOid,statusCheckRollup,url,baseRefName"
+GH_MERGE_FIELDS = "number,title,state,isDraft,headRefOid,statusCheckRollup,url,baseRefName"
 
 
 def merge_problem(req: dict, row: object, repo: str, now: dt.datetime) -> str | None:
@@ -370,6 +370,9 @@ def merge_problem(req: dict, row: object, repo: str, now: dt.datetime) -> str | 
         return f"Merge refused: #{n}'s checks are unreadable ({e}). Nothing was merged"
     if checks != "success":
         return f"Merge refused: checks on #{n} are {checks}, not passing. Nothing was merged"
+    if row.get("baseRefName") != req.get("base"):
+        return (f"Merge refused: #{n} now merges into {row.get('baseRefName')}, not {req.get('base')} as you saw. "
+                f"Nothing was merged")
     if row.get("headRefOid") != req.get("expected_head_sha"):
         return (f"Merge refused: #{n} has new commits since you asked (head is now "
                 f"{str(row.get('headRefOid'))[:8]}, you saw {str(req.get('expected_head_sha'))[:8]}). Nothing was merged")

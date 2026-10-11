@@ -1062,13 +1062,18 @@ class Console:
                                     f"ready to merge. Nothing was merged")
         if pr["checks"] != "success":
             raise RequestError(409, f"#{n}'s checks are {pr['checks']}, not passing. Nothing was merged")
+        if body.get("base") != pr["base"]:
+            raise RequestError(409, f"#{n} merges into {pr['base']} in the steward's last push, not "
+                                    f"{body.get('base')!r}. Reload the PR tab. Nothing was merged")
         if pr.get("head_sha") != sha:
             raise RequestError(409, f"#{n} has moved since you looked (its head is not {sha[:8]} in the steward's "
                                     f"last push). Reload the PR tab. Nothing was merged")
         msgs = self.store.records()
         answered = {m.get("reply_to") for m in msgs if m["type"] == "message" and m["by"] == "agent"}
+        stale = (datetime.now(timezone.utc) - PR.MERGE_MAX_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # A request over 24 hours old is dead (the steward refuses it), so it no longer blocks a new one.
         if any(m["type"] == "message" and m.get("item") == S.PRS_ITEM and m.get("intent") == "pr-merge"
-               and m.get("pr") == n and m["id"] not in answered for m in msgs):
+               and m.get("pr") == n and m["id"] not in answered and m["ts"] >= stale for m in msgs):
             raise RequestError(409, f"a merge of #{n} is already requested and no session has answered yet")
 
     def _chat_gate(self) -> None:

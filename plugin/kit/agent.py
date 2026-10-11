@@ -1167,10 +1167,18 @@ def _pr_merge(a) -> int:
         print(f"refused: {a.request} already has an answer", file=sys.stderr)
         return 1
 
-    def reply(text: str) -> None:
-        if not a.dry_run:
-            _req(state, "POST", "/message", {"item": S.PRS_ITEM, "text": text[:2000], "reply_to": req["id"],
-                                              "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+    def reply(text: str) -> bool:
+        if a.dry_run:
+            return True
+        try:
+            code, out = _req(state, "POST", "/message", {"item": S.PRS_ITEM, "text": text[:2000], "reply_to": req["id"],
+                                                          "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+        except OSError as e:
+            code, out = 0, {"error": str(e)}
+        if code != 200:
+            print(f"warning: the reply on {S.PRS_ITEM} was not stored ({out.get('error', code)}); say so to the "
+                  f"owner, the request is still unanswered", file=sys.stderr)
+        return code == 200
 
     def gh_json(args: list[str]):
         out = G.gh(args, root)
@@ -1210,9 +1218,10 @@ def _pr_merge(a) -> int:
     rc, _stdout, stderr = out
     if rc != 0:
         return refuse(f"gh refused the merge ({rc}): {stderr.strip()[:300] or 'no message'}")
-    reply(f"Merged #{req['pr']} into {row.get('baseRefName', 'the base branch')} ({a.method}), head {req['expected_head_sha'][:8]}.")
-    print(_json({"merged": req["pr"], "repo": repo, "method": a.method}))
-    return 0
+    stored = reply(f"Merged #{req['pr']} \"{str(row.get('title'))[:120]}\" into {row.get('baseRefName')} "
+                   f"({a.method}), head {req['expected_head_sha'][:8]}.")
+    print(_json({"merged": req["pr"], "repo": repo, "method": a.method, "replied": stored}))
+    return 0 if stored else 3
 
 
 def _issues_push(a) -> int:

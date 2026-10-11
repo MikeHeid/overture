@@ -218,7 +218,7 @@ OPTIONAL = {
     # 0.8.0: `step`. A kit before it refuses a message carrying it, by name.
     "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to",
                           # 1.32 (UX-VIEW.md): a visual request's purpose and source; ux-save and ux-link.
-                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha"}),
+                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base"}),
     "answer": frozenset({"supersedes", "reason"}),
     # 0.5.0: the conditions a RE-lock was taken against, computed by the server.
     # Written only when they differ from the question's `valid_if`, so a store
@@ -559,11 +559,14 @@ def _check_pr_merge(rec: dict, intent: object, prs: bool) -> list[str]:
         n = rec.get("pr")
         if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 10**9:
             errs.append("a pr-merge names the pull request: pr, a whole number from 1")
+        base = rec.get("base")
+        if not isinstance(base, str) or not base or len(base) > 255 or re.search(r"[\x00-\x1f\x7f]", base):
+            errs.append("a pr-merge names the branch the owner saw it merge into: base, a branch name")
         sha = rec.get("expected_head_sha")
         if not isinstance(sha, str) or not re.match(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z", sha):
             errs.append("a pr-merge names the head commit the owner saw: expected_head_sha, a full commit id")
     else:
-        for k in ("pr", "expected_head_sha"):
+        for k in ("pr", "expected_head_sha", "base"):
             if k in rec:
                 errs.append(f"{k} belongs to a pr-merge")
         if prs and rec["by"] == "owner":

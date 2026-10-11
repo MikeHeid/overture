@@ -545,6 +545,10 @@ def context(project: Path, sid: str | None = None) -> str | None:
         if r["intent"] == "chat":  # the chat is not a register item (0.7.0)
             lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): answer the owner's chat message")
             continue
+        if r["intent"] == "pr-merge":  # 1.33: on the @prs thread, which is no register item
+            lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): the owner asked to merge a pull request: "
+                         f"`{agent} pr-merge --project WORKTREE --request ID` (id in `todo.merge`)")
+            continue
         if r["intent"] == "scan":  # CONSOLE-kit/Q40: stale rulings to answer; numbered by `rx`, not by the store
             n = r.get("qids")
             lines.append(f"- rx {_rx(r)} ({_shown(r.get('ts'), TS)}): answer the owner's scan for a resolve"
@@ -558,7 +562,7 @@ def context(project: Path, sid: str | None = None) -> str | None:
     if len(wake) > MAX_LISTED:
         lines.append(f"- … and {len(wake) - MAX_LISTED} more (`{agent} inbox`)")
     lines += ["",
-              "Use the console-process skill for `process`, `chat` and `scan`, the console-fork skill for "
+              "Use the console-process skill for `process`, `chat`, `scan` and `pr-merge`, the console-fork skill for "
               "`fork`, the console-visual skill for `visual` (console-ux on a UX item), and the console-ux "
               "skill for `ux-save` and `ux-link`. "
               f"`{agent} inbox` lists them; after handling one, `{agent} synced --through SEQ` "

@@ -733,8 +733,8 @@ class PrMergeButtonTests(unittest.TestCase):
         page.get_by_role("button", name="Merge pull request 5 into main").click()
         page.locator(".ck-pr-merge-confirm").get_by_role("button", name="Merge", exact=True).click()
         page.wait_for_timeout(400)
-        self.assertEqual([(m["item"], m["intent"], m["pr"], m["expected_head_sha"]) for m in _Handler.posts],
-                         [("@prs", "pr-merge", 5, "a" * 40)])
+        self.assertEqual([(m["item"], m["intent"], m["pr"], m["expected_head_sha"], m["base"]) for m in _Handler.posts],
+                         [("@prs", "pr-merge", 5, "a" * 40, "main")])
 
 
 class LiveBoardTests(unittest.TestCase):

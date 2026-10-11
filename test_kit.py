@@ -5612,7 +5612,7 @@ class PrMergeTests(Tmp):
         return row
 
     def req(self, **over):
-        r = {"id": "m1", "pr": 7, "expected_head_sha": self.SHA, "ts": "2026-10-11T10:00:00Z"}
+        r = {"id": "m1", "pr": 7, "expected_head_sha": self.SHA, "base": "main", "ts": "2026-10-11T10:00:00Z"}
         r.update(over)
         return r
 
@@ -5635,6 +5635,7 @@ class PrMergeTests(Tmp):
             ({}, self.row(statusCheckRollup=[{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]), "failure"),
             ({}, self.row(statusCheckRollup=[]), "none"),
             ({}, self.row(headRefOid="b" * 40), "new commits"),
+            ({}, self.row(baseRefName="release"), "now merges into release"),
             ({}, self.row(url="https://github.com/other/repo/pull/7"), "not in octo/repo"),
             ({}, self.row(number=8), "did not return"),
             ({}, "nope", "did not return"),
@@ -5658,7 +5659,7 @@ class PrMergeTests(Tmp):
 
     def msg(self, **over):
         rec = {"type": "message", "schemaVersion": 1, "item": "@prs", "text": "Merge #7", "by": "owner", "nonce": "n" * 10,
-               "intent": "pr-merge", "pr": 7, "expected_head_sha": self.SHA}
+               "intent": "pr-merge", "pr": 7, "expected_head_sha": self.SHA, "base": "main"}
         rec.update(over)
         return rec
 

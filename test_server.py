@@ -1522,9 +1522,9 @@ class PrMergeRequestTests(_Live, unittest.TestCase):
         code, out = self.agent_post("/prs", {"repo": "acme/app", "window_days": 30, "prs": [pr]})
         self.assertEqual(code, 200, out)
 
-    def ask(self, n=7, sha=None, expect=200):
+    def ask(self, n=7, sha=None, base="main", expect=200):
         body = {"item": "@prs", "intent": "pr-merge", "pr": n, "expected_head_sha": sha or self.SHA,
-                "text": f"Merge #{n}", "nonce": "pm" + os.urandom(6).hex()}
+                "base": base, "text": f"Merge #{n}", "nonce": "pm" + os.urandom(6).hex()}
         code, out = self.req("POST", "/api/message", body, tok=token())
         self.assertEqual(code, expect, out)
         return out
@@ -1553,6 +1553,7 @@ class PrMergeRequestTests(_Live, unittest.TestCase):
         self.push(state="merged", merged_at="2026-10-02T00:00:00Z", merge_commit="d" * 40)
         self.assertIn("merged", self.ask(expect=409)["error"])
         self.push()
+        self.assertIn("merges into main", self.ask(base="release", expect=409)["error"])
         self.assertIn("moved since you looked", self.ask(sha="d" * 40, expect=409)["error"])
         self.assertIn("not in the steward's last push", self.ask(n=99, expect=409)["error"])
         self.assertEqual(len(self.console.payload()["view"]["threads"].get("@prs", [])), 0)
@@ -1562,7 +1563,7 @@ class PrMergeRequestTests(_Live, unittest.TestCase):
 
     def test_an_agent_cannot_write_the_request_and_the_thread_takes_no_other_intent(self):
         code, out = self.agent_post("/message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
-                                                 "expected_head_sha": self.SHA, "text": "x", "nonce": "ag" + os.urandom(6).hex()})
+                                                 "expected_head_sha": self.SHA, "base": "main", "text": "x", "nonce": "ag" + os.urandom(6).hex()})
         self.assertEqual(code, 400, out)
         body = {"item": "@prs", "intent": "chat", "text": "hi", "nonce": "pm" + os.urandom(6).hex()}
         code, out = self.req("POST", "/api/message", body, tok=token())
@@ -7979,8 +7980,8 @@ class PrMergeCliTests(_SingleServer, unittest.TestCase):
               "merge_commit": None, "checks": "success", "head_sha": self.SHA}
         self.sconsole.push_prs({"repo": "octo/repo", "window_days": 30, "prs": [pr]}, "steward")
         self.req_id = self.sconsole.write("message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
-                                                      "expected_head_sha": self.SHA, "text": "Merge #7",
-                                                      "nonce": "pmcli00001"}, "owner")["id"]
+                                                      "expected_head_sha": self.SHA, "base": "main",
+                                                      "text": "Merge #7", "nonce": "pmcli00001"}, "owner")["id"]
 
     def run_cli(self, *extra, **env):
         return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "agent.py"), "--state",
