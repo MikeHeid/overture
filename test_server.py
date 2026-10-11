@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import base64
 import http.client
+import struct
 import io
 import json
 import re
@@ -1494,6 +1496,90 @@ class BacklinkTests(_Live, unittest.TestCase):
         # sandboxed: without the directive its script would run in the console's own origin.
         directives = [d.strip() for d in r.getheader("Content-Security-Policy").split(";")]
         self.assertIn("sandbox allow-scripts", directives)
+
+
+def tiny_png(w=2, h=2, seed=0) -> bytes:
+    """A real PNG built with the standard library; `seed` changes the pixels, so the bytes differ."""
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + b"".join(bytes([(seed + x + y) % 256, 0, 0]) for x in range(w)) for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+class AssetRouteTests(_Live, unittest.TestCase):
+    """1.32 (FEED-ASSETS.md): agents post screenshots on an item; the owner sees and deletes them."""
+
+    def post(self, data=None, **over):
+        body = {"item": "LANE.1", "content_b64": base64.b64encode(data or tiny_png()).decode(),
+                "caption": "Tabs with icons", "kind": "after"}
+        body.update(over)
+        return self.agent_post("/asset", body)
+
+    def raw(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", path, headers={"Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        data = r.read()
+        conn.close()
+        return r, data
+
+    def test_post_then_view_then_serve_then_delete(self):
+        png = tiny_png(seed=1)
+        code, out = self.post(png)
+        self.assertEqual(code, 200, out)
+        row = out["asset"]
+        self.assertEqual((row["format"], row["width"], row["height"], row["kind"]), ("png", 2, 2, "after"))
+        _, view = self.get("/api/view")
+        assets = view["view"]["assets"]
+        self.assertEqual([a["id"] for a in assets["by_item"]["LANE.1"]], [row["id"]])
+        self.assertNotIn("sha256", assets["recent"][0])
+        r, data = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual((r.status, data), (200, png))
+        self.assertEqual(r.getheader("Content-Type"), "image/png")
+        self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
+        self.assertIn("sandbox", r.getheader("Content-Security-Policy"))
+        self.assertEqual(r.getheader("Cross-Origin-Resource-Policy"), "same-origin")
+        code, out = self.req("POST", "/api/asset-delete", {"id": row["id"], "nonce": "del1"}, tok=token())
+        self.assertEqual(code, 200, out)
+        r, _ = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual(r.status, 404)
+
+    def test_the_format_comes_from_the_bytes_never_the_name(self):
+        for bad, why in ((b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", "SVG"),
+                         (b"GIF8 not really", "not a PNG"), (b"hello", "not a PNG")):
+            with self.subTest(why=why):
+                code, out = self.post(bad)
+                self.assertEqual(code, 400)
+                self.assertIn(why, out["error"])
+
+    def test_unknown_item_question_or_ticket_is_refused_by_name(self):
+        for over, word in (({"item": "NOPE"}, "no item"), ({"qid": "LANE.1/Q99"}, "no question"),
+                           ({"ticket": "T-nope1234"}, "no ticket"), ({"kind": "gallery"}, "kind"),
+                           ({"caption": "two\nlines"}, "one line"), ({"ticket": ["T-x"]}, "must be a string"),
+                           ({"kind": {"a": 1}}, "must be a string")):
+            with self.subTest(over=over):
+                code, out = self.post(**over)
+                self.assertEqual(code, 400, out)
+                self.assertIn(word, out["error"])
+
+    def test_the_same_bytes_on_the_same_item_are_one_asset(self):
+        png = tiny_png(seed=7)
+        _, a = self.post(png)
+        _, b = self.post(png)
+        self.assertEqual(a["asset"]["id"], b["asset"]["id"])
+        self.assertTrue(b.get("duplicate"))
+
+    def test_only_the_owner_door_deletes_and_only_with_a_token(self):
+        _, out = self.post(tiny_png(seed=3))
+        code, _ = self.req("POST", "/api/asset-delete", {"id": out["asset"]["id"], "nonce": "d2"})
+        self.assertEqual(code, 403)
+        code, _ = self.agent_post("/asset-delete", {"id": out["asset"]["id"]})
+        self.assertEqual(code, 404)
+        r, _ = self.raw("/api/asset?id=" + out["asset"]["id"])
+        self.assertEqual(r.status, 200)
 
 
 class TicketRouteTests(_Live, unittest.TestCase):
@@ -3654,7 +3740,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
         self.assertIn("subprocess.Popen", seen)
 
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
-    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/visual-export",
+    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
                    "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
 

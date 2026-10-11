@@ -3187,3 +3187,30 @@ example dashboard.
   attribute selector and quoted font or `content` value silently stopped
   matching. CSS now passes through as written, with `<` turned into the
   CSS escape `\3C`, so no markup can be spelled inside it.
+- **Screenshots in the Feed** (FEED-ASSETS.md). Agents post screenshots
+  and recordings on an item with `agent.py asset ITEM --file … --caption …
+  [--kind before|after|screenshot|recording] [--qid] [--pr] [--ticket]`.
+  - **Where they show:** in the Feed, under a new **Screenshots** filter,
+    with a before and after side by side; in a **Screenshots** fold on the
+    item; and in a full-size viewer with ◂ ▸ and the arrow keys.
+  - **Your controls:** star one to keep it; delete it from the owner door
+    only, with a two-step confirm. Under reduced motion a GIF waits for a
+    press of play.
+  - **Formats:** PNG, JPEG, WebP or GIF, judged by the file's magic bytes;
+    SVG is refused.
+  - **Limits:** 2 MiB for a still, 8 MiB for a GIF, 8000 px on a side;
+    30 per agent and 120 per project per 10 minutes (unnamed agents share
+    one bucket); at most 3000 in the index. Format, size and sides are
+    checked before the server takes its lock, and a JPEG's header scan stops
+    at 256 KiB, so a crafted file can't stall the console.
+  - **Storage:** files are kept under `STATE/assets/`, outside the store, so
+    an older kit still opens the project. Each is served sandboxed with
+    `nosniff`. The same bytes posted twice on an item are one asset.
+  - **When space runs short (F1):** at 100 per item or 300 MiB per project,
+    the oldest screenshots that are neither starred nor linked to a PR are
+    removed, and the Feed notes each one. A starred "after" keeps its
+    "before".
+  - **When agents post (F3):** the console-process and console-ux skills
+    post a before and an after for every visible change.
+- **The Feed's filter row stays on one line (D9).** Its selects now shrink
+  instead of wrapping.

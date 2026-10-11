@@ -52,6 +52,8 @@ gate. See `HealthHandler` for why the health door is safe to leave ungated.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import calendar
 import collections
 import hashlib
@@ -90,6 +92,7 @@ from . import triggers as TR
 from . import prs as PR
 from . import issues as IS
 from . import tickets as TK
+from . import assets as AS
 from . import names as N
 from . import peers as PE
 from . import projectcfg as PC
@@ -118,6 +121,8 @@ OWNER_CSRF_ROTATE = "/api/csrf-rotate"   # invalidate all pages' CSRF without a 
 OWNER_TICKET_CREATE = "/api/ticket-create"
 OWNER_TICKET_UPDATE = "/api/ticket-update"
 OWNER_TICKET_CLOSE = "/api/ticket-close"
+# 1.32 (FEED-ASSETS.md): the owner deletes an asset an agent posted. Agents post on their own door.
+OWNER_ASSET_DELETE = "/api/asset-delete"
 # The live console (0.7.0). A long poll: the page asks "has anything changed
 # since seq S?" and the server answers the moment something does, or after at
 # most WAIT_MAX seconds with "no". Well inside Cloudflare's 100 s response
@@ -136,6 +141,10 @@ AGENT_ROUTES = {"/question": "question", "/message": "message", "/transcript": "
 # and a visual up to 256 KiB, and JSON escaping can grow either several times.
 # The door is a user-only Unix socket; the owner's door keeps MAX_BODY.
 AGENT_MAX_BODY = 2 << 20
+# An asset arrives base64 in JSON: an 8 MiB GIF is about 10.7 MiB of body. Raised on /asset only.
+ASSET_MAX_BODY = 12 << 20
+# A stored asset opened in its own tab runs nothing and loads nothing.
+ASSET_CSP = "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'"
 # /view's answer when a stored file fails its check: what to do, never where the file is.
 VIEW_UNREADABLE = ("the console's stored state could not be read just now; if the stored items are the cause, "
                    "the steward should push them again (agent.py items-push)")
@@ -1125,6 +1134,12 @@ class Console:
         except (TK.TicketError, OSError) as e:
             sys.stderr.write(f"console tickets: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "tickets": {"by_item": {}, "counts": {}}}
+        # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
+        try:
+            out["view"] = {**out["view"], "assets": AS.as_view(AS.load(self.cfg.state))}
+        except (AS.AssetError, OSError) as e:
+            sys.stderr.write(f"console assets: {type(e).__name__}: {e}\n")
+            out["view"] = {**out["view"], "assets": AS.as_view({})}
         # Rulings → PRs backlinks. Each locked ruling has a stable qid like "A/Q1";
         # PR titles that mention a qid literally are threaded back to the question card so
         # operators can see which shipped work ties to which ruling. Owner-door only (needs
@@ -1724,6 +1739,79 @@ class Console:
         if err:
             raise RequestError(err_code, err)
         return out
+
+    # ---- Assets (1.32, FEED-ASSETS.md) ------------------------------------------------------
+    # Screenshots and recordings an agent posts on an item, unasked. Stored under STATE/assets
+    # (assets.py), outside the store; the page re-reads `view.assets` on the next wake.
+    def add_asset(self, body: object, agent: str | None) -> dict:
+        fields = {"item", "content_b64", "caption", "kind", "qid", "pr", "ticket", "nonce"}
+        if not isinstance(body, dict) or set(body) - fields or not {"item", "content_b64", "caption"} <= set(body):
+            raise RequestError(400, '/asset takes {"item", "content_b64", "caption", "kind"?, "qid"?, "pr"?, '
+                                    '"ticket"?, "nonce"?}')
+        item = body["item"]
+        if not isinstance(item, str) or item not in self.items():
+            raise RequestError(400, f"no item {item!r} in the project's item list")
+        try:
+            data = base64.b64decode(body["content_b64"], validate=True) if isinstance(body["content_b64"], str) \
+                else None
+        except (ValueError, binascii.Error):
+            data = None
+        if not data:
+            raise RequestError(400, "content_b64 must be the file's bytes, base64-encoded")
+        for k in ("caption", "kind", "qid", "ticket"):
+            if body.get(k) is not None and not isinstance(body[k], str):
+                raise RequestError(400, f"{k} must be a string")
+        # Format, size and sides are checked BEFORE the lock: a crafted file costs its own request, not every
+        # other owner write and wake (review, 1.32).
+        try:
+            AS.check(data)
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        qid = body.get("qid")
+        if qid is not None:
+            if qid not in self.payload().get("view", {}).get("questions", {}):
+                raise RequestError(400, f"no question {qid!r}")
+        ticket = body.get("ticket")
+        if ticket is not None:
+            try:
+                known = TK.load(self.cfg.state)["tickets"]
+            except (TK.TicketError, OSError):
+                known = {}
+            if ticket not in known:
+                raise RequestError(400, f"no ticket {ticket!r}")
+        try:
+            starred = set(self.favorites.list())
+        except (ValueError, OSError):
+            starred = set()
+        try:
+            with self._lock:
+                out = AS.add(self.cfg.state, item=item, data=data, caption=body["caption"],
+                             kind=body.get("kind") or "screenshot", agent=agent, now=_iso_now(),
+                             starred=starred, qid=qid, pr=body.get("pr"), ticket=ticket)
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        except OSError as e:
+            sys.stderr.write(f"console assets: write failed: {type(e).__name__}: {e}\n")
+            raise RequestError(500, "could not store the asset; see server log") from None
+        self._bump()
+        return out
+
+    def asset(self, asset_id: str) -> tuple[bytes, str]:
+        try:
+            return AS.read(self.cfg.state, asset_id)
+        except AS.AssetError as e:
+            raise RequestError(404, str(e)) from None
+
+    def asset_delete(self, body: object) -> dict:
+        if not isinstance(body, dict) or set(body) - {"id", "nonce"} or "id" not in body:
+            raise RequestError(400, '/api/asset-delete takes {"id", "nonce"?}')
+        try:
+            with self._lock:
+                row = AS.delete(self.cfg.state, body["id"])
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        self._bump()
+        return {"deleted": row["id"]}
 
     def favorite_toggle(self, body: object) -> dict:
         """Toggle `body['id']` in STATE/favorites.json; return the new state and the keys.
@@ -3116,7 +3204,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(self.timeout)   # the answer is written under the usual per-write timeout
         return b"".join(chunks)
 
-    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str) -> None:
+    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str, corp: str = "cross-origin") -> None:
         """A body that is not JSON, under its own Content-Security-Policy (0.8.0, a stored visual).
 
         0.9.8: `Cross-Origin-Resource-Policy: cross-origin`, not same-origin. Raw responses are consumed
@@ -3133,7 +3221,7 @@ class _Handler(BaseHTTPRequestHandler):
             if k != "Content-Security-Policy":
                 self.send_header(k, v)
         self.send_header("Content-Security-Policy", csp)
-        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+        self.send_header("Cross-Origin-Resource-Policy", corp)
         self.end_headers()
         self.wfile.write(data)
 
@@ -3299,7 +3387,7 @@ class OwnerHandler(_Handler):
             except RequestError as e:
                 return self._send(e.code, {"error": str(e)})
         live = {"/api/wait": self._wait, "/api/feed": self._feed, "/api/evidence": self._evidence,
-                "/api/visual": self._visual, "/api/visual-render": self._visual_render,
+                "/api/visual": self._visual, "/api/visual-render": self._visual_render, "/api/asset": self._asset,
                 "/api/item-chart": self._item_chart, "/api/impact-graph": self._impact_graph}.get(route)
         if live is not None and query is not None:
             try:
@@ -3389,6 +3477,13 @@ class OwnerHandler(_Handler):
         if fmt == "html":
             return self._send_raw(200, data, "text/html; charset=utf-8", VISUAL_HTML_CSP)
         self._send_raw(200, data, "text/plain; charset=utf-8", VISUAL_TEXT_CSP)
+
+    def _asset(self, query: dict[str, str]) -> None:
+        """1.32: one stored asset's bytes, typed by its magic bytes, sandboxed if opened on its own."""
+        self._only(query, {"id"}, "/api/asset")
+        data, mime = self.console.asset(query.get("id", ""))
+        # Same-origin: the page loads assets as <img>, never from a sandboxed frame.
+        self._send_raw(200, data, mime, ASSET_CSP, corp="same-origin")
 
     def _visual_render(self, query: dict[str, str]) -> None:
         """0.8.19: a Mermaid visual rendered as a diagram inside the console's sandboxed iframe."""
@@ -3498,7 +3593,7 @@ class OwnerHandler(_Handler):
                                               "/api/refactor", OWNER_FAVORITE, OWNER_PLAYBOOK,
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
-                                              OWNER_CSRF_ROTATE):
+                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -3540,6 +3635,8 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.ticket_update(self._body()))
             if self.path == OWNER_TICKET_CLOSE:     # close a ticket; dependents unblock as needed
                 return self._send(200, self.console.ticket_close(self._body()))
+            if self.path == OWNER_ASSET_DELETE:     # 1.32: the owner removes an agent's asset
+                return self._send(200, self.console.asset_delete(self._body()))
             self._send(200, {"record": self.console.write(kind, self._body(), "owner")})
         except RequestError as e:
             self._send(e.code, {**e.extra, "error": str(e)})
@@ -3586,6 +3683,9 @@ class AgentHandler(_Handler):
                 return self._send(200, self.console.reanchor(self._body()))
             if self.path == "/visual":  # 0.8.1: the server stores the file in STATE, never in the project
                 return self._send(200, self.console.add_visual(self._body(), agent))
+            if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)
+                self.max_body = ASSET_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
+                return self._send(200, self.console.add_asset(self._body(), agent))
             if self.path == "/visual-export":  # 0.8.1: a read; agent.py writes into the agent's own worktree
                 return self._send(200, self.console.visual_export(self._body()))
             if self.path == "/history-blob":   # Q23 part 2: one past version, proved by its own hash

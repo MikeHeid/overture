@@ -208,6 +208,151 @@ class ConsoleUxSkillTests(unittest.TestCase):
         self.assertIn("**console-ux** skill", process)
 
 
+def _png(w=2, h=2, seed=0) -> bytes:
+    import struct as _st
+    import zlib
+    def chunk(kind, data):
+        return _st.pack(">I", len(data)) + kind + data + _st.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + b"".join(bytes([(seed + x + y) % 256, 0, 0]) for x in range(w)) for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", _st.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+class AssetTests(Tmp):
+    """assets.py (1.32, FEED-ASSETS.md): sniffing, caps, the rate limit, and F1 pruning."""
+
+    def setUp(self):
+        super().setUp()
+        from overture import assets
+        self.A = assets
+
+    def add(self, seed, item="LANE.1", at=None, agent="agent-1", **kw):
+        return self.A.add(self.dir, item=item, data=_png(seed=seed), caption=f"shot {seed}", kind="screenshot",
+                          agent=agent, now=at or self.clock(), **kw)
+
+    def test_formats_come_from_magic_bytes(self):
+        import struct as _st
+        self.assertEqual(self.A.sniff(_png(5, 3)), ("png", 5, 3))
+        self.assertEqual(self.A.sniff(b"GIF89a" + _st.pack("<HH", 40, 30) + b"\x00" * 8), ("gif", 40, 30))
+        jpeg = b"\xff\xd8\xff\xe0" + _st.pack(">H", 16) + b"JFIF\x00" + b"\x00" * 9 \
+            + b"\xff\xc0" + _st.pack(">HBHH", 17, 8, 120, 160) + b"\x00" * 12
+        self.assertEqual(self.A.sniff(jpeg), ("jpeg", 160, 120))
+        vp8x = b"RIFF" + b"\x00" * 4 + b"WEBPVP8X" + b"\x00" * 8 + (639).to_bytes(3, "little") + (479).to_bytes(3, "little")
+        self.assertEqual(self.A.sniff(vp8x), ("webp", 640, 480))
+        for bad in (b"<svg onload=alert(1)>", b'<?xml version="1.0"?><svg/>', b"%PDF-1.7", b""):
+            with self.assertRaises(self.A.AssetError):
+                self.A.sniff(bad)
+
+    def test_size_and_side_caps(self):
+        with self.assertRaisesRegex(self.A.AssetError, "each side"):
+            self.A.add(self.dir, item="X", data=_png(9000, 1), caption="c", kind="screenshot", agent=None,
+                       now=self.clock())
+
+    def test_the_rate_limit_is_per_agent_per_window(self):
+        for i in range(self.A.RATE_COUNT):
+            self.add(i, at="2026-10-11T10:00:00Z")
+        with self.assertRaisesRegex(self.A.AssetError, "the limit is"):
+            self.add(999, at="2026-10-11T10:05:00Z")
+        self.add(999, at="2026-10-11T10:05:00Z", agent="agent-2")     # another agent is not slowed
+        self.add(1000, at="2026-10-11T10:11:00Z")                     # the window moved on
+
+    def test_f1_prunes_the_oldest_unprotected_and_notes_it(self):
+        old = self.A.PER_ITEM
+        self.A.PER_ITEM = 3
+        try:
+            a = self.add(1, pr=12)["asset"]                      # linked to a PR: kept
+            b = self.add(2)["asset"]                             # starred below: kept
+            c = self.add(3)["asset"]                             # the oldest unprotected
+            out = self.add(4, starred={"asset:" + b["id"]})
+            self.assertEqual([n["id"] for n in out["pruned"]], [c["id"]])
+            left = self.A.load(self.dir)["assets"]
+            self.assertEqual(set(left), {a["id"], b["id"], out["asset"]["id"]})
+            self.assertEqual(self.A.as_view(self.A.load(self.dir))["pruned"][0]["id"], c["id"])
+            # The pruned file is gone from disk; the kept ones are still served.
+            files = {p.name for p in (self.dir / "assets").iterdir()}
+            self.assertNotIn(c["sha256"] + ".png", files)
+            self.assertEqual(self.A.read(self.dir, a["id"])[1], "image/png")
+            # Nothing left to prune: refused by name, nothing written.
+            with self.assertRaisesRegex(self.A.AssetError, "starred or linked to a PR"):
+                self.add(5, starred={"asset:" + b["id"], "asset:" + out["asset"]["id"]}, pr=None)
+        finally:
+            self.A.PER_ITEM = old
+
+    def test_unnamed_agents_share_a_bucket_and_the_project_has_its_own_limit(self):
+        # Review: the agent name is self-declared, and an unnamed post skipped the limit entirely.
+        for i in range(self.A.RATE_COUNT):
+            self.add(i, at="2026-10-11T10:00:00Z", agent=None)
+        with self.assertRaisesRegex(self.A.AssetError, "unnamed agents"):
+            self.add(500, at="2026-10-11T10:01:00Z", agent=None)
+        old = self.A.RATE_PROJECT
+        self.A.RATE_PROJECT = self.A.RATE_COUNT + 2
+        try:
+            self.add(600, at="2026-10-11T10:01:00Z", agent="b1")
+            self.add(601, at="2026-10-11T10:01:00Z", agent="b2")
+            with self.assertRaisesRegex(self.A.AssetError, "project's limit"):
+                self.add(602, at="2026-10-11T10:01:00Z", agent="b3")
+        finally:
+            self.A.RATE_PROJECT = old
+
+    def test_tiny_files_cannot_fill_the_index_for_good(self):
+        # Review: thousands of 33-byte PNGs never reach MAX_TOTAL; MAX_ROWS prunes them like any other cap.
+        old = self.A.MAX_ROWS
+        self.A.MAX_ROWS = 3
+        try:
+            first = self.add(1, item="A.1")["asset"]
+            self.add(2, item="A.2"); self.add(3, item="A.3")
+            out = self.add(4, item="A.4")
+            self.assertEqual([n["id"] for n in out["pruned"]], [first["id"]])
+            self.assertEqual(len(self.A.load(self.dir)["assets"]), 3)
+        finally:
+            self.A.MAX_ROWS = old
+
+    def test_the_jpeg_scan_is_bounded(self):
+        import time as _t
+        crafted = b"\xff\xd8\xff\xe0\x00\x10" + b"\x00" * (8 << 20)
+        t0 = _t.monotonic()
+        with self.assertRaises(self.A.AssetError):
+            self.A.check(crafted)
+        self.assertLess(_t.monotonic() - t0, 0.25)
+
+    def test_a_malformed_index_row_is_skipped_not_a_crash(self):
+        row = self.add(1)["asset"]
+        idx = self.dir / "assets" / "index.json"
+        doc = json.loads(idx.read_text())
+        doc["assets"]["a" + "0" * 16] = {"id": "a" + "0" * 16, "item": "X"}     # no sha256, format, ...
+        idx.write_text(json.dumps(doc))
+        self.assertEqual(set(self.A.load(self.dir)["assets"]), {row["id"]})
+        self.add(2)                                                          # and writes still work
+
+    def test_a_starred_after_keeps_its_before(self):
+        old = self.A.PER_ITEM
+        self.A.PER_ITEM = 2
+        try:
+            before = self.A.add(self.dir, item="LANE.1", data=_png(seed=1), caption="b", kind="before", agent="x",
+                                now="2026-10-11T10:00:00Z")["asset"]
+            after = self.A.add(self.dir, item="LANE.1", data=_png(seed=2), caption="a", kind="after", agent="x",
+                               now="2026-10-11T10:05:00Z")["asset"]
+            with self.assertRaisesRegex(self.A.AssetError, "starred or linked"):
+                self.A.add(self.dir, item="LANE.1", data=_png(seed=3), caption="c", kind="screenshot", agent="x",
+                           now="2026-10-11T10:06:00Z", starred={"asset:" + after["id"]})
+            self.assertIn(before["id"], self.A.load(self.dir)["assets"])
+        finally:
+            self.A.PER_ITEM = old
+
+    def test_a_file_changed_on_disk_is_not_served(self):
+        row = self.add(1)["asset"]
+        (self.dir / "assets" / (row["sha256"] + ".png")).write_bytes(_png(seed=99))
+        with self.assertRaisesRegex(self.A.AssetError, "changed on disk"):
+            self.A.read(self.dir, row["id"])
+
+    def test_a_symlinked_assets_folder_is_refused(self):
+        other = self.dir / "elsewhere"
+        other.mkdir()
+        (self.dir / "assets").symlink_to(other)
+        with self.assertRaises(OSError):
+            self.add(1)
+
+
 class SchemaTests(unittest.TestCase):
     def test_well_formed_records_pass(self):
         for r in (question(), question(kind="free"), question(kind="multi"), answer(), message()):
