@@ -6332,6 +6332,29 @@ class PageStagePublishTests(_Live, unittest.TestCase):
         self.assertEqual(body, DASH.encode())
         self.assertIsNone(self.served())   # a preview publishes nothing
 
+    def test_the_main_page_csp_allows_the_published_pages_own_scripts_by_hash_only(self):
+        # Q28 point 4 under 1.31's nonce CSP. Catches: the published page's inline script refused (the dashboard
+        # breaks), a staged page's script allowed before it is published, the page's bytes edited to carry the
+        # nonce (R8), and an allowance wider than the exact reviewed body ('unsafe-inline', a second hash).
+        import base64
+        import hashlib
+        import re
+        body = 'document.body.dataset.pageScript = "ran";'
+        sha = "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+        script_src = lambda h: re.search(r"script-src ([^;]*)", h["Content-Security-Policy"]).group(1).split()
+        self.stage()
+        code, headers, html = self.raw_get("/")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(script_src(headers)), 1)   # staged only: the console's nonce, nothing for its script
+        self.assertEqual(self.publish({"commit": self.C1})[0], 200)
+        code, headers, html = self.raw_get("/")
+        nonce, *rest = script_src(headers)
+        self.assertEqual(rest, [sha])
+        self.assertTrue(nonce.startswith("'nonce-"))
+        self.assertIn(f'<script nonce="{nonce[7:-1]}">', html.decode())   # the console's own carries it
+        page, _ = P.strip(html.decode()).split('<p class="ck-page-source"')   # the page's own bytes, unedited
+        self.assertEqual(page + "</body></html>\n", DASH)
+
     def test_publish_takes_the_staged_commit_and_refuses_a_mismatch_by_name(self):
         # Point 2. Catches: a publish with nothing staged, a stale page's button publishing a newer staging the
         # owner never saw, a bad body accepted, and a staged file left behind to be published twice.

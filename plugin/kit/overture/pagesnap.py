@@ -27,11 +27,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import html as H
 import json
 import os
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 from . import atfile as AF
@@ -256,13 +258,66 @@ def staged_page(state: Path) -> bytes | None:
 
 def render(state: Path, block: str) -> str:
     """The page to serve: the PUBLISHED page (or the kit-only page) with its provenance, any proposal, the console."""
+    return render_with_hashes(state, block)[0]
+
+
+def render_with_hashes(state: Path, block: str) -> tuple[str, list[str]]:
+    """`render`, and the CSP hash sources of the PUBLISHED page's own inline scripts, from the one read.
+
+    1.31 serves GET / under `script-src 'nonce-…'`, and the nonce is only on the console's block, so
+    without these the owner's published page lost its own scripts (Q28: they run once published). Each
+    hash allows exactly one reviewed script body; a script injected into the DOM with any other body is
+    still refused. The page itself is not edited (R8: strip(served) is the committed page, byte for byte).
+    """
     doc, note = load(state, SNAPSHOT)
     staged, staged_note = load(state, STAGED)
     strip = proposal_strip(staged, staged_note)
     if doc is None:
-        return P.inject(kit_page(note), strip + block)
+        return P.inject(kit_page(note), strip + block), []
     line = f'<p class="ck-page-source" role="note">{H.escape(source_line(doc))}</p>\n'
-    return P.inject(page_text(doc["content"]), line + strip + block)
+    page = page_text(doc["content"])
+    return P.inject(page, line + strip + block), inline_script_hashes(page)
+
+
+class _InlineScripts(HTMLParser):
+    """Collects the body of every `<script>` without `src`, as the browser's parser hands it to the script."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bodies: list[str] = []
+        self._body: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag == "script":
+            self._body = None if any(k == "src" for k, _ in attrs) else []
+
+    def handle_data(self, data: str) -> None:
+        if self._body is not None:
+            self._body.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            if self._body is not None:
+                self.bodies.append("".join(self._body))
+            self._body = None
+
+
+def inline_script_hashes(page: str) -> list[str]:
+    """`'sha256-…'` for each inline script in `page`, sorted and distinct; [] when the page cannot be parsed.
+
+    The browser hashes the script's text after its input stream turns CRLF and CR into LF, so this does
+    too. A body this parser splits differently from the browser gets a hash the browser never matches:
+    that script is refused (fails closed), it never widens what runs. A `src` script and an inline event
+    handler (`onclick=`) get nothing: 1.31's CSP still refuses both on this page.
+    """
+    parser = _InlineScripts()
+    try:
+        parser.feed(page.replace("\r\n", "\n").replace("\r", "\n"))
+        parser.close()
+    except Exception:  # noqa: BLE001 — a page the parser cannot read allows no script of its own
+        return []
+    return sorted({"'sha256-" + base64.b64encode(hashlib.sha256(b.encode("utf-8")).digest()).decode("ascii") + "'"
+                   for b in parser.bodies})
 
 
 def kit_page(note: str) -> str:
