@@ -41,6 +41,7 @@
     'lightbulb': [["path",{"d":"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"}],["path",{"d":"M9 18h6"}],["path",{"d":"M10 22h4"}]],
     'user-round-plus': [["path",{"d":"M2 21a8 8 0 0 1 13.292-6"}],["circle",{"cx":"10","cy":"8","r":"5"}],["path",{"d":"M19 16v6"}],["path",{"d":"M22 19h-6"}]],
     'keyboard': [["path",{"d":"M10 8h.01"}],["path",{"d":"M12 12h.01"}],["path",{"d":"M14 8h.01"}],["path",{"d":"M16 12h.01"}],["path",{"d":"M18 8h.01"}],["path",{"d":"M6 8h.01"}],["path",{"d":"M7 16h10"}],["path",{"d":"M8 12h.01"}],["rect",{"width":"20","height":"16","x":"2","y":"4","rx":"2"}]],
+    'x': [["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],
     'image': [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2","ry":"2"}],["circle",{"cx":"9","cy":"9","r":"2"}],["path",{"d":"m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"}]]
 
   };
@@ -955,6 +956,7 @@
       updateInboxButton();
       updateItemButtons();
       updateSectionBadges();   // Overlay a tiny count on any [data-ck-item] section on the host page.
+      refreshUxView();         // an open UX View shows what the view now says
       return data;
     } catch (e) {
       cursor = cursor || {};
@@ -1679,6 +1681,9 @@
     }
     if (e.key === 'g') { shortcutGpfx = now; return; }
     if (e.key === '?') { e.preventDefault(); openShortcutHelp(); return; }
+    if (e.key === 'u' && panelEl.getAttribute('data-open') === 'true' && currentMode === 'item' && currentItem && isUxItem(currentItem)) {
+      e.preventDefault(); openUxView(currentItem); return;
+    }
     if (e.key === '.') {
       e.preventDefault();
       if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
@@ -1720,6 +1725,7 @@
       ['g o', 'Open Portfolio tab'], ['g s', 'Open Favorite tab'], ['g c', 'Open Chat tab'],
       ['g b', 'Close panel (back to board)'],
       ['.',   'Focus the Delegate bar'],
+      ['u',   'Open UX View (on a UX item)'],
       ['j / k', 'Next / previous row'],
       ['Enter / Space', 'Open the focused row'],
       ['?',   'Show this help'],
@@ -4188,6 +4194,10 @@
     box.appendChild(doc);
     const src = config.api + '/visual?id=' + encodeURIComponent(v.id);
     if (v.format === 'html') {
+      const uxOpen = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-visual-ux',
+        'aria-label': 'Open ' + v.title + ' in UX View' }, ['Open in UX View']);
+      uxOpen.addEventListener('click', () => openUxView(v.item || currentItem));
+      box.appendChild(uxOpen);
       // The ONLY way a mock reaches the page: an iframe whose sandbox grants nothing
       // (no scripts, no same-origin, no forms, no popups, no top navigation). The
       // server's CSP on the response says the same, even if the URL is opened alone.
@@ -5904,14 +5914,261 @@
     return [btn, slot];
   }
 
+  // ---- UX View (1.33, UX-VIEW.md "The modal") -------------------------------------------------------
+  // A viewport overlay over the item's HTML visuals: preview at a true width, versions, Generate, Save as
+  // component, and the Claude Design link. It sends the same owner messages step 1 added (a visual request
+  // with purpose 'ux', ux-save, ux-link); it writes no file. Scripts stay off (the sandbox below is empty).
+  const UX_LANES = ['lane-ui', 'lane-ux'];
+  const UX_SIZES = [['mobile', 'Mobile', 375], ['tablet', 'Tablet', 768], ['desktop', 'Desktop', 1280], ['fit', 'Fit', 0]];
+  let uxState = null;
+
+  function isUxItem(id) {
+    const it = items && items[id];
+    if (!it) return false;
+    if (it.ux === true) return true;
+    const lane = laneOf(id);
+    if (!lane) return false;
+    const cfg = laneConfig(lane);
+    return typeof cfg.ux === 'boolean' ? cfg.ux : UX_LANES.indexOf(lane) >= 0;
+  }
+  function uxThread(id) { return ((view && view.threads) || {})[id] || []; }
+  // Everything the modal shows is read from the view: the item's HTML visuals oldest first, its ux-saves,
+  // the newest ux-link, and whether a purpose-ux request is still waiting for a drawing.
+  function uxFacts(id) {
+    const thread = uxThread(id);
+    const visuals = (((view && view.visuals) || {})[id] || []).filter(v => v.format === 'html')
+      .sort((a, b) => (a.ts || '').localeCompare(b.ts || '') || (a.seq || 0) - (b.seq || 0));
+    const saves = thread.filter(m => m.by === 'owner' && m.intent === 'ux-save').sort((a, b) => a.seq - b.seq);
+    const save = saves.length ? saves[saves.length - 1] : null;
+    const reply = save ? thread.filter(m => m.by === 'agent' && m.reply_to === save.id).sort((a, b) => b.seq - a.seq)[0] : null;
+    const links = thread.filter(m => m.by === 'owner' && m.intent === 'ux-link').sort((a, b) => a.seq - b.seq);
+    const item = (items && items[id]) || {};
+    const design = links.length ? links[links.length - 1].url : (typeof item.design === 'string' ? item.design : '');
+    const waiting = ((view && view.waiting_visuals) || []).some(w => w.item === id &&
+      (thread.find(m => m.id === w.id) || {}).purpose === 'ux');
+    return { visuals, save, reply, design: design || '', waiting, linkWaiting: ((view && view.waiting_ux) || [])
+      .some(w => w.item === id && w.intent === 'ux-link') };
+  }
+  function uxStatus(f, idx) {
+    const n = f.visuals.length;
+    if (!n) return f.waiting ? 'Asked an agent · waiting for a session…'
+      : 'No version yet. Generate one, or describe what you want.';
+    const cur = f.visuals[idx], v = 'v' + (idx + 1);
+    const savedIdx = f.save ? f.visuals.findIndex(x => x.id === f.save.visual_id) : -1;
+    const savedName = savedIdx >= 0 ? 'v' + (savedIdx + 1) : 'an earlier version';
+    if (f.waiting) return 'Asked an agent for another version · waiting for a session…';
+    if (f.save && f.save.visual_id === cur.id) {
+      return f.reply ? 'Saved ' + v + ' · ' + String(f.reply.text || '').split('\n')[0].slice(0, 140)
+        : 'Saved ' + v + ' · waiting for the steward to write components/' + (uxState ? uxState.item : '') + '.md';
+    }
+    if (f.save) return 'Viewing ' + v + ' · the saved component is ' + savedName;
+    return v + ' of ' + n + ' · not saved';
+  }
+  function uxSizePref() {
+    try { const s = localStorage.getItem('ck-ux-size'); if (UX_SIZES.some(x => x[0] === s)) return s; } catch (_e) { /* private mode */ }
+    return 'desktop';
+  }
+
+  function openUxView(itemId) {
+    if (document.getElementById('ck-ux-view')) return;
+    const opener = document.activeElement;
+    const st = uxState = { item: itemId, idx: -1, size: uxSizePref(), notesOpen: false, busy: false };
+    const itemTitle = (items && items[itemId] && items[itemId].title) || '';
+    const titleId = 'ck-ux-title';
+    const dlg = el('div', { id: 'ck-ux-view', className: 'ck-ux-view', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': titleId });
+    const box = el('div', { className: 'ck-ux-box' });
+    const closeBtn = el('button', { type: 'button', className: 'ck-btn ck-ux-close', 'aria-label': 'Close UX View' }, [icon('x') || '✕']);
+    box.appendChild(el('div', { className: 'ck-ux-head' }, [
+      el('h2', { id: titleId }, ['UX View · ' + itemId + (itemTitle ? ' ' + itemTitle : '')]), closeBtn]));
+    const prev = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Previous version' }, ['◂']);
+    const next = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Next version' }, ['▸']);
+    const vlabel = el('span', { className: 'ck-ux-vlabel', 'aria-live': 'polite' });
+    const sizes = el('div', { className: 'ck-ux-sizes', role: 'radiogroup', 'aria-label': 'Preview width' });
+    const radios = {};
+    for (const [key, label, px] of UX_SIZES) {
+      const r = el('button', { type: 'button', role: 'radio', className: 'ck-btn ck-btn-quiet ck-ux-size',
+        'aria-checked': key === st.size ? 'true' : 'false', title: px ? px + 'px wide' : 'Fill the space' }, [label]);
+      r.addEventListener('click', () => { st.size = key; try { localStorage.setItem('ck-ux-size', key); } catch (_e) { /* ok */ } paint(); });
+      radios[key] = r; sizes.appendChild(r);
+    }
+    box.appendChild(el('div', { className: 'ck-ux-bar' }, [prev, vlabel, next, sizes]));
+    const stage = el('div', { className: 'ck-ux-stage' });
+    const scaleNote = el('div', { className: 'ck-ux-scale ck-muted' });
+    const side = el('aside', { className: 'ck-ux-side', 'aria-label': 'Component' });
+    const body = el('div', { className: 'ck-ux-body' }, [el('div', { className: 'ck-ux-previewcol' }, [stage, scaleNote]), side]);
+    box.appendChild(body);
+    const status = el('p', { className: 'ck-ux-status', role: 'status', 'aria-live': 'polite' });
+    box.appendChild(status);
+    const err = el('p', { className: 'ck-error-msg ck-ux-err', role: 'alert', hidden: 'hidden' });
+    box.appendChild(err);
+    const notes = el('textarea', { className: 'ck-textarea ck-ux-notes', rows: '3', hidden: 'hidden',
+      'aria-label': 'Notes for the agent', placeholder: 'What should change? Name design artifacts to use, e.g. buttons/primary.html' });
+    box.appendChild(notes);
+    const genFace = el('button', { type: 'button', className: 'ck-btn ck-split-main' }, ['Generate']);
+    const genMore = el('button', { type: 'button', className: 'ck-btn ck-split-more', 'aria-haspopup': 'menu',
+      'aria-expanded': 'false', 'aria-label': 'More ways to generate' }, [icon('chevron-down') || '▾']);
+    const menu = el('div', { className: 'ck-ux-menu', role: 'menu', hidden: 'hidden' });
+    const saveBtn = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Save as component']);
+    box.appendChild(el('div', { className: 'ck-ux-foot' }, [
+      el('span', { className: 'ck-split ck-ux-gen' }, [genFace, genMore, menu]), saveBtn]));
+    dlg.appendChild(box);
+
+    function paint() {
+      const f = uxFacts(itemId);
+      const n = f.visuals.length;
+      if (st.idx < 0 || st.idx >= n) st.idx = n - 1;          // newest by default; the owner's walk is kept
+      const cur = n ? f.visuals[st.idx] : null;
+      const px = (UX_SIZES.find(x => x[0] === st.size) || [])[2] || 0;
+      for (const k of Object.keys(radios)) radios[k].setAttribute('aria-checked', k === st.size ? 'true' : 'false');
+      vlabel.textContent = n ? 'v' + (st.idx + 1) + ' of ' + n + (cur.agent ? ' · by ' + cur.agent : '') + ' · ' + relTime(cur.ts) : 'No versions';
+      prev.disabled = !(n && st.idx > 0); next.disabled = !(n && st.idx < n - 1);
+      stage.textContent = '';
+      if (cur) {
+        const frame = document.createElement('iframe');
+        frame.setAttribute('sandbox', '');                        // no scripts, forms, popups or same-origin
+        frame.setAttribute('referrerpolicy', 'no-referrer');
+        frame.setAttribute('title', (cur.title || itemId) + ' v' + (st.idx + 1) + (px ? ', ' + px + 'px' : ', fit'));
+        frame.className = 'ck-ux-frame';
+        frame.src = config.api + '/visual?id=' + encodeURIComponent(cur.id);
+        stage.appendChild(frame);
+        const fit = () => {
+          const w = stage.clientWidth || 1, s = px ? Math.min(1, w / px) : 1;
+          frame.style.width = px ? px + 'px' : '100%';
+          frame.style.height = (stage.clientHeight / s) + 'px';
+          frame.style.transform = s < 1 ? 'scale(' + s + ')' : '';
+          const name = (UX_SIZES.find(x => x[0] === st.size) || ['', ''])[1];
+          scaleNote.textContent = px ? name + ' · ' + px + 'px · ' + Math.round(s * 100) + '%' : 'Fit · 100%';
+        };
+        fit();
+        if (typeof ResizeObserver === 'function') {
+          if (st.ro) st.ro.disconnect();
+          st.ro = new ResizeObserver(fit); st.ro.observe(stage);
+        }
+      } else {
+        stage.appendChild(el('p', { className: 'ck-muted ck-ux-empty' }, ['Nothing drawn yet.']));
+        scaleNote.textContent = '';
+      }
+      status.textContent = uxStatus(f, st.idx);
+      // Component panel + settings
+      side.textContent = '';
+      side.appendChild(el('h3', { className: 'ck-ux-h3' }, ['Component']));
+      const savedIdx = f.save ? f.visuals.findIndex(x => x.id === f.save.visual_id) : -1;
+      side.appendChild(el('p', { className: 'ck-muted' }, [f.save
+        ? 'Saved: ' + (savedIdx >= 0 ? 'v' + (savedIdx + 1) : 'an earlier version') + ' · components/' + itemId + '.md'
+        : 'Not saved yet. Save writes components/' + itemId + '.md by a pull request.']));
+      const det = el('details', { className: 'ck-ux-settings' }, [el('summary', {}, ['Settings'])]);
+      const linkId = 'ck-ux-link';
+      const link = el('input', { type: 'url', id: linkId, className: 'ck-input', value: f.design,
+        placeholder: 'https://claude.ai/design/p/…', autocomplete: 'off' });
+      const linkSave = el('button', { type: 'button', className: 'ck-btn' }, [f.design ? 'Update link' : 'Link design']);
+      const unlink = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', hidden: f.design ? null : 'hidden' }, ['Unlink']);
+      det.appendChild(el('label', { for: linkId, className: 'ck-field-label' }, ['Claude Design link']));
+      det.appendChild(link);
+      det.appendChild(el('div', { className: 'ck-actions' }, [linkSave, unlink]));
+      det.appendChild(el('p', { className: 'ck-muted' }, [f.linkWaiting ? 'Link sent · waiting for the steward to record it.'
+        : 'The console never opens or fetches this link. The agent reads the design with your login.']));
+      det.appendChild(el('p', { className: 'ck-muted' }, ['Scripts in components: off. Switching them on arrives in a later step.']));
+      const sendLink = async url => {
+        err.hidden = true;
+        const r = await apiPost('/message', { item: itemId, intent: 'ux-link', url, text: url ? 'Link the Claude Design project' : 'Unlink the Claude Design project' }, 'ux-link-' + itemId);
+        if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; } else announce(url ? 'Design linked.' : 'Design unlinked.');
+      };
+      linkSave.addEventListener('click', () => sendLink(link.value.trim()));
+      unlink.addEventListener('click', () => sendLink(''));
+      if (st.settingsOpen) det.open = true;
+      det.addEventListener('toggle', () => { st.settingsOpen = det.open; });
+      side.appendChild(det);
+      // Footer
+      const asked = f.waiting;
+      genFace.disabled = st.busy || asked;
+      genFace.textContent = asked ? 'Requested' : 'Generate';
+      saveBtn.disabled = st.busy || !cur || !!(f.save && cur && f.save.visual_id === cur.id);
+      saveBtn.textContent = cur && st.idx < n - 1 ? 'Save v' + (st.idx + 1) + ' as component' : 'Save as component';
+      menu.textContent = '';
+      const entries = [
+        ['Generate with notes…', 'Describe what to change first', false, () => { st.notesOpen = true; notes.hidden = false; notes.focus(); }],
+        ['Generate from design', f.design ? 'Start from the linked Claude Design project' : 'Add a Design link first (Settings)', !f.design, () => generate(true)]
+      ];
+      for (const [label, hint, off, fn] of entries) {
+        const b = el('button', { type: 'button', role: 'menuitem', className: 'ck-more-item', disabled: off ? '' : null, title: hint }, [label,
+          el('span', { className: 'ck-muted ck-action-hint' }, [hint])]);
+        b.addEventListener('click', () => { closeMenu(); fn(); });
+        menu.appendChild(b);
+      }
+    }
+    function closeMenu() { menu.hidden = true; genMore.setAttribute('aria-expanded', 'false'); }
+    genMore.addEventListener('click', () => {
+      const open = menu.hidden;
+      menu.hidden = !open; genMore.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) { const first = menu.querySelector('button:not([disabled])'); if (first) first.focus(); }
+    });
+    menu.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); genMore.focus(); } });
+    async function generate(fromDesign) {
+      err.hidden = true;
+      const typed = notes.value.trim();
+      const text = typed || ('Draw the component for ' + itemId + (itemTitle ? ' (' + itemTitle + ')' : '') + '.');
+      const body = { item: itemId, intent: 'visual', purpose: 'ux', text };
+      if (fromDesign) body.from = 'design';
+      st.busy = true; paint();
+      const r = await apiPost('/message', body, 'ux-gen-' + itemId);
+      st.busy = false;
+      if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+      else { notes.value = ''; notes.hidden = true; announce('Asked an agent to draw it.'); }
+      paint();
+    }
+    genFace.addEventListener('click', () => generate(false));
+    saveBtn.addEventListener('click', async () => {
+      const f = uxFacts(itemId), cur = f.visuals[st.idx];
+      if (!cur) return;
+      err.hidden = true; st.busy = true; paint();
+      const r = await apiPost('/message', { item: itemId, intent: 'ux-save', visual_id: cur.id,
+        text: 'Save v' + (st.idx + 1) + ' of ' + (cur.title || itemId) + ' as components/' + itemId + '.md' }, 'ux-save-' + itemId + '-' + cur.id);
+      st.busy = false;
+      if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+      else announce('Saved v' + (st.idx + 1) + '. The steward will write the component.');
+      paint();
+    });
+    prev.addEventListener('click', () => { st.idx = Math.max(0, st.idx - 1); paint(); });
+    next.addEventListener('click', () => { st.idx += 1; paint(); });
+    st.repaint = paint;
+    const teardownA11y = (() => { document.body.appendChild(dlg); return attachDialogAccessibility(dlg, { returnTo: opener }); })();
+    st.close = () => {
+      if (st.ro) st.ro.disconnect();
+      closeMenu();
+      panelEl.inert = panelEl.getAttribute('data-open') !== 'true';
+      if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      teardownA11y();
+      uxState = null;
+    };
+    closeBtn.addEventListener('click', st.close);
+    dlg.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); st.close(); }
+      else if ((e.key === '[' || e.key === ']') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { (e.key === '[' ? prev : next).click(); }
+    });
+    dlg.addEventListener('click', e => { if (e.target === dlg) st.close(); });
+    panelEl.inert = true;                                         // the console behind the modal is not reachable
+    paint();
+    requestAnimationFrame(() => closeBtn.focus());
+  }
+  // The live loop re-renders the panel; keep an open modal current with what the view now says.
+  function refreshUxView() { if (uxState && uxState.repaint && document.getElementById('ck-ux-view')) uxState.repaint(); }
+
   function renderItemTools(itemId) {
     const wrap = el('div', { className: 'ck-tools' });
     const answersBtn = el('button', { className: 'ck-btn', type: 'button' }, ['Answers']);
     answersBtn.addEventListener('click', () => showSheet(itemId, null));
     const [forkBtn, slot] = disclosure('⑂ Deliberate (full round)', 'fork-' + itemId,
       () => renderForkForm(itemId, null));
-    const [visBtn, visSlot] = disclosure('◫ Request a visual…', 'vis-' + itemId, () => renderVisualForm(itemId));
+    let [visBtn, visSlot] = disclosure('◫ Request a visual…', 'vis-' + itemId, () => renderVisualForm(itemId));
     visBtn.setAttribute('aria-label', 'Request a visual of ' + itemId);
+    if (isUxItem(itemId)) {
+      // UX View (1.33): on a UX item the modal covers requesting and generating.
+      visBtn = el('button', { className: 'ck-btn', type: 'button', 'aria-keyshortcuts': 'u',
+        'aria-label': 'Open UX View for ' + itemId + ': preview, versions, save' }, ['\u25eb UX View']);
+      visBtn.addEventListener('click', () => openUxView(itemId));
+      visSlot = el('div');
+    }
     // Launch Idea — the headline. Opens a right-rail panel that walks the operator
     // through framing + grilling + ticket spawning. Entry-point for the "starting a thing"
     // flow; the strategist's framing — ideation as entry, rulings and code as exit.

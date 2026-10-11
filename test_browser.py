@@ -104,6 +104,8 @@ class _Handler(BaseHTTPRequestHandler):
     view_multiline = False  # /view carries a thread whose messages span several lines (0.8.4)
     view_working = False  # ...and the cursor says an agent is working on it
     view_listening = None  # the cursor's `listening`; None leaves it out, as a pre-0.6.0 server
+    view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
+    posts: list = []    # the JSON bodies POSTed to /api/message
     board: object = None   # what /api/board answers; None is 404, as a project with no board()
     board_status = 200
     board_hits = 0
@@ -119,11 +121,19 @@ class _Handler(BaseHTTPRequestHandler):
             status = 503 if _Handler.view_fails else 200
             payload = dict(VIEW_MULTILINE if _Handler.view_multiline else VIEW_AGENT2 if _Handler.view_agent == 2
                            else VIEW_AGENT if _Handler.view_agent else VIEW)
+            if _Handler.view_ux:
+                payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "ux": True}}
+                vs = [{"id": f"v{n}", "seq": 10 + n, "ts": f"2026-10-11T0{n}:00:00Z", "item": "LANE.1", "request": "rq",
+                       "format": "html", "title": "Save button", "text": f"Version {n}", "path": f"p{n}.html",
+                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"} for n in (1, 2)]
+                payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
             if _Handler.view_working:  # an agent has marked this item id as in hand
                 payload["cursor"] = {"working": {_Handler.view_working: "2026-09-29T10:00:00Z"}}
             if _Handler.view_listening is not None:  # the watch heartbeat, as the server judged it
                 payload["cursor"] = {**payload.get("cursor", {}), "listening": _Handler.view_listening}
             body, ctype = json.dumps(payload), "application/json"
+        elif self.path.startswith("/api/visual"):
+            body, ctype = "<!doctype html><title>mock</title><h1>mock</h1>", "text/html"
         elif self.path.startswith("/api/board"):
             _Handler.board_hits += 1
             status = 404 if _Handler.board is None else _Handler.board_status
@@ -135,6 +145,17 @@ class _Handler(BaseHTTPRequestHandler):
         data = body.encode()
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        _Handler.posts.append(json.loads(raw or b"{}"))
+        data = b'{"record": {}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -201,6 +222,7 @@ class DockTests(unittest.TestCase):
         cls.server.shutdown()
 
     def setUp(self):
+        _Handler.view_ux, _Handler.posts = False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
@@ -586,6 +608,77 @@ SIGNATURE = """() => Array.from(document.querySelectorAll('%s')).map(e => [
   Array.from(e.classList).filter(c => c.startsWith('s-')).join(' ')])""" % LIVE_MARKS
 COUNT_UPDATES = """window.__boardChanged = 0;
 document.addEventListener('ck:board-updated', e => { window.__boardChanged += e.detail.changed; });"""
+
+
+class UxViewTests(unittest.TestCase):
+    """UX View (1.33): the modal over an item's HTML visuals, against the stub server."""
+
+    @classmethod
+    def setUpClass(cls):
+        DockTests.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        DockTests.tearDownClass.__func__(cls)
+
+    setUp = DockTests.setUp
+    _page = DockTests._page
+
+    def _open(self, width=1280):
+        _Handler.view_ux = True
+        page = self._page("chromium", width)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.evaluate("window.location.hash = 'item=LANE.1'")
+        page.wait_for_selector("text=UX View")
+        page.get_by_role("button", name="Open UX View for LANE.1").click()
+        page.wait_for_selector("#ck-ux-view")
+        return page
+
+    def test_ux_item_gets_the_modal_with_versions_sizes_and_a_sandboxed_preview(self):
+        page = self._open()
+        self.assertEqual(page.locator("#ck-ux-view[role=dialog][aria-modal=true]").count(), 1)
+        self.assertIn("v2 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        self.assertEqual(page.locator(".ck-ux-frame").get_attribute("sandbox"), "")
+        self.assertIn("not saved", page.locator(".ck-ux-status").inner_text())
+        page.get_by_role("button", name="Previous version").click()
+        self.assertIn("v1 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        page.get_by_role("radio", name="Mobile").click()
+        self.assertIn("375px", page.locator(".ck-ux-scale").inner_text())
+        self.assertTrue(page.evaluate("document.querySelector('.ck-panel').inert"))
+        page.keyboard.press("Escape")
+        self.assertEqual(page.locator("#ck-ux-view").count(), 0)
+
+    def test_save_and_generate_send_the_owner_messages_step_one_defined(self):
+        page = self._open()
+        page.get_by_role("button", name="Save as component").click()
+        page.wait_for_timeout(300)
+        save = [m for m in _Handler.posts if m.get("intent") == "ux-save"]
+        self.assertEqual([(m["item"], m["visual_id"]) for m in save], [("LANE.1", "v2")])
+        page.get_by_role("button", name="Generate", exact=True).click()
+        page.wait_for_timeout(300)
+        gen = [m for m in _Handler.posts if m.get("intent") == "visual"]
+        self.assertEqual([(m["item"], m["purpose"]) for m in gen], [("LANE.1", "ux")])
+        self.assertNotIn("from", gen[0])
+
+    def test_generate_from_design_is_disabled_until_a_link_is_set(self):
+        page = self._open()
+        page.get_by_role("button", name="More ways to generate").click()
+        self.assertTrue(page.get_by_role("menuitem", name="Generate from design").is_disabled())
+        page.keyboard.press("Escape")
+        page.locator(".ck-ux-settings summary").click()
+        page.fill("#ck-ux-link", "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1")
+        page.get_by_role("button", name="Link design").click()
+        page.wait_for_timeout(300)
+        link = [m for m in _Handler.posts if m.get("intent") == "ux-link"]
+        self.assertEqual([m["url"] for m in link], ["https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"])
+
+    def test_full_screen_and_no_overflow_on_a_phone(self):
+        page = self._open(width=375)
+        box = page.locator(".ck-ux-box").bounding_box()
+        self.assertEqual(round(box["width"]), 375)
+        self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
 
 
 class LiveBoardTests(unittest.TestCase):
