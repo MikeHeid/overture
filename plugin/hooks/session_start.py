@@ -355,6 +355,31 @@ def _entry(project: Path) -> dict | None:
     return None if e is None else checked(e)
 
 
+ROLE_ENV = "CLAUDE_PLUGIN_OPTION_ROLE"     # the plugin's Machine role setting; overture/registry.py (D11)
+
+
+def machine_role() -> str | None:
+    """This machine's role: "worker" if the registry or the plugin setting says so, else "steward", else None.
+    A worker wins. Never raises: an unreadable registry is no role here (the hook has its own note for that)."""
+    found = []
+    try:
+        raw = _read_regular(_registry_path(), MAX_REGISTRY)
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else {}
+        found.append(doc.get("role") if isinstance(doc, dict) else None)
+    except (Unsafe, OSError, UnicodeDecodeError, ValueError):
+        pass
+    found.append((os.environ.get(ROLE_ENV) or "").strip().lower() or None)
+    found = [v for v in found if v in ("steward", "worker")]
+    return "worker" if "worker" in found else ("steward" if found else None)
+
+
+def worker_note(name: str) -> str:
+    return (f"Owner console steward: this machine's role is `worker`, so no session here is the steward, even one "
+            f"named {name}; the steward runs on another machine. Post questions to the console with the console-ask "
+            f"skill, and never run `watch`, `synced` or the fold: they are refused here. AskUserQuestion is blocked "
+            f"in this session.")
+
+
 def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None, bool]:
     """The steward note for this session (0.8.3), and whether this session is the steward.
 
@@ -366,6 +391,8 @@ def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None
         return None, True
     if me is None:
         me = os.environ.get(AGENT_ENV, "")
+    if is_name(me) and me == name and machine_role() == "worker":
+        return worker_note(name), False
     if is_name(me) and me == name:
         return (f"Owner console steward: this session is the steward, {name}. It alone runs `watch`, `synced` "
                 f"and the fold for this console. It may ask the owner live (AskUserQuestion), but mirrors each "

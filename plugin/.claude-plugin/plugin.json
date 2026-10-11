@@ -27,6 +27,13 @@
       "required": false,
       "sensitive": false
     },
+    "role": {
+      "type": "string",
+      "title": "Machine role (steward or worker)",
+      "description": "Optional. Set to worker on a machine where no session may be the master agent: /overture:as <steward name> is refused there, and a session that is started with that name is still treated as a worker. Set to steward (or leave empty) where the steward runs. The same setting can be made with `agent.py role`; if either says worker, it is a worker.",
+      "required": false,
+      "sensitive": false
+    },
     "steward": {
       "type": "string",
       "title": "Master agent name (the steward)",
