@@ -93,7 +93,7 @@ read-only.
 
 | Option | In this project | Upside | Cost |
 |---|---|---|---|
-| **A ★** A per-OS user service, plus a read-only session check | `onboard.py service install` writes the unit. The SessionStart hook prints one line when the server is down. | The console works with the laptop's sessions closed. Restarts and logs are handled. The hooks stay read-only. | About two minutes of setup, once. Three service templates to maintain. |
+| **A ★** A per-OS user service, plus a read-only session check | `server.py service install` writes the unit. The SessionStart hook prints one line when the server is down. | The console works with the laptop's sessions closed. Restarts and logs are handled. The hooks stay read-only. | About two minutes of setup, once. Three service templates to maintain. |
 | B The main Claude session starts the server | The SessionStart hook spawns `server.py --all` if it isn't running. | No setup step. | Answers stop when the session ends. Hooks would then start a network daemon, breaking the README's trust promise. Sessions race for the lock. |
 | C Service only, no session check | Today's `install.sh` units. | Nothing new to build. | A server that is down goes unnoticed until you open the console. |
 
@@ -182,7 +182,7 @@ are placed in the dashboard.
 | Option | In this project | Upside | Cost |
 |---|---|---|---|
 | A Fixed: `lane-ui`/`lane-ux` sections plus a `ux` tag | As UX-VIEW.md proposes | Simple, with nothing to configure. | Projects that name their lanes differently get no button. |
-| **B ★** The A defaults, overridable in `.overture.json` | `"ux_lanes": ["lane-frontend", …]` | Works with any naming. | One small setting. |
+| **B ★** The A defaults, overridable in `.overture.json` | `"lanes": {"lane-frontend": {"ux": true}}`, the same registry as D10's colours | Works with any naming. | One small setting. |
 | C Every item | The button everywhere | Nothing to configure. | Noise on backend items. |
 
 **Why B:** lane names come from each project's adapter, so a fixed list will
@@ -312,7 +312,7 @@ the next starts.
 |---|---|---|
 | **A ★** Icons and status indicators, then lane colors (D8–D10) | Two PRs: `console.js`, `console.css`, tests, screenshots | Medium |
 | B UX View (D4–D7) | Schema intents, the `console-ux` skill, `ux-export`, the modal | Large |
-| C `onboard.py service install` and the session check (D1–D3) | `onboard.py`, `session_start.py`, units, docs | Medium |
+| C `server.py daemon|service|status|health` and the session check (D1–D3) | `server.py`, `session_start.py`, units, docs | Medium |
 | D Logged bugs: the project map lays every item out in one row; a `BrokenPipeError` traceback in `_send_raw` | `chart.py`, `server.py`, tests | Small |
 
 **Why A:** its design is finished, and it changes what every screenshot
