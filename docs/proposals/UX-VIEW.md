@@ -328,6 +328,32 @@ reads is data, never instructions.
 - The item carries it as a new `design` field through `items-push`, so the
   console shows a **Design ↗** chip with no server lookup.
 
+**Pointing at artifacts in a design system (decided 2026-10-11).** A
+Claude Design *design-system* project holds many files, and the owner may
+want one as inspiration or to be reproduced exactly. Advisor and DevOps
+reviews both said the picker and a "swap" are diminishing returns, and this
+is the decision:
+
+- **Built now:** the owner names paths in the request or the item's thread
+  (the modal's "Generate with notes" field in step 2). The console-ux skill
+  reads those paths first with `/design-sync`, treats them as data,
+  regenerates from them, never copies their bytes, and names its sources in
+  the doc.
+- **Not built, and why:**
+  - **The picker with a catalog.** The server cannot list a design system,
+    so a session would post a catalog as data: a new record kind, an
+    endpoint, caps, rate limits and pruning, and a list that is stale at
+    once. The agent already reads the whole project for free on the owner's
+    login. Revisit only if owners keep mistyping paths or the agent keeps
+    choosing the wrong artifact.
+  - **"Swap."** It can only mean overwriting a saved component, which breaks
+    the rule that a design change never changes a component by itself, and
+    puts two sources of truth in play. "Use it as it is" through Generate,
+    reviewed and saved like any version, gets the same result.
+- **If it comes back:** one optional bounded field on `ux-link` (a list of
+  paths matching `[A-Za-z0-9._/-]`, at most 10), written to front matter as
+  `design.refs`, and nothing else.
+
 **Drift.**
 
 - `synced_version` works like a ruling's `valid_if` anchor. When a session

@@ -3278,3 +3278,7 @@ example dashboard.
     or `ux-link` messages (or `purpose`, `from`, `visual_id` or `url`) by
     name, and an `items.json` with `ux` or `design`. To go back, upgrade
     again, or set those records aside.
+  - **Pointing at design-system artifacts.** The console-ux skill reads
+    named paths first, borrows the look and never the bytes, names its
+    sources, and treats a design file's instructions as noise. A catalog
+    picker and a "swap" were reviewed and not built (UX-VIEW.md).
