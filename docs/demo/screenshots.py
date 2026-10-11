@@ -342,6 +342,17 @@ class Demo:
             for n, t, st, d, ck, c, m in prs]}
         self.agent("/prs", body, "steward")
 
+        # 1.32: screenshots agents posted on items (FEED-ASSETS.md). Real ones: the tab bar before and
+        # after the icons PR, and a UX component rendered by tools/ux_check.py.
+        shots = HERE / "assets"
+        def asset(item, name, caption, kind, who, **extra):
+            data = base64.b64encode((shots / name).read_bytes()).decode()
+            self.agent("/asset", {"item": item, "content_b64": data, "caption": caption, "kind": kind, **extra}, who)
+        asset("UI-3", "plan-picker-375.png", "Plan picker at 375px, dark, scripts off", "screenshot", "agent-4")
+        asset("UI-1", "tabs-before.png", "Tab bar before icons", "before", "agent-4")
+        asset("UI-1", "tabs-after.png", "Tab bar with icons: five tabs fit one line at 515px", "after", "agent-4",
+              pr=214)
+
         # The steward is watching and synced a minute ago.
         self.agent("/cursor", {"last_synced_at": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
                    "steward")
@@ -506,6 +517,21 @@ def capture(demo: Demo) -> list[str]:
                 pg.wait_for_timeout(300)
             panel(pg, "feature-stale")
         shot("feature-stale", stale)
+
+        def feed_assets(pg):
+            pg.locator("#ck-tab-feed").click()
+            pg.wait_for_timeout(900)
+            pg.select_option("#ck-feed-kind", "asset")
+            pg.wait_for_timeout(1200)
+            panel(pg, "feature-assets")
+        shot("feature-assets", feed_assets)
+
+        def asset_viewer(pg):
+            item(pg, "UI-1")
+            pg.locator(".ck-assets-fold .ck-asset-thumb").last.click()
+            pg.wait_for_timeout(900)
+            pg.screenshot(path=str(OUT / "feature-asset-viewer.png"))
+        shot("feature-asset-viewer", asset_viewer)
 
         def tickets_tab(pg):
             pg.locator("#ck-tab-tickets").click()

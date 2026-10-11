@@ -178,6 +178,19 @@ has a `lane-ui` or `lane-ux` segment, it is a **UX item** and the request is a
 component. Use the **console-ux** skill for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
 woke you.
 
+**Show your work** (1.32, FEED-ASSETS.md F3). When anything you change is
+visible (a UX item, a page, a UI fix), post a **before** and an **after**
+screenshot on its item, from your own browser run (Playwright, or
+`KIT/tools/ux_check.py`):
+
+    A asset ITEM --file before.png --caption "<what it looked like>" --kind before
+    A asset ITEM --file after.png --caption "<what changed, in one line>" --kind after [--pr N]
+
+- **Formats:** PNG, JPEG, WebP or GIF; at most 2 MiB for a still and 8 MiB
+  for a GIF.
+- **Don't screenshot backend-only changes:** there is nothing to see.
+- **Linking a PR** with `--pr` keeps the asset when space runs short.
+
 ## 4b. Answer each scan for a resolve
 
 Each entry of `todo.scans` is the owner pressing **Scan for a resolve** on a

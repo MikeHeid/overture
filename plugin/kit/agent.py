@@ -33,6 +33,11 @@
                                                 answer an owner's visual request: the server stores FILE
                                                 and its doc in its STATE dir (never in the project) and
                                                 shows it on the item
+    agent.py --state DIR asset ITEM --file IMAGE --caption TEXT [--kind before|after|screenshot|recording]
+                               [--qid QID] [--pr N] [--ticket T-ID]
+                                                post a screenshot or recording on an item (1.32): PNG,
+                                                JPEG, WebP or GIF, judged by its bytes; it shows in the
+                                                Feed and on the item. The server stores it in STATE.
     agent.py --state DIR visual-export --project WORKTREE [--visual ID ...]
                                                 copy stored visuals (default: all; identical files are
                                                 skipped) into WORKTREE/<visuals_dir>/ and regenerate its
@@ -132,6 +137,7 @@ environment as OVERTURE_SESSION. This session's name is then, in order:
 """
 
 import argparse
+import base64
 import datetime as dt
 import json
 import os
@@ -428,6 +434,7 @@ def _call(state: Path, method: str, path: str, body=None, agent: str | None = No
 
 
 READ_CAP = 1 << 20  # a transcript or visual file larger than this is refused before it is sent
+ASSET_READ_CAP = 8 << 20  # 1.32: an asset (a GIF at most 8 MiB); the server applies the per-format limits
 
 
 def _read_text(path: Path, what: str) -> str | None:
@@ -1226,6 +1233,17 @@ def main(argv=None) -> int:
     s.add_argument("--file", type=Path, required=True)
     s.add_argument("--doc", type=Path, required=True)
     s.add_argument("--title", required=True)
+    s = sub.add_parser("asset", description=(
+        "Post a screenshot or recording on an item (1.32, FEED-ASSETS.md). PNG, JPEG, WebP or GIF, judged by "
+        "the file's own bytes; at most 2 MiB for a still and 8 MiB for a GIF. It shows in the owner's Feed "
+        "and on the item. Post a `before` and an `after` for every visible change to a UX item."))
+    s.add_argument("item")
+    s.add_argument("--file", type=Path, required=True)
+    s.add_argument("--caption", required=True, help="one line, at most 200 characters")
+    s.add_argument("--kind", default="screenshot", choices=("before", "after", "screenshot", "recording"))
+    s.add_argument("--qid", help="the question it illustrates")
+    s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
+    s.add_argument("--ticket", help="the ticket it shows")
     s = sub.add_parser("visual-export", description=(
         "Copy stored visuals into PROJECT/<visuals_dir>/ and regenerate its INDEX.md, to land by PR. PROJECT "
         "must be the top of your own git work tree (visuals_dir is a path from the repository's top), never a "
@@ -1596,6 +1614,24 @@ def _run(a, bell: Path) -> int:
         return _call(a.state, "POST", "/visual", {"request": a.request, "format": a.format, "title": a.title,
                                                   "content": content, "text": doc,
                                                   "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+    if a.cmd == "asset":
+        try:
+            data = R.read_regular(a.file, ASSET_READ_CAP + 1)
+        except R.RegistryError as e:
+            print(f"asset {a.file}: {e}", file=sys.stderr)
+            return 1
+        if data is None:
+            print(f"asset {a.file} does not exist", file=sys.stderr)
+            return 1
+        if len(data) > ASSET_READ_CAP:
+            print(f"asset {a.file} is over {ASSET_READ_CAP} bytes; refused, not cut", file=sys.stderr)
+            return 1
+        body = {"item": a.item, "content_b64": base64.b64encode(data).decode("ascii"), "caption": a.caption,
+                "kind": a.kind, "nonce": secrets.token_urlsafe(12)}
+        for k in ("qid", "pr", "ticket"):
+            if getattr(a, k) is not None:
+                body[k] = getattr(a, k)
+        return _call(a.state, "POST", "/asset", body, agent=a.agent)
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":

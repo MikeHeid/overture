@@ -2879,6 +2879,9 @@
       // create-ticket form. Opened by Launch Idea when it spawns tickets; opened by
       // the operator for ad-hoc bugs / research notes on this item.
       body.appendChild(renderTicketsFold(itemId));
+      // 1.32: the screenshots and recordings agents posted on this item (FEED-ASSETS.md).
+      const assetsFold = renderAssetsFold(itemId);
+      if (assetsFold) body.appendChild(assetsFold);
       // Active agents on this item : a fold listing every named agent currently
       // holding a working mark on this item, with the time it was marked. Reads
       // cursor.working_by (no new server call). Hidden when nothing is active.
@@ -7017,7 +7020,7 @@
 
   const FEED_LABEL = { question: 'Question asked', answer: 'Answered', lock: 'Locked', reanchor: 'Re-anchored',
     fork: 'Deliberation requested', process: 'Answers are in', chat: 'Chat', reply: 'Agent replied', note: 'Your note',
-    transcript: 'Roar transcript', visual: 'Visual' };
+    transcript: 'Roar transcript', visual: 'Visual', asset: 'Screenshots' };
   const feedState = { kind: '', item: '', events: null, next: null, error: null, seq: -1, key: '' };
 
   function feedWords(ev) {
@@ -7038,6 +7041,12 @@
 
   async function loadFeed(listEl, append) {
     const key = feedState.kind + '|' + feedState.item;
+    // 1.32: screenshots live in view.assets (not the store), so the Screenshots filter needs no fetch.
+    if (feedState.kind === 'asset') {
+      Object.assign(feedState, { events: [], next: null, seq: view ? view.seq : -1, key: key, error: null });
+      if (document.contains(listEl)) fillFeedList(listEl);
+      return;
+    }
     let url = config.api + '/feed?limit=50';
     if (feedState.kind) url += '&kind=' + encodeURIComponent(feedState.kind);
     if (feedState.item) url += '&item=' + encodeURIComponent(feedState.item);
@@ -7357,15 +7366,207 @@
     return d.getTime();
   }
 
+  // ---- Assets in the Feed (1.32, FEED-ASSETS.md) -------------------------------------------
+  // Screenshots and recordings agents post on an item. The rows come from view.assets (owner
+  // door only); the bytes from /api/asset, same origin, served by their magic bytes.
+  function assetRows(itemFilter) {
+    const a = (view && view.assets) || {};
+    const rows = itemFilter ? ((a.by_item || {})[itemFilter] || []) : (a.recent || []);
+    return rows.slice();
+  }
+  function assetUrl(row) { return config.api + '/asset?id=' + encodeURIComponent(row.id); }
+  const ASSET_KIND = { before: 'Before', after: 'After', screenshot: 'Screenshot', recording: 'Recording' };
+  // A GIF under reduced motion starts as a button, never auto-playing (WCAG 2.2.2 / 2.3.3).
+  function assetThumb(row, onOpen) {
+    const still = row.format === 'gif' && reducedMotion && reducedMotion.matches;
+    const btn = el('button', { type: 'button', className: 'ck-asset-thumb', dataKind: row.kind,
+      'aria-label': 'View ' + (ASSET_KIND[row.kind] || 'screenshot').toLowerCase() + ': ' + row.caption });
+    if (still) {
+      btn.appendChild(el('span', { className: 'ck-asset-play' }, ['▶ Play recording']));
+    } else {
+      btn.appendChild(el('img', { src: assetUrl(row), alt: row.caption, loading: 'lazy', decoding: 'async',
+        width: String(row.width), height: String(row.height) }));
+    }
+    btn.addEventListener('click', onOpen);
+    return btn;
+  }
+  function assetMeta(row) {
+    const bits = [el('span', { className: 'ck-asset-kind', dataKind: row.kind }, [ASSET_KIND[row.kind] || row.kind])];
+    if (row.qid) bits.push(el('span', { className: 'ck-inbox-item-id' }, [row.qid]));
+    if (row.pr) bits.push(el('span', { className: 'ck-asset-link' }, ['PR #' + row.pr]));
+    if (row.ticket) bits.push(el('span', { className: 'ck-asset-link' }, [row.ticket]));
+    bits.push(el('span', { className: 'ck-muted' }, [row.width + '×' + row.height]));
+    return el('div', { className: 'ck-asset-meta' }, bits);
+  }
+  // A "before" posted within 30 minutes ahead of an "after" on the same item is shown beside it.
+  function pairAssets(rows) {
+    const out = [];
+    const used = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (used.has(r.id)) continue;
+      if (r.kind === 'after') {
+        const t = Date.parse(r.at);
+        const before = rows.find(b => !used.has(b.id) && b.id !== r.id && b.kind === 'before' && b.item === r.item
+          && t - Date.parse(b.at) >= 0 && t - Date.parse(b.at) <= 30 * 60 * 1000);
+        if (before) { used.add(before.id); used.add(r.id); out.push([before, r]); continue; }
+      }
+      used.add(r.id);
+      out.push([r]);
+    }
+    return out;
+  }
+  function renderAssetCard(group, all) {
+    const main = group[group.length - 1];
+    const card = el('div', { className: 'ck-asset-card' + (group.length > 1 ? ' ck-asset-pair' : '') });
+    const figs = el('div', { className: 'ck-asset-figs' });
+    for (const row of group) {
+      figs.appendChild(el('figure', { className: 'ck-asset-fig' }, [
+        assetThumb(row, () => openAssetViewer(all, all.indexOf(row))),
+        el('figcaption', {}, [group.length > 1 ? (ASSET_KIND[row.kind] || '') : row.caption])
+      ]));
+    }
+    card.appendChild(figs);
+    if (group.length > 1) card.appendChild(el('p', { className: 'ck-asset-caption' }, [main.caption]));
+    card.appendChild(assetMeta(main));
+    const actions = el('div', { className: 'ck-asset-actions' });
+    // One star per card: a pair is starred by its "after", the one worth keeping.
+    actions.appendChild(renderStarButton('asset:' + main.id, group.length > 1 ? 'this before and after'
+      : 'this ' + (ASSET_KIND[main.kind] || 'screenshot').toLowerCase()));
+    actions.appendChild(assetDeleteButton(group));
+    card.appendChild(actions);
+    return card;
+  }
+  // Two-step delete, inline: the first press asks, the second (within 5 s) deletes.
+  function assetDeleteButton(group) {
+    const btn = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-asset-delete' },
+      [group.length > 1 ? 'Delete both' : 'Delete']);
+    let armed = null;
+    btn.addEventListener('click', async () => {
+      if (!armed) {
+        btn.textContent = 'Delete? Press again';
+        btn.setAttribute('data-armed', 'true');
+        armed = setTimeout(() => { armed = null; btn.removeAttribute('data-armed');
+          btn.textContent = group.length > 1 ? 'Delete both' : 'Delete'; }, 5000);
+        return;
+      }
+      clearTimeout(armed); armed = null;
+      btn.disabled = true;
+      for (const row of group) {
+        const r = await apiPost('/asset-delete', { id: row.id }, 'asset-del-' + row.id);
+        if (r && r.error) { announce('Could not delete: ' + r.error); btn.disabled = false; return; }
+      }
+      announce(group.length > 1 ? 'Deleted both screenshots' : 'Deleted the screenshot');
+    });
+    return btn;
+  }
+  let assetViewerTeardown = null;
+  function closeAssetViewer() {
+    const dlg = document.getElementById('ck-asset-view');
+    if (dlg) dlg.remove();
+    if (assetViewerTeardown) { assetViewerTeardown(); assetViewerTeardown = null; }
+  }
+  // A lightbox: the full image, its caption, ◂ ▸ through the list it came from, Escape to close.
+  function openAssetViewer(rows, index) {
+    closeAssetViewer();
+    let i = Math.max(0, Math.min(rows.length - 1, index));
+    const dlg = el('div', { id: 'ck-asset-view', className: 'ck-asset-view', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': 'ck-asset-view-title' });
+    const box = el('div', { className: 'ck-asset-view-box' });
+    const title = el('h2', { id: 'ck-asset-view-title' });
+    const counter = el('span', { className: 'ck-muted', 'aria-live': 'polite' });
+    const img = el('img', { className: 'ck-asset-view-img', alt: '' });
+    const meta = el('div');
+    const prev = el('button', { type: 'button', className: 'ck-btn', 'aria-label': 'Previous screenshot' }, ['◂']);
+    const next = el('button', { type: 'button', className: 'ck-btn', 'aria-label': 'Next screenshot' }, ['▸']);
+    const close = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Close']);
+    const open = el('button', { type: 'button', className: 'ck-btn' }, ['Open item']);
+    const paint = () => {
+      const r = rows[i];
+      title.textContent = r.caption;
+      img.src = assetUrl(r);
+      img.alt = r.caption;
+      counter.textContent = (i + 1) + ' of ' + rows.length + ' · ' + r.item + ' · ' + (r.agent ? 'by ' + r.agent + ' · ' : '')
+        + relTime(r.at);
+      meta.textContent = '';
+      meta.appendChild(assetMeta(r));
+      prev.disabled = i === 0;
+      next.disabled = i === rows.length - 1;
+    };
+    prev.addEventListener('click', () => { if (i > 0) { i--; paint(); } });
+    next.addEventListener('click', () => { if (i < rows.length - 1) { i++; paint(); } });
+    close.addEventListener('click', closeAssetViewer);
+    open.addEventListener('click', () => { const it = rows[i].item; closeAssetViewer(); openFromInbox(it); });
+    dlg.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeAssetViewer(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); prev.click(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); next.click(); }
+    });
+    dlg.addEventListener('click', e => { if (e.target === dlg) closeAssetViewer(); });
+    box.appendChild(el('div', { className: 'ck-asset-view-head' }, [title, counter]));
+    box.appendChild(el('div', { className: 'ck-asset-view-stage' }, [img]));
+    box.appendChild(meta);
+    box.appendChild(el('div', { className: 'ck-asset-view-actions' }, [prev, next, open, close]));
+    dlg.appendChild(box);
+    document.body.appendChild(dlg);
+    assetViewerTeardown = attachDialogAccessibility(dlg);
+    paint();
+    close.focus();
+  }
+  // The item's own gallery, under its questions; shown only when the item has assets.
+  function renderAssetsFold(itemId) {
+    const rows = assetRows(itemId);
+    if (!rows.length) return null;
+    const det = el('details', { className: 'ck-assets-fold', open: true });
+    det.appendChild(el('summary', {}, [icon('image'), ' Screenshots ',
+      el('span', { className: 'ck-muted' }, [String(rows.length)])]));
+    const grid = el('div', { className: 'ck-asset-grid' });
+    for (const g of pairAssets(rows)) grid.appendChild(renderAssetCard(g, rows));
+    det.appendChild(grid);
+    return det;
+  }
+
   function fillFeedList(list) {
     list.textContent = '';
     if (feedState.error) {
       list.appendChild(el('li', { className: 'ck-error-msg' }, ['Could not load the feed: ' + feedState.error]));
       return;
     }
-    const evs = feedState.events || [];
+    // 1.32: screenshots join the stream by time (Every kind) or stand alone (Screenshots). On a
+    // paged stream they stop at the oldest event loaded, so "Older" brings both forward together.
+    let evs = (feedState.events || []).slice();
+    if ((feedState.kind === '' || feedState.kind === 'asset') && feedState.item !== CHAT_ITEM) {
+      const rows = assetRows(feedState.item);
+      const oldest = feedState.next && evs.length ? evs[evs.length - 1].ts : null;
+      const groups = pairAssets(rows).filter(g => !oldest || g[g.length - 1].at >= oldest);
+      evs = evs.concat(groups.map(g => ({ kind: 'asset', ts: g[g.length - 1].at, item: g[0].item,
+        agent: g[g.length - 1].agent, group: g, all: rows })));
+      const pruned = ((view && view.assets && view.assets.pruned) || [])
+        .filter(n => !feedState.item || n.item === feedState.item);
+      evs = evs.concat(pruned.map(n => ({ kind: 'asset', ts: n.at, item: n.item, pruned: n })));
+      evs.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    }
     if (!evs.length) list.appendChild(el('li', { className: 'ck-muted' }, ['Nothing here yet.']));
     for (const ev of evs) {
+      if (ev.kind === 'asset') {
+        const row = el('li', { className: 'ck-feed-row ck-feed-asset', dataKind: 'asset' });
+        const words = ev.pruned ? 'Screenshot removed to make room'
+          : (ev.group.length > 1 ? 'Before and after' : (ASSET_KIND[ev.group[0].kind] || 'Screenshot') + ' posted');
+        const head = el('div', { className: 'ck-feed-head' }, [
+          el('span', { className: 'ck-feed-kind', dataKind: 'asset' }, [icon('image'), ' ', words]),
+          el('span', { className: 'ck-inbox-item-id' }, [ev.item]),
+          el('span', { className: 'ck-feed-time', title: new Date(ev.ts).toLocaleString() }, [relTime(ev.ts)])]);
+        if (ev.agent) head.appendChild(el('span', { className: 'ck-feed-agent' }, ['by ' + ev.agent]));
+        row.appendChild(head);
+        if (ev.pruned) {
+          row.appendChild(el('div', { className: 'ck-feed-text ck-muted' }, ['"' + ev.pruned.caption + '": ' + ev.pruned.why
+            + '. Star a screenshot, or link it to a PR, to keep it.']));
+        } else {
+          row.appendChild(renderAssetCard(ev.group, ev.all));
+        }
+        list.appendChild(row);
+        continue;
+      }
       const isNew = ev.seq > seenAtOpen && ev.by === 'agent';
       const where = ev.item === CHAT_ITEM ? 'chat' : (ev.qid || ev.item || '');
       const row = el('li', { className: 'ck-feed-row' + (isNew ? ' ck-feed-new' : ''), dataKind: ev.kind, dataSeq: String(ev.seq) });

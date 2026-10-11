@@ -404,6 +404,35 @@ deleted: each act is recorded in a file beside the store, and the fold records t
 outcome in your project. New questions are refused a whole-file hash where an
 excerpt fits, which is what made most rulings go stale.
 
+### See what agents changed, as screenshots
+
+When an agent changes something you can see, it posts a **before** and an
+**after** screenshot on the item:
+
+    agent.py asset UI-1 --file after.png --caption "Tabs with icons" --kind after --pr 214
+
+They show up in the **Feed**, where a before and after appear side by side
+and the **Screenshots** filter shows only them, and in a **Screenshots** fold
+on the item. Click one to open a full-size viewer, and step through the
+others with ◂ ▸ or the arrow keys.
+
+<img src="docs/screenshots/feature-assets.png" alt="The Feed's Screenshots filter: a UX component at 375px, and the tab bar before and after icons, side by side" width="400">
+
+- **Formats:** PNG, JPEG, WebP or GIF. The format is decided from the
+  file's own bytes, never its name, and SVG is refused because it can carry
+  script.
+- **Size limits:** 2 MiB for a still image, 8 MiB for a GIF, and 8000 px on
+  a side.
+- **Storage:** files are kept in the server's state directory, never in your
+  project.
+- **When space runs short** (100 per item, 300 MiB per project), the oldest
+  screenshots that aren't starred or linked to a PR are removed. The Feed
+  says so.
+- **Your controls:** star a screenshot to keep it, or delete it (press
+  twice).
+- **Reduced motion:** with reduced motion turned on, a GIF waits for you to
+  press play.
+
 ### Track work as tickets
 
 Tickets are small units of work that belong to an item: a **task**, a **bug**,
