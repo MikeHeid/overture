@@ -126,7 +126,8 @@ class _Handler(BaseHTTPRequestHandler):
                 payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "ux": True}}
                 vs = [{"id": f"v{n}", "seq": 10 + n, "ts": f"2026-10-11T0{n}:00:00Z", "item": "LANE.1", "request": "rq",
                        "format": "html", "title": "Save button", "text": f"Version {n}", "path": f"p{n}.html",
-                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"} for n in (1, 2)]
+                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"}
+                       for n in range(1, (_Handler.view_ux if isinstance(_Handler.view_ux, int) and _Handler.view_ux > 1 else 2) + 1)]
                 payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
                 if _Handler.view_scripts:
                     sw = {"id": "s" * 24, "seq": 99, "ts": "2026-10-11T09:00:00Z", "item": "LANE.1", "by": "owner",
@@ -725,6 +726,27 @@ class UxViewTests(unittest.TestCase):
         # The console ignored the frame's message (it is not one of the console's own chart frames).
         self.assertNotIn("pwned", page.evaluate("document.body.innerText"))
         self.assertEqual(page.evaluate("document.querySelectorAll('a[download]').length"), 0)
+
+    def test_a_viewer_on_the_newest_version_follows_a_new_one_but_not_from_an_older_one(self):
+        page = self._open()
+        self.assertIn("v2 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 3                                    # a third version arrives on the next refresh
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('v3 of 3')")
+        page.get_by_role("button", name="Previous version").click()
+        self.assertIn("v2 of 3", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 4
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('of 4')")
+        self.assertIn("v2 of 4", page.locator(".ck-ux-vlabel").inner_text())
+
+    def test_a_link_being_typed_survives_a_live_refresh(self):
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        page.fill("#ck-ux-link", "https://claude.ai/design/p/fee63c71-69b8")
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")      # the view is fetched and repainted
+        page.wait_for_timeout(600)
+        self.assertEqual(page.input_value("#ck-ux-link"), "https://claude.ai/design/p/fee63c71-69b8")
 
     def test_full_screen_and_no_overflow_on_a_phone(self):
         page = self._open(width=375)

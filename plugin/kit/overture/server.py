@@ -3607,7 +3607,7 @@ class OwnerHandler(_Handler):
             if bad:
                 raise RequestError(400, f"kind {', '.join(bad)} is not one of {', '.join(V.FEED_KINDS)}")
         item = query.get("item") or None
-        if item is not None and item != S.CHAT_ITEM and (len(item) > 128 or not S.ITEM_ID.match(item)):
+        if item is not None and item not in (S.CHAT_ITEM, S.PRS_ITEM) and (len(item) > 128 or not S.ITEM_ID.match(item)):
             raise RequestError(400, "item must be an item id")
         before = self._int(query.get("before"), "before", 1, 10**9)
         limit = self._int(query.get("limit"), "limit", 1, V.FEED_MAX) or V.FEED_DEFAULT

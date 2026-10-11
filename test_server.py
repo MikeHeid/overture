@@ -1798,6 +1798,13 @@ class PrMergeRequestTests(_Live, unittest.TestCase):
         self.assertIn("not in the steward's last push", self.ask(n=99, expect=409)["error"])
         self.assertEqual(len(self.console.payload()["view"]["threads"].get("@prs", [])), 0)
 
+    def test_the_feed_can_be_read_for_the_merge_requests_thread(self):
+        self.push()
+        self.ask()
+        code, out = self.req("GET", "/api/feed?item=%40prs", tok=token())
+        self.assertEqual(code, 200, out)
+        self.assertEqual([e["item"] for e in out["events"]], ["@prs"])
+
     def test_nothing_pushed_yet_is_named(self):
         self.assertIn("nothing to merge", self.ask(expect=409)["error"])
 
