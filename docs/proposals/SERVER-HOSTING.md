@@ -9,7 +9,7 @@ one command shape the kit already uses. Do not start the server from a Claude
 session. A session can *check* the server and say how to start it, but it
 never launches it.
 
-Status: proposal, for the owner to decide.
+Status: decided on 2026-10-11, with amendments. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
 
 ---
 
