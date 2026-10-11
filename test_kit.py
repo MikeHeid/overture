@@ -107,6 +107,95 @@ class Tmp(unittest.TestCase):
         return Store(self.path, known_items=ITEMS, clock=self.clock, **kw)
 
 
+class SanitizerTests(unittest.TestCase):
+    """The HTML visual sanitizer (1.31) as UX components need it (1.32): CSS intact, inert controls kept."""
+
+    def clean(self, html):
+        from overture.visuals import sanitize_html
+        return sanitize_html(html)[0]
+
+    def test_css_in_a_style_block_is_not_html_escaped(self):
+        # Catches: <style> content went through the HTML text escaper, so `a > b` became
+        # `a &gt; b` and `"x"` became `&quot;x&quot;`: every child selector, attribute selector
+        # and quoted string in a mock's CSS silently stopped matching.
+        out = self.clean('<style>.a > .b{content:"x"} [type="checkbox"]:checked + label{color:red}</style>')
+        self.assertIn('.a > .b{content:"x"}', out)
+        self.assertIn('[type="checkbox"]:checked + label', out)
+
+    def test_style_cannot_spell_markup_or_escape_early(self):
+        out = self.clean('<style>p{content:"<b>"}</style><script>alert(1)</script><p>ok</p>')
+        self.assertNotIn("<b>", out)
+        self.assertIn("\\3C b>", out)
+        self.assertNotIn("script", out)
+        self.assertNotIn("alert", out)
+        self.assertTrue(out.endswith("<p>ok</p>"))
+
+    def test_inert_controls_and_disclosure_are_kept(self):
+        out = self.clean('<details name="g" open><summary>Q</summary>A</details>'
+                         '<button type="button" popovertarget="m" aria-expanded="false">Menu</button>'
+                         '<div id="m" popover role="menu">Items</div>'
+                         '<label for="c">C</label><input id="c" type="checkbox" checked>'
+                         '<select name="s"><option value="1" selected>One</option></select>'
+                         '<progress value="3" max="5"></progress>'
+                         '<button type="button" commandfor="d" command="show-modal">Open</button>'
+                         '<button command="--custom" commandfor="d">X</button><dialog id="d">Hi</dialog>')
+        for piece in ('<details name="g" open="">', "<summary>Q</summary>", 'popovertarget="m"',
+                      'aria-expanded="false"', 'popover=""', 'role="menu"', '<label for="c">',
+                      '<input id="c" type="checkbox" checked="" />', '<option value="1" selected="">',
+                      '<progress value="3" max="5">', 'commandfor="d" command="show-modal"', '<dialog id="d">'):
+            self.assertIn(piece, out)
+        self.assertNotIn("</input>", out)
+        self.assertNotIn("--custom", out)   # a custom command needs script: refused
+
+    def test_nothing_can_submit_load_or_run(self):
+        out = self.clean('<form action="https://evil.example"><input type="file" name="f" autofocus>'
+                         '<input type="image" src="https://evil.example/x.png">'
+                         '<button type="submit" formaction="javascript:alert(1)" onclick="x()">Go</button>'
+                         '<button type="bogus">B</button></form>')
+        for bad in ("<form", "evil.example", 'type="file"', 'type="image"', "autofocus", "formaction",
+                    "javascript", "onclick", 'type="bogus"'):
+            self.assertNotIn(bad, out)
+        self.assertIn('<button type="submit">Go</button>', out)
+
+
+class ConsoleUxSkillTests(unittest.TestCase):
+    """The console-ux skill (1.32): its worked example passes the gate it teaches, and it is wired in."""
+
+    SKILL = HERE / "plugin" / "skills" / "console-ux"
+
+    def test_the_worked_example_survives_the_sanitizer_untouched(self):
+        # The example is what agents copy; if the server strips any of it, the skill teaches a
+        # component the owner never sees.
+        from overture.visuals import sanitize_html
+        src = (self.SKILL / "references" / "example-plan-picker.html").read_text(encoding="utf-8")
+        clean, stripped = sanitize_html(src)
+        self.assertEqual(stripped, 0)
+        self.assertNotIn("<script", src)
+        self.assertNotIn(" style=", src)
+        for piece in ('command="show-modal"', "popovertarget=", "anchor-name", '<details name="faq">',
+                      ':has(input[value="org"]:checked)', "prefers-reduced-motion", "forced-colors",
+                      "light-dark("):
+            self.assertIn(piece, clean)
+
+    def test_ux_check_names_what_would_be_stripped(self):
+        sys.path.insert(0, str(KIT / "tools"))
+        import ux_check
+        from overture.visuals import sanitize_html
+        bad = '<div style="x" onclick="y()">a</div><svg></svg><script>1</script><input type="file">'
+        found = " | ".join(ux_check.what_is_stripped(bad, sanitize_html(bad)[0]))
+        for word in ("<script>", "on* event", 'style=""', "<svg>", "attributes: type"):
+            self.assertIn(word, found)
+
+    def test_the_skill_is_wired_in(self):
+        text = (self.SKILL / "SKILL.md").read_text(encoding="utf-8")
+        for ref in ("principles.md", "patterns.md", "style.md", "checklist.md", "example-plan-picker.html"):
+            self.assertIn("references/" + ref if ref != "example-plan-picker.html" else ref, text)
+            self.assertTrue((self.SKILL / "references" / ref).is_file(), ref)
+        self.assertIn("tools/ux_check.py", text)
+        process = (HERE / "plugin" / "skills" / "console-process" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("**console-ux** skill", process)
+
+
 class SchemaTests(unittest.TestCase):
     def test_well_formed_records_pass(self):
         for r in (question(), question(kind="free"), question(kind="multi"), answer(), message()):
@@ -4176,7 +4265,7 @@ class SessionNameTests(_Steward):
 # -- K1: slim reads (todo, view --item, --since, the skills) -------------------------------
 
 SKILLS = HERE / "plugin" / "skills"
-SLIM_SKILLS = ("console-process", "console-fork", "console-ask", "console-visual")
+SLIM_SKILLS = ("console-process", "console-fork", "console-ask", "console-visual", "console-ux")
 
 
 def _compact(obj) -> int:

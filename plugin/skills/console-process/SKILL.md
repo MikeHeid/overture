@@ -172,8 +172,11 @@ leave them after the cursor.
 **Visual requests** (0.8.0). Each entry of `todo.visuals` (an owner message
 with `intent: "visual"` that nothing in `view.visuals[ITEM]` answers yet) is
 a picture to draw: use the
-**console-visual** skill for each. A visual line on the doorbell
-(`"intent": "visual"`) is what woke you.
+**console-visual** skill for each. A request on a **UX item** (its section
+has a UX lane such as `lane-ui` or `lane-ux`, the item sets `ux: true`, or the
+request carries `purpose: "ux"`) is a component: use the **console-ux** skill
+for it instead. A visual line on the doorbell (`"intent": "visual"`) is what
+woke you.
 
 ## 4b. Answer each scan for a resolve
 

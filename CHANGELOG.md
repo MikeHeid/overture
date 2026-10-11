@@ -3146,3 +3146,37 @@ example dashboard.
   only the parent's iframe attribute sandboxed it.
 - **MIT license.** `LICENSE` at the root and in `plugin/`, so the release
   zip carries it, and `"license": "MIT"` in the plugin manifest.
+- **The console-ux skill.** UX components are now drawn by their own
+  skill, written as a UX lead and a component engineer in one. It holds
+  four researched references (checked on 2026-10-11, with sources):
+  - **principles:** WCAG 2.2 AA as rules, the laws of UX, Nielsen's
+    heuristics, microcopy;
+  - **patterns:** how the leading design systems build each component,
+    and the no-JavaScript recipe for each;
+  - **style:** tokens in the W3C 2025.10 format, type, colour, motion, and
+    which 2025–2026 trends last;
+  - **checklist:** a gate every version passes.
+
+  Components work with **no JavaScript** while Scripts is off. They use
+  `<details name>`, `popover`, invoker commands, `:has(:checked)` and
+  anchor positioning. A worked example, a plan picker, passes the whole
+  gate. console-process routes visual requests on UX items to it.
+- **`tools/ux_check.py`.** Runs a component through the server's own
+  sanitizer and names anything that would be stripped. With Playwright,
+  it renders the component exactly as UX View will: sandboxed, under the
+  server's CSP, with JavaScript off, at 375, 768 and 1280px, in light and
+  dark.
+- **Inert controls in HTML visuals (S1).** `button`, `input`, `select`,
+  `textarea`, `label`, `fieldset`, `details`/`summary`, `dialog`,
+  `progress`, `meter` and friends now survive the sanitizer, as do
+  `aria-*`, `popover`, `popovertarget`, and the built-in invoker
+  `command`/`commandfor`. Nothing can submit, load or run:
+  - there is no `<form>`, `formaction` or `autofocus`;
+  - `type="file"` and `type="image"` are refused;
+  - custom `--commands` are refused.
+- **Fix: CSS in an HTML visual was HTML-escaped.** The sanitizer ran
+  `<style>` content through the text escaper, so `a > b` became
+  `a &gt; b` and `"x"` became `&quot;x&quot;`. Every child selector,
+  attribute selector and quoted font or `content` value silently stopped
+  matching. CSS now passes through as written, with `<` turned into the
+  CSS escape `\3C`, so no markup can be spelled inside it.

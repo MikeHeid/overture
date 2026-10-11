@@ -43,7 +43,7 @@ from a repository or a web page alone.
 
 | Piece | Today |
 |---|---|
-| Showing HTML safely | An HTML visual is **sanitized when it is stored** (`server.py` `sanitize_html`, `visuals.py`). Scripts, `style` attributes, `svg` and form controls (`button`, `input`, `select`, `label`, `form`) are removed; `<style>` blocks survive. It is served under `VISUAL_HTML_CSP`, which carries its own `sandbox` directive, in an `<iframe sandbox="">`. |
+| Showing HTML safely | An HTML visual is **sanitized when it is stored** (`server.py` `sanitize_html`, `visuals.py`). Scripts, `style` attributes, `svg` and `form` are removed; `<style>` blocks survive. Since 1.32 (S1), inert controls (`button`, `input`, `select`, `textarea`, `label`, `details`, `dialog`, …), `popover`/`popovertarget` and built-in invoker commands survive too, and CSS in `<style>` is no longer HTML-escaped. It is served under `VISUAL_HTML_CSP`, which carries its own `sandbox` directive, in an `<iframe sandbox="">`. |
 | Mermaid | The vendored library runs in its own frame under a per-request nonce (`VISUAL_RENDER_CSP_TMPL`). |
 | Asking an agent to draw | **Request a visual…** on an item: an owner `message` with `intent: "visual"`. `agent.py visual` answers it, at most 3 visuals per request (`MAX_VISUALS_PER_REQUEST`). |
 | Moving a visual into the repo | `agent.py visual-export --project <worktree>` writes files only; the `console-visual` skill opens the PR. |
@@ -165,7 +165,9 @@ the fragment viewer's pattern: fixed, `inset: 0`, width
     `visual` requests and their 3-per-request cap, so nothing in that chain
     has to learn a new intent.
   - Generate from design adds `from: "design"`.
-- A new skill, `console-ux`, handles visual requests with `purpose: "ux"`:
+- A new skill, `console-ux` (shipped in 1.32, with researched references, a
+  worked example and `tools/ux_check.py`), handles visual requests on UX
+  items, and those with `purpose: "ux"`:
   1. It reads the item, its rulings, the current component file, and the
      project's design tokens (the `:root` CSS custom properties).
   2. It writes the component as one HTML document with a `<style>` block.
