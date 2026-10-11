@@ -171,6 +171,9 @@ STATE = """() => {
 # The default-open itself is held by DockTests.test_a_docked_inbox_opens_by_default_until_closed.
 INBOX_CLOSED_THIS_SESSION = "try { sessionStorage.setItem('ck-inbox-closed', '1'); } catch (e) {}"
 
+# The footer's own words, without the Shortcuts button (#129) that sits at its end.
+FOOTER_TEXT = "e => [...e.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('')"
+
 FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 # The open docked column's width with nothing stored. 1.24.0 replaced the 50vw default (it "ate half of
@@ -500,8 +503,12 @@ class DockTests(unittest.TestCase):
     # Catches: threads waiting on the agent summed into the owner's badge (it would
     # read 3, and "waiting" would include work that is not the owner's), or never
     # shown at all. Checked on both presentations: the strip and the button.
+    # The state mark (D8, after 1.31): an inline icon, decorative (the label carries the words), in place of
+    # the text glyph "●" these counts and chips were read with before.
     AGENT = """sel => { const b = document.querySelector(sel), a = b.querySelector('.ck-agent-count');
+      const m = a.querySelector('.ck-mark');
       return { owner: b.querySelector('.ck-inbox-count').textContent, agent: a.textContent,
+               mark: m && [m.getAttribute('data-state'), !!m.querySelector('svg.ck-icon'), m.getAttribute('aria-hidden')],
                agentShown: getComputedStyle(a).display !== 'none', label: b.getAttribute('aria-label') }; }"""
 
     def test_threads_waiting_on_the_agent_get_their_own_count(self):
@@ -512,14 +519,17 @@ class DockTests(unittest.TestCase):
                     page = self._page(kind, width)
                     got = page.evaluate(self.AGENT, sel)
                     self.assertEqual(got["owner"], "2")
-                    self.assertEqual(got["agent"], "● 1")
+                    self.assertEqual(got["agent"], " 1")
+                    self.assertEqual(got["mark"], ["awaiting_agent", True, "true"], got)
                     self.assertTrue(got["agentShown"])
                     self.assertEqual(got["label"], "Open inbox, 2 waiting for you, 1 waiting on an agent")
 
     # The inbox's "with the agent" row, as the owner reads it.
     AGENT_ROW = """() => { const s = document.querySelector('.ck-inbox-list .ck-q-state[data-state="agent_active"], .ck-inbox-list .ck-q-state[data-state="awaiting_agent"]');
       const hs = Array.from(document.querySelectorAll('.ck-section-heading')).map(h => h.textContent);
-      return { chip: s && s.textContent, state: s && s.getAttribute('data-state'), headings: hs }; }"""
+      const m = s && s.querySelector('.ck-mark');
+      return { chip: s && s.textContent, state: s && s.getAttribute('data-state'), headings: hs,
+               mark: m && [m.getAttribute('data-state'), !!m.querySelector('svg.ck-icon'), m.getAttribute('aria-hidden')] }; }"""
 
     def test_an_item_an_agent_is_working_on_reads_agent_active(self):
         # Owner, 2026-09-29: "when an agent is working on something, relabel 'awaiting agent' to 'agent active'".
@@ -541,7 +551,8 @@ class DockTests(unittest.TestCase):
                         page.click(sel)
                         page.wait_for_selector(".ck-inbox-list .ck-q-state[data-state='agent_active'], .ck-inbox-list .ck-q-state[data-state='awaiting_agent']")
                         got = page.evaluate(self.AGENT_ROW)
-                        self.assertEqual(got["chip"], "● " + words, got)
+                        self.assertEqual(got["chip"], " " + words, got)
+                        self.assertEqual(got["mark"], ["awaiting_agent", True, "true"], got)   # one bot mark either way
                         self.assertEqual(got["state"], "agent_active" if working else "awaiting_agent", got)
                         self.assertIn(heading, got["headings"], got)
 
@@ -2039,7 +2050,7 @@ class LiveConsoleTests(unittest.TestCase):
                 page.evaluate("window.ConsoleKit.refreshUsage()")
                 from overture import __version__
                 # No usage file: the footer carries the kit version alone, never usage it was not given.
-                self.assertEqual(page.locator(".ck-footer").text_content(), f"overture {__version__}")
+                self.assertEqual(page.locator(".ck-footer").evaluate(FOOTER_TEXT), f"overture {__version__}")
                 d = self.cfg.root
                 write_usage(d)
                 (d / "acct.json").write_text(json.dumps(
@@ -2080,8 +2091,13 @@ class LiveConsoleTests(unittest.TestCase):
                 url = self.serve()
                 page = self.page(kind, 1280, url)
                 page.wait_for_selector(".ck-footer")
-                self.assertEqual(page.locator(".ck-footer").text_content(), f"overture {__version__}")
-                self.assertEqual(page.locator(".ck-footer").evaluate("e => e.children.length"), 0)  # text only
+                self.assertEqual(page.locator(".ck-footer").evaluate(FOOTER_TEXT), f"overture {__version__}")
+                # As text, never markup: the footer's one element is the Shortcuts button (#129), which opens
+                # the shortcut sheet.
+                self.assertEqual(page.locator(".ck-footer").evaluate(
+                    "e => [...e.children].map(c => c.tagName + '.' + c.className)"), ["BUTTON.ck-footer-keys"])
+                page.click(".ck-footer-keys")
+                page.wait_for_selector("#ck-shortcut-help[role=dialog]", state="visible")
                 room = page.evaluate("[parseFloat(getComputedStyle(document.body).paddingBottom),"
                                      " document.querySelector('.ck-footer').offsetHeight]")
                 self.assertAlmostEqual(room[0], room[1], delta=1)   # it covers no line of the page
