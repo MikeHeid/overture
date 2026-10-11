@@ -3287,6 +3287,14 @@ class OwnerHandler(_Handler):
             # (0.7.0). Nothing is owed to a client that is gone, and no traceback is logged.
             self.close_connection = True
 
+    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str, corp: str = "cross-origin") -> None:
+        try:
+            super()._send_raw(code, data, ctype, csp, corp)
+        except (BrokenPipeError, ConnectionResetError):
+            # The same for a chart, visual or screenshot: the frame or <img> was dropped mid-answer
+            # (a re-render, a closed fold). Logged as a traceback through 1.31.
+            self.close_connection = True
+
     def _gate(self) -> bool:
         try:
             self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))

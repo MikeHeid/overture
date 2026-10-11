@@ -2123,6 +2123,20 @@
     // closePanel() when the whole panel is dismissed.
     const auxPaneEl = document.getElementById('ck-launch-pane');
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
+    placeStatusChip();
+  }
+  // The status chip sits IN the header's row, before the skin and theme toggles, so it takes its own
+  // space. Through 1.31 it floated at a fixed offset from the right and covered those toggles.
+  function placeStatusChip() {
+    if (!statusChip) return;
+    const hdr = panelEl.querySelector('.ck-header');
+    const anchor = hdr && hdr.querySelector('.ck-skin-toggle, .ck-theme-toggle, .ck-close-btn');
+    if (anchor) {
+      hdr.insertBefore(statusChip, anchor);
+      statusChip.classList.add('ck-status-chip-inline');
+    } else {
+      statusChip.classList.remove('ck-status-chip-inline');
+    }
   }
 
   // Render inbox mode
@@ -4047,10 +4061,10 @@
   let projectMapFilter = '';   // '' = all; else one of the state keys
   const MAP_CHIPS = [
     ['', 'All'],
-    ['awaiting_you', '? Awaiting you'],
-    ['stale', '! Stale'],
-    ['unlocked', '~ Unlocked'],
-    ['locked', 'o Locked']
+    ['awaiting_you', 'Awaiting you'],
+    ['stale', 'Stale'],
+    ['unlocked', 'Unlocked'],
+    ['locked', 'Locked']
   ];
   function renderProjectMap() {
     const wrap = el('details', { className: 'ck-project-map' });
@@ -4080,7 +4094,7 @@
         className: 'ck-chip' + (on ? ' ck-chip-on' : ''),
         type: 'button', role: 'tab',
         'aria-pressed': on ? 'true' : 'false'
-      }, [label]);
+      }, [key ? stateMark(key) : null, label]);   // the same state icons as everywhere else (D8)
       b.addEventListener('click', () => {
         projectMapFilter = key;
         for (const other of chips.querySelectorAll('.ck-chip')) {

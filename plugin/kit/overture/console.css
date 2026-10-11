@@ -3517,3 +3517,10 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   .ck-lane-chip::before { background: CanvasText; }
 }
 .ck-priority-row .ck-lane-chip { margin: 0 4px; }
+/* The status chip in the header's own row (1.32): no longer floats over the toggles. */
+.ck-status-chip.ck-status-chip-inline { position: static; flex: 0 0 auto; }
+.ck-header .ck-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-chip-row .ck-chip { display: inline-flex; align-items: center; gap: 5px; }
+.ck-chip-row .ck-chip.ck-chip-on .ck-mark { color: inherit; }
+.ck-header .ck-back-btn, .ck-header .ck-skin-toggle, .ck-header .ck-theme-toggle, .ck-header .ck-close-btn,
+.ck-header .ck-star { flex: 0 0 auto; white-space: nowrap; }

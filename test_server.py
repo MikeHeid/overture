@@ -1509,6 +1509,26 @@ def tiny_png(w=2, h=2, seed=0) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+class ClientGoneTests(unittest.TestCase):
+    """A client that hangs up mid-answer is not an error (logged as a traceback through 1.31)."""
+
+    def test_raw_answers_to_a_closed_socket_raise_nothing(self):
+        h = SV.OwnerHandler.__new__(SV.OwnerHandler)
+        h.send_response = h.send_header = lambda *a, **k: None
+        h.end_headers = lambda: None
+
+        class Gone:
+            def write(self, _data):
+                raise BrokenPipeError(32, "Broken pipe")
+        h.wfile = Gone()
+        h.close_connection = False
+        h._send_raw(200, b"x" * 10, "image/png", "sandbox")     # must not raise
+        self.assertTrue(h.close_connection)
+        h.close_connection = False
+        h._send(200, {"ok": True})
+        self.assertTrue(h.close_connection)
+
+
 class AssetRouteTests(_Live, unittest.TestCase):
     """1.32 (FEED-ASSETS.md): agents post screenshots on an item; the owner sees and deletes them."""
 

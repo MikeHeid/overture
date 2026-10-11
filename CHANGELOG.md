@@ -3237,3 +3237,13 @@ example dashboard.
   project map, now drawn left to right) is scaled to the frame's width and
   opens at its top, so its labels stay readable. Shorter charts still fit
   whole.
+- **Fix: no traceback when a browser drops a chart, visual or screenshot
+  mid-answer.** The owner door already treated a closed connection as
+  normal for JSON answers. Raw answers (`_send_raw`: charts, visuals,
+  assets) now do the same, so a re-render or a closed fold no longer logs a
+  `BrokenPipeError` traceback.
+- **Fix: the status chip no longer covers the skin and theme toggles.** It
+  sits in the header's own row, before the toggles. The header's buttons
+  keep their width and the title shrinks with an ellipsis instead.
+- **Project map filter chips use the state icons** (D8), instead of the old
+  `? ! ~ o` text marks.
