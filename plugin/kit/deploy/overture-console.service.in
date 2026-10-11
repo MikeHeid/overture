@@ -4,6 +4,9 @@
 [Unit]
 Description=Overture console server (every project in server.json; loopback only, reached through Cloudflare Access)
 After=network-online.target
+# A server that cannot start (a missing dependency, a bad server.json) stops retrying instead of looping forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

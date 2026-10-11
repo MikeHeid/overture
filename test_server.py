@@ -1537,7 +1537,7 @@ class HostingTests(unittest.TestCase):
         self.log = self.t / "systemctl.log"
         sc = self.bin / "systemctl"
         sc.write_text(f"#!/bin/sh\necho \"$@\" >> {self.log}\n"
-                      "case \"$2\" in is-active) [ -f " + str(self.t / "ACTIVE") + " ] && echo active || echo inactive;; esac\n"
+                      "case \"$2\" in is-active) if [ -f " + str(self.t / "ACTIVE") + " ]; then cat " + str(self.t / "ACTIVE") + "; else echo inactive; fi;; esac\n"
                       "exit 0\n")
         sc.chmod(0o755)
         self.env = {**os.environ, "XDG_CONFIG_HOME": str(self.cfg), "XDG_STATE_HOME": str(self.st),
@@ -1592,7 +1592,7 @@ class HostingTests(unittest.TestCase):
         calls = self.log.read_text()
         for want in ("--user daemon-reload", "--user enable overture-console.service", "--user restart overture-console.service"):
             self.assertIn(want, calls)
-        (self.t / "ACTIVE").write_text("")                      # the fake systemctl now says the unit is active
+        (self.t / "ACTIVE").write_text("active\n")             # the fake systemctl now says the unit is active
         r = self.cli("daemon", "start")
         self.assertEqual(r.returncode, 1)
         self.assertIn("service", r.stderr)
@@ -1611,6 +1611,39 @@ class HostingTests(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             hosting.render_unit(Path("/tmp/has space/server.json"))
         self.assertIn("server file path", str(cm.exception))
+
+    def test_a_unit_that_is_still_starting_or_unsure_blocks_a_daemon_too(self):
+        self.cli("service", "install")
+        for word, needle in (("activating\n", "activating"), ("Failed to connect to bus\n", "does not say")):
+            (self.t / "ACTIVE").write_text(word)
+            r = self.cli("daemon", "start")
+            self.assertEqual(r.returncode, 1, word)
+            self.assertIn(needle, r.stderr)
+        self.assertFalse((self.st / "overture" / "server.pid").exists())
+
+    def test_health_never_removes_the_socket_of_a_server_that_is_slow_to_answer(self):
+        self.sfile.parent.mkdir(parents=True, exist_ok=True)
+        path = str(self.sfile.parent / "server.sock")
+        live = socket.socket(socket.AF_UNIX)
+        self.addCleanup(live.close)
+        live.bind(path)
+        live.listen(1)                                         # connects, never answers: busy or starting
+        r = self.cli("health", "--json")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(json.loads(r.stdout)["cleaned"], [])
+
+    def test_a_pid_file_naming_something_else_is_never_signalled(self):
+        run = self.st / "overture"
+        run.mkdir(parents=True)
+        me = subprocess.Popen(["sleep", "30"])                  # alive, but not `server.py --all`
+        self.addCleanup(me.kill)
+        (run / "server.pid").write_text(json.dumps({"pid": me.pid, "server_file": str(self.sfile)}))
+        r = self.cli("daemon", "stop")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stale pid file", r.stdout)
+        self.assertIsNone(me.poll())                            # still running: never signalled
+        (run / "server.pid").write_text(json.dumps({"pid": 1}))
+        self.assertEqual(self.cli("daemon", "stop").returncode, 1)   # pid 1 is no record at all
 
     def test_no_projects_means_nothing_starts(self):
         self.sfile.write_text(json.dumps({"team_domain": TEAM, "projects": {}}))
