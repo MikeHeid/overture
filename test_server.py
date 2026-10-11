@@ -1798,6 +1798,13 @@ class PrMergeRequestTests(_Live, unittest.TestCase):
         self.assertIn("not in the steward's last push", self.ask(n=99, expect=409)["error"])
         self.assertEqual(len(self.console.payload()["view"]["threads"].get("@prs", [])), 0)
 
+    def test_the_feed_can_be_read_for_the_merge_requests_thread(self):
+        self.push()
+        self.ask()
+        code, out = self.req("GET", "/api/feed?item=%40prs", tok=token())
+        self.assertEqual(code, 200, out)
+        self.assertEqual([e["item"] for e in out["events"]], ["@prs"])
+
     def test_nothing_pushed_yet_is_named(self):
         self.assertIn("nothing to merge", self.ask(expect=409)["error"])
 
@@ -1946,6 +1953,42 @@ class AssetRouteTests(_Live, unittest.TestCase):
         self.assertEqual(code, 200, out)
         r, _ = self.raw("/api/asset?id=" + row["id"])
         self.assertEqual(r.status, 404)
+
+    def upload(self, data=None, expect=200, **over):
+        body = {"item": "LANE.1", "content_b64": base64.b64encode(data or tiny_png(seed=7)).decode(),
+                "caption": "My mock", "nonce": "up" + os.urandom(6).hex()}
+        body.update(over)
+        code, out = self.req("POST", "/api/asset-upload", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_the_owner_can_attach_an_image_and_it_is_theirs(self):
+        row = self.upload()["asset"]
+        self.assertEqual((row["by"], row["agent"], row["kind"]), ("owner", None, "screenshot"))
+        _, view = self.get("/api/view")
+        self.assertEqual([(a["id"], a["by"]) for a in view["view"]["assets"]["by_item"]["LANE.1"]], [(row["id"], "owner")])
+        r, data = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual(r.status, 200)
+        code, out = self.req("POST", "/api/asset-delete", {"id": row["id"], "nonce": "del2"}, tok=token())
+        self.assertEqual(code, 200, out)
+
+    def test_an_owner_upload_is_checked_like_an_agents_and_is_owner_only(self):
+        self.upload(b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>", expect=400)
+        self.upload(item="NOPE.9", expect=400)
+        self.upload(qid="LANE.1/Q1", expect=400)                      # only item, content_b64, caption, nonce
+        self.upload(kind="after", expect=400)                         # an owner's image is always a screenshot
+        code, _ = self.req("POST", "/api/asset-upload", {"item": "LANE.1", "content_b64": "AAAA", "caption": "x"})
+        self.assertIn(code, (401, 403))                                # no owner token: refused
+        code, _ = self.agent_post("/asset-upload", {"item": "LANE.1"})
+        self.assertEqual(code, 404)                                    # not on the agent door
+
+    def test_owner_and_agent_images_have_their_own_rate_buckets(self):
+        import overture.assets as AS
+        for n in range(AS.RATE_COUNT):
+            self.upload(tiny_png(seed=100 + n))
+        self.upload(tiny_png(seed=999), expect=400)                    # the owner's bucket is full ("you")
+        code, out = self.post(tiny_png(seed=5))                        # an agent is not held up by it
+        self.assertEqual(code, 200, out)
 
     def test_the_format_comes_from_the_bytes_never_the_name(self):
         for bad, why in ((b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", "SVG"),

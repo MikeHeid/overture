@@ -123,6 +123,7 @@ OWNER_TICKET_UPDATE = "/api/ticket-update"
 OWNER_TICKET_CLOSE = "/api/ticket-close"
 # 1.32 (FEED-ASSETS.md): the owner deletes an asset an agent posted. Agents post on their own door.
 OWNER_ASSET_DELETE = "/api/asset-delete"
+OWNER_ASSET_UPLOAD = "/api/asset-upload"     # F2: the owner attaches an image to an item
 # The live console (0.7.0). A long poll: the page asks "has anything changed
 # since seq S?" and the server answers the moment something does, or after at
 # most WAIT_MAX seconds with "no". Well inside Cloudflare's 100 s response
@@ -1790,7 +1791,7 @@ class Console:
     # ---- Assets (1.32, FEED-ASSETS.md) ------------------------------------------------------
     # Screenshots and recordings an agent posts on an item, unasked. Stored under STATE/assets
     # (assets.py), outside the store; the page re-reads `view.assets` on the next wake.
-    def add_asset(self, body: object, agent: str | None) -> dict:
+    def add_asset(self, body: object, agent: str | None, by: str = "agent") -> dict:
         fields = {"item", "content_b64", "caption", "kind", "qid", "pr", "ticket", "nonce"}
         if not isinstance(body, dict) or set(body) - fields or not {"item", "content_b64", "caption"} <= set(body):
             raise RequestError(400, '/asset takes {"item", "content_b64", "caption", "kind"?, "qid"?, "pr"?, '
@@ -1834,7 +1835,7 @@ class Console:
             with self._lock:
                 out = AS.add(self.cfg.state, item=item, data=data, caption=body["caption"],
                              kind=body.get("kind") or "screenshot", agent=agent, now=_iso_now(),
-                             starred=starred, qid=qid, pr=body.get("pr"), ticket=ticket)
+                             starred=starred, qid=qid, pr=body.get("pr"), ticket=ticket, by=by)
         except AS.AssetError as e:
             raise RequestError(400, str(e)) from None
         except OSError as e:
@@ -3607,7 +3608,7 @@ class OwnerHandler(_Handler):
             if bad:
                 raise RequestError(400, f"kind {', '.join(bad)} is not one of {', '.join(V.FEED_KINDS)}")
         item = query.get("item") or None
-        if item is not None and item != S.CHAT_ITEM and (len(item) > 128 or not S.ITEM_ID.match(item)):
+        if item is not None and item not in (S.CHAT_ITEM, S.PRS_ITEM) and (len(item) > 128 or not S.ITEM_ID.match(item)):
             raise RequestError(400, "item must be an item id")
         before = self._int(query.get("before"), "before", 1, 10**9)
         limit = self._int(query.get("limit"), "limit", 1, V.FEED_MAX) or V.FEED_DEFAULT
@@ -3761,7 +3762,7 @@ class OwnerHandler(_Handler):
                                               "/api/refactor", OWNER_FAVORITE, OWNER_PLAYBOOK,
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
-                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE):
+                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -3803,6 +3804,12 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.ticket_update(self._body()))
             if self.path == OWNER_TICKET_CLOSE:     # close a ticket; dependents unblock as needed
                 return self._send(200, self.console.ticket_close(self._body()))
+            if self.path == OWNER_ASSET_UPLOAD:     # F2: an image the owner attached or pasted
+                self.max_body = ASSET_MAX_BODY
+                body = self._body()
+                if not isinstance(body, dict) or set(body) - {"item", "content_b64", "caption", "nonce"}:
+                    raise RequestError(400, '/api/asset-upload takes {"item", "content_b64", "caption", "nonce"?}')
+                return self._send(200, self.console.add_asset({**body, "kind": "screenshot"}, None, by="owner"))
             if self.path == OWNER_ASSET_DELETE:     # 1.32: the owner removes an agent's asset
                 return self._send(200, self.console.asset_delete(self._body()))
             self._send(200, {"record": self.console.write(kind, self._body(), "owner")})

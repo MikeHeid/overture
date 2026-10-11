@@ -126,7 +126,8 @@ class _Handler(BaseHTTPRequestHandler):
                 payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "ux": True}}
                 vs = [{"id": f"v{n}", "seq": 10 + n, "ts": f"2026-10-11T0{n}:00:00Z", "item": "LANE.1", "request": "rq",
                        "format": "html", "title": "Save button", "text": f"Version {n}", "path": f"p{n}.html",
-                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"} for n in (1, 2)]
+                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"}
+                       for n in range(1, (_Handler.view_ux if isinstance(_Handler.view_ux, int) and _Handler.view_ux > 1 else 2) + 1)]
                 payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
                 if _Handler.view_scripts:
                     sw = {"id": "s" * 24, "seq": 99, "ts": "2026-10-11T09:00:00Z", "item": "LANE.1", "by": "owner",
@@ -725,6 +726,66 @@ class UxViewTests(unittest.TestCase):
         # The console ignored the frame's message (it is not one of the console's own chart frames).
         self.assertNotIn("pwned", page.evaluate("document.body.innerText"))
         self.assertEqual(page.evaluate("document.querySelectorAll('a[download]').length"), 0)
+
+    def test_a_viewer_on_the_newest_version_follows_a_new_one_but_not_from_an_older_one(self):
+        page = self._open()
+        self.assertIn("v2 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 3                                    # a third version arrives on the next refresh
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('v3 of 3')")
+        page.get_by_role("button", name="Previous version").click()
+        self.assertIn("v2 of 3", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 4
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('of 4')")
+        self.assertIn("v2 of 4", page.locator(".ck-ux-vlabel").inner_text())
+
+    PNG = __import__("base64").b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+    def _item(self):
+        _Handler.view_ux = True
+        page = self._page("chromium", 1280)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.evaluate("window.location.hash = 'item=LANE.1'")
+        page.wait_for_selector(".ck-thread .ck-textarea")
+        return page
+
+    def test_the_owner_can_attach_an_image_by_choosing_a_file(self):
+        import base64
+        page = self._item()
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "my mock.png", "mimeType": "image/png",
+                                                                          "buffer": self.PNG}])
+        page.wait_for_function("document.querySelector('.ck-attach-status') === null || document.querySelector('.ck-attach-status').textContent !== ''")
+        page.wait_for_timeout(400)
+        up = [m for m in _Handler.posts if "content_b64" in m]
+        self.assertEqual([(m["item"], m["caption"]) for m in up], [("LANE.1", "my mock")])
+        self.assertEqual(base64.b64decode(up[0]["content_b64"]), self.PNG)
+        self.assertNotIn("kind", up[0])
+
+    def test_pasting_an_image_attaches_it_and_a_non_image_is_refused_before_sending(self):
+        page = self._item()
+        page.evaluate("""(b64) => {
+          const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+          const dt = new DataTransfer();
+          dt.items.add(new File([bin], 'pasted.png', {type: 'image/png'}));
+          document.querySelector('.ck-thread .ck-textarea').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        }""", __import__("base64").b64encode(self.PNG).decode())
+        page.wait_for_timeout(500)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "x.txt", "mimeType": "text/plain", "buffer": b"hi"}])
+        page.wait_for_timeout(300)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+
+    def test_a_link_being_typed_survives_a_live_refresh(self):
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        page.fill("#ck-ux-link", "https://claude.ai/design/p/fee63c71-69b8")
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")      # the view is fetched and repainted
+        page.wait_for_timeout(600)
+        self.assertEqual(page.input_value("#ck-ux-link"), "https://claude.ai/design/p/fee63c71-69b8")
 
     def test_full_screen_and_no_overflow_on_a_phone(self):
         page = self._open(width=375)

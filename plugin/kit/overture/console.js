@@ -197,6 +197,7 @@
   let knownVisualIds = null;    // 0.8.19: every visual record id the page has seen
   let seenAtOpen = 0;           // the seen seq when the inbox was opened: what the Feed marks "new"
   const CHAT_ITEM = '@chat';    // mirrors schema.CHAT_ITEM
+  const PRS_ITEM = '@prs';      // mirrors schema.PRS_ITEM
   const MAX_CHAT = 4000;        // mirrors schema.MAX_CHAT
   const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
 
@@ -5596,6 +5597,25 @@
     if (draftTexts[draftKey]) inputTextarea.value = draftTexts[draftKey];
     inputTextarea.addEventListener('input', () => { setDraft(draftKey, inputTextarea.value); });
     authorInput.appendChild(inputTextarea);
+    // F2: attach or paste an image of your own; it lands on this item beside the agents' screenshots.
+    const attachStatus = el('span', { className: 'ck-muted ck-attach-status', role: 'status', 'aria-live': 'polite' });
+    const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: 'hidden',
+      'aria-label': 'Choose an image to attach to ' + itemId });
+    const attachBtn = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
+      'aria-label': 'Attach an image to ' + itemId }, [icon('image') || '', 'Attach image']);
+    attachBtn.addEventListener('click', () => fileInput.click());
+    const doAttach = async file => {
+      attachStatus.textContent = 'Attaching\u2026';
+      const r = await attachImage(itemId, file);
+      attachStatus.textContent = r.error ? 'Not attached: ' + r.error : 'Attached.';
+      announce(attachStatus.textContent);
+      if (!r.error) renderPanel();
+    };
+    fileInput.addEventListener('change', () => { const f = fileInput.files && fileInput.files[0]; if (f) doAttach(f); fileInput.value = ''; });
+    inputTextarea.addEventListener('paste', e => {
+      const f = Array.from((e.clipboardData && e.clipboardData.files) || []).find(x => /^image\//.test(x.type));
+      if (f) { e.preventDefault(); doAttach(f); }
+    });
     const sendBtn = el('button', { className: 'ck-btn ck-btn-primary', type: 'button', style: 'margin-top: 8px;' },
       ['Send']);
     sendBtn.addEventListener('click', async () => {
@@ -5612,7 +5632,7 @@
         renderPanel();
       }
     });
-    authorInput.appendChild(sendBtn);
+    authorInput.appendChild(el('div', { className: 'ck-attach-row' }, [sendBtn, attachBtn, fileInput, attachStatus]));
     wrap.appendChild(authorInput);
 
     // Messages
@@ -6024,7 +6044,9 @@
     function paint() {
       const f = uxFacts(itemId);
       const n = f.visuals.length;
-      if (st.idx < 0 || st.idx >= n) st.idx = n - 1;          // newest by default; the owner's walk is kept
+      // Newest by default; a walk to an older version is kept, but a viewer on the newest follows a new arrival.
+      if (st.idx < 0 || st.idx >= n || (n > (st.n || 0) && st.idx === (st.n || 0) - 1)) st.idx = n - 1;
+      st.n = n;
       const cur = n ? f.visuals[st.idx] : null;
       const px = (UX_SIZES.find(x => x[0] === st.size) || [])[2] || 0;
       for (const k of Object.keys(radios)) radios[k].setAttribute('aria-checked', k === st.size ? 'true' : 'false');
@@ -6070,8 +6092,11 @@
         : 'Not saved yet. Save writes components/' + itemId + '.md by a pull request.']));
       const det = el('details', { className: 'ck-ux-settings' }, [el('summary', {}, ['Settings'])]);
       const linkId = 'ck-ux-link';
-      const link = el('input', { type: 'url', id: linkId, className: 'ck-input', value: f.design,
+      // What the owner is typing survives the live refresh that repaints this panel.
+      const link = el('input', { type: 'url', id: linkId, className: 'ck-input',
+        value: st.linkDraft !== undefined ? st.linkDraft : f.design,
         placeholder: 'https://claude.ai/design/p/…', autocomplete: 'off' });
+      link.addEventListener('input', () => { st.linkDraft = link.value; });
       const linkSave = el('button', { type: 'button', className: 'ck-btn' }, [f.design ? 'Update link' : 'Link design']);
       const unlink = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', hidden: f.design ? null : 'hidden' }, ['Unlink']);
       det.appendChild(el('label', { for: linkId, className: 'ck-field-label' }, ['Claude Design link']));
@@ -6116,7 +6141,8 @@
       const sendLink = async url => {
         err.hidden = true;
         const r = await apiPost('/message', { item: itemId, intent: 'ux-link', url, text: url ? 'Link the Claude Design project' : 'Unlink the Claude Design project' }, 'ux-link-' + itemId);
-        if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; } else announce(url ? 'Design linked.' : 'Design unlinked.');
+        if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; }
+        else { st.linkDraft = undefined; announce(url ? 'Design linked.' : 'Design unlinked.'); }
       };
       linkSave.addEventListener('click', () => sendLink(link.value.trim()));
       unlink.addEventListener('click', () => sendLink(''));
@@ -7403,6 +7429,9 @@
     const chatOpt = el('option', { value: CHAT_ITEM }, ['The chat']);
     if (feedState.item === CHAT_ITEM) chatOpt.selected = true;
     itemSel.appendChild(chatOpt);
+    const prsOpt = el('option', { value: PRS_ITEM }, ['Merge requests']);
+    if (feedState.item === PRS_ITEM) prsOpt.selected = true;
+    itemSel.appendChild(prsOpt);
     for (const id of treeOrder()) {
       const o = el('option', { value: id }, [id + (items[id].title ? ' · ' + truncateText(items[id].title, 40) : '')]);
       if (feedState.item === id) o.selected = true;
@@ -7839,6 +7868,21 @@
     paint();
     close.focus();
   }
+  // F2: send the owner's own image for an item. Checked here for a clear message; the server checks again.
+  async function attachImage(itemId, file) {
+    if (!file || !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) return { error: 'only a PNG, JPEG, WebP or GIF' };
+    const limit = file.type === 'image/gif' ? 8 << 20 : 2 << 20;
+    if (file.size > limit) return { error: 'that file is ' + Math.ceil(file.size / 1024) + ' KiB; the limit is ' + (limit >> 20) + ' MiB' };
+    const b64 = await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(',')[1] || '');
+      fr.onerror = () => res('');
+      fr.readAsDataURL(file);
+    });
+    if (!b64) return { error: 'the file could not be read' };
+    const caption = (String(file.name || '').replace(/\.[A-Za-z0-9]+$/, '').replace(/[\r\n]+/g, ' ').trim() || 'Image from you').slice(0, 200);
+    return apiPost('/asset-upload', { item: itemId, content_b64: b64, caption }, 'asset-' + itemId + '-' + b64.length);
+  }
   // The item's own gallery, under its questions; shown only when the item has assets.
   function renderAssetsFold(itemId) {
     const rows = assetRows(itemId);
@@ -7867,7 +7911,7 @@
       const oldest = feedState.next && evs.length ? evs[evs.length - 1].ts : null;
       const groups = pairAssets(rows).filter(g => !oldest || g[g.length - 1].at >= oldest);
       evs = evs.concat(groups.map(g => ({ kind: 'asset', ts: g[g.length - 1].at, item: g[0].item,
-        agent: g[g.length - 1].agent, group: g, all: rows })));
+        agent: g[g.length - 1].by === 'owner' ? 'you' : g[g.length - 1].agent, group: g, all: rows })));
       const pruned = ((view && view.assets && view.assets.pruned) || [])
         .filter(n => !feedState.item || n.item === feedState.item);
       evs = evs.concat(pruned.map(n => ({ kind: 'asset', ts: n.at, item: n.item, pruned: n })));
@@ -7895,7 +7939,7 @@
         continue;
       }
       const isNew = ev.seq > seenAtOpen && ev.by === 'agent';
-      const where = ev.item === CHAT_ITEM ? 'chat' : (ev.qid || ev.item || '');
+      const where = ev.item === CHAT_ITEM ? 'chat' : ev.item === PRS_ITEM ? 'merge requests' : (ev.qid || ev.item || '');
       const row = el('li', { className: 'ck-feed-row' + (isNew ? ' ck-feed-new' : ''), dataKind: ev.kind, dataSeq: String(ev.seq) });
       const head = el('div', { className: 'ck-feed-head' }, [
         el('span', { className: 'ck-feed-kind', dataKind: ev.kind }, [feedWords(ev)]),
@@ -7910,12 +7954,12 @@
         t.textContent = ev.text;
         row.appendChild(t);
       }
-      const target = ev.item === CHAT_ITEM ? 'chat' : (items[ev.item] ? ev.item : null);
+      const target = ev.item === CHAT_ITEM ? 'chat' : ev.item === PRS_ITEM ? 'prs' : (items[ev.item] ? ev.item : null);
       if (target) {
         const open = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
-          'aria-label': 'Open ' + (target === 'chat' ? 'the chat' : target) }, ['Open']);
+          'aria-label': 'Open ' + (target === 'chat' ? 'the chat' : target === 'prs' ? 'the pull requests' : target) }, ['Open']);
         open.addEventListener('click', () => {
-          if (target === 'chat') return selectTab('chat');
+          if (target === 'chat' || target === 'prs') return selectTab(target);
           openFromInbox(target);
         });
         row.appendChild(open);
