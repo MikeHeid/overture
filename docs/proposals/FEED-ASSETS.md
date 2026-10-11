@@ -131,7 +131,9 @@ CHANGELOG says so.
     PR, and record that in the Feed.
   - **B** Refuse new assets until the owner deletes some.
 - **F2. The owner attaching images too** (pasting into an item's thread).
-  - **A ★** Later, as its own PR.
+  - **A ★** Later, as its own PR. *Built in 1.33: **Attach image** and
+    paste in an item's Discussion box, `POST /api/asset-upload` (owner only,
+    always a screenshot, its own 30-per-10-minutes bucket, shown as "you").*
   - **B** In the same PR.
 - **F3. Posting by default.**
   - **A ★** Skills post a before and an after for every change to a UX item

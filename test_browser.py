@@ -740,6 +740,45 @@ class UxViewTests(unittest.TestCase):
         page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('of 4')")
         self.assertIn("v2 of 4", page.locator(".ck-ux-vlabel").inner_text())
 
+    PNG = __import__("base64").b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+    def _item(self):
+        _Handler.view_ux = True
+        page = self._page("chromium", 1280)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.evaluate("window.location.hash = 'item=LANE.1'")
+        page.wait_for_selector(".ck-thread .ck-textarea")
+        return page
+
+    def test_the_owner_can_attach_an_image_by_choosing_a_file(self):
+        import base64
+        page = self._item()
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "my mock.png", "mimeType": "image/png",
+                                                                          "buffer": self.PNG}])
+        page.wait_for_function("document.querySelector('.ck-attach-status') === null || document.querySelector('.ck-attach-status').textContent !== ''")
+        page.wait_for_timeout(400)
+        up = [m for m in _Handler.posts if "content_b64" in m]
+        self.assertEqual([(m["item"], m["caption"]) for m in up], [("LANE.1", "my mock")])
+        self.assertEqual(base64.b64decode(up[0]["content_b64"]), self.PNG)
+        self.assertNotIn("kind", up[0])
+
+    def test_pasting_an_image_attaches_it_and_a_non_image_is_refused_before_sending(self):
+        page = self._item()
+        page.evaluate("""(b64) => {
+          const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+          const dt = new DataTransfer();
+          dt.items.add(new File([bin], 'pasted.png', {type: 'image/png'}));
+          document.querySelector('.ck-thread .ck-textarea').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        }""", __import__("base64").b64encode(self.PNG).decode())
+        page.wait_for_timeout(500)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "x.txt", "mimeType": "text/plain", "buffer": b"hi"}])
+        page.wait_for_timeout(300)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+
     def test_a_link_being_typed_survives_a_live_refresh(self):
         page = self._open()
         page.locator(".ck-ux-settings summary").click()

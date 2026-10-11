@@ -3595,3 +3595,8 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   background: var(--c-claimed-bg, var(--c-surface-alt)); color: var(--c-claimed, var(--c-fg)); border: 1px solid var(--c-border); }
 .ck-ux-scripts-badge[hidden] { display: none; }
 .ck-ux-switch { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 6px 0; }
+
+/* F2: attach an image (1.33) */
+.ck-attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.ck-attach-row .ck-btn-primary { margin-top: 0 !important; }
+.ck-attach-status { font-size: 12px; }

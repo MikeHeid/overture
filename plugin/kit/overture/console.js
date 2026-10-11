@@ -5597,6 +5597,25 @@
     if (draftTexts[draftKey]) inputTextarea.value = draftTexts[draftKey];
     inputTextarea.addEventListener('input', () => { setDraft(draftKey, inputTextarea.value); });
     authorInput.appendChild(inputTextarea);
+    // F2: attach or paste an image of your own; it lands on this item beside the agents' screenshots.
+    const attachStatus = el('span', { className: 'ck-muted ck-attach-status', role: 'status', 'aria-live': 'polite' });
+    const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: 'hidden',
+      'aria-label': 'Choose an image to attach to ' + itemId });
+    const attachBtn = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
+      'aria-label': 'Attach an image to ' + itemId }, [icon('image') || '', 'Attach image']);
+    attachBtn.addEventListener('click', () => fileInput.click());
+    const doAttach = async file => {
+      attachStatus.textContent = 'Attaching\u2026';
+      const r = await attachImage(itemId, file);
+      attachStatus.textContent = r.error ? 'Not attached: ' + r.error : 'Attached.';
+      announce(attachStatus.textContent);
+      if (!r.error) renderPanel();
+    };
+    fileInput.addEventListener('change', () => { const f = fileInput.files && fileInput.files[0]; if (f) doAttach(f); fileInput.value = ''; });
+    inputTextarea.addEventListener('paste', e => {
+      const f = Array.from((e.clipboardData && e.clipboardData.files) || []).find(x => /^image\//.test(x.type));
+      if (f) { e.preventDefault(); doAttach(f); }
+    });
     const sendBtn = el('button', { className: 'ck-btn ck-btn-primary', type: 'button', style: 'margin-top: 8px;' },
       ['Send']);
     sendBtn.addEventListener('click', async () => {
@@ -5613,7 +5632,7 @@
         renderPanel();
       }
     });
-    authorInput.appendChild(sendBtn);
+    authorInput.appendChild(el('div', { className: 'ck-attach-row' }, [sendBtn, attachBtn, fileInput, attachStatus]));
     wrap.appendChild(authorInput);
 
     // Messages
@@ -7849,6 +7868,21 @@
     paint();
     close.focus();
   }
+  // F2: send the owner's own image for an item. Checked here for a clear message; the server checks again.
+  async function attachImage(itemId, file) {
+    if (!file || !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) return { error: 'only a PNG, JPEG, WebP or GIF' };
+    const limit = file.type === 'image/gif' ? 8 << 20 : 2 << 20;
+    if (file.size > limit) return { error: 'that file is ' + Math.ceil(file.size / 1024) + ' KiB; the limit is ' + (limit >> 20) + ' MiB' };
+    const b64 = await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(',')[1] || '');
+      fr.onerror = () => res('');
+      fr.readAsDataURL(file);
+    });
+    if (!b64) return { error: 'the file could not be read' };
+    const caption = (String(file.name || '').replace(/\.[A-Za-z0-9]+$/, '').replace(/[\r\n]+/g, ' ').trim() || 'Image from you').slice(0, 200);
+    return apiPost('/asset-upload', { item: itemId, content_b64: b64, caption }, 'asset-' + itemId + '-' + b64.length);
+  }
   // The item's own gallery, under its questions; shown only when the item has assets.
   function renderAssetsFold(itemId) {
     const rows = assetRows(itemId);
@@ -7877,7 +7911,7 @@
       const oldest = feedState.next && evs.length ? evs[evs.length - 1].ts : null;
       const groups = pairAssets(rows).filter(g => !oldest || g[g.length - 1].at >= oldest);
       evs = evs.concat(groups.map(g => ({ kind: 'asset', ts: g[g.length - 1].at, item: g[0].item,
-        agent: g[g.length - 1].agent, group: g, all: rows })));
+        agent: g[g.length - 1].by === 'owner' ? 'you' : g[g.length - 1].agent, group: g, all: rows })));
       const pruned = ((view && view.assets && view.assets.pruned) || [])
         .filter(n => !feedState.item || n.item === feedState.item);
       evs = evs.concat(pruned.map(n => ({ kind: 'asset', ts: n.at, item: n.item, pruned: n })));
