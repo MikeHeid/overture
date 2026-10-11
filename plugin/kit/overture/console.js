@@ -1565,7 +1565,7 @@
       shortcutGpfx = 0;
       // new tabs — 'y' = playbooks (p is PRs), 't' = triggers. Favorite/chat shortcuts
       // still work even though they're behind the "More ▾" dropdown.
-      const tab = ({ i: 'inbox', f: 'feed', p: 'prs', y: 'playbooks', t: 'triggers',
+      const tab = ({ i: 'inbox', f: 'feed', k: 'tickets', p: 'prs', y: 'playbooks', t: 'triggers',
                      s: 'favorite', o: 'portfolio', c: 'chat' })[e.key];
       if (tab) {
         e.preventDefault();
@@ -1616,7 +1616,7 @@
     const rows = [
       ['Ctrl/Cmd + K', 'Open the command palette'],
       ['Alt + Enter', 'Copy a shareable link to the selected palette row'],
-      ['g i', 'Open Inbox tab'], ['g f', 'Open Feed tab'], ['g p', 'Open PRs tab'],
+      ['g i', 'Open Inbox tab'], ['g f', 'Open Feed tab'], ['g k', 'Open Tickets tab'], ['g p', 'Open PRs tab'],
       ['g y', 'Open Playbooks tab'], ['g t', 'Open Triggers tab'],
       ['g o', 'Open Portfolio tab'], ['g s', 'Open Favorite tab'], ['g c', 'Open Chat tab'],
       ['g b', 'Close panel (back to board)'],
@@ -1660,7 +1660,7 @@
 
   function buildPaletteCommands() {
     const cmds = [];
-    const tabs = [['inbox', 'Inbox', 'g i'], ['feed', 'Feed', 'g f'], ['prs', 'PRs', 'g p'],
+    const tabs = [['inbox', 'Inbox', 'g i'], ['feed', 'Feed', 'g f'], ['tickets', 'Tickets', 'g k'], ['prs', 'PRs', 'g p'],
                   ['playbooks', 'Playbooks', 'g y'], ['triggers', 'Triggers', 'g t'],
                   ['portfolio', 'Portfolio', 'g o'], ['favorite', 'Favorite', 'g s'], ['chat', 'Chat', 'g c']];
     for (const [id, label, hint] of tabs) cmds.push({ kind: 'tab', id, label, hint });
@@ -2043,6 +2043,8 @@
       body.appendChild(renderOffline());
     } else if (currentTab === 'feed') {
       renderFeed(body);
+    } else if (currentTab === 'tickets') {
+      renderTicketsTab(body);
     } else if (currentTab === 'prs') {
       renderPRs(body);
     } else if (currentTab === 'playbooks') {   // promoted from the Delegate bar's select
@@ -2071,6 +2073,7 @@
   const TABS = [
     ['inbox', 'Inbox'],
     ['feed', 'Feed'],
+    ['tickets', 'Tickets'],
     ['prs', 'PRs'],
     ['playbooks', 'Playbooks'],
     ['triggers', 'Triggers'],
@@ -2079,12 +2082,16 @@
     ['chat', 'Chat']
   ];
   // Which TABS are shown directly in the bar vs. folded behind "More ▾".
-  const TABS_PRIMARY_IDS = ['inbox', 'feed', 'prs', 'playbooks', 'triggers', 'portfolio'];
+  const TABS_PRIMARY_IDS = ['inbox', 'feed', 'tickets', 'prs', 'playbooks', 'triggers', 'portfolio'];
 
   function tabNote(id) {
     const unread = unreadCount();
     if (id === 'inbox' && view && view.inbox && view.inbox.length) return String(view.inbox.length);
     if (id === 'feed' && unread) return unread + ' new';
+    if (id === 'tickets') {
+      const n = ticketOpenTotal();
+      if (n) return String(n);
+    }
     if (id === 'playbooks' && view && Array.isArray(view.playbooks) && view.playbooks.length) {
       return String(view.playbooks.length);
     }
@@ -5194,9 +5201,100 @@
       for (const t of closed) d.appendChild(renderTicketRow(t));
       body.appendChild(d);
     }
+    if (list.some(t => Array.isArray(t.blocked_by) && t.blocked_by.length)) {
+      body.appendChild(renderTicketChart(itemId));
+    }
     body.appendChild(renderNewTicketForm(itemId));
     details.appendChild(body);
     return details;
+  }
+
+  // Tickets tab: every item's tickets as a board (Open / Blocked / Closed), a kind filter, and the
+  // blocker graph. Reads view.tickets only; writes go through the same /ticket-close as the fold.
+  let ticketKindFilter = 'all';
+  let ticketChartOpen = false;
+  function ticketTitles() {
+    const out = {};
+    const byItem = (view && view.tickets && view.tickets.by_item) || {};
+    for (const lst of Object.values(byItem)) for (const t of lst) out[t.id] = t.title;
+    return out;
+  }
+  function ticketOpenTotal() {
+    const counts = (view && view.tickets && view.tickets.counts) || {};
+    let n = 0;
+    for (const c of Object.values(counts)) n += (c.open || 0) + (c.blocked || 0);
+    return n;
+  }
+  function renderTicketChart(itemId) {
+    const wrap = el('details', { className: 'ck-item-chart ck-ticket-chart' });
+    if (!itemId && ticketChartOpen) wrap.setAttribute('open', '');
+    wrap.appendChild(el('summary', { className: 'ck-item-chart-summary' }, [
+      el('span', { className: 'ck-item-chart-title' }, ['What blocks what']),
+      el('span', { className: 'ck-muted ck-item-chart-hint' }, [' — tickets, arrows from blocker to blocked'])
+    ]));
+    const slot = el('div', { className: 'ck-item-chart-slot' });
+    wrap.appendChild(slot);
+    const load = () => {
+      if (slot.querySelector('iframe')) return;
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.setAttribute('title', 'Ticket graph' + (itemId ? ': ' + itemId : ''));
+      frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
+      frame.src = config.api + '/ticket-chart' + (itemId ? '?item=' + encodeURIComponent(itemId) : '');
+      slot.appendChild(frame);
+    };
+    wrap.addEventListener('toggle', () => {
+      if (!itemId) ticketChartOpen = wrap.open;
+      if (wrap.open) load();
+    });
+    if (wrap.open) load();
+    return wrap;
+  }
+  function renderTicketsTab(body) {
+    const byItem = (view && view.tickets && view.tickets.by_item) || {};
+    const all = [];
+    for (const lst of Object.values(byItem)) for (const t of lst) all.push(t);
+    const total = { open: 0, blocked: 0, closed: 0 };
+    for (const t of all) if (t.status in total) total[t.status] += 1;
+    body.appendChild(el('p', { className: 'ck-muted ck-tickets-tab-summary' }, [
+      all.length ? (total.open + ' open · ' + total.blocked + ' blocked · ' + total.closed + ' closed, across '
+        + Object.keys(byItem).length + ' item' + (Object.keys(byItem).length === 1 ? '' : 's'))
+        : 'No tickets yet. Open an item and use "+ New ticket", or let Launch Idea create them.']));
+    if (!all.length) return;
+    const chips = el('div', { className: 'ck-chip-row ck-ticket-filters', role: 'group', 'aria-label': 'Filter by kind' });
+    for (const k of ['all'].concat(Object.keys(TICKET_KIND_LABELS))) {
+      const b = el('button', { type: 'button', className: 'ck-inbox-chip',
+        'aria-pressed': ticketKindFilter === k ? 'true' : 'false' }, [k === 'all' ? 'All' : TICKET_KIND_LABELS[k]]);
+      b.addEventListener('click', () => { ticketKindFilter = k; renderPanel(); });
+      chips.appendChild(b);
+    }
+    body.appendChild(chips);
+    body.appendChild(renderTicketChart(null));
+    const shown = all.filter(t => ticketKindFilter === 'all' || t.kind === ticketKindFilter);
+    const board = el('div', { className: 'ck-ticket-board' });
+    const cols = [['open', 'Open'], ['blocked', 'Blocked'], ['closed', 'Closed']];
+    for (const [status, label] of cols) {
+      let rows = shown.filter(t => t.status === status)
+        .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+      const col = el('section', { className: 'ck-ticket-col', dataStatus: status, 'aria-label': label + ' tickets' });
+      col.appendChild(el('h3', { className: 'ck-ticket-col-h' }, [label + ' ',
+        el('span', { className: 'ck-muted' }, [String(rows.length)])]));
+      const more = status === 'closed' && rows.length > 8 ? rows.length - 8 : 0;
+      if (more) rows = rows.slice(0, 8);
+      for (const t of rows) {
+        const card = renderTicketRow(t);
+        const chip = el('button', { type: 'button', className: 'ck-ref-link ck-ticket-item',
+          title: 'Open ' + t.parent_item }, [t.parent_item]);
+        chip.addEventListener('click', () => openPanel(t.parent_item, 'item'));
+        const head = card.querySelector('.ck-ticket-head');
+        (head || card).insertBefore(chip, (head || card).firstChild);
+        col.appendChild(card);
+      }
+      if (more) col.appendChild(el('p', { className: 'ck-muted' }, ['+' + more + ' older']));
+      board.appendChild(col);
+    }
+    body.appendChild(board);
   }
   function renderTicketRow(t) {
     const row = el('div', { className: 'ck-ticket', dataStatus: t.status, dataKind: t.kind,
@@ -5211,8 +5309,11 @@
       row.appendChild(el('p', { className: 'ck-ticket-body' }, [t.body]));
     }
     if (Array.isArray(t.blocked_by) && t.blocked_by.length) {
-      row.appendChild(el('div', { className: 'ck-ticket-blocked ck-muted' },
-        ['Blocked by: ' + t.blocked_by.join(', ')]));
+      // Name each blocker by its title (the id stays in the tooltip): an id alone says nothing.
+      const titles = ticketTitles();
+      const names = t.blocked_by.map(id => titles[id] ? '“' + titles[id] + '”' : id);
+      row.appendChild(el('div', { className: 'ck-ticket-blocked ck-muted', title: t.blocked_by.join(', ') },
+        ['Blocked by ' + names.join(', ')]));
     }
     if (t.status !== 'closed') {
       const actions = el('div', { className: 'ck-actions ck-ticket-actions' });

@@ -399,6 +399,29 @@ deleted: each act is recorded in a file beside the store, and the fold records t
 outcome in your project. New questions are refused a whole-file hash where an
 excerpt fits, which is what made most rulings go stale.
 
+### Track work as tickets
+
+Tickets are small units of work that belong to an item: a **task**, a **bug**,
+a **research** question, or a **grilling** note. You create them on an
+item's panel. Launch Idea and Branch Out create them for you.
+
+- **Blocking.** A ticket can be blocked by other tickets. Circular blocking
+  is refused by name. When a blocker closes, everything it blocked
+  unblocks.
+- **The Tickets tab** (`g k`) is a board across every item, with Open,
+  Blocked and Closed columns and a filter by kind. Each card names its
+  item, opens it with a click, and says what blocks it by title.
+- **What blocks what** draws the chains as a diagram, grouped by item. It
+  is there for the whole project on the Tickets tab, and for one item on
+  that item's panel.
+
+<img src="docs/screenshots/anim-tickets.gif" alt="Closing a blocking ticket: Ledger schema closes and Migration for the ledger moves from Blocked to Open" width="400">
+
+<img src="docs/screenshots/feature-ticket-graph.png" alt="What blocks what: tickets grouped by item, arrows from blocker to blocked, blocked tickets outlined in red" width="400">
+
+Only you create and close tickets. Agents cannot write them yet; that
+waits on the capability gate.
+
 ### Your dashboard, published by you
 
 The console can sit inside your project's own dashboard page. An agent

@@ -1597,6 +1597,9 @@ class Console:
     def ticket_create(self, body: object, by: str = "owner", agent: str | None = None) -> dict:
         if not isinstance(body, dict) or not isinstance(body.get("nonce"), str):
             raise RequestError(400, '/api/ticket-create takes a {"nonce", "parent_item", "kind", "title", "body"?} object')
+        # A ticket hangs off an item the project lists; under any other id no panel would ever show it.
+        if isinstance(body.get("parent_item"), str) and body["parent_item"] not in self.items():
+            raise RequestError(400, f"no item {body['parent_item']!r} in the project's item list")
         try:
             with self._lock:
                 row = TK.create(self.cfg.state, body, by, _iso_now(), agent=agent)
@@ -1866,6 +1869,23 @@ class Console:
         title = "Project map" + (f" — {state}" if state else "")
         suffix = f"-{state}" if state else ""
         return _mermaid_wrapper(source, title, nonce, clickable=True, filename=f"project-map{suffix}")
+
+    def ticket_chart(self, nonce: str, item: str | None = None) -> tuple[bytes, str, str]:
+        """Tickets as a Mermaid graph: blocker -> blocked, coloured by status; one item or the whole project.
+
+        Built here from `tickets.json` (owner-written); same sandboxed wrapper and CSP as the other charts.
+        """
+        items = self.items()
+        if item is not None and item not in items:
+            raise RequestError(404, f"no item {item!r} in the project's item list")
+        try:
+            tv = TK.as_view(TK.load(self.cfg.state))
+        except (TK.TicketError, OSError) as e:
+            raise RequestError(503, f"tickets cannot be read: {e}") from None
+        source = CH.build_tickets(tv, items, item, clickable=True)
+        title = f"Tickets: {item}" if item else "Tickets"
+        return _mermaid_wrapper(source, title, nonce, clickable=True,
+                                filename=f"tickets-{item}" if item else "tickets")
 
     def item_impact(self, item: str, nonce: str) -> tuple[bytes, str, str]:
         """0.14.0: an interactive impact graph (Cytoscape) for `item`."""
@@ -3264,6 +3284,11 @@ class OwnerHandler(_Handler):
         route, query = self._query()
         if route == "/api/project-chart" and query is not None:
             return self._project_chart(query)
+        if route == "/api/ticket-chart" and query is not None:
+            try:
+                return self._ticket_chart(query)
+            except RequestError as e:
+                return self._send(e.code, {"error": str(e)})
         if route == "/api/playbook-plan" and query is not None:
             try:
                 return self._send(200, self.console.playbook_plan(query.get("name", "")))
@@ -3408,6 +3433,16 @@ class OwnerHandler(_Handler):
             raise RequestError(400, "item must be an item id")
         nonce = secrets.token_hex(16)
         data, ctype, csp = self.console.item_impact(item, nonce)
+        self._send_raw(200, data, ctype, csp)
+
+    def _ticket_chart(self, query: dict[str, str]) -> None:
+        """Tickets and what blocks what, for one item (`?item=`) or the whole project."""
+        self._only(query, {"item"}, "/api/ticket-chart")
+        item = query.get("item") or None
+        if item is not None and (len(item) > 128 or not S.ITEM_ID.match(item)):
+            raise RequestError(400, "item must be an item id")
+        nonce = secrets.token_hex(16)
+        data, ctype, csp = self.console.ticket_chart(nonce, item)
         self._send_raw(200, data, ctype, csp)
 
     def _project_chart(self, query: dict[str, str]) -> None:

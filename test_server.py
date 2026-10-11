@@ -14,6 +14,7 @@ import hashlib
 import http.client
 import io
 import json
+import re
 import os
 import stat
 import subprocess
@@ -1489,6 +1490,63 @@ class BacklinkTests(_Live, unittest.TestCase):
         style_src = [d for d in r.getheader("Content-Security-Policy").split(";") if "style-src" in d][0]
         self.assertIn("'unsafe-inline'", style_src)
         self.assertNotIn("nonce-", style_src)
+
+
+class TicketRouteTests(_Live, unittest.TestCase):
+    """The owner door's ticket routes (1.26): create, update, close, and view.tickets."""
+
+    def ticket(self, path, **body):
+        body.setdefault("nonce", "tk" + os.urandom(6).hex())
+        return self.req("POST", path, body, tok=token())
+
+    def test_create_update_close_round_trip_through_the_view(self):
+        code, a = self.ticket("/api/ticket-create", parent_item="LANE.1", kind="bug", title="Retry storms")
+        self.assertEqual(code, 200, a)
+        code, b = self.ticket("/api/ticket-create", parent_item="LANE.1", title="Backoff", blocked_by=[a["ticket"]["id"]])
+        self.assertEqual((code, b["ticket"]["status"]), (200, "blocked"))
+        code, u = self.ticket("/api/ticket-update", id=b["ticket"]["id"], title="Exponential backoff")
+        self.assertEqual((code, u["ticket"]["title"]), (200, "Exponential backoff"))
+        code, _ = self.ticket("/api/ticket-close", id=a["ticket"]["id"])
+        self.assertEqual(code, 200)
+        _, view = self.get("/api/view")
+        tickets = view["view"]["tickets"]
+        self.assertEqual(tickets["counts"]["LANE.1"], {"open": 1, "blocked": 0, "closed": 1})
+        self.assertEqual({t["title"] for t in tickets["by_item"]["LANE.1"]}, {"Retry storms", "Exponential backoff"})
+
+    def test_a_ticket_under_an_unknown_item_is_refused(self):
+        # Catches: a ticket filed under an id the project does not list was stored, and no
+        # item panel would ever show it.
+        code, out = self.ticket("/api/ticket-create", parent_item="NOPE", title="Lost")
+        self.assertEqual(code, 400)
+        self.assertIn("no item", out["error"])
+
+    def test_refusals_name_the_field_and_need_a_token(self):
+        code, out = self.ticket("/api/ticket-create", parent_item="LANE.1", title="")
+        self.assertEqual(code, 400)
+        self.assertIn("title", out["error"])
+        code, _ = self.req("POST", "/api/ticket-create", {"nonce": "x1", "parent_item": "LANE.1", "title": "t"})
+        self.assertEqual(code, 403)
+
+    def test_the_ticket_chart_draws_blockers_and_escapes_titles(self):
+        _, a = self.ticket("/api/ticket-create", parent_item="LANE.1", title='Schema "v2" `drop`')
+        _, b = self.ticket("/api/ticket-create", parent_item="LANE.1", title="Migrate", blocked_by=[a["ticket"]["id"]])
+        for path in ("/api/ticket-chart", "/api/ticket-chart?item=LANE.1"):
+            with self.subTest(path=path):
+                code, page = self.req("GET", path, tok=token())
+                self.assertEqual(code, 200)
+                ida = "t_" + re.sub(r"[^A-Za-z0-9]", "_", a["ticket"]["id"])
+                idb = "t_" + re.sub(r"[^A-Za-z0-9]", "_", b["ticket"]["id"])
+                self.assertIn(f"{ida} --&gt;|blocks| {idb}", page)
+                # Quotes and backticks would end a Mermaid label early: the title arrives sanitized.
+                self.assertIn("Schema v2 drop", page)
+        self.assertEqual(self.req("GET", "/api/ticket-chart?item=NOPE", tok=token())[0], 404)
+        self.assertEqual(self.req("GET", "/api/ticket-chart?x=1", tok=token())[0], 400)
+        self.assertEqual(self.req("GET", "/api/ticket-chart")[0], 403)
+
+    def test_the_agent_door_has_no_ticket_route(self):
+        # Tickets are owner-write only until the capability-gate work (1.26 release notes).
+        code, _ = self.agent_post("/ticket-create", {"nonce": "ag1", "parent_item": "LANE.1", "title": "t"})
+        self.assertEqual(code, 404)
 
 
 class FeedTests(_Live, unittest.TestCase):

@@ -3072,3 +3072,26 @@ example dashboard.
   server gets installed, and the join guide. The upgrade banner names
   the real `install.sh` path and the units that exist. Tests check
   that every command it prints is real.
+- **Tickets tab.** A board across every item: Open, Blocked and Closed
+  columns, a filter by kind, item chips that open the item, and `g k`.
+  It also appears in the command palette and the shortcut sheet.
+- **What blocks what.** `/api/ticket-chart` (`?item=` optional) draws
+  tickets as a Mermaid graph, with arrows from blocker to blocked. It
+  is grouped by item and coloured by status, and clicking a ticket
+  opens its item. It appears on the Tickets tab and on an item's
+  Tickets fold when that item has blocking. Titles are owner text, so
+  labels go through the chart sanitizer.
+- **Blockers are named by title.** "Blocked by" shows the blocker's
+  title instead of its id; the id is kept in the tooltip.
+- **Ticket fixes:**
+  - A ticket blocked by an already-closed ticket was marked "blocked"
+    for good, because nothing would ever unblock it. A closed blocker
+    now blocks nothing.
+  - Closing a ticket twice overwrote its first close time. Closing an
+    already-closed ticket now changes nothing.
+  - A ticket filed under an item the project does not list was stored
+    but never shown. It is now refused by name.
+- **Ticket tests.** `tickets.py` and its routes had no tests. Now 9
+  unit tests and 5 route tests cover create, update and close,
+  blocking, cycles, field checks, the view, the chart and the owner
+  gate.
