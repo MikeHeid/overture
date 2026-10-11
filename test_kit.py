@@ -582,6 +582,49 @@ class PublishTests(unittest.TestCase):
         css = (KIT / "overture" / "console.css").read_text()
         self.assertIn(".ck-snooze-menu[hidden] { display: none; }", css)
 
+    def test_every_icon_used_is_bundled(self):
+        # D8: icons are a bundled Lucide subset. A name with no entry in ICONS
+        # draws nothing, so every name the console asks for must be there.
+        js = (KIT / "overture" / "console.js").read_text()
+        block = re.search(r"const ICONS = \{\n(.*?)\n  \};", js, re.S)
+        self.assertIsNotNone(block, "console.js no longer declares ICONS")
+        bundled = set(re.findall(r"^    '([a-z-]+)':", block.group(1), re.M))
+        used = set(re.findall(r"\bicon\('([a-z-]+)'", js))
+        for name in ("TAB_ICON", "STATE_ICON"):
+            m = re.search(name + r" = \{(.*?)\};", js, re.S)
+            self.assertIsNotNone(m, name)
+            used |= set(re.findall(r":\s*'([a-z-]+)'", m.group(1)))
+        menu = re.search(r"openActionMenu\(chatMore, \[(.*?)\]\)\);", js, re.S)
+        used |= set(re.findall(r"\[\s*'([a-z-]+)',", menu.group(1)))
+        self.assertTrue(used)
+        self.assertEqual(used - bundled, set())
+        self.assertTrue((KIT / "overture" / "vendor" / "LUCIDE-LICENSE.txt").is_file())
+
+    def test_every_tab_and_state_has_an_icon(self):
+        # D8/D9: every tab shows an icon and a label; every question state has
+        # its own shape, so colour is never the only signal.
+        js = (KIT / "overture" / "console.js").read_text()
+        tabs = set(re.findall(r"^    \['([a-z]+)', '[A-Za-z]+'\]", re.search(
+            r"const TABS = \[(.*?)\];", js, re.S).group(1), re.M))
+        tab_icons = set(re.findall(r"(\w+): '", re.search(r"TAB_ICON = \{(.*?)\};", js, re.S).group(1)))
+        self.assertEqual(tabs, tab_icons)
+        glyph_states = set(re.findall(r"^    (\w+): '", re.search(
+            r"const GLYPH = \{(.*?)\};", js, re.S).group(1), re.M))
+        state_icons = re.search(r"STATE_ICON = \{(.*?)\};", js, re.S).group(1)
+        self.assertLessEqual(glyph_states, set(re.findall(r"(\w+): '", state_icons)))
+        # Distinct shapes for the states the owner acts on.
+        shapes = dict(re.findall(r"(\w+): '([a-z-]+)'", state_icons))
+        acted = [shapes[s] for s in ("awaiting_you", "unlocked", "locked", "stale")]
+        self.assertEqual(len(set(acted)), len(acted))
+
+    def test_docked_column_fits_its_tab_row(self):
+        # D9: the docked column is never narrower than its tab row, so tabs
+        # keep icon and label on one line instead of wrapping or clipping.
+        js = (KIT / "overture" / "console.js").read_text()
+        self.assertIn("function fitDockToTabs(bar)", js)
+        self.assertIn("return Math.max(DOCK_W_MIN, dockTabsW);", js)
+        self.assertEqual(js.count("fitDockToTabs("), 3)  # the definition and both draws
+
     def test_dock_breakpoint_is_one_number_in_js_and_css(self):
         # AB-2/Q2: console.js decides docked-or-overlay from DOCK_QUERY and
         # console.css styles the dock under its own @media. If they drift, a
@@ -5251,6 +5294,103 @@ class PrsFromGhTests(Tmp):
         G._OPEN = True
         with mock.patch("subprocess.run", side_effect=FileNotFoundError()):
             self.assertEqual(G.gh(["pr", "list"], self.dir)[0], 127)
+
+
+from overture import tickets as TK  # noqa: E402
+
+
+class TicketTests(unittest.TestCase):
+    """overture/tickets.py: children of items, kept whole in STATE/tickets.json (1.26)."""
+
+    NOW = "2026-10-11T00:00:00Z"
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.state = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def new(self, title="Write the retry policy", item="API-2", **kw):
+        return TK.create(self.state, {"parent_item": item, "title": title, **kw}, "owner", self.NOW)
+
+    def test_create_stores_an_open_task_and_reads_back(self):
+        t = self.new()
+        self.assertRegex(t["id"], TK.ID_RE)
+        self.assertEqual((t["kind"], t["status"], t["blocked_by"], t["created_by"]), ("task", "open", [], "owner"))
+        self.assertEqual(TK.load(self.state)["tickets"][t["id"]], t)
+
+    def test_every_field_is_checked_by_name(self):
+        cases = [({"parent_item": "API-2", "title": ""}, "title must not be empty"),
+                 ({"parent_item": "API-2", "title": "a\nb"}, "one line"),
+                 ({"parent_item": "API-2", "title": "x" * (TK.MAX_TITLE + 1)}, "limit is"),
+                 ({"parent_item": "API-2", "title": "t", "body": "x" * (TK.MAX_BODY + 1)}, "limit is"),
+                 ({"parent_item": "../etc", "title": "t"}, "parent_item"),
+                 ({"parent_item": "API-2", "title": "t", "kind": "epic"}, "kind"),
+                 ({"parent_item": "API-2", "title": "t", "blocked_by": ["T-nope1234"]}, "unknown ticket")]
+        for body, why in cases:
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(TK.TicketError, why):
+                    TK.create(self.state, body, "owner", self.NOW)
+        self.assertEqual(TK.load(self.state)["tickets"], {})   # nothing written by a refusal
+
+    def test_blocking_sets_status_and_closing_the_blocker_unblocks(self):
+        a = self.new("Schema")
+        b = self.new("Migration", blocked_by=[a["id"]])
+        self.assertEqual(b["status"], "blocked")
+        TK.close(self.state, a["id"], self.NOW)
+        b2 = TK.load(self.state)["tickets"][b["id"]]
+        self.assertEqual((b2["status"], b2["blocked_by"]), ("open", []))
+
+    def test_a_ticket_still_blocked_by_another_open_one_stays_blocked(self):
+        a, c = self.new("A"), self.new("C")
+        b = self.new("B", blocked_by=[a["id"], c["id"]])
+        TK.close(self.state, a["id"], self.NOW)
+        b2 = TK.load(self.state)["tickets"][b["id"]]
+        self.assertEqual((b2["status"], b2["blocked_by"]), ("blocked", [c["id"]]))
+
+    def test_a_closed_blocker_does_not_block(self):
+        # Catches: blocked_by naming an already-closed ticket set status "blocked", and nothing
+        # would ever unblock it, since only closing a blocker unblocks its dependents.
+        a = self.new("Done already")
+        TK.close(self.state, a["id"], self.NOW)
+        b = self.new("Follows it", blocked_by=[a["id"]])
+        self.assertEqual(b["status"], "open")
+        c = self.new("Patched later")
+        c2 = TK.update(self.state, c["id"], {"blocked_by": [a["id"]]}, self.NOW)
+        self.assertEqual(c2["status"], "open")
+
+    def test_cycles_and_self_blocking_are_refused(self):
+        a = self.new("A")
+        b = self.new("B", blocked_by=[a["id"]])
+        with self.assertRaisesRegex(TK.TicketError, "cycle"):
+            TK.update(self.state, a["id"], {"blocked_by": [b["id"]]}, self.NOW)
+        with self.assertRaisesRegex(TK.TicketError, "itself"):
+            TK.update(self.state, a["id"], {"blocked_by": [a["id"]]}, self.NOW)
+
+    def test_update_refuses_status_and_unknown_fields(self):
+        a = self.new()
+        with self.assertRaisesRegex(TK.TicketError, "unknown update field"):
+            TK.update(self.state, a["id"], {"status": "closed"}, self.NOW)
+
+    def test_closing_twice_keeps_the_first_close_time(self):
+        a = self.new()
+        TK.close(self.state, a["id"], "2026-10-11T00:00:00Z")
+        again = TK.close(self.state, a["id"], "2026-10-12T00:00:00Z")
+        self.assertEqual(again["closed_at"], "2026-10-11T00:00:00Z")
+
+    def test_a_malformed_row_is_kept_on_disk_and_skipped_in_the_view(self):
+        a = self.new()
+        doc = TK.load(self.state)
+        doc["tickets"]["T-futurekind1"] = {"id": "T-futurekind1", "kind": "epic", "status": "open",
+                                           "title": "from a newer kit", "parent_item": "API-2"}
+        TK.save(self.state, doc)
+        self.new("another")   # a write after the odd row
+        self.assertIn("T-futurekind1", TK.load(self.state)["tickets"])
+        view = TK.as_view(TK.load(self.state))
+        self.assertNotIn("T-futurekind1", [t["id"] for t in view["by_item"]["API-2"]])
+        self.assertEqual(view["counts"]["API-2"], {"open": 2, "blocked": 0, "closed": 0})
+        self.assertIn(a["id"], [t["id"] for t in view["by_item"]["API-2"]])
 
 
 if __name__ == "__main__":

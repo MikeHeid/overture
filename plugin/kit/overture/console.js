@@ -15,6 +15,61 @@
     superseded: '⤳'       // ⤳ a replacement was locked (CONSOLE-kit/Q32)
   };
 
+  // D8 (owner, 2026-10-11): icons are a Lucide subset (lucide-static 0.460.0, ISC; licence in
+  // vendor/LUCIDE-LICENSE.txt), copied in as element lists and drawn with currentColor, so they follow
+  // the theme with no icon font, no CDN and no request. test_kit checks every name used below exists here.
+  const ICONS = {
+    'inbox': [["polyline",{"points":"22 12 16 12 14 15 10 15 8 12 2 12"}],["path",{"d":"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"}]],
+    'rss': [["path",{"d":"M4 11a9 9 0 0 1 9 9"}],["path",{"d":"M4 4a16 16 0 0 1 16 16"}],["circle",{"cx":"5","cy":"19","r":"1"}]],
+    'ticket': [["path",{"d":"M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"}],["path",{"d":"M13 5v2"}],["path",{"d":"M13 17v2"}],["path",{"d":"M13 11v2"}]],
+    'git-pull-request': [["circle",{"cx":"18","cy":"18","r":"3"}],["circle",{"cx":"6","cy":"6","r":"3"}],["path",{"d":"M13 6h3a2 2 0 0 1 2 2v7"}],["line",{"x1":"6","x2":"6","y1":"9","y2":"21"}]],
+    'book-open': [["path",{"d":"M12 7v14"}],["path",{"d":"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"}]],
+    'zap': [["path",{"d":"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"}]],
+    'layout-grid': [["rect",{"width":"7","height":"7","x":"3","y":"3","rx":"1"}],["rect",{"width":"7","height":"7","x":"14","y":"3","rx":"1"}],["rect",{"width":"7","height":"7","x":"14","y":"14","rx":"1"}],["rect",{"width":"7","height":"7","x":"3","y":"14","rx":"1"}]],
+    'star': [["path",{"d":"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"}]],
+    'message-square': [["path",{"d":"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"}]],
+    'chevron-down': [["path",{"d":"m6 9 6 6 6-6"}]],
+    'circle-dot': [["circle",{"cx":"12","cy":"12","r":"10"}],["circle",{"cx":"12","cy":"12","r":"1"}]],
+    'bot': [["path",{"d":"M12 8V4H8"}],["rect",{"width":"16","height":"12","x":"4","y":"8","rx":"2"}],["path",{"d":"M2 14h2"}],["path",{"d":"M20 14h2"}],["path",{"d":"M15 13v2"}],["path",{"d":"M9 13v2"}]],
+    'lock': [["rect",{"width":"18","height":"11","x":"3","y":"11","rx":"2","ry":"2"}],["path",{"d":"M7 11V7a5 5 0 0 1 10 0v4"}]],
+    'lock-open': [["rect",{"width":"18","height":"11","x":"3","y":"11","rx":"2","ry":"2"}],["path",{"d":"M7 11V7a5 5 0 0 1 9.9-1"}]],
+    'triangle-alert': [["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],
+    'ban': [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"m4.9 4.9 14.2 14.2"}]],
+    'arrow-right-left': [["path",{"d":"m16 3 4 4-4 4"}],["path",{"d":"M20 7H4"}],["path",{"d":"m8 21-4-4 4-4"}],["path",{"d":"M4 17h16"}]],
+    'git-branch': [["line",{"x1":"6","x2":"6","y1":"3","y2":"15"}],["circle",{"cx":"18","cy":"6","r":"3"}],["circle",{"cx":"6","cy":"18","r":"3"}],["path",{"d":"M18 9a9 9 0 0 1-9 9"}]],
+    'flame': [["path",{"d":"M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"}]],
+    'lightbulb': [["path",{"d":"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"}],["path",{"d":"M9 18h6"}],["path",{"d":"M10 22h4"}]],
+    'user-round-plus': [["path",{"d":"M2 21a8 8 0 0 1 13.292-6"}],["circle",{"cx":"10","cy":"8","r":"5"}],["path",{"d":"M19 16v6"}],["path",{"d":"M22 19h-6"}]],
+    'keyboard': [["path",{"d":"M10 8h.01"}],["path",{"d":"M12 12h.01"}],["path",{"d":"M14 8h.01"}],["path",{"d":"M16 12h.01"}],["path",{"d":"M18 8h.01"}],["path",{"d":"M6 8h.01"}],["path",{"d":"M7 16h10"}],["path",{"d":"M8 12h.01"}],["rect",{"width":"20","height":"16","x":"2","y":"4","rx":"2"}]],
+    'image': [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2","ry":"2"}],["circle",{"cx":"9","cy":"9","r":"2"}],["path",{"d":"m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"}]]
+
+  };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function icon(name, cls) {
+    const parts = ICONS[name];
+    if (!parts) return null;
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    const attrs = { viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor',
+      'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      'aria-hidden': 'true', focusable: 'false', class: 'ck-icon' + (cls ? ' ' + cls : '') };
+    for (const k in attrs) svg.setAttribute(k, attrs[k]);
+    for (const [tag, a] of parts) {
+      const c = document.createElementNS(SVG_NS, tag);
+      for (const k in a) c.setAttribute(k, a[k]);
+      svg.appendChild(c);
+    }
+    return svg;
+  }
+  // Each state has its own shape as well as its colour and its words, so colour is never the only signal.
+  const STATE_ICON = { awaiting_you: 'circle-dot', awaiting_agent: 'bot', agent_active: 'bot', unlocked: 'lock-open',
+    locked: 'lock', stale: 'triangle-alert', withdrawn: 'ban', superseded: 'arrow-right-left' };
+  // A state's icon, wrapped so CSS can colour it by data-state. Falls back to the text glyph.
+  function stateMark(state) {
+    const svg = icon(STATE_ICON[state]);
+    return el('span', { className: 'ck-mark', dataState: state, 'aria-hidden': 'true' },
+      [svg || (GLYPH[state] || '')]);
+  }
+
   let config = null;
   let view = null;
   let items = null;
@@ -1195,7 +1250,10 @@
       }
       b.setAttribute('data-new-empty', unread ? 'false' : 'true');
       const agentEl = b.querySelector('.ck-agent-count');
-      if (agentEl) agentEl.textContent = agent ? GLYPH.awaiting_agent + ' ' + agent : '';
+      if (agentEl) {
+        agentEl.textContent = '';
+        if (agent) { agentEl.appendChild(stateMark('awaiting_agent')); agentEl.appendChild(document.createTextNode(' ' + agent)); }
+      }
       b.setAttribute('data-empty', total === 0 ? 'true' : 'false');
       b.setAttribute('data-agent-empty', agent === 0 ? 'true' : 'false');
       b.setAttribute('aria-label', label);
@@ -1206,11 +1264,33 @@
   function isDocked() { return !!(dockMedia && dockMedia.matches); }
 
   // dock-width persistence + drag resize.
-  function dockWidthMax() { return Math.max(DOCK_W_MIN, Math.floor(window.innerWidth * DOCK_W_MAX_FRAC)); }
+  // D9 (owner, 2026-10-11): the docked column is never narrower than its tab row, so every tab shows its
+  // icon and label on one line. The row's width is measured after each draw (fitDockToTabs).
+  let dockTabsW = 0;
+  function dockWidthMin() { return Math.max(DOCK_W_MIN, dockTabsW); }
+  function dockWidthMax() { return Math.max(dockWidthMin(), Math.floor(window.innerWidth * DOCK_W_MAX_FRAC)); }
   function clampDockWidth(w) {
     const n = Math.round(Number(w) || 0);
-    if (!isFinite(n) || n <= 0) return DOCK_W_DEFAULT;
-    return Math.max(DOCK_W_MIN, Math.min(dockWidthMax(), n));
+    if (!isFinite(n) || n <= 0) return Math.max(DOCK_W_DEFAULT, dockWidthMin());
+    return Math.max(dockWidthMin(), Math.min(dockWidthMax(), n));
+  }
+  // Measure the tab row's natural width; widen the column if it is narrower. Only while docked: the
+  // overlay is the full screen width, and there the row scrolls sideways instead of wrapping.
+  function fitDockToTabs(bar) {
+    if (!bar || !isDocked()) return;
+    let w = 0;
+    for (const c of bar.children) {
+      if (c.classList.contains('ck-more-menu')) continue;
+      w += c.getBoundingClientRect().width;
+    }
+    const cs = getComputedStyle(bar);
+    w += (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      + (parseFloat(cs.columnGap) || 0) * Math.max(0, bar.children.length - 1) + 2;
+    const need = Math.ceil(w);
+    if (need === dockTabsW) return;
+    dockTabsW = need;
+    const curr = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ck-col'), 10) || 0;
+    if (curr < dockWidthMin()) applyDockWidth(curr);
   }
   function readStoredDockWidth() {
     try {
@@ -1224,7 +1304,7 @@
     document.documentElement.style.setProperty('--ck-col', width + 'px');
     if (dockHandle) {
       dockHandle.setAttribute('aria-valuenow', String(width));
-      dockHandle.setAttribute('aria-valuemin', String(DOCK_W_MIN));
+      dockHandle.setAttribute('aria-valuemin', String(dockWidthMin()));
       dockHandle.setAttribute('aria-valuemax', String(dockWidthMax()));
     }
     return width;
@@ -1273,7 +1353,7 @@
       if (e.key === 'ArrowLeft') next = curr + step;
       else if (e.key === 'ArrowRight') next = curr - step;
       else if (e.key === 'Home') next = dockWidthMax();
-      else if (e.key === 'End') next = DOCK_W_MIN;
+      else if (e.key === 'End') next = dockWidthMin();
       else return;
       e.preventDefault();
       const applied = applyDockWidth(next);
@@ -1350,10 +1430,10 @@
       const rc = rings[id];
       const t = data.total;
       const parts = [];
-      if (t.awaiting_you > 0) parts.push(GLYPH.awaiting_you + ' ' + t.awaiting_you + ' you');
-      if (t.awaiting_agent > 0) parts.push(GLYPH.awaiting_agent + ' ' + t.awaiting_agent + (agentActive(id) ? ' agent active' : ' agent'));
-      if (t.unlocked > 0) parts.push(GLYPH.unlocked + ' ' + t.unlocked + ' unlocked');
-      if (t.stale > 0) parts.push(GLYPH.stale + ' ' + t.stale + ' stale');
+      if (t.awaiting_you > 0) parts.push(['awaiting_you', t.awaiting_you + ' you']);
+      if (t.awaiting_agent > 0) parts.push(['awaiting_agent', t.awaiting_agent + (agentActive(id) ? ' agent active' : ' agent')]);
+      if (t.unlocked > 0) parts.push(['unlocked', t.unlocked + ' unlocked']);
+      if (t.stale > 0) parts.push(['stale', t.stale + ' stale']);
       const hasItems = parts.length > 0;
       btn.setAttribute('data-has-items', hasItems ? 'true' : 'false');
       // Clear and rebuild
@@ -1364,7 +1444,7 @@
         btn.title = rc.locked + ' of ' + rc.total + ' question' + (rc.total === 1 ? '' : 's') + ' locked';
       }
       if (hasItems) {
-        btn.appendChild(document.createTextNode(parts.join('  ')));
+        for (const n of countParts(parts)) btn.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
       } else {
         btn.appendChild(document.createTextNode('discuss'));
       }
@@ -1384,10 +1464,10 @@
       const t = view.items && view.items[id] && view.items[id].total;
       if (!t) return;
       const parts = [];
-      if (t.awaiting_you > 0) parts.push(GLYPH.awaiting_you + ' ' + t.awaiting_you);
-      if (t.unlocked > 0) parts.push(GLYPH.unlocked + ' ' + t.unlocked);
-      if (t.stale > 0) parts.push(GLYPH.stale + ' ' + t.stale);
-      if (t.locked > 0) parts.push(GLYPH.locked + ' ' + t.locked);
+      if (t.awaiting_you > 0) parts.push(['awaiting_you', String(t.awaiting_you)]);
+      if (t.unlocked > 0) parts.push(['unlocked', String(t.unlocked)]);
+      if (t.stale > 0) parts.push(['stale', String(t.stale)]);
+      if (t.locked > 0) parts.push(['locked', String(t.locked)]);
       let badge = el.querySelector(':scope > .ck-section-badge');
       if (!parts.length) { if (badge) badge.remove(); return; }
       if (!badge) {
@@ -1398,9 +1478,11 @@
         badge.addEventListener('click', () => openPanel(id, 'item'));
         el.insertBefore(badge, el.firstChild);
       }
-      const words = id + '  ' + parts.join('  ');
-      if (badge.textContent !== words) {
-        badge.textContent = words;
+      const words = id + '  ' + parts.map(p => p[0] + ' ' + p[1]).join('  ');
+      if (badge.getAttribute('data-words') !== words) {
+        badge.setAttribute('data-words', words);
+        badge.textContent = id;
+        for (const [st, n] of parts) { badge.appendChild(document.createTextNode(' ')); badge.appendChild(stateMark(st)); badge.appendChild(document.createTextNode(n)); }
         if (badge.hasAttribute('data-drawn')) pulse(badge);
       }
       badge.setAttribute('data-drawn', 'true');
@@ -1565,7 +1647,7 @@
       shortcutGpfx = 0;
       // new tabs — 'y' = playbooks (p is PRs), 't' = triggers. Favorite/chat shortcuts
       // still work even though they're behind the "More ▾" dropdown.
-      const tab = ({ i: 'inbox', f: 'feed', p: 'prs', y: 'playbooks', t: 'triggers',
+      const tab = ({ i: 'inbox', f: 'feed', k: 'tickets', p: 'prs', y: 'playbooks', t: 'triggers',
                      s: 'favorite', o: 'portfolio', c: 'chat' })[e.key];
       if (tab) {
         e.preventDefault();
@@ -1616,7 +1698,7 @@
     const rows = [
       ['Ctrl/Cmd + K', 'Open the command palette'],
       ['Alt + Enter', 'Copy a shareable link to the selected palette row'],
-      ['g i', 'Open Inbox tab'], ['g f', 'Open Feed tab'], ['g p', 'Open PRs tab'],
+      ['g i', 'Open Inbox tab'], ['g f', 'Open Feed tab'], ['g k', 'Open Tickets tab'], ['g p', 'Open PRs tab'],
       ['g y', 'Open Playbooks tab'], ['g t', 'Open Triggers tab'],
       ['g o', 'Open Portfolio tab'], ['g s', 'Open Favorite tab'], ['g c', 'Open Chat tab'],
       ['g b', 'Close panel (back to board)'],
@@ -1660,7 +1742,7 @@
 
   function buildPaletteCommands() {
     const cmds = [];
-    const tabs = [['inbox', 'Inbox', 'g i'], ['feed', 'Feed', 'g f'], ['prs', 'PRs', 'g p'],
+    const tabs = [['inbox', 'Inbox', 'g i'], ['feed', 'Feed', 'g f'], ['tickets', 'Tickets', 'g k'], ['prs', 'PRs', 'g p'],
                   ['playbooks', 'Playbooks', 'g y'], ['triggers', 'Triggers', 'g t'],
                   ['portfolio', 'Portfolio', 'g o'], ['favorite', 'Favorite', 'g s'], ['chat', 'Chat', 'g c']];
     for (const [id, label, hint] of tabs) cmds.push({ kind: 'tab', id, label, hint });
@@ -2029,7 +2111,9 @@
   // Render inbox mode
   function renderInbox() {
     panelEl.appendChild(makeHeader(['Inbox'], closePanel, 'Back to board'));
-    panelEl.appendChild(renderTabs());
+    const tabBar = renderTabs();
+    panelEl.appendChild(tabBar);
+    fitDockToTabs(tabBar);
     panelEl.appendChild(renderStatusBar(null));
     panelEl.appendChild(renderDelegateBar());   // Delegate ▾ — orchestrate from anywhere, not only on an item.
     const trgs = view && Array.isArray(view.triggers) ? view.triggers : [];
@@ -2043,6 +2127,8 @@
       body.appendChild(renderOffline());
     } else if (currentTab === 'feed') {
       renderFeed(body);
+    } else if (currentTab === 'tickets') {
+      renderTicketsTab(body);
     } else if (currentTab === 'prs') {
       renderPRs(body);
     } else if (currentTab === 'playbooks') {   // promoted from the Delegate bar's select
@@ -2065,12 +2151,12 @@
     }
   }
 
-  // The inbox's tabs. Playbooks and Triggers promoted to the main bar; Favorite
-  // and Chat demoted behind a "More ▾" dropdown. Order: Inbox Feed PRs Playbooks Triggers
-  // Portfolio   (More ▾: Favorite, Chat). Keyboard shortcuts (g c, g s) still work.
+  // The inbox's tabs. Order: Inbox Feed Tickets PRs Portfolio (More ▾: Playbooks, Triggers,
+  // Favorite, Chat). Keyboard shortcuts (g k, g c, g s, …) reach every tab either way.
   const TABS = [
     ['inbox', 'Inbox'],
     ['feed', 'Feed'],
+    ['tickets', 'Tickets'],
     ['prs', 'PRs'],
     ['playbooks', 'Playbooks'],
     ['triggers', 'Triggers'],
@@ -2078,13 +2164,21 @@
     ['favorite', 'Favorite'],
     ['chat', 'Chat']
   ];
+  // D8/D9 (owner, 2026-10-11): every tab shows its icon and its label.
+  const TAB_ICON = { inbox: 'inbox', feed: 'rss', tickets: 'ticket', prs: 'git-pull-request', playbooks: 'book-open',
+    triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square' };
   // Which TABS are shown directly in the bar vs. folded behind "More ▾".
-  const TABS_PRIMARY_IDS = ['inbox', 'feed', 'prs', 'playbooks', 'triggers', 'portfolio'];
+  // D9: five tabs with icon and label fit a ~530px column on one line; the rest sit behind More.
+  const TABS_PRIMARY_IDS = ['inbox', 'feed', 'tickets', 'prs', 'portfolio'];
 
   function tabNote(id) {
     const unread = unreadCount();
     if (id === 'inbox' && view && view.inbox && view.inbox.length) return String(view.inbox.length);
     if (id === 'feed' && unread) return unread + ' new';
+    if (id === 'tickets') {
+      const n = ticketOpenTotal();
+      if (n) return String(n);
+    }
     if (id === 'playbooks' && view && Array.isArray(view.playbooks) && view.playbooks.length) {
       return String(view.playbooks.length);
     }
@@ -2094,7 +2188,7 @@
     if (id === 'favorite' && view && view.favorites && view.favorites.length) return String(view.favorites.length);
     if (id === 'portfolio') {
       const n = portfolioAwaitingTotal();
-      if (n) return n + ' ?you';
+      if (n) return String(n);
     }
     if (id === 'chat' && view && view.chat && view.chat.awaiting_agent) return '●';
     return '';
@@ -2103,7 +2197,7 @@
     const selected = currentTab === id;
     const b = el('button', { className: 'ck-tab', type: 'button', role: 'tab', id: 'ck-tab-' + id,
       'aria-selected': selected ? 'true' : 'false', 'aria-controls': 'ck-tabpanel',
-      tabindex: selected ? '0' : '-1' }, [label]);
+      tabindex: selected ? '0' : '-1' }, [icon(TAB_ICON[id]), el('span', { className: 'ck-tab-label' }, [label])]);
     const note = tabNote(id);
     if (note) b.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + note]));
     if (id === 'chat' && note) b.setAttribute('aria-label', 'Chat, waiting on an agent');
@@ -2136,7 +2230,8 @@
         'aria-haspopup': 'menu', 'aria-expanded': 'false',
         'aria-label': activeOverflow ? ('More tabs — currently in ' + activeOverflow[1]) : 'More tabs',
         'aria-selected': activeOverflow ? 'true' : 'false' },
-        [label, el('span', { 'aria-hidden': 'true', className: 'ck-tab-more-caret' }, [' ▾'])]);
+        [activeOverflow ? icon(TAB_ICON[activeOverflow[0]]) : null, el('span', { className: 'ck-tab-label' }, [label]),
+          el('span', { 'aria-hidden': 'true', className: 'ck-tab-more-caret' }, [icon('chevron-down') || ' ▾'])]);
       // Current overflow tab shows its note (same as a primary tab) so the operator sees state.
       if (activeOverflow) {
         const note = tabNote(activeOverflow[0]);
@@ -2166,7 +2261,7 @@
     closeMoreMenu();
     const menu = el('div', { className: 'ck-more-menu', role: 'menu' });
     for (const [id, label] of overflow) {
-      const item = el('button', { type: 'button', className: 'ck-more-item', role: 'menuitem' }, [label]);
+      const item = el('button', { type: 'button', className: 'ck-more-item', role: 'menuitem' }, [icon(TAB_ICON[id]), label]);
       const note = tabNote(id);
       if (note) item.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + note]));
       item.addEventListener('click', () => { closeMoreMenu(); selectTab(id); });
@@ -2193,6 +2288,36 @@
       if (!menu.contains(e.target) && e.target !== anchor) closeMoreMenu();
     };
     menu.addEventListener('keydown', onKey);
+    setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+    moreMenuOpen = { menu, anchor, onOutside };
+  }
+  // A small action menu (Chat ▾): same keyboard and outside-click behaviour as More ▾.
+  function openActionMenu(anchor, entries) {
+    closeMoreMenu();
+    const menu = el('div', { className: 'ck-more-menu ck-action-menu', role: 'menu' });
+    for (const [iconName, label, hint, fn] of entries) {
+      const item = el('button', { type: 'button', className: 'ck-more-item', role: 'menuitem', title: hint },
+        [icon(iconName), label, el('span', { className: 'ck-muted ck-action-hint' }, [hint])]);
+      item.addEventListener('click', () => { closeMoreMenu(); fn(); });
+      menu.appendChild(item);
+    }
+    anchor.setAttribute('aria-expanded', 'true');
+    anchor.parentNode.appendChild(menu);
+    const rect = anchor.getBoundingClientRect();
+    const panelRect = panelEl.getBoundingClientRect();
+    menu.style.left = Math.max(8, rect.right - panelRect.left - 260) + 'px';
+    menu.style.top = (rect.bottom - panelRect.top + 4) + 'px';
+    const items = menu.querySelectorAll('.ck-more-item');
+    if (items.length) items[0].focus();
+    menu.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeMoreMenu(); anchor.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const idx = Array.prototype.indexOf.call(items, document.activeElement);
+        items[e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length].focus();
+      }
+    });
+    const onOutside = e => { if (!menu.contains(e.target) && e.target !== anchor) closeMoreMenu(); };
     setTimeout(() => document.addEventListener('click', onOutside, true), 0);
     moreMenuOpen = { menu, anchor, onOutside };
   }
@@ -2391,7 +2516,7 @@
         // these rows had tabindex but no Enter/Space handler — a dead focus stop).
         const row = el('div', { className: 'ck-inbox-item ck-inbox-item-answered', tabindex: '0',
           role: 'button', 'aria-label': 'Open item ' + it + ' (recently answered)' + (itemData ? ', ' + itemData.title : '') }, [
-          el('span', { className: 'ck-q-state', dataState: 'locked' }, [GLYPH.locked || '✓', ' locked']),
+          el('span', { className: 'ck-q-state', dataState: 'locked' }, [stateMark('locked'), ' locked']),
           renderItemRefTag(it),
           el('span', { className: 'ck-inbox-item-id' }, [it]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
@@ -2426,7 +2551,7 @@
         const item = el('div', { className: 'ck-inbox-item', tabindex: '0',
           role: 'button', 'aria-label': 'Open item ' + itemId + (itemData ? ', ' + itemData.title : '') }, [
           el('span', { className: 'ck-q-state', dataState: agentActive(itemId) ? 'agent_active' : 'awaiting_agent' }, [
-            GLYPH.awaiting_agent, ' ' + agentWords(itemId)
+            stateMark('awaiting_agent'), ' ' + agentWords(itemId)
           ]),
           renderItemRefTag(itemId),
           el('span', { className: 'ck-inbox-item-id' }, [itemId]),
@@ -2444,7 +2569,7 @@
     const chatWaits = !!(view.chat && view.chat.awaiting_agent);
     if (chatWaits) {
       const row = el('button', { className: 'ck-inbox-item ck-inbox-chat', type: 'button' }, [
-        el('span', { className: 'ck-q-state', dataState: 'awaiting_agent' }, [GLYPH.awaiting_agent, ' awaiting agent']),
+        el('span', { className: 'ck-q-state', dataState: 'awaiting_agent' }, [stateMark('awaiting_agent'), ' awaiting agent']),
         el('span', { className: 'ck-inbox-item-title' }, ['Your chat message'])
       ]);
       row.addEventListener('click', () => selectTab('chat'));
@@ -2515,7 +2640,7 @@
       'aria-label': q.state.replace('_', ' ') + ': ' + qid + (itemData ? ', ' + itemData.title : '')
         + (waiting ? '. ' + waiting : '') }, [
       el('span', { className: 'ck-q-state', dataState: q.state }, [
-        GLYPH[q.state] || '', ' ', q.state.replace('_', ' ')
+        stateMark(q.state), ' ', q.state.replace('_', ' ')
       ]),
       renderItemRefTag(q.question.item),
       el('span', { className: 'ck-inbox-item-id' }, [q.question.item]),
@@ -2544,7 +2669,7 @@
     for (const q of locked.slice(0, 8)) {
       const row = el('div', { className: 'ck-answered-row', tabindex: '0',
         'aria-label': 'Open answer for ' + q.question.qid }, [
-        el('span', { className: 'ck-q-state', dataState: 'locked' }, [GLYPH.locked || '✓', ' locked']),
+        el('span', { className: 'ck-q-state', dataState: 'locked' }, [stateMark('locked'), ' locked']),
         el('span', { className: 'ck-inbox-item-qnum' }, ['Q' + qNum(q.question.qid)]),
         el('span', { className: 'ck-answered-pick' }, [answerSummary(q)])
       ]);
@@ -2853,10 +2978,10 @@
     if (view && itemId && view.items[itemId]) {
       const t = view.items[itemId].own;
       const counts = el('div', { className: 'ck-counts' });
-      if (t.awaiting_you) counts.appendChild(el('span', {}, [GLYPH.awaiting_you + ' ' + t.awaiting_you + ' awaiting you']));
-      if (t.awaiting_agent) counts.appendChild(el('span', {}, [GLYPH.awaiting_agent + ' ' + t.awaiting_agent + ' ' + agentWords(itemId)]));
-      if (t.unlocked) counts.appendChild(el('span', {}, [GLYPH.unlocked + ' ' + t.unlocked + ' unlocked']));
-      if (t.stale) counts.appendChild(el('span', {}, [GLYPH.stale + ' ' + t.stale + ' stale']));
+      if (t.awaiting_you) counts.appendChild(el('span', {}, [stateMark('awaiting_you'), ' ' + t.awaiting_you + ' awaiting you']));
+      if (t.awaiting_agent) counts.appendChild(el('span', {}, [stateMark('awaiting_agent'), ' ' + t.awaiting_agent + ' ' + agentWords(itemId)]));
+      if (t.unlocked) counts.appendChild(el('span', {}, [stateMark('unlocked'), ' ' + t.unlocked + ' unlocked']));
+      if (t.stale) counts.appendChild(el('span', {}, [stateMark('stale'), ' ' + t.stale + ' stale']));
       bar.appendChild(counts);
     }
     // Sync time
@@ -2959,7 +3084,7 @@
       el('span', { className: 'ck-q-line-caret', 'aria-hidden': 'true' }, [open ? '▾' : '▸']),
       el('span', { className: 'ck-inbox-item-id' }, [qData.qid]),
       el('span', { className: 'ck-q-line-pick' }, [pickWords(qData, head)]),
-      el('span', { className: 'ck-q-state', dataState: q.state }, [(GLYPH[q.state] || '') + ' ' +
+      el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' +
         (STATE_WORDS[q.state] || q.state)])
     ]);
     line.addEventListener('click', () => {
@@ -2985,7 +3110,7 @@
     // Header
     const hdr = el('div', { className: 'ck-q-header' }, [
       el('span', { className: 'ck-q-state', dataState: state }, [
-        GLYPH[state] || '', ' ', state.replace('_', ' ')
+        stateMark(state), ' ', state.replace('_', ' ')
       ])
     ]);
     const textCol = el('div', { className: 'ck-q-textcol' });
@@ -3417,6 +3542,7 @@
   // without first opening an item. Reuses existing /api/message endpoints — no new server routes.
   // Posting is handled client-side; the collapsed <details> state persists across live wakes via a module var.
   let delegateOpen = false;
+  let delegateItem = null;   // Chat ▾ → Delegate preselects the item it came from, once
   function renderDelegateBar() {
     const wrap = el('details', { className: 'ck-delegate-bar' });
     if (delegateOpen) wrap.setAttribute('open', '');
@@ -3452,6 +3578,7 @@
       const data = items[id] || {};
       itemSel.appendChild(el('option', { value: id }, [id + (data.title ? ' — ' + truncateText(data.title, 60) : '')]));
     }
+    if (delegateItem && items && items[delegateItem]) { itemSel.value = delegateItem; delegateItem = null; }
     body.appendChild(el('div', { className: 'ck-field ck-del-itemrow' }, [
       el('label', { for: 'ck-del-item', className: 'ck-field-label' }, ['On item']),
       itemSel
@@ -5194,9 +5321,100 @@
       for (const t of closed) d.appendChild(renderTicketRow(t));
       body.appendChild(d);
     }
+    if (list.some(t => Array.isArray(t.blocked_by) && t.blocked_by.length)) {
+      body.appendChild(renderTicketChart(itemId));
+    }
     body.appendChild(renderNewTicketForm(itemId));
     details.appendChild(body);
     return details;
+  }
+
+  // Tickets tab: every item's tickets as a board (Open / Blocked / Closed), a kind filter, and the
+  // blocker graph. Reads view.tickets only; writes go through the same /ticket-close as the fold.
+  let ticketKindFilter = 'all';
+  let ticketChartOpen = false;
+  function ticketTitles() {
+    const out = {};
+    const byItem = (view && view.tickets && view.tickets.by_item) || {};
+    for (const lst of Object.values(byItem)) for (const t of lst) out[t.id] = t.title;
+    return out;
+  }
+  function ticketOpenTotal() {
+    const counts = (view && view.tickets && view.tickets.counts) || {};
+    let n = 0;
+    for (const c of Object.values(counts)) n += (c.open || 0) + (c.blocked || 0);
+    return n;
+  }
+  function renderTicketChart(itemId) {
+    const wrap = el('details', { className: 'ck-item-chart ck-ticket-chart' });
+    if (!itemId && ticketChartOpen) wrap.setAttribute('open', '');
+    wrap.appendChild(el('summary', { className: 'ck-item-chart-summary' }, [
+      el('span', { className: 'ck-item-chart-title' }, ['What blocks what']),
+      el('span', { className: 'ck-muted ck-item-chart-hint' }, [' — tickets, arrows from blocker to blocked'])
+    ]));
+    const slot = el('div', { className: 'ck-item-chart-slot' });
+    wrap.appendChild(slot);
+    const load = () => {
+      if (slot.querySelector('iframe')) return;
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.setAttribute('title', 'Ticket graph' + (itemId ? ': ' + itemId : ''));
+      frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
+      frame.src = config.api + '/ticket-chart' + (itemId ? '?item=' + encodeURIComponent(itemId) : '');
+      slot.appendChild(frame);
+    };
+    wrap.addEventListener('toggle', () => {
+      if (!itemId) ticketChartOpen = wrap.open;
+      if (wrap.open) load();
+    });
+    if (wrap.open) load();
+    return wrap;
+  }
+  function renderTicketsTab(body) {
+    const byItem = (view && view.tickets && view.tickets.by_item) || {};
+    const all = [];
+    for (const lst of Object.values(byItem)) for (const t of lst) all.push(t);
+    const total = { open: 0, blocked: 0, closed: 0 };
+    for (const t of all) if (t.status in total) total[t.status] += 1;
+    body.appendChild(el('p', { className: 'ck-muted ck-tickets-tab-summary' }, [
+      all.length ? (total.open + ' open · ' + total.blocked + ' blocked · ' + total.closed + ' closed, across '
+        + Object.keys(byItem).length + ' item' + (Object.keys(byItem).length === 1 ? '' : 's'))
+        : 'No tickets yet. Open an item and use "+ New ticket", or let Launch Idea create them.']));
+    if (!all.length) return;
+    const chips = el('div', { className: 'ck-chip-row ck-ticket-filters', role: 'group', 'aria-label': 'Filter by kind' });
+    for (const k of ['all'].concat(Object.keys(TICKET_KIND_LABELS))) {
+      const b = el('button', { type: 'button', className: 'ck-inbox-chip',
+        'aria-pressed': ticketKindFilter === k ? 'true' : 'false' }, [k === 'all' ? 'All' : TICKET_KIND_LABELS[k]]);
+      b.addEventListener('click', () => { ticketKindFilter = k; renderPanel(); });
+      chips.appendChild(b);
+    }
+    body.appendChild(chips);
+    body.appendChild(renderTicketChart(null));
+    const shown = all.filter(t => ticketKindFilter === 'all' || t.kind === ticketKindFilter);
+    const board = el('div', { className: 'ck-ticket-board' });
+    const cols = [['open', 'Open'], ['blocked', 'Blocked'], ['closed', 'Closed']];
+    for (const [status, label] of cols) {
+      let rows = shown.filter(t => t.status === status)
+        .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+      const col = el('section', { className: 'ck-ticket-col', dataStatus: status, 'aria-label': label + ' tickets' });
+      col.appendChild(el('h3', { className: 'ck-ticket-col-h' }, [label + ' ',
+        el('span', { className: 'ck-muted' }, [String(rows.length)])]));
+      const more = status === 'closed' && rows.length > 8 ? rows.length - 8 : 0;
+      if (more) rows = rows.slice(0, 8);
+      for (const t of rows) {
+        const card = renderTicketRow(t);
+        const chip = el('button', { type: 'button', className: 'ck-ref-link ck-ticket-item',
+          title: 'Open ' + t.parent_item }, [t.parent_item]);
+        chip.addEventListener('click', () => openPanel(t.parent_item, 'item'));
+        const head = card.querySelector('.ck-ticket-head');
+        (head || card).insertBefore(chip, (head || card).firstChild);
+        col.appendChild(card);
+      }
+      if (more) col.appendChild(el('p', { className: 'ck-muted' }, ['+' + more + ' older']));
+      board.appendChild(col);
+    }
+    body.appendChild(board);
   }
   function renderTicketRow(t) {
     const row = el('div', { className: 'ck-ticket', dataStatus: t.status, dataKind: t.kind,
@@ -5211,8 +5429,11 @@
       row.appendChild(el('p', { className: 'ck-ticket-body' }, [t.body]));
     }
     if (Array.isArray(t.blocked_by) && t.blocked_by.length) {
-      row.appendChild(el('div', { className: 'ck-ticket-blocked ck-muted' },
-        ['Blocked by: ' + t.blocked_by.join(', ')]));
+      // Name each blocker by its title (the id stays in the tooltip): an id alone says nothing.
+      const titles = ticketTitles();
+      const names = t.blocked_by.map(id => titles[id] ? '“' + titles[id] + '”' : id);
+      row.appendChild(el('div', { className: 'ck-ticket-blocked ck-muted', title: t.blocked_by.join(', ') },
+        ['Blocked by ' + names.join(', ')]));
     }
     if (t.status !== 'closed') {
       const actions = el('div', { className: 'ck-actions ck-ticket-actions' });
@@ -5499,11 +5720,18 @@
     }
   }
 
+  // A state count with its icon: [mark, ' 3 locked'].
+  function countParts(rows) {
+    const out = [];
+    for (const [state, text] of rows) {
+      if (out.length) out.push('  ');
+      out.push(stateMark(state), ' ' + text);
+    }
+    return out;
+  }
   function countLine(c) {
-    return [GLYPH.awaiting_you + ' ' + c.awaiting_you + ' unanswered',
-      GLYPH.unlocked + ' ' + c.unlocked + ' answered',
-      GLYPH.locked + ' ' + c.locked + ' locked',
-      GLYPH.stale + ' ' + c.stale + ' stale'].join('  ');
+    return countParts([['awaiting_you', c.awaiting_you + ' unanswered'], ['unlocked', c.unlocked + ' answered'],
+      ['locked', c.locked + ' locked'], ['stale', c.stale + ' stale']]);
   }
 
   // The answers sheet (spec §7.6): every question in the scope, every answer it got.
@@ -5539,7 +5767,7 @@
 
     const sheet = answersSheet(itemId, forkId);
     body.appendChild(el('p', { className: 'ck-sheet-counts' }, [
-      sheet.rows.length + ' questions, ' + sheet.answers + ' answers. ' + countLine(sheet.counts)]));
+      sheet.rows.length + ' questions, ' + sheet.answers + ' answers. '].concat(countLine(sheet.counts))));
     if (!sheet.rows.length) {
       body.appendChild(el('p', { className: 'ck-muted' }, ['No questions here yet.']));
     }
@@ -5547,7 +5775,7 @@
 
     // Footer: the counts, Copy as Markdown, and the ready signal
     const foot = el('div', { className: 'ck-sheet-foot' }, [
-      el('div', { className: 'ck-sheet-counts' }, [countLine(sheet.counts)])]);
+      el('div', { className: 'ck-sheet-counts' }, countLine(sheet.counts))]);
     const copyBtn = el('button', { className: 'ck-btn', type: 'button' }, ['Copy as Markdown']);
     copyBtn.addEventListener('click', () => {
       const md = sheetMarkdown(sheet);
@@ -5581,7 +5809,7 @@
     const row = el('details', { className: 'ck-sheet-row', dataState: q.state });
     const current = head ? (head.picks.map(p => labels[p] || p).join(', ') || 'own words') : 'no answer yet';
     row.appendChild(el('summary', {}, [
-      el('span', { className: 'ck-q-state', dataState: q.state }, [GLYPH[q.state] + ' ' + STATE_WORDS[q.state]]),
+      el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' + STATE_WORDS[q.state]]),
       el('span', { className: 'ck-inbox-item-id' }, [r.qid]),
       el('span', { className: 'ck-sheet-q' }, [truncateText(r.text, 90)]),
       el('span', { className: 'ck-sheet-current' }, [current + (q.answers.length > 1 ? ' · ' + q.answers.length + ' answers' : '')])
@@ -5655,7 +5883,30 @@
     const branchBtn = el('button', { className: 'ck-btn ck-launch-btn', type: 'button',
       'aria-label': 'Branch out on a topic under ' + itemId }, ['⌁ Branch out']);
     branchBtn.addEventListener('click', () => openBranchOut(itemId));
-    wrap.appendChild(el('div', { className: 'ck-actions' }, [launchBtn, branchBtn, answersBtn, forkBtn, visBtn]));
+    // Chat ▾: a split button. The face jumps to this item's Discussion box; the arrow lists the
+    // ways to get an agent thinking about this item, each the existing feature, scoped here.
+    const chatSplit = el('span', { className: 'ck-split' });
+    const chatBtn = el('button', { className: 'ck-btn ck-split-main', type: 'button',
+      'aria-label': 'Chat about ' + itemId }, [icon('message-square'), ' Chat']);
+    chatBtn.addEventListener('click', () => {
+      const ta = panelEl.querySelector('.ck-thread .ck-textarea');
+      if (ta) { ta.scrollIntoView({ block: 'center', behavior: (reducedMotion && reducedMotion.matches) ? 'auto' : 'smooth' }); ta.focus(); }
+    });
+    const chatMore = el('button', { className: 'ck-btn ck-split-more', type: 'button', 'aria-haspopup': 'menu',
+      'aria-expanded': 'false', 'aria-label': 'More ways to engage an agent on ' + itemId }, [icon('chevron-down') || '▾']);
+    chatMore.addEventListener('click', () => openActionMenu(chatMore, [
+      ['git-branch', 'Branch out', 'Turn a topic into a deliberated brief', () => openBranchOut(itemId)],
+      ['flame', 'Grill', 'Five adversarial questions before you commit', () => {
+        openLaunchIdea(itemId); launchIdeaState.step = 2; renderLaunchIdea(); }],
+      ['lightbulb', 'Advise', 'Ask the seats for a recommendation (deliberate)', () => {
+        if (slot.hidden || !slot.childElementCount) forkBtn.click();
+        forkBtn.scrollIntoView({ block: 'center' }); }],
+      ['user-round-plus', 'Delegate', 'Start a round, request a visual, run a playbook', () => {
+        delegateOpen = true; delegateItem = itemId; currentTab = 'inbox'; backToInbox(); }],
+    ]));
+    chatSplit.appendChild(chatBtn);
+    chatSplit.appendChild(chatMore);
+    wrap.appendChild(el('div', { className: 'ck-actions' }, [launchBtn, branchBtn, chatSplit, answersBtn, forkBtn, visBtn]));
     wrap.appendChild(slot);
     wrap.appendChild(visSlot);
     // Q36: while the send bar is up it is the one way to send; two controls for one signal would only differ.
@@ -6084,7 +6335,7 @@
         card.appendChild(el('p', { className: 'ck-muted' }, ['Waiting for the committee\'s questions.']));
       } else {
         const list = el('ul', { className: 'ck-fork-qs' });
-        for (const q of qs) list.appendChild(el('li', {}, [GLYPH[q.state] + ' ' + q.question.qid + ' · ' + STATE_WORDS[q.state]]));
+        for (const q of qs) list.appendChild(el('li', {}, [stateMark(q.state), ' ' + q.question.qid + ' · ' + STATE_WORDS[q.state]]));
         card.appendChild(list);
         const answersBtn = el('button', { className: 'ck-btn', type: 'button' }, ['Answers from this round']);
         answersBtn.addEventListener('click', () => showSheet(itemId, m.id));
@@ -6335,7 +6586,7 @@
     const card = el('div', { className: 'ck-round-step', role: 'group', 'aria-labelledby': 'ck-round-qtext' });
     if (advancedTo === qData.qid) { advancedTo = null; card.classList.add('ck-advance-in'); }
     card.appendChild(el('div', { className: 'ck-q-header' }, [
-      el('span', { className: 'ck-q-state', dataState: q.state }, [GLYPH[q.state] + ' ' + STATE_WORDS[q.state]]),
+      el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' + STATE_WORDS[q.state]]),
       el('span', { className: 'ck-inbox-item-id' }, [qData.qid])
     ]));
     const text = el('div', { className: 'ck-q-text ck-round-qtext', id: 'ck-round-qtext', tabindex: '-1' });
@@ -7423,11 +7674,11 @@
     const stale = Number(row.stale || 0);
     const vis = Number(row.visuals_waiting || 0);
     const tallies = el('div', { className: 'ck-portfolio-tallies' }, [
-      renderTally('?you', you, 'awaiting-you'),
-      renderTally('~unl', unl, 'unlocked'),
-      renderTally('!stale', stale, 'stale'),
-      renderTally('○lock', lock, 'locked'),
-      vis ? renderTally('◫vis', vis, 'visual') : null
+      renderTally('awaiting_you', 'you', you, 'awaiting-you'),
+      renderTally('unlocked', 'unlocked', unl, 'unlocked'),
+      renderTally('stale', 'stale', stale, 'stale'),
+      renderTally('locked', 'locked', lock, 'locked'),
+      vis ? renderTally('visual', 'visuals', vis, 'visual') : null
     ].filter(Boolean));
     card.appendChild(tallies);
     const peek = Array.isArray(row.peek) ? row.peek : [];
@@ -7495,16 +7746,16 @@
     const f = inboxFilters();
     const wrap = el('div', { className: 'ck-inbox-filters', role: 'toolbar',
       'aria-label': 'Filter Inbox by question state' });
-    const label = (st) => ({
-      awaiting_you: '? you',
-      unlocked: '~ unl',
-      stale: '! stale',
-      locked: '○ lock'
-    })[st];
+    const label = (st) => [stateMark(st), ' ' + ({
+      awaiting_you: 'you',
+      unlocked: 'unlocked',
+      stale: 'stale',
+      locked: 'locked'
+    })[st]];
     for (const st of INBOX_STATES) {
       const on = !!f[st];
       const chip = el('button', { type: 'button', className: 'ck-inbox-chip',
-        dataState: st, 'aria-pressed': on ? 'true' : 'false' }, [label(st)]);
+        dataState: st, 'aria-pressed': on ? 'true' : 'false' }, label(st));
       chip.addEventListener('click', () => {
         setInboxFilter(st, !on);
         renderPanel();
@@ -7611,7 +7862,7 @@
       className: 'ck-living-rulings',
       'aria-label': stale.length + ' living rulings need review'
     }, [
-      el('span', { className: 'ck-living-rulings-glyph', 'aria-hidden': 'true' }, [GLYPH.stale]),
+      el('span', { className: 'ck-living-rulings-glyph', 'aria-hidden': 'true' }, [icon(STATE_ICON.stale) || GLYPH.stale]),
       el('span', { className: 'ck-living-rulings-count' }, [String(stale.length)]),
       el('span', { className: 'ck-living-rulings-label' },
         [' Living ruling' + (stale.length === 1 ? ' needs' : 's need') + ' review']),
@@ -7714,9 +7965,11 @@
     return 'awaiting over 24h' + ts;
   }
 
-  function renderTally(label, n, kind) {
+  function renderTally(state, label, n, kind) {
+    const mark = state === 'visual' ? el('span', { className: 'ck-mark', 'aria-hidden': 'true' }, [icon('image')])
+      : stateMark(state);
     return el('span', { className: 'ck-portfolio-tally', dataKind: kind, dataZero: n ? 'false' : 'true' },
-      [label + ' ', el('b', {}, [String(n)])]);
+      [mark, ' ', el('b', {}, [String(n)]), ' ' + label]);
   }
 
   // 0.8.19: Favorite tab — starred visuals grouped under their items, plus any starred items with no stars yet.
@@ -7854,7 +8107,8 @@
   }
 
   function renderPRRow(pr) {
-    const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number) });
+    const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number),
+      dataDraft: pr.draft ? 'true' : 'false', dataChecks: pr.checks || 'none' });
     const href = prHref(pr.url);
     const titleKids = [el('span', { className: 'ck-pr-num' }, ['#' + pr.number]), ' ',
       el('span', { className: 'ck-pr-title' }, [String(pr.title)])];
@@ -7939,7 +8193,11 @@
     fresh.scrollTop = fresh.scrollHeight;
     status.replaceWith(renderChatStatus());
     const tabs = panelEl.querySelector('.ck-tabs');
-    if (tabs && !tabs.contains(document.activeElement)) tabs.replaceWith(renderTabs());
+    if (tabs && !tabs.contains(document.activeElement)) {
+      const bar = renderTabs();
+      tabs.replaceWith(bar);
+      fitDockToTabs(bar);
+    }
     return true;
   }
 
@@ -8395,6 +8653,11 @@
     if (usage.account) parts.push(usage.account);
     if (version) parts.push('overture ' + version);
     footerEl.textContent = parts.join(' · ');
+    // The shortcut sheet is one press of `?` away, but nobody finds `?`: give it a button.
+    const keys = el('button', { type: 'button', className: 'ck-footer-keys',
+      title: 'Keyboard shortcuts (?)', 'aria-label': 'Show keyboard shortcuts' }, [icon('keyboard'), ' Shortcuts']);
+    keys.addEventListener('click', () => openShortcutHelp());
+    footerEl.appendChild(keys);
     footerEl.setAttribute('data-stale', stale ? 'true' : 'false');
     // The host page gets room for the footer at whatever height it wrapped to.
     root.style.setProperty('--ck-footer-h', footerEl.offsetHeight + 'px');

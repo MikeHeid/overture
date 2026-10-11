@@ -245,7 +245,8 @@ The 0.9.11 fallback palette is Primer-aligned (`#0969da` accent on light,
   `{"sections": {"AB-2": ["#features/rollout", "#features/timeline"]}}`.
   The item view renders chips linking to each anchor.
 - Add in-place state badges by marking any `<section data-ck-item="X">`
-  on the dashboard. The console injects a `"X ◐ 2 ◑ 1 ◌ 3 ○ 4"` badge
+  on the dashboard. The console injects an `X 2 1 3 4` badge, each count
+  behind its state's icon (awaiting you, unlocked, stale, locked),
   in-place, updated on every live wake; clicking it opens the panel on X.
 
 ## Hooks the plugin ships (doorbell + command guards)
@@ -365,9 +366,13 @@ anything from the repository. See the module docstrings for the trust model.
   <img src="docs/screenshots/feature-favorite.png" alt="The Favorite tab listing two starred items" width="400">
 
 - **Chat**, for a message not tied to a question. It wakes the watching
-  session.
+  session. On an item, **💬 Chat ▾** jumps to that item's discussion. Its
+  menu offers **Branch out**, **Grill**, **Advise** (deliberate) and
+  **Delegate**, each already scoped to the item.
 
   <img src="docs/screenshots/feature-chat.png" alt="The Chat tab: the owner asks if main is green, the steward answers" width="400">
+
+  <img src="docs/screenshots/feature-chat-menu.png" alt="The Chat ▾ menu on an item: Branch out, Grill, Advise, Delegate" width="400">
 
 ### Keep rulings honest as the code moves
 
@@ -399,6 +404,29 @@ deleted: each act is recorded in a file beside the store, and the fold records t
 outcome in your project. New questions are refused a whole-file hash where an
 excerpt fits, which is what made most rulings go stale.
 
+### Track work as tickets
+
+Tickets are small units of work that belong to an item: a **task**, a **bug**,
+a **research** question, or a **grilling** note. You create them on an
+item's panel. Launch Idea and Branch Out create them for you.
+
+- **Blocking.** A ticket can be blocked by other tickets. Circular blocking
+  is refused by name. When a blocker closes, everything it blocked
+  unblocks.
+- **The Tickets tab** (`g k`) is a board across every item, with Open,
+  Blocked and Closed columns and a filter by kind. Each card names its
+  item, opens it with a click, and says what blocks it by title.
+- **What blocks what** draws the chains as a diagram, grouped by item. It
+  is there for the whole project on the Tickets tab, and for one item on
+  that item's panel.
+
+<img src="docs/screenshots/anim-tickets.gif" alt="Closing a blocking ticket: Ledger schema closes and Migration for the ledger moves from Blocked to Open" width="400">
+
+<img src="docs/screenshots/feature-ticket-graph.png" alt="What blocks what: tickets grouped by item, arrows from blocker to blocked, blocked tickets outlined in red" width="400">
+
+Only you create and close tickets. Agents cannot write them yet; that
+waits on the capability gate.
+
 ### Your dashboard, published by you
 
 The console can sit inside your project's own dashboard page. An agent
@@ -424,7 +452,9 @@ server cannot check it.
   agent-6`). One of them, the **steward**, named in your own registry, is the
   only one that processes your requests and folds your answers. The others
   post their questions to your inbox instead of asking you directly.
-- The **PRs** tab lists the project's open pull requests, then those
+- The **PRs** tab shows each pull request as its own card. The left edge
+  shows its state: blue open, amber checks running, red checks failing,
+  gray draft, purple merged. It lists the project's open pull requests, then those
   merged or closed in the last 30 days (`--days` changes it), with checks, draft and merged
   badges, a link to each on GitHub, and an **Open** button for any item or
   question a title or branch names. The steward pushes the list
@@ -448,16 +478,18 @@ server cannot check it.
 
   <img src="docs/screenshots/anim-palette.gif" alt="Pressing Ctrl+K, typing retry, and jumping straight to the matching item" width="720">
 
-- **Keyboard shortcuts.** Press `?` on any page for the full list.
-  `g i / f / p / s / o / c` hop to the Inbox / Feed / PRs / Favorite /
-  Portfolio / Chat tab, `g b` closes the panel, `.` focuses the
+- **Keyboard shortcuts.** Press `?`, or the **⌨ Shortcuts** button in the
+  footer, for the full list.
+  `g i / f / k / p / s / o / c` hop to the Inbox / Feed / Tickets / PRs /
+  Favorite / Portfolio / Chat tab, `g b` closes the panel, `.` focuses the
   Delegate bar, `j / k` walk the rows, Enter / Space opens the focused
   row. Shortcuts never fire in a text input.
 
   <img src="docs/screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
 
 - The **Portfolio** tab lists every other console you have configured, with
-  its state tallies (`?you ~unl !stale ○lock`), last-activity and a click
+  its state tallies (`2 you`, `1 unlocked`, `1 stale`, `9 locked`, each with its
+  state icon), last-activity and a click
   that opens it in a new tab. A bell button opts in to desktop
   notifications so a sibling's new `?you` or `!stale` reaches you even
   when the tab is in the background; a Snooze button sets a 1-hour DND

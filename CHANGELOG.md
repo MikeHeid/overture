@@ -3072,6 +3072,68 @@ example dashboard.
   server gets installed, and the join guide. The upgrade banner names
   the real `install.sh` path and the units that exist. Tests check
   that every command it prints is real.
+- **Tickets tab.** A board across every item: Open, Blocked and Closed
+  columns, a filter by kind, item chips that open the item, and `g k`.
+  It also appears in the command palette and the shortcut sheet.
+- **What blocks what.** `/api/ticket-chart` (`?item=` optional) draws
+  tickets as a Mermaid graph, with arrows from blocker to blocked. It
+  is grouped by item and coloured by status, and clicking a ticket
+  opens its item. It appears on the Tickets tab and on an item's
+  Tickets fold when that item has blocking. Titles are owner text, so
+  labels go through the chart sanitizer.
+- **Blockers are named by title.** "Blocked by" shows the blocker's
+  title instead of its id; the id is kept in the tooltip.
+- **Ticket fixes:**
+  - A ticket blocked by an already-closed ticket was marked "blocked"
+    for good, because nothing would ever unblock it. A closed blocker
+    now blocks nothing.
+  - Closing a ticket twice overwrote its first close time. Closing an
+    already-closed ticket now changes nothing.
+  - A ticket filed under an item the project does not list was stored
+    but never shown. It is now refused by name.
+- **Ticket tests.** `tickets.py` and its routes had no tests. Now 9
+  unit tests and 5 route tests cover create, update and close,
+  blocking, cycles, field checks, the view, the chart and the owner
+  gate.
+- **PR cards.** Each pull request on the PRs tab is a bordered card whose
+  left edge shows its state: open, checks running, checks failing,
+  draft, merged or closed.
+- **Shortcuts button.** The footer has a **⌨ Shortcuts** button that
+  opens the shortcut sheet, so `?` is no longer the only way in.
+- **Chat ▾ on items.** A split button on every item: **Chat** jumps to
+  the item's discussion. Its menu routes to **Branch out**, **Grill**
+  (Launch Idea's grill step), **Advise** (the deliberation form) and
+  **Delegate** (the Delegate bar, with the item preselected).
+- **docs/proposals/UX-VIEW.md.** A proposal for UX View: a component
+  modal with Save, Generate and Generate with input; components saved
+  to `components/<item>.md` with a dated backup, through the steward;
+  new UX items placed into their lane automatically.
+- **Icons (D8).** A bundled subset of 23 Lucide icons (lucide-static
+  0.460.0, ISC; the licence is in `vendor/LUCIDE-LICENSE.txt`), drawn
+  inline with `currentColor`, so there is no icon font, no CDN and no
+  request. Every tab, the More menu, the Chat ▾ menu and the footer's
+  Shortcuts button show one.
+- **State marks.** The near-identical circles (◐ ◑ ○ ◌) are replaced by a
+  distinct shape per state, and each keeps its colour and its words:
+  - awaiting you: a dotted circle;
+  - awaiting an agent: a bot;
+  - answered, not locked: an open lock;
+  - locked: a lock;
+  - stale: a warning triangle;
+  - withdrawn: a ban sign;
+  - superseded: crossed arrows.
+
+  They appear on question chips, inbox rows, the filter chips, the
+  dashboard's item buttons and section badges, the answers sheet,
+  round cards and the Portfolio tallies. The Portfolio tallies now read
+  `3 you`, `1 stale` instead of `?you`, `!stale`. Markdown exports and
+  desktop notifications keep their text marks.
+- **Tabs fit on one line (D9).** Tabs show an icon and a label. The
+  docked column is never narrower than its tab row: it measures the row
+  after each draw and widens if needed. To keep that near the old
+  width, Playbooks and Triggers moved behind **More ▾** (their `g`
+  shortcuts still work), and the Portfolio tab's count no longer says
+  `?you`. In the narrow overlay the row still scrolls sideways.
 - **The published page's own scripts run again.** 1.31 served the
   console under `script-src 'nonce-…'`, and only the console's own
   script carried the nonce, so a published dashboard's inline scripts

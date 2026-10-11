@@ -3354,3 +3354,77 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   /* Snooze menu: pin to the right edge of the row so it doesn't overflow the panel. */
   .ck-snooze-menu { right: auto; left: 0; min-width: 180px; }
 }
+
+/* Tickets tab: a board, one column per status. Columns wrap in a narrow dock. */
+.ck-ticket-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+.ck-ticket-col { min-width: 0; background: var(--c-surface-alt); border: 1px solid var(--c-border); border-radius: var(--radius-md, 10px); padding: 8px; }
+.ck-ticket-col-h { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+.ck-ticket-col[data-status="blocked"] .ck-ticket-col-h { color: var(--c-blocked); }
+.ck-ticket-col .ck-ticket { margin: 0 0 6px; }
+.ck-ticket-item { display: inline-block; margin: 0 0 4px; font-size: 11px; }
+.ck-ticket-filters { margin: 6px 0; }
+.ck-ticket-board .ck-ticket { padding: 6px 8px; font-size: 12.5px; }
+.ck-ticket-board .ck-ticket-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.ck-ticket-board .ck-ticket-title { flex-basis: 100%; font-size: 13px; margin-top: 2px; }
+.ck-ticket-board .ck-ticket-id { font-size: 10.5px; }
+.ck-ticket-board .ck-ticket-body { display: none; }
+.ck-ticket-board .ck-btn { padding: 2px 8px; min-height: 0; font-size: 12px; }
+
+/* PR tab: each pull request is its own bordered card; the left edge says its state at a glance. */
+.ck-pr-row {
+  --pr-edge: var(--c-accent);
+  border: 1px solid var(--c-border); border-left: 4px solid var(--pr-edge);
+  border-radius: var(--radius-sm, 6px); padding: 8px 10px; margin: 0 0 8px;
+  background: var(--c-surface); list-style: none;
+}
+.ck-pr-row[data-state="open"][data-checks="failure"] { --pr-edge: var(--c-blocked); }
+.ck-pr-row[data-state="open"][data-checks="pending"] { --pr-edge: var(--c-claimed); }
+.ck-pr-row[data-draft="true"]                        { --pr-edge: var(--c-fg-muted); }
+.ck-pr-row[data-state="merged"]                      { --pr-edge: #8250df; }
+.ck-pr-row[data-state="closed"]                      { --pr-edge: var(--c-blocked); opacity: .8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ck-pr-row[data-state="merged"] { --pr-edge: #a371f7; } }
+:root[data-theme="dark"] .ck-pr-row[data-state="merged"] { --pr-edge: #a371f7; }
+.ck-prs-list { padding-left: 0; }
+
+/* Footer: the shortcut sheet's button, on the right. */
+.ck-footer-keys {
+  float: right; margin-left: 12px; font: inherit; font-size: 12px; cursor: pointer;
+  color: var(--c-fg-muted); background: transparent; border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm, 6px); padding: 0 8px;
+}
+.ck-footer-keys:hover, .ck-footer-keys:focus-visible { color: var(--c-fg); border-color: var(--c-accent); outline: none; }
+
+/* Chat ▾ split button and its action menu. */
+.ck-split { display: inline-flex; }
+.ck-split .ck-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ck-split .ck-split-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding-left: 8px; padding-right: 8px; }
+.ck-action-menu { min-width: 260px; }
+.ck-action-menu .ck-more-item {
+  display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; row-gap: 1px; align-items: center; text-align: left;
+}
+.ck-action-menu .ck-more-item .ck-action-hint { grid-column: 2; }
+.ck-action-hint { font-size: 11.5px; }
+.ck-pr-row::before { display: none; }   /* the feed's row dot; the coloured edge replaces it */
+
+/* --- D8/D9: Lucide icons and state marks (2026-10-11) --- */
+.ck-icon { width: 1em; height: 1em; flex: 0 0 auto; vertical-align: -0.125em; }
+.ck-tab, .ck-more-item:not(.ck-action-menu .ck-more-item), .ck-footer-keys, .ck-split-main, .ck-split-more, .ck-inbox-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.ck-tab { gap: 5px; padding: 10px 8px; }
+.ck-tab .ck-icon { width: 15px; height: 15px; }
+.ck-tab-more-caret { display: inline-flex; }
+.ck-mark { display: inline-flex; align-items: center; }
+/* Outside a coloured state chip the mark carries the state's colour; inside one it inherits it. */
+.ck-mark[data-state="awaiting_you"] { color: var(--c-claimed); }
+.ck-mark[data-state="awaiting_agent"], .ck-mark[data-state="agent_active"] { color: var(--c-accent); }
+.ck-mark[data-state="unlocked"] { color: var(--c-open); }
+.ck-mark[data-state="locked"] { color: var(--c-built); }
+.ck-mark[data-state="stale"] { color: var(--c-blocked); }
+.ck-mark[data-state="withdrawn"], .ck-mark[data-state="superseded"] { color: var(--c-deferred); }
+.ck-q-state .ck-mark { color: inherit; }
+.ck-item-btn .ck-mark { margin-right: 2px; }
+.ck-section-badge .ck-mark { margin: 0 2px 0 1px; }
+.ck-section-badge .ck-mark .ck-icon { width: 11px; height: 11px; }
+.ck-portfolio-tally { display: inline-flex; align-items: center; gap: 3px; }
+.ck-living-rulings-glyph .ck-icon { color: var(--c-blocked); }
