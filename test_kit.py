@@ -582,6 +582,19 @@ class PublishTests(unittest.TestCase):
         css = (KIT / "overture" / "console.css").read_text()
         self.assertIn(".ck-snooze-menu[hidden] { display: none; }", css)
 
+    def test_console_hears_only_its_own_chart_frames(self):
+        # The message listener used to act on any window's postMessage: another frame on
+        # the dashboard page could force an SVG download or steer the panel. Every frame
+        # the console makes with allow-scripts is marked, and the listener checks the sender.
+        js = (KIT / "overture" / "console.js").read_text()
+        made = js.count("frame.setAttribute('sandbox', 'allow-scripts');")
+        self.assertGreater(made, 0)
+        self.assertEqual(made, js.count("frame.setAttribute('data-ck-chart', '');"))
+        listener = js[js.index("window.addEventListener('message'"):][:400]
+        self.assertIn("if (!fromChartFrame(e)) return;", listener)
+        self.assertIn("e.origin !== 'null'", js)
+        self.assertIn("f.contentWindow === e.source", js)
+
     def test_every_icon_used_is_bundled(self):
         # D8: icons are a bundled Lucide subset. A name with no entry in ICONS
         # draws nothing, so every name the console asks for must be there.
