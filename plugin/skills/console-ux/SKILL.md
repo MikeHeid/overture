@@ -224,7 +224,14 @@ is a worked example that passes the whole gate: radio cards, an anchored
 popover menu, a dialog opened with invoker commands, an exclusive accordion,
 and button text that follows the choice. All of it works with scripts off.
 
-*(Planned, FEED-ASSETS.md: post the screenshots to the item's Feed.)*
+**Post the screenshots that matter on the item** (F3), so the owner sees
+them in the Feed:
+
+    A asset ITEM --file <scratch>/ux-check/dark-375.png --caption "Checkout button at 375px, dark" --kind screenshot
+
+When you change a component that already exists, post a `--kind before`
+of the old one, then an `--kind after` of the new one. The Feed shows them
+side by side.
 
 ## 6. Write the doc and post
 

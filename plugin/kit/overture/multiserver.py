@@ -65,7 +65,7 @@ PROJECT_PATH = re.compile(r"^/p/([a-z](?:[a-z0-9]|-(?=[a-z0-9])){0,31})(/[^?#]*)
 FORBIDDEN = {"error": "forbidden"}   # one body for every refusal at the agent door: it names nothing (§3.5)
 # The agent POST routes the base handler serves; anything else is the 404 below. `_Handler.finish` drains the
 # unread body of that 404, and of every 403 and 503 here, within its own total deadline.
-POST_ROUTES = {"/cursor", "/working", "/reanchor", "/visual", "/visual-export", "/history-blob", "/history-specs",
+POST_ROUTES = {"/cursor", "/working", "/reanchor", "/visual", "/asset", "/visual-export", "/history-blob", "/history-specs",
                "/items", "/prs", "/issues", "/page-snapshot", "/anchor-proposal", "/refactor-advice",
                "/playbook", "/item-move", *SV.AGENT_ROUTES}
 BEARER = re.compile(r"^Bearer (ck1_[A-Za-z0-9_-]{43})\Z")

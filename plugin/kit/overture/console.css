@@ -1247,8 +1247,10 @@
 .ck-review-row[data-status="left"] { color: var(--c-fg-muted); }
 
 /* --- The Feed --- */
-.ck-feed-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
-.ck-feed-filters .ck-select { max-width: 100%; }
+.ck-feed-filters { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+/* D9: the filter row stays on one line; the two selects share what is left. */
+.ck-feed-filters .ck-select { flex: 1 1 0; min-width: 0; max-width: 100%; }
+.ck-feed-filters .ck-feed-digest, .ck-feed-filters .ck-field-label { flex: 0 0 auto; white-space: nowrap; }
 .ck-feed { list-style: none; margin: 0; padding: 0; }
 .ck-feed-row {
   position: relative;
@@ -3428,3 +3430,46 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-section-badge .ck-mark .ck-icon { width: 11px; height: 11px; }
 .ck-portfolio-tally { display: inline-flex; align-items: center; gap: 3px; }
 .ck-living-rulings-glyph .ck-icon { color: var(--c-blocked); }
+
+/* --- Assets in the Feed and on items (1.32, FEED-ASSETS.md) --- */
+.ck-asset-card { display: grid; gap: 6px; margin-top: 6px; }
+.ck-asset-figs { display: grid; gap: 8px; grid-template-columns: 1fr; }
+.ck-asset-pair .ck-asset-figs { grid-template-columns: 1fr 1fr; }
+.ck-asset-fig { margin: 0; display: grid; gap: 4px; min-width: 0; }
+.ck-asset-fig figcaption { font-size: 12px; color: var(--c-fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-asset-pair .ck-asset-fig figcaption { font-weight: 600; color: var(--c-fg); }
+.ck-asset-thumb {
+  display: block; padding: 0; border: 1px solid var(--c-border-light); border-radius: 8px; overflow: hidden;
+  background: var(--c-surface-alt); cursor: zoom-in; min-height: 48px; width: 100%;
+}
+.ck-asset-thumb img { display: block; width: 100%; height: auto; max-height: 180px; object-fit: cover; object-position: top; }
+.ck-asset-thumb[data-kind="before"] { border-color: var(--c-border); }
+.ck-asset-thumb[data-kind="after"] { border-color: var(--c-built); }
+.ck-asset-thumb:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+.ck-asset-play { display: flex; align-items: center; justify-content: center; min-height: 96px; font-weight: 600; color: var(--c-fg); }
+.ck-asset-caption { margin: 0; font-size: 13px; }
+.ck-asset-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+.ck-asset-kind { font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--c-surface-alt); }
+.ck-asset-kind[data-kind="after"] { background: var(--c-built-bg); color: var(--c-built); }
+.ck-asset-kind[data-kind="before"] { background: var(--c-open-bg); color: var(--c-open); }
+.ck-asset-link { color: var(--c-accent); }
+.ck-asset-actions { display: flex; gap: 6px; align-items: center; }
+.ck-asset-delete[data-armed="true"] { color: var(--c-blocked); border-color: var(--c-blocked); }
+.ck-assets-fold { margin: 12px 16px; border: 1px solid var(--c-border-light); border-radius: 8px; padding: 8px 12px; }
+.ck-assets-fold > summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.ck-asset-grid { display: grid; gap: 12px; margin-top: 8px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.ck-asset-grid .ck-asset-pair { grid-column: 1 / -1; }
+.ck-asset-view {
+  position: fixed; inset: 0; z-index: 1004; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, #000 60%, transparent); padding: 16px;
+}
+.ck-asset-view-box {
+  width: min(1100px, 96vw); max-height: 94vh; display: grid; grid-template-rows: auto 1fr auto auto; gap: 10px;
+  background: var(--c-surface); color: var(--c-fg); border: 1px solid var(--c-border); border-radius: 12px; padding: 16px;
+}
+.ck-asset-view-head h2 { margin: 0 0 2px; font-size: 16px; }
+.ck-asset-view-stage { min-height: 0; overflow: auto; display: flex; justify-content: center; background: var(--c-bg); border-radius: 8px; }
+.ck-asset-view-img { max-width: 100%; height: auto; object-fit: contain; }
+@media (forced-colors: active) { .ck-asset-thumb { border-color: CanvasText; } }
+.ck-asset-view-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.ck-asset-view-box { grid-template-rows: auto minmax(0, 1fr) auto auto; }

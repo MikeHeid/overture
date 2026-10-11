@@ -5,7 +5,13 @@ should show up in the **Feed** and on the item, the same way this session's
 before-and-after shots were shown while the icons were built. The owner sees
 what changed without opening a branch.
 
-Status: accepted. F1–F3 took their ★ as *architect defaults* (2026-10-11).
+Status: shipped in 1.32. F1–F3 took their ★ as *architect defaults*
+(2026-10-11). Two places differ from the plan below:
+
+- The index sits in `STATE/assets/index.json`, outside the append-only
+  store, so an older kit is never refused by it and pruning is possible.
+- A before/after pair is starred by its "after", and that keeps the
+  "before" too.
 
 ---
 
