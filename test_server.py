@@ -19,6 +19,7 @@ import json
 import re
 import os
 import stat
+import socket
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -1507,6 +1509,160 @@ def tiny_png(w=2, h=2, seed=0) -> bytes:
     raw = b"".join(b"\x00" + b"".join(bytes([(seed + x + y) % 256, 0, 0]) for x in range(w)) for y in range(h))
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+class HostingTests(unittest.TestCase):
+    """1.33 (D1-D3): `server.py daemon|service|status|health`, as separate processes on a temp XDG tree."""
+
+    def setUp(self):
+        from overture import serverfile as SF
+        from overture import registry as R
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.t = Path(os.path.realpath(tmp.name))
+        self.cfg, self.st = self.t / "cfg", self.t / "st"
+        reg = self.cfg / "overture" / "projects.json"
+        self.sfile = reg.parent / "server.json"
+        root, state = self.t / "root", self.t / "state"
+        root.mkdir()
+        state.mkdir()
+        R.register(root, state, HERE / "plugin" / "kit", path=reg)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+        SF.add("alpha", state, "a.example.com", AUD, self.port, TEAM, registry=reg, path=self.sfile)
+        self.state = state
+        self.bin = self.t / "bin"
+        self.bin.mkdir()
+        self.log = self.t / "systemctl.log"
+        sc = self.bin / "systemctl"
+        sc.write_text(f"#!/bin/sh\necho \"$@\" >> {self.log}\n"
+                      "case \"$2\" in is-active) if [ -f " + str(self.t / "ACTIVE") + " ]; then cat " + str(self.t / "ACTIVE") + "; else echo inactive; fi;; esac\n"
+                      "exit 0\n")
+        sc.chmod(0o755)
+        self.env = {**os.environ, "XDG_CONFIG_HOME": str(self.cfg), "XDG_STATE_HOME": str(self.st),
+                    "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+        self.addCleanup(self.stop_daemon)
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "server.py"), *args],
+                              capture_output=True, text=True, env=self.env, timeout=60)
+
+    def stop_daemon(self):
+        self.cli("daemon", "stop")
+
+    def test_daemon_start_status_health_stop(self):
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("daemon started", r.stdout)
+        self.assertEqual(self.cli("daemon", "start").returncode, 1)          # already running
+        s = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual((s["mode"], s["answering"], s["projects"]["alpha"]["port_open"]), ("daemon", True, True))
+        h = self.cli("health", "--json")
+        self.assertEqual(h.returncode, 0, h.stdout)
+        self.assertEqual(json.loads(h.stdout)["problems"], [])
+        self.assertTrue((self.st / "overture" / "server.pid").exists())
+        r = self.cli("daemon", "stop")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        s = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual((s["mode"], s["answering"]), ("stopped", False))
+        self.assertFalse((self.st / "overture" / "server.pid").exists())
+
+    def test_health_when_stopped_names_the_fix_and_cleans_stale_files(self):
+        run = self.st / "overture"
+        run.mkdir(parents=True)
+        (run / "server.pid").write_text(json.dumps({"pid": 2 ** 22 + 12345}))    # no such process
+        self.sfile.parent.mkdir(parents=True, exist_ok=True)
+        dead = socket.socket(socket.AF_UNIX)
+        dead.bind(str(self.sfile.parent / "server.sock"))
+        dead.close()                                                              # a socket file nobody listens on
+        r = self.cli("health", "--json")
+        doc = json.loads(r.stdout)
+        self.assertEqual(r.returncode, 1)
+        self.assertTrue(any("not running" in p for p in doc["problems"]))
+        self.assertEqual(len(doc["cleaned"]), 2)
+        self.assertFalse((run / "server.pid").exists())
+        self.assertFalse((self.sfile.parent / "server.sock").exists())
+
+    def test_service_install_writes_a_plain_unit_and_the_two_modes_refuse_each_other(self):
+        r = self.cli("service", "install", "--start")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        unit = (self.cfg / "systemd" / "user" / "overture-console.service").read_text()
+        self.assertIn(f"ExecStart={sys.executable} {HERE / 'plugin' / 'kit'}/server.py --all --server-file {self.sfile}", unit)
+        calls = self.log.read_text()
+        for want in ("--user daemon-reload", "--user enable overture-console.service", "--user restart overture-console.service"):
+            self.assertIn(want, calls)
+        (self.t / "ACTIVE").write_text("active\n")             # the fake systemctl now says the unit is active
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("service", r.stderr)
+        r = self.cli("service", "uninstall")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.cfg / "systemd" / "user" / "overture-console.service").exists())
+        self.assertEqual(self.cli("service", "uninstall").returncode, 1)
+
+    def test_a_daemon_blocks_service_install_and_an_unsafe_path_is_refused_by_name(self):
+        self.assertEqual(self.cli("daemon", "start").returncode, 0)
+        r = self.cli("service", "install")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("daemon is running", r.stderr)
+        sys.path.insert(0, str(HERE / "plugin" / "kit"))
+        import hosting
+        with self.assertRaises(ValueError) as cm:
+            hosting.render_unit(Path("/tmp/has space/server.json"))
+        self.assertIn("server file path", str(cm.exception))
+
+    def test_a_unit_that_is_still_starting_or_unsure_blocks_a_daemon_too(self):
+        self.cli("service", "install")
+        for word, needle in (("activating\n", "activating"), ("Failed to connect to bus\n", "does not say")):
+            (self.t / "ACTIVE").write_text(word)
+            r = self.cli("daemon", "start")
+            self.assertEqual(r.returncode, 1, word)
+            self.assertIn(needle, r.stderr)
+        self.assertFalse((self.st / "overture" / "server.pid").exists())
+
+    def test_health_never_removes_the_socket_of_a_server_that_is_slow_to_answer(self):
+        self.sfile.parent.mkdir(parents=True, exist_ok=True)
+        path = str(self.sfile.parent / "server.sock")
+        live = socket.socket(socket.AF_UNIX)
+        self.addCleanup(live.close)
+        live.bind(path)
+        live.listen(1)                                         # connects, never answers: busy or starting
+        r = self.cli("health", "--json")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(json.loads(r.stdout)["cleaned"], [])
+
+    def test_a_pid_file_naming_something_else_is_never_signalled(self):
+        run = self.st / "overture"
+        run.mkdir(parents=True)
+        me = subprocess.Popen(["sleep", "30"])                  # alive, but not `server.py --all`
+        self.addCleanup(me.kill)
+        (run / "server.pid").write_text(json.dumps({"pid": me.pid, "server_file": str(self.sfile)}))
+        r = self.cli("daemon", "stop")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stale pid file", r.stdout)
+        self.assertIsNone(me.poll())                            # still running: never signalled
+        (run / "server.pid").write_text(json.dumps({"pid": 1}))
+        self.assertEqual(self.cli("daemon", "stop").returncode, 1)   # pid 1 is no record at all
+
+    def test_no_projects_means_nothing_starts(self):
+        self.sfile.write_text(json.dumps({"team_domain": TEAM, "projects": {}}))
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no projects", r.stderr)
+
+    def test_the_session_hook_hints_when_the_server_is_down_and_only_then(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ss", HERE / "plugin" / "hooks" / "session_start.py")
+        ss = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.cfg)}):
+            spec.loader.exec_module(ss)
+            hint = ss._server_down(self.state, HERE / "plugin" / "kit")
+            self.assertIn("server.py", hint)
+            self.assertIn("status", hint)
+            self.sfile.parent.joinpath("server.sock").write_text("")      # a socket file is there: nothing to say
+            self.assertIsNone(ss._server_down(self.state, HERE / "plugin" / "kit"))
+            self.assertIsNone(ss._server_down(self.t / "elsewhere", HERE / "plugin" / "kit"))
 
 
 class ScriptsSwitchTests(_Live, unittest.TestCase):
@@ -3348,6 +3504,8 @@ def spec_question(v1: str) -> dict:
 SPAWN_ALLOWED = {
     "overture/gitseam.py": "the one door for git; it starts nothing once the server closes it",
     "agent.py": "run by an agent inside its own jail; the server process never imports it",
+    "hosting.py": "operator tool: `server.py daemon|service|status|health` run systemctl and detach the server; "
+                  "the server never imports it",
     "onboard.py": "operator setup/verify tool (1.24.0 verify runs curl/systemctl); never imported by the server",
     "tools/": "operator tools (verify_vendor.py runs git on a kit clone); never imported by the server",
 }
@@ -3416,6 +3574,7 @@ sys.addaudithook(hook)
 
 import http.client, os, socket, threading, time
 from pathlib import Path
+from unittest import mock
 p = json.loads(sys.argv[1])
 sys.path.insert(0, p["kit"])
 from overture import server as SV
@@ -4304,6 +4463,7 @@ class StraceGateTests(unittest.TestCase):
 WRITE_FAULT_CHILD = r'''
 import errno, os, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import stewardgit as SG
 os.urandom = lambda n: b"\0" * n          # the temporary's name, fixed so the trace can be read for it
@@ -6065,6 +6225,7 @@ class SingleServerStartTests(unittest.TestCase):
 SET_ASIDE_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 IT.store_snapshot(Path(sys.argv[2]), json.loads(sys.argv[3]))
@@ -6288,6 +6449,7 @@ class SingleServerItemsTests(_SingleServer, unittest.TestCase):
 ITEMS_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 from overture import server as SV
@@ -6346,6 +6508,7 @@ def page_body(html: str, *, ref: str = "origin/main", commit: str = "c0ffee" + "
 PAGE_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 from overture import server as SV

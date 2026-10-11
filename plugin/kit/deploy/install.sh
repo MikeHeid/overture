@@ -62,7 +62,7 @@ if [ "$SRC" != "$KIT" ]; then
   rm -rf "$KIT.new"
   mkdir "$KIT.new"
   for part in overture deploy demo docs agent.py fold.py onboard.py publish.py server.py \
-              adapter_template.py requirements.txt README.md INSTALL.md VERSION; do
+              adapter_template.py hosting.py requirements.txt README.md INSTALL.md VERSION; do
     if [ -e "$SRC/$part" ]; then cp -R "$SRC/$part" "$KIT.new/"; fi
   done
   find "$KIT.new" -name __pycache__ -prune -exec rm -rf {} +

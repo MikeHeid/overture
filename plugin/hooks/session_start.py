@@ -504,6 +504,23 @@ def _upgrade_note(agent: str, state: Path, kit: Path, running: str, last: str | 
     )
 
 
+def _server_down(state: Path, kit: Path) -> str | None:
+    """One line when this project is served by the one server (`server.py --all`, server.json) and its agent
+    socket is not there. Read only: it names the command that says why, and starts nothing (D1)."""
+    sf = _registry_path().parent / "server.json"
+    try:
+        raw = _read_regular(sf, 1 << 20)
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (Unsafe, OSError, UnicodeDecodeError, ValueError):
+        return None
+    mine = isinstance(doc, dict) and isinstance(doc.get("projects"), dict) and any(
+        isinstance(p, dict) and p.get("state") == str(state) for p in doc["projects"].values())
+    if not mine or (sf.parent / "server.sock").exists():
+        return None
+    return (f"Owner console: the console server is not running, so the owner cannot reach it. "
+            f"`python3 {kit / 'server.py'} status` says why; `daemon start` or `service install --start` runs it.")
+
+
 def context(project: Path, sid: str | None = None) -> str | None:
     """The note for this session, or None when there is nothing to say."""
     try:
@@ -532,6 +549,9 @@ def context(project: Path, sid: str | None = None) -> str | None:
     steward, mine = steward_line(e, agent, whoami(state, sid))
     if steward:
         ask += "\n\n" + steward
+    down = _server_down(state, kit)
+    if down:
+        ask += "\n\n" + down
     prefix = (upgrade + "\n\n") if upgrade else ""
     if not wake:
         return prefix + ask
