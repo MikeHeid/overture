@@ -3162,7 +3162,8 @@ example dashboard.
   anchor positioning. A worked example, a plan picker, passes the whole
   gate. console-process routes visual requests on UX items to it.
 - **`tools/ux_check.py`.** Runs a component through the server's own
-  sanitizer and names anything that would be stripped. With Playwright,
+  sanitizer and names, by the sanitizer's own rules, every element,
+  attribute and attribute value that would be stripped. With Playwright,
   it renders the component exactly as UX View will: sandboxed, under the
   server's CSP, with JavaScript off, at 375, 768 and 1280px, in light and
   dark.
@@ -3173,7 +3174,13 @@ example dashboard.
   `command`/`commandfor`. Nothing can submit, load or run:
   - there is no `<form>`, `formaction` or `autofocus`;
   - `type="file"` and `type="image"` are refused;
-  - custom `--commands` are refused.
+  - custom `--commands` are refused;
+  - `autocomplete` is dropped, so a component can't prompt the browser to
+    offer saved passwords or cards.
+
+  A self-closed non-void tag such as `<style/>` is now written as an empty
+  element. Browsers ignore the `/`, so it used to swallow the rest of the
+  visual as CSS.
 - **Fix: CSS in an HTML visual was HTML-escaped.** The sanitizer ran
   `<style>` content through the text escaper, so `a > b` became
   `a &gt; b` and `"x"` became `&quot;x&quot;`. Every child selector,

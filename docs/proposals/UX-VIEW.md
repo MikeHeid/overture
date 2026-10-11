@@ -167,7 +167,8 @@ the fragment viewer's pattern: fixed, `inset: 0`, width
   - Generate from design adds `from: "design"`.
 - A new skill, `console-ux` (shipped in 1.32, with researched references, a
   worked example and `tools/ux_check.py`), handles visual requests on UX
-  items, and those with `purpose: "ux"`:
+  items. Today that means a `lane-ui` or `lane-ux` section; `purpose: "ux"`
+  joins when the schema intents land (step 1):
   1. It reads the item, its rulings, the current component file, and the
      project's design tokens (the `:root` CSS custom properties).
   2. It writes the component as one HTML document with a `<style>` block.

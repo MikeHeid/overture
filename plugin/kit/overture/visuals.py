@@ -74,7 +74,9 @@ NAME = re.compile(r"^([0-9a-f]{8})-([0-9a-f]{12})(\.mmd|\.html)\Z")
 # whitelisted tags with the whitelisted attributes.
 #
 # ALLOWED is a conservative set that covers prototyping needs (headings, lists, inline
-# code, images from http(s) and data: image URIs, tables, blockquotes, styled divs).
+# code, images from http(s) and data: image URIs, tables, blockquotes, styled divs) and,
+# since 1.32, inert controls and disclosure for UX components (button, input, select,
+# details, dialog, popover). <style> blocks are kept, their CSS passed through unescaped.
 # Everything else — <script>, <iframe>, <object>, <embed>, <form>, <svg>, <link>,
 # <base>, <meta>, <math>, <frame> — is dropped tag-and-all (opening markup only; the
 # TEXT inside stays unless the parser considers it rawtext — which it does for
@@ -149,7 +151,9 @@ _ALLOWED_TAGS: dict[str, frozenset[str]] = {
                           "command", "commandfor"}),
     "input":   frozenset({"type", "name", "value", "checked", "disabled", "placeholder", "required", "readonly",
                           "min", "max", "step", "minlength", "maxlength", "pattern", "size", "list",
-                          "inputmode", "autocomplete", "multiple"}),
+                          "inputmode", "multiple"}),
+    # No `autocomplete`: `cc-number` or `current-password` would have the browser offer the owner's saved
+    # cards or passwords inside a frame an agent wrote.
     "select":  frozenset({"name", "disabled", "required", "multiple", "size"}),
     "option":  frozenset({"value", "selected", "disabled", "label"}),
     "optgroup": frozenset({"label", "disabled"}),
@@ -295,6 +299,12 @@ class _SanitizingParser(HTMLParser):
         tag = tag.lower()
         if tag in self.dropped_content_tags or tag not in _ALLOWED_TAGS:
             self.stripped += 1
+            return
+        if tag not in _VOID:
+            # Browsers ignore the `/` on a non-void tag: `<style/>` would open rawtext and swallow the
+            # rest of the visual as CSS. Write it as an empty element instead.
+            self._emit_start(tag, attrs, False)
+            self.out.append(f"</{tag}>")
             return
         self._emit_start(tag, attrs, True)
 

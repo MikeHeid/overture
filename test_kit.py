@@ -147,6 +147,13 @@ class SanitizerTests(unittest.TestCase):
         self.assertNotIn("</input>", out)
         self.assertNotIn("--custom", out)   # a custom command needs script: refused
 
+    def test_a_self_closed_non_void_tag_cannot_swallow_the_rest(self):
+        # Browsers ignore the "/" on <style/>: it opened rawtext and the rest of the visual became CSS.
+        self.assertEqual(self.clean("<style/>body{}<p>x</p>"), "<style></style>body{}<p>x</p>")
+
+    def test_no_autocomplete_so_no_saved_secrets_are_offered(self):
+        self.assertNotIn("autocomplete", self.clean('<input name="c" autocomplete="cc-number">'))
+
     def test_nothing_can_submit_load_or_run(self):
         out = self.clean('<form action="https://evil.example"><input type="file" name="f" autofocus>'
                          '<input type="image" src="https://evil.example/x.png">'
@@ -181,14 +188,19 @@ class ConsoleUxSkillTests(unittest.TestCase):
         sys.path.insert(0, str(KIT / "tools"))
         import ux_check
         from overture.visuals import sanitize_html
-        bad = '<div style="x" onclick="y()">a</div><svg></svg><script>1</script><input type="file">'
-        found = " | ".join(ux_check.what_is_stripped(bad, sanitize_html(bad)[0]))
-        for word in ("<script>", "on* event", 'style=""', "<svg>", "attributes: type"):
+        # Values the sanitizer refuses count too (a reviewer caught the first version missing them).
+        bad = ('<div style="x" onclick="y()">a</div><svg></svg><script>1</script><input type="file" autofocus>'
+               '<button command="--x">b</button><meta charset="utf-8">')
+        found = " | ".join(ux_check.what_is_stripped(bad))
+        for word in ("<script>", "<div onclick>", 'style=""', "<svg>", '<input type="file">', "<input autofocus>",
+                     '<button command="--x">', "<meta>"):
             self.assertIn(word, found)
+        self.assertEqual(ux_check.what_is_stripped(sanitize_html(bad)[0]), [])
 
     def test_the_skill_is_wired_in(self):
         text = (self.SKILL / "SKILL.md").read_text(encoding="utf-8")
-        for ref in ("principles.md", "patterns.md", "style.md", "checklist.md", "example-plan-picker.html"):
+        for ref in ("principles.md", "patterns.md", "style.md", "checklist.md", "scripts.md",
+                    "example-plan-picker.html"):
             self.assertIn("references/" + ref if ref != "example-plan-picker.html" else ref, text)
             self.assertTrue((self.SKILL / "references" / ref).is_file(), ref)
         self.assertIn("tools/ux_check.py", text)
