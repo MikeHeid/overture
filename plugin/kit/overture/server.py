@@ -675,7 +675,9 @@ SECURITY_HEADERS = (
     # on the page. Both are no-op for the honest console (which uses neither). `script-src 'self'`
     # is NOT added here because publish.py injects console.js inline — tightening script-src
     # requires a per-request nonce in the <script> tag, which is 1.31 scope.
-    ("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"),
+    # 1.33: `frame-src 'self'` keeps a scripted component (sandboxed, opaque origin) from navigating its own
+    # frame to an outside page inside the console: every frame the console embeds is one of its own routes.
+    ("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; frame-src 'self'"),
     # adversarial review flagged that the brief claimed cross-origin isolation
     # was set but no COOP header actually was. COOP: same-origin isolates the owner
     # window from any opener (ad hoc tab opens pointing here lose the WindowProxy),
@@ -1946,12 +1948,15 @@ class Console:
                 "so it has nowhere to land in the repository")
         return {"record": stored, "land": land}
 
-    def scripts_on(self, visual_id: str) -> bool:
-        """Whether the owner's newest ux-scripts for this visual says scripts are on. The owner's record only."""
+    def scripts_on(self, visual_id: str, before_seq: int | None = None) -> bool:
+        """Whether the owner's newest ux-scripts for this visual says scripts are on. The owner's record only.
+
+        `before_seq` reads the switch as it stood when a ux-save was made, so a later flip to preview a version
+        never changes what an earlier save exports."""
         on = False
         for r in self.store.records():
             if r["type"] == "message" and r["by"] == "owner" and r.get("intent") == "ux-scripts" \
-                    and r.get("visual_id") == visual_id:
+                    and r.get("visual_id") == visual_id and (before_seq is None or r["seq"] < before_seq):
                 on = r["scripts"] is True
         return on
 
@@ -2223,7 +2228,7 @@ class Console:
             doc = VIS.read_doc(self.cfg.state, rec, req.get("text", ""))
         except (VIS.VisualError, UnicodeDecodeError) as e:
             raise RequestError(409, f"visual {rec['id']} cannot be exported: {e}") from None
-        scripts = self.scripts_on(rec["id"])
+        scripts = self.scripts_on(rec["id"], msg["seq"])     # the switch as it was when the owner saved
         source = None
         if scripts:   # the owner switched scripts on for this exact version: the component carries its source
             try:
@@ -3465,7 +3470,7 @@ class OwnerHandler(_Handler):
             # Overriding CSP: adds script-src nonce-… alongside the shared defaults.
             self.send_header(
                 "Content-Security-Policy",
-                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; frame-src 'self'; "
                 f"script-src 'nonce-{nonce}'",
             )
             self.end_headers()

@@ -1584,9 +1584,13 @@ class ScriptsSwitchTests(_Live, unittest.TestCase):
         save = self.owner_msg(item="LANE.1", intent="ux-save", text="save", visual_id=vid)
         code, out = self.agent_post("/ux-export", {"save": save["id"]})
         self.assertEqual((code, out["scripts"], out["source"]), (200, False, None))
-        self.switch(vid, True)
+        self.switch(vid, True)       # flipped AFTER the save, to preview: that save still exports without script
         code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual((out["scripts"], out["source"]), (False, None))
+        save2 = self.owner_msg(item="LANE.1", intent="ux-save", text="save again", visual_id=vid)
+        code, out = self.agent_post("/ux-export", {"save": save2["id"]})
         self.assertEqual((out["scripts"], out["source"]), (True, self.RAW))
+        self.assertIn("frame-src 'self'", self.raw("/")[1].get("content-security-policy", ""))
 
 
 class PrMergeRequestTests(_Live, unittest.TestCase):

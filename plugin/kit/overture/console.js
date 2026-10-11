@@ -6088,18 +6088,27 @@
         const seen = (() => { try { return localStorage.getItem('ck-ux-scripts-seen') === '1'; } catch (_e) { return true; } })();
         const note = el('p', { className: 'ck-muted ck-ux-scripts-note', hidden: st.scriptsNote ? null : 'hidden' }, [
           'Scripts run in a sealed frame with no access to the console or its cookies. Turn on only for components you need to see working.']);
+        const confirm = el('button', { type: 'button', className: 'ck-btn', hidden: st.scriptsNote ? null : 'hidden' }, ['Turn scripts on']);
         det.appendChild(note);
+        det.appendChild(confirm);
         det.appendChild(el('p', { className: 'ck-muted' }, [on ? 'Recorded at the next save.'
           : 'Needs a scripted source for this version; ask for one with Generate with notes.']));
-        sw.addEventListener('change', async () => {
+        const send = async want => {
           err.hidden = true;
-          const want = sw.checked;
-          if (want && !seen) { st.scriptsNote = true; note.hidden = false; try { localStorage.setItem('ck-ux-scripts-seen', '1'); } catch (_e) { /* ok */ } }
           const r = await apiPost('/message', { item: itemId, intent: 'ux-scripts', visual_id: cur.id, scripts: want,
             text: 'Scripts ' + (want ? 'on' : 'off') + ' for v' + (st.idx + 1) + ' of ' + (cur.title || itemId) }, 'ux-scripts-' + cur.id + '-' + want);
           if (r.error) { sw.checked = !want; err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
           else announce('Scripts ' + (want ? 'on' : 'off') + '.');
-          if (!r.error) { st.settingsOpen = true; paint(); }
+          if (!r.error) { st.settingsOpen = true; st.scriptsNote = false; paint(); }
+        };
+        // The first time, the warning is read BEFORE anything runs: the switch waits for a second click.
+        sw.addEventListener('change', () => {
+          if (sw.checked && !seen && !st.scriptsSeen) { sw.checked = false; st.scriptsNote = true; note.hidden = false; confirm.hidden = false; confirm.focus(); return; }
+          send(sw.checked);
+        });
+        confirm.addEventListener('click', () => {
+          st.scriptsSeen = true; try { localStorage.setItem('ck-ux-scripts-seen', '1'); } catch (_e) { /* ok */ }
+          send(true);
         });
       } else {
         det.appendChild(el('p', { className: 'ck-muted' }, ['Scripts: no version to switch yet.']));
