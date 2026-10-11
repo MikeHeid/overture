@@ -514,7 +514,7 @@ server cannot check it.
                                               state dir: store + doorbell
                                                      ▲
  Claude session ── SessionStart hook reads the doorbell (registered projects only)
-                └─ skills: console-process / console-fork / console-fold / console-ask / console-visual ── agent.py
+                └─ skills: console-process / console-fork / console-fold / console-ask / console-visual / console-ux ── agent.py
 ```
 
 - **`server.py`** serves the console, inside your published dashboard page if
@@ -644,3 +644,8 @@ To build the release zip:
 It runs `claude plugin validate --strict` on the result. The deny file lists
 strings from your own deployment (hostnames, AUD tags, team domain, home
 path), and the build refuses if any of them appears in the zip.
+
+## License
+
+MIT. See [LICENSE](LICENSE). The bundled Lucide icons are ISC-licensed
+(`plugin/kit/overture/vendor/LUCIDE-LICENSE.txt`).

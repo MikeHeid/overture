@@ -74,7 +74,9 @@ NAME = re.compile(r"^([0-9a-f]{8})-([0-9a-f]{12})(\.mmd|\.html)\Z")
 # whitelisted tags with the whitelisted attributes.
 #
 # ALLOWED is a conservative set that covers prototyping needs (headings, lists, inline
-# code, images from http(s) and data: image URIs, tables, blockquotes, styled divs).
+# code, images from http(s) and data: image URIs, tables, blockquotes, styled divs) and,
+# since 1.32, inert controls and disclosure for UX components (button, input, select,
+# details, dialog, popover). <style> blocks are kept, their CSS passed through unescaped.
 # Everything else — <script>, <iframe>, <object>, <embed>, <form>, <svg>, <link>,
 # <base>, <meta>, <math>, <frame> — is dropped tag-and-all (opening markup only; the
 # TEXT inside stays unless the parser considers it rawtext — which it does for
@@ -141,9 +143,66 @@ _ALLOWED_TAGS: dict[str, frozenset[str]] = {
     "head":    frozenset(),
     "body":    frozenset({"class"}),
     "title":   frozenset(),
+    # 1.32 (S1, architect default): inert controls and disclosure, so a UX component looks and behaves like
+    # the real thing with NO script. Nothing here can submit or navigate: there is no <form>, `form`,
+    # `formaction`, `formmethod` or `autofocus`, the frame's CSP says `form-action 'none'`, and `type`
+    # values that load or upload (`image`, `file`) are refused in _attr_ok.
+    "button":  frozenset({"type", "name", "value", "disabled", "popovertarget", "popovertargetaction",
+                          "command", "commandfor"}),
+    "input":   frozenset({"type", "name", "value", "checked", "disabled", "placeholder", "required", "readonly",
+                          "min", "max", "step", "minlength", "maxlength", "pattern", "size", "list",
+                          "inputmode", "multiple"}),
+    # No `autocomplete`: `cc-number` or `current-password` would have the browser offer the owner's saved
+    # cards or passwords inside a frame an agent wrote.
+    "select":  frozenset({"name", "disabled", "required", "multiple", "size"}),
+    "option":  frozenset({"value", "selected", "disabled", "label"}),
+    "optgroup": frozenset({"label", "disabled"}),
+    "datalist": frozenset(),
+    "textarea": frozenset({"name", "rows", "cols", "placeholder", "disabled", "readonly", "required",
+                           "minlength", "maxlength"}),
+    "label":   frozenset({"for"}),
+    "fieldset": frozenset({"disabled", "name"}),
+    "legend":  frozenset(),
+    "details": frozenset({"open", "name"}),
+    "summary": frozenset(),
+    "dialog":  frozenset({"open"}),
+    "progress": frozenset({"value", "max"}),
+    "meter":   frozenset({"value", "min", "max", "low", "high", "optimum"}),
+    "output":  frozenset({"for", "name"}),
+    "small":   frozenset(),
+    "mark":    frozenset(),
+    "abbr":    frozenset(),
+    "time":    frozenset({"datetime"}),
+    "kbd":     frozenset(),
+    "sup":     frozenset(),
+    "sub":     frozenset(),
+    "s":       frozenset(),
+    "del":     frozenset(),
+    "ins":     frozenset(),
+    "cite":    frozenset(),
+    "q":       frozenset(),
+    "menu":    frozenset(),
+    "search":  frozenset(),
+    "aside":   frozenset(),
+}
+# Attributes every allowed tag may carry (1.32): identity, accessibility and declarative behaviour. `aria-*`
+# and `data-*` are allowed by prefix in _attr_ok. `popover` (with a button's `popovertarget`) opens and
+# closes a panel with no script.
+_GLOBAL_ATTRS = frozenset({"class", "id", "role", "title", "hidden", "tabindex", "dir", "lang", "popover",
+                           "aria-label"})
+_INPUT_TYPES = frozenset({"text", "search", "email", "tel", "url", "number", "range", "date", "time",
+                          "datetime-local", "month", "week", "color", "checkbox", "radio", "button", "reset",
+                          "submit", "hidden"})
+_ENUM_ATTRS = {
+    ("button", "type"): frozenset({"button", "submit", "reset"}),
+    ("button", "popovertargetaction"): frozenset({"toggle", "show", "hide"}),
+    # Invoker commands (Baseline 2025): the built-in ones only; a custom `--command` needs script.
+    ("button", "command"): frozenset({"show-modal", "close", "request-close", "toggle-popover", "show-popover",
+                                      "hide-popover"}),
+    ("input", "type"): _INPUT_TYPES,
 }
 # Void elements: emit without a closing tag.
-_VOID = frozenset({"br", "hr", "img"})
+_VOID = frozenset({"br", "hr", "img", "input"})
 # Attribute URL schemes we accept. `#frag`, relative paths (no scheme), http, https,
 # mailto. `data:` is allowed ONLY for images on `src` (image/<format>;base64 ...).
 _SAFE_URL_RE = re.compile(r"^(?:https?:|mailto:|#|/|[^:]+$)", re.IGNORECASE)
@@ -157,9 +216,12 @@ def _attr_ok(tag: str, attr: str, value: str) -> bool:
     # Any attribute whose name starts with `on` is forbidden regardless of allowlist.
     if attr.startswith("on"):
         return False
-    # `data-*` attributes are universally allowed: they are author-only and inert.
-    is_data = attr.startswith("data-")
-    if not is_data and attr not in allowed:
+    # `data-*` and `aria-*` attributes are universally allowed: they are inert.
+    is_data = attr.startswith("data-") or attr.startswith("aria-")
+    if not is_data and attr not in allowed and attr not in _GLOBAL_ATTRS:
+        return False
+    enum = _ENUM_ATTRS.get((tag, attr))
+    if enum is not None and (value or "").strip().lower() not in enum:
         return False
     # URL-shaped attributes: validate scheme.
     if attr in ("href", "src", "action", "formaction", "xlink:href"):
@@ -238,6 +300,12 @@ class _SanitizingParser(HTMLParser):
         if tag in self.dropped_content_tags or tag not in _ALLOWED_TAGS:
             self.stripped += 1
             return
+        if tag not in _VOID:
+            # Browsers ignore the `/` on a non-void tag: `<style/>` would open rawtext and swallow the
+            # rest of the visual as CSS. Write it as an empty element instead.
+            self._emit_start(tag, attrs, False)
+            self.out.append(f"</{tag}>")
+            return
         self._emit_start(tag, attrs, True)
 
     def handle_endtag(self, tag):
@@ -261,6 +329,13 @@ class _SanitizingParser(HTMLParser):
 
     def handle_data(self, data):
         if self.in_dropped_rawtext > 0:
+            return
+        if self.tag_stack and self.tag_stack[-1] == "style":
+            # CSS is rawtext: entities are NOT decoded inside <style>, so HTML-escaping it broke every
+            # `a > b`, `[type="x"]` and `content: "…"` (pre-1.32). It cannot close the element early (the
+            # parser ended this data at `</style`), and a `<` is written as the CSS escape `\3C `, so no
+            # markup can be spelled inside it either.
+            self.out.append(data.replace("<", "\\3C "))
             return
         self.out.append(_esc(data))
 
