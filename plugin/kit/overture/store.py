@@ -216,8 +216,8 @@ class Store:
                 self._check_about(rec)
             if S.ROAR in (rec.get("roles") or ()):
                 self._check_roar_once(rec)
-            if rec.get("intent") == "ux-save":
-                # 1.32: a ux-save names an HTML visual on the same item; anything else could not be a component.
+            if rec.get("intent") in ("ux-save", "ux-scripts"):
+                # 1.32: a ux-save names (1.33: and so does a ux-scripts) an HTML visual on the same item; anything else could not be a component.
                 v = self._by_id.get(rec["visual_id"])
                 if v is None or v["type"] != "visual":
                     raise StoreError(f"visual_id {rec['visual_id']!r} names no visual")

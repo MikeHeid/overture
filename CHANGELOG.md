@@ -2992,6 +2992,18 @@ on its own.
 
 ## Unreleased
 
+- **UX View: the Scripts switch (step 4, D4).** A component can now run
+  script, only if you turn it on. The visual an agent posts stays
+  script-free; an agent may also store a scripted source beside it
+  (`agent.py component-source`, write-once). **Settings → Scripts (this
+  version)** sends your `ux-scripts` request; only then does
+  `/api/component-render` serve that source, in a frame sandboxed with
+  `allow-scripts` only (no same-origin, forms, popups or top navigation)
+  under `default-src 'none'; connect-src 'none'`. The modal shows "⚡ Scripts
+  on", and a save with it on lands the scripted source with `scripts: true`.
+  This reverses part of the 1.31 hardening for that one route; it is off by
+  default and per version.
+
 - **Merge from the PR tab (UX View step 3, D7).** An open, ready, passing
   pull request gets a **Merge** button on the PR tab, confirmed inline. The
   server merges nothing and holds no GitHub token: Merge sends an owner

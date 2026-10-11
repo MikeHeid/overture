@@ -679,6 +679,45 @@ def store(state: Path, rel: str, doc_rel: str, content: bytes, doc: str) -> None
         _write_once(d, doc.encode("utf-8"), doc_rel)
 
 
+# -- the scripted source of an HTML component (1.33, UX-VIEW.md "Scripts in components") ------------------
+#
+# The visual itself is the sanitized, script-free version and stays the fallback ("enhance, never depend").
+# An agent may store ONE raw, unsanitized "scripted source" beside it. It is never shown unless the owner's
+# ux-scripts switch is on for that visual, and then only by /api/component-render under a sealed CSP.
+
+SOURCE_SUFFIX = ".scripted.html"
+
+
+def _source_rel(rec: dict) -> str:
+    name, _doc = stored_names(rec)
+    item = rec.get("item")
+    if not isinstance(item, str) or not S.ITEM_ID.match(item):
+        raise VisualError("the record's item is not an item id")
+    return f"{STORE_DIR}/{item}/{name}{SOURCE_SUFFIX}"
+
+
+def store_source(state: Path, rec: dict, data: bytes) -> bool:
+    """Keep the scripted source of HTML visual `rec`, jailed; refuses to replace different bytes. True when written."""
+    if rec.get("format") != "html":
+        raise VisualError("only an HTML visual has a scripted source")
+    rel = _source_rel(rec)
+    with _jail(state, rel, "path", create=True) as p:
+        return _write_once(p, data, rel)
+
+
+def read_source(state: Path, rec: dict) -> bytes | None:
+    """The scripted source bytes, or None when the visual has none."""
+    rel = _source_rel(rec)
+    try:
+        p = _jail(state, rel, "path", create=False)
+    except VisualError as e:
+        if "is not there" in str(e):
+            return None
+        raise
+    with p:
+        return _read_nofollow(p, S.MAX_VISUAL)
+
+
 def _locate(state: Path, rec: dict, field: str) -> tuple[_At | None, str]:
     """The open folder holding a record's visual (`path`) or doc (`doc_path`), or None when its folder is missing."""
     name, doc = stored_names(rec)

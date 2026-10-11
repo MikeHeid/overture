@@ -195,10 +195,11 @@ decide it in the doc.
 
 ### Scripts
 
-Scripts are always stripped today, so build everything to work without
-them. When the owner's Scripts switch ships (UX-VIEW.md, step 4),
-[references/scripts.md](references/scripts.md) says how to add them as
-progressive enhancement.
+Scripts are always stripped from the visual you post, so build everything to
+work without them. Only if the component truly needs script, also store a
+scripted source with `A component-source` (it runs only if the owner switches
+Scripts on for that version); [references/scripts.md](references/scripts.md)
+says how to write it as progressive enhancement.
 
 ### Craft rules
 
