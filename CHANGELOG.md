@@ -3198,8 +3198,11 @@ example dashboard.
     press of play.
   - **Formats:** PNG, JPEG, WebP or GIF, judged by the file's magic bytes;
     SVG is refused.
-  - **Limits:** 2 MiB for a still, 8 MiB for a GIF, 8000 px on a side, and
-    30 per agent per 10 minutes.
+  - **Limits:** 2 MiB for a still, 8 MiB for a GIF, 8000 px on a side;
+    30 per agent and 120 per project per 10 minutes (unnamed agents share
+    one bucket); at most 3000 in the index. Format, size and sides are
+    checked before the server takes its lock, and a JPEG's header scan stops
+    at 256 KiB, so a crafted file can't stall the console.
   - **Storage:** files are kept under `STATE/assets/`, outside the store, so
     an older kit still opens the project. Each is served sandboxed with
     `nosniff`. The same bytes posted twice on an item are one asset.

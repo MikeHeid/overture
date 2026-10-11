@@ -278,6 +278,52 @@ class AssetTests(Tmp):
         finally:
             self.A.PER_ITEM = old
 
+    def test_unnamed_agents_share_a_bucket_and_the_project_has_its_own_limit(self):
+        # Review: the agent name is self-declared, and an unnamed post skipped the limit entirely.
+        for i in range(self.A.RATE_COUNT):
+            self.add(i, at="2026-10-11T10:00:00Z", agent=None)
+        with self.assertRaisesRegex(self.A.AssetError, "unnamed agents"):
+            self.add(500, at="2026-10-11T10:01:00Z", agent=None)
+        old = self.A.RATE_PROJECT
+        self.A.RATE_PROJECT = self.A.RATE_COUNT + 2
+        try:
+            self.add(600, at="2026-10-11T10:01:00Z", agent="b1")
+            self.add(601, at="2026-10-11T10:01:00Z", agent="b2")
+            with self.assertRaisesRegex(self.A.AssetError, "project's limit"):
+                self.add(602, at="2026-10-11T10:01:00Z", agent="b3")
+        finally:
+            self.A.RATE_PROJECT = old
+
+    def test_tiny_files_cannot_fill_the_index_for_good(self):
+        # Review: thousands of 33-byte PNGs never reach MAX_TOTAL; MAX_ROWS prunes them like any other cap.
+        old = self.A.MAX_ROWS
+        self.A.MAX_ROWS = 3
+        try:
+            first = self.add(1, item="A.1")["asset"]
+            self.add(2, item="A.2"); self.add(3, item="A.3")
+            out = self.add(4, item="A.4")
+            self.assertEqual([n["id"] for n in out["pruned"]], [first["id"]])
+            self.assertEqual(len(self.A.load(self.dir)["assets"]), 3)
+        finally:
+            self.A.MAX_ROWS = old
+
+    def test_the_jpeg_scan_is_bounded(self):
+        import time as _t
+        crafted = b"\xff\xd8\xff\xe0\x00\x10" + b"\x00" * (8 << 20)
+        t0 = _t.monotonic()
+        with self.assertRaises(self.A.AssetError):
+            self.A.check(crafted)
+        self.assertLess(_t.monotonic() - t0, 0.25)
+
+    def test_a_malformed_index_row_is_skipped_not_a_crash(self):
+        row = self.add(1)["asset"]
+        idx = self.dir / "assets" / "index.json"
+        doc = json.loads(idx.read_text())
+        doc["assets"]["a" + "0" * 16] = {"id": "a" + "0" * 16, "item": "X"}     # no sha256, format, ...
+        idx.write_text(json.dumps(doc))
+        self.assertEqual(set(self.A.load(self.dir)["assets"]), {row["id"]})
+        self.add(2)                                                          # and writes still work
+
     def test_a_starred_after_keeps_its_before(self):
         old = self.A.PER_ITEM
         self.A.PER_ITEM = 2

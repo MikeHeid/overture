@@ -1541,6 +1541,7 @@ class AssetRouteTests(_Live, unittest.TestCase):
         self.assertEqual(r.getheader("Content-Type"), "image/png")
         self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
         self.assertIn("sandbox", r.getheader("Content-Security-Policy"))
+        self.assertEqual(r.getheader("Cross-Origin-Resource-Policy"), "same-origin")
         code, out = self.req("POST", "/api/asset-delete", {"id": row["id"], "nonce": "del1"}, tok=token())
         self.assertEqual(code, 200, out)
         r, _ = self.raw("/api/asset?id=" + row["id"])
@@ -1557,7 +1558,8 @@ class AssetRouteTests(_Live, unittest.TestCase):
     def test_unknown_item_question_or_ticket_is_refused_by_name(self):
         for over, word in (({"item": "NOPE"}, "no item"), ({"qid": "LANE.1/Q99"}, "no question"),
                            ({"ticket": "T-nope1234"}, "no ticket"), ({"kind": "gallery"}, "kind"),
-                           ({"caption": "two\nlines"}, "one line")):
+                           ({"caption": "two\nlines"}, "one line"), ({"ticket": ["T-x"]}, "must be a string"),
+                           ({"kind": {"a": 1}}, "must be a string")):
             with self.subTest(over=over):
                 code, out = self.post(**over)
                 self.assertEqual(code, 400, out)

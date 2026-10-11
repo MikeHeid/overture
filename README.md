@@ -425,7 +425,7 @@ others with ◂ ▸ or the arrow keys.
   a side.
 - **Storage:** files are kept in the server's state directory, never in your
   project.
-- **When space runs short** (100 per item, 300 MiB per project), the oldest
+- **When space runs short** (100 per item, 3000 or 300 MiB per project), the oldest
   screenshots that aren't starred or linked to a PR are removed. The Feed
   says so.
 - **Your controls:** star a screenshot to keep it, or delete it (press

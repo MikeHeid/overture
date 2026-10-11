@@ -7384,8 +7384,11 @@
     if (still) {
       btn.appendChild(el('span', { className: 'ck-asset-play' }, ['▶ Play recording']));
     } else {
-      btn.appendChild(el('img', { src: assetUrl(row), alt: row.caption, loading: 'lazy', decoding: 'async',
-        width: String(row.width), height: String(row.height) }));
+      const img = el('img', { src: assetUrl(row), alt: row.caption, loading: 'lazy', decoding: 'async',
+        width: String(row.width), height: String(row.height) });
+      // Deleted or pruned since this was drawn: say so instead of a broken image.
+      img.addEventListener('error', () => img.replaceWith(el('span', { className: 'ck-asset-play ck-muted' }, ['No longer stored'])));
+      btn.appendChild(img);
     }
     btn.addEventListener('click', onOpen);
     return btn;
@@ -7518,8 +7521,9 @@
     const rows = assetRows(itemId);
     if (!rows.length) return null;
     const det = el('details', { className: 'ck-assets-fold', open: true });
+    const total = ((view.assets && view.assets.counts) || {})[itemId] || rows.length;
     det.appendChild(el('summary', {}, [icon('image'), ' Screenshots ',
-      el('span', { className: 'ck-muted' }, [String(rows.length)])]));
+      el('span', { className: 'ck-muted' }, [total > rows.length ? rows.length + ' newest of ' + total : String(total)])]));
     const grid = el('div', { className: 'ck-asset-grid' });
     for (const g of pairAssets(rows)) grid.appendChild(renderAssetCard(g, rows));
     det.appendChild(grid);

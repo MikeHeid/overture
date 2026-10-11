@@ -1758,9 +1758,18 @@ class Console:
             data = None
         if not data:
             raise RequestError(400, "content_b64 must be the file's bytes, base64-encoded")
+        for k in ("caption", "kind", "qid", "ticket"):
+            if body.get(k) is not None and not isinstance(body[k], str):
+                raise RequestError(400, f"{k} must be a string")
+        # Format, size and sides are checked BEFORE the lock: a crafted file costs its own request, not every
+        # other owner write and wake (review, 1.32).
+        try:
+            AS.check(data)
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
         qid = body.get("qid")
         if qid is not None:
-            if not isinstance(qid, str) or qid not in self.payload().get("view", {}).get("questions", {}):
+            if qid not in self.payload().get("view", {}).get("questions", {}):
                 raise RequestError(400, f"no question {qid!r}")
         ticket = body.get("ticket")
         if ticket is not None:
@@ -3195,7 +3204,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(self.timeout)   # the answer is written under the usual per-write timeout
         return b"".join(chunks)
 
-    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str) -> None:
+    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str, corp: str = "cross-origin") -> None:
         """A body that is not JSON, under its own Content-Security-Policy (0.8.0, a stored visual).
 
         0.9.8: `Cross-Origin-Resource-Policy: cross-origin`, not same-origin. Raw responses are consumed
@@ -3212,7 +3221,7 @@ class _Handler(BaseHTTPRequestHandler):
             if k != "Content-Security-Policy":
                 self.send_header(k, v)
         self.send_header("Content-Security-Policy", csp)
-        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+        self.send_header("Cross-Origin-Resource-Policy", corp)
         self.end_headers()
         self.wfile.write(data)
 
@@ -3473,7 +3482,8 @@ class OwnerHandler(_Handler):
         """1.32: one stored asset's bytes, typed by its magic bytes, sandboxed if opened on its own."""
         self._only(query, {"id"}, "/api/asset")
         data, mime = self.console.asset(query.get("id", ""))
-        self._send_raw(200, data, mime, ASSET_CSP)
+        # Same-origin: the page loads assets as <img>, never from a sandboxed frame.
+        self._send_raw(200, data, mime, ASSET_CSP, corp="same-origin")
 
     def _visual_render(self, query: dict[str, str]) -> None:
         """0.8.19: a Mermaid visual rendered as a diagram inside the console's sandboxed iframe."""

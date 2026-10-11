@@ -47,6 +47,10 @@ PER_ITEM = 100
 MAX_TOTAL = 300 << 20
 RATE_COUNT = 30
 RATE_WINDOW = 600
+RATE_PROJECT = 120          # every agent together, per RATE_WINDOW: the agent name is self-declared
+MAX_ROWS = 3000             # rows in the index, whatever their bytes: tiny files must not fill it for good
+VIEW_PER_ITEM = 24          # newest per item sent with every page view; the item's `counts` say how many in all
+JPEG_SCAN = 256 << 10       # a JPEG's frame header is near its start; never scan a whole crafted file
 MAX_PRUNED_NOTES = 50
 KINDS = ("before", "after", "screenshot", "recording")
 MIME = {"png": "image/png", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
@@ -86,7 +90,8 @@ def sniff(data: bytes) -> tuple[str, int, int]:
         raise AssetError("a WebP file whose header could not be read")
     if data[:3] == b"\xff\xd8\xff":
         i = 2
-        while i + 9 < len(data):
+        end = min(len(data), JPEG_SCAN)
+        while i + 9 < end:
             if data[i] != 0xFF:
                 i += 1
                 continue
@@ -142,9 +147,17 @@ def load(state: Path) -> dict:
         raise AssetError(f"{DIR}/{INDEX} is not JSON: {e}") from None
     if not isinstance(doc, dict) or not isinstance(doc.get("assets"), dict):
         raise AssetError(f"{DIR}/{INDEX} must be an object with an 'assets' map")
-    assets = {k: v for k, v in doc["assets"].items() if ID_RE.match(str(k)) and isinstance(v, dict)}
+    assets = {k: v for k, v in doc["assets"].items() if ID_RE.match(str(k)) and _row_ok(v)}
     pruned = [n for n in doc.get("pruned", []) if isinstance(n, dict)][-MAX_PRUNED_NOTES:]
     return {"assets": assets, "pruned": pruned}
+
+
+def _row_ok(r: object) -> bool:
+    """A row every reader can use; anything else is skipped on load (and so dropped at the next save)."""
+    return (isinstance(r, dict) and isinstance(r.get("item"), str) and r.get("format") in MIME
+            and isinstance(r.get("sha256"), str) and bool(SHA_RE.match(r["sha256"]))
+            and isinstance(r.get("bytes"), int) and isinstance(r.get("at"), str)
+            and isinstance(r.get("caption"), str) and r.get("kind") in KINDS and ID_RE.match(str(r.get("id", ""))))
 
 
 def _save(dfd: int, doc: dict) -> None:
@@ -178,19 +191,27 @@ def _parse_time(s: object) -> float:
         return 0.0
 
 
-def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: str | None, now: str,
-        starred: set[str] = frozenset(), qid: str | None = None, pr: int | None = None,
-        ticket: str | None = None) -> dict:
-    """Store one asset; return `{"asset": row, "pruned": [notes]}`. The caller has checked `item`,
-    `qid` and `ticket` exist. Refusals raise AssetError, before anything is written."""
+def check(data: bytes) -> tuple[str, int, int]:
+    """Format, size and sides, with no file touched: the server runs it BEFORE taking its lock."""
+    if len(data) > MAX_GIF:
+        raise AssetError(f"the file is {len(data)} bytes; the most an asset can be is {MAX_GIF}")
     fmt, w, h = sniff(data)
     cap = MAX_GIF if fmt == "gif" else MAX_STILL
     if len(data) > cap:
         raise AssetError(f"the {fmt.upper()} is {len(data)} bytes; the limit for it is {cap}")
     if not (1 <= w <= MAX_SIDE and 1 <= h <= MAX_SIDE):
         raise AssetError(f"the image is {w}×{h}; each side must be 1 to {MAX_SIDE} px")
+    return fmt, w, h
+
+
+def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: str | None, now: str,
+        starred: set[str] = frozenset(), qid: str | None = None, pr: int | None = None,
+        ticket: str | None = None) -> dict:
+    """Store one asset; return `{"asset": row, "pruned": [notes]}`. The caller has checked `item`,
+    `qid` and `ticket` exist. Refusals raise AssetError, before anything is written."""
+    fmt, w, h = check(data)
     caption = _one_line(caption, "caption", MAX_CAPTION)
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         raise AssetError(f"kind {kind!r} is not one of {', '.join(KINDS)}")
     if pr is not None and (isinstance(pr, bool) or not isinstance(pr, int) or pr < 1):
         raise AssetError("pr must be a pull request number")
@@ -207,12 +228,15 @@ def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: 
         for row in rows.values():
             if row.get("item") == item and row.get("sha256") == sha:
                 return {"asset": row, "pruned": [], "duplicate": True}
-        if agent is not None:
-            recent = [r for r in rows.values() if r.get("agent") == agent
-                      and t_now - _parse_time(r.get("at")) < RATE_WINDOW]
-            if len(recent) >= RATE_COUNT:
-                raise AssetError(f"agent {agent} posted {len(recent)} assets in the last "
-                                 f"{RATE_WINDOW // 60} minutes; the limit is {RATE_COUNT}")
+        recent = [r for r in rows.values() if t_now - _parse_time(r.get("at")) < RATE_WINDOW]
+        mine = [r for r in recent if r.get("agent") == agent]     # an unnamed agent shares one bucket
+        who = f"agent {agent}" if agent else "unnamed agents"
+        if len(mine) >= RATE_COUNT:
+            raise AssetError(f"{who} posted {len(mine)} assets in the last "
+                             f"{RATE_WINDOW // 60} minutes; the limit is {RATE_COUNT}")
+        if len(recent) >= RATE_PROJECT:
+            raise AssetError(f"{len(recent)} assets were posted in the last {RATE_WINDOW // 60} minutes; "
+                             f"the project's limit is {RATE_PROJECT}")
         row = {"id": "a" + secrets.token_hex(8), "item": item, "format": fmt, "mime": MIME[fmt],
                "width": w, "height": h, "bytes": len(data), "sha256": sha, "caption": caption,
                "kind": kind, "by": "agent", "agent": agent, "at": now}
@@ -223,11 +247,20 @@ def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: 
         if ticket:
             row["ticket"] = ticket
         notes = _make_room(rows, row, starred, now)
-        if not any(r.get("sha256") == sha for r in rows.values()):
+        new_file = not any(r.get("sha256") == sha for r in rows.values())
+        if new_file:
             AF.write_at(dfd, _file_name(row), data)
         rows[row["id"]] = row
         doc["pruned"] = (doc["pruned"] + notes)[-MAX_PRUNED_NOTES:]
-        _save(dfd, doc)
+        try:
+            _save(dfd, doc)
+        except BaseException:
+            if new_file:   # never leave a file no row names
+                try:
+                    os.unlink(_file_name(row), dir_fd=dfd)
+                except FileNotFoundError:
+                    pass
+            raise
         _sweep(dfd, rows)
         return {"asset": row, "pruned": notes}
     finally:
@@ -243,10 +276,11 @@ def _protected_ids(rows: dict, starred: set[str]) -> set[str]:
     keep = {r["id"] for r in rows.values() if "pr" in r or ("asset:" + r["id"]) in starred}
     for a in [r for r in rows.values() if r["id"] in keep and r.get("kind") == "after"]:
         t = _parse_time(a.get("at"))
-        for b in rows.values():
-            if b.get("kind") == "before" and b.get("item") == a.get("item") \
-                    and 0 <= t - _parse_time(b.get("at")) <= PAIR_WINDOW:
-                keep.add(b["id"])
+        # The one "before" the console shows beside it: the newest within the window.
+        befores = [b for b in rows.values() if b.get("kind") == "before" and b.get("item") == a.get("item")
+                   and 0 <= t - _parse_time(b.get("at")) <= PAIR_WINDOW]
+        if befores:
+            keep.add(max(befores, key=lambda b: b.get("at", ""))["id"])
     return keep
 
 
@@ -271,6 +305,8 @@ def _make_room(rows: dict, new: dict, starred: set[str], now: str) -> list[dict]
     while sum(1 for r in rows.values() if r["item"] == new["item"]) >= PER_ITEM:
         prune_one([r for r in rows.values() if r["item"] == new["item"]],
                   f"item {new['item']} holds {PER_ITEM} assets")
+    while len(rows) + 1 > MAX_ROWS:
+        prune_one(list(rows.values()), f"the project holds {MAX_ROWS} assets")
     while unique_bytes(list(rows.values()) + [new]) > MAX_TOTAL:
         prune_one(list(rows.values()), f"assets fill the project's {MAX_TOTAL >> 20} MiB")
     return notes
@@ -344,10 +380,13 @@ def as_view(doc: dict) -> dict:
                   key=lambda r: r.get("at", ""), reverse=True)
     slim = [{k: r[k] for k in VIEW_FIELDS if k in r} for r in rows]
     by_item: dict[str, list[dict]] = {}
+    counts: dict[str, int] = {}
     for r in slim:
-        by_item.setdefault(r["item"], []).append(r)
+        counts[r["item"]] = counts.get(r["item"], 0) + 1
+        if counts[r["item"]] <= VIEW_PER_ITEM:
+            by_item.setdefault(r["item"], []).append(r)
     total = sum({r["sha256"]: r["bytes"] for r in rows}.values())
-    return {"by_item": by_item, "recent": slim[:200], "count": len(slim), "bytes": total,
+    return {"by_item": by_item, "counts": counts, "recent": slim[:60], "count": len(slim), "bytes": total,
             "limit_bytes": MAX_TOTAL, "pruned": list(reversed(doc.get("pruned", [])))}
 
 
