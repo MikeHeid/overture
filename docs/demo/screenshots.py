@@ -328,6 +328,12 @@ class Demo:
         D.write_watch(self.cfg.state, True, every=3600)
 
 
+# Scroll an element's BOTTOM edge into view (with a little air), so a box that opens below the
+# fold is shown whole; scroll_into_view_if_needed only guarantees its top edge.
+SHOW_WHOLE = "el => { el.scrollIntoView({block: 'end'}); const p = el.closest('.ck-body') || el.parentElement;" \
+             " if (p && p.scrollBy) p.scrollBy(0, 24); }"
+
+
 # -- capture ---------------------------------------------------------------
 def capture(demo: Demo) -> list[str]:
     from playwright.sync_api import sync_playwright
@@ -476,7 +482,7 @@ def capture(demo: Demo) -> list[str]:
             if why.count():
                 why.click()
                 pg.wait_for_timeout(1200)
-                pg.locator(".ck-why").first.scroll_into_view_if_needed()
+                pg.locator(".ck-why").first.evaluate(SHOW_WHOLE)
                 pg.wait_for_timeout(300)
             panel(pg, "feature-stale")
         shot("feature-stale", stale)
@@ -581,7 +587,7 @@ def record_gifs(browser, url: str, problems: list[str]) -> None:
     rec("anim-stale", [
         (go("OPS-2"), 1400),
         (click("What changed", 1400), 1200),
-        (lambda pg: (pg.locator(".ck-why").first.scroll_into_view_if_needed(), pg.wait_for_timeout(400)), 3600),
+        (lambda pg: (pg.locator(".ck-why").first.evaluate(SHOW_WHOLE), pg.wait_for_timeout(500)), 3600),
     ])
     # Command palette: type, jump.
     rec("anim-palette", [
