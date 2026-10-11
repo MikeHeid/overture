@@ -1055,9 +1055,20 @@
 
   // 0.8.19: iframe-to-parent clicks from a chart node. Only our own chart iframes talk this shape,
   // and we re-check the fields; anything else is ignored. The parent decides what to do (scroll vs. open).
+  // Only the console's own chart frames may talk to it: a frame it made with sandbox="allow-scripts" (an
+  // opaque origin, so e.origin is "null") and marked data-ck-chart. Any other window (another frame on the
+  // dashboard page, a popup, a future scripted component) could otherwise force a download or steer the panel.
+  function fromChartFrame(e) {
+    if (!e || e.origin !== 'null' || !e.source) return false;
+    for (const f of document.querySelectorAll('iframe[data-ck-chart]')) {
+      if (f.contentWindow === e.source) return true;
+    }
+    return false;
+  }
   window.addEventListener('message', e => {
     const d = e && e.data;
     if (!d || typeof d !== 'object' || !d.type) return;
+    if (!fromChartFrame(e)) return;
     if (d.type === 'ck-chart-export') {
       // The iframe serialised its rendered SVG; the parent builds a blob and triggers the download.
       if (typeof d.svg !== 'string' || !d.svg.length) return;
@@ -3710,6 +3721,7 @@
       if (slot.querySelector('iframe')) return;
       const frame = document.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('data-ck-chart', '');
       frame.setAttribute('referrerpolicy', 'no-referrer');
       frame.setAttribute('title', 'Status flowchart: ' + itemId);
       frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
@@ -4005,6 +4017,7 @@
       if (slot.querySelector('iframe')) return;
       const frame = document.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('data-ck-chart', '');
       frame.setAttribute('referrerpolicy', 'no-referrer');
       frame.setAttribute('title', 'Impact graph: ' + itemId);
       frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
@@ -4040,6 +4053,7 @@
     const chips = el('div', { className: 'ck-chip-row', role: 'tablist', 'aria-label': 'Filter the project map' });
     const frame = document.createElement('iframe');
     frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('data-ck-chart', '');
     frame.setAttribute('referrerpolicy', 'no-referrer');
     frame.setAttribute('title', 'Project map');
     frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-project-map-frame';
@@ -4166,6 +4180,7 @@
       const renderSrc = config.api + '/visual-render?id=' + encodeURIComponent(v.id);
       const frame = document.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('data-ck-chart', '');
       frame.setAttribute('referrerpolicy', 'no-referrer');
       frame.setAttribute('title', 'Mermaid diagram: ' + v.title);
       frame.className = 'ck-visual-frame ck-visual-frame-mermaid';
@@ -5358,6 +5373,7 @@
       if (slot.querySelector('iframe')) return;
       const frame = document.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('data-ck-chart', '');
       frame.setAttribute('referrerpolicy', 'no-referrer');
       frame.setAttribute('title', 'Ticket graph' + (itemId ? ': ' + itemId : ''));
       frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';

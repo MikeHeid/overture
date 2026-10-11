@@ -150,6 +150,9 @@ VISUAL_TEXT_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'"
 # but NOT "allow-same-origin". The CSP here lets the vendored lib (same-origin) run and the init script with
 # a per-request nonce; it blocks every other source, inline style aside (mermaid writes SVG style attributes).
 VISUAL_RENDER_CSP_TMPL = (
+    # `sandbox allow-scripts` in the policy itself, not only on the parent's iframe: opened in its own tab,
+    # this page would otherwise run its script in the console's real origin.
+    "sandbox allow-scripts; "
     "default-src 'none'; "
     "script-src 'nonce-{nonce}'; "
     # No nonce here: with a nonce present, browsers ignore 'unsafe-inline', which refused the <style>
