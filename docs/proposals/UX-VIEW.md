@@ -30,7 +30,16 @@ Status:
     with hash-named backups, keeping 10;
   - the console-ux skill's save path.
 
-  Next: step 2, the modal.
+- **Step 2 shipped (the modal):** `◫ UX View` on a UX item (or **Open in UX
+  View** on any HTML visual, or `u`); version stepper (`[` `]`); a Mobile /
+  Tablet / Desktop / Fit radio group with a scaled, sandboxed preview;
+  **Generate ▾** (face, with notes, from design); **Save as component**; a
+  Settings panel with the Design link; live status line. Differences from the
+  sketch above: "Generate with notes" opens a notes box in the modal rather
+  than a Thread tab, and the Scripts switch is left to step 4 (the panel says
+  so).
+
+  Next: step 3, Merge from the PR tab.
 
 ---
 

@@ -2992,6 +2992,14 @@ on its own.
 
 ## Unreleased
 
+- **UX View (step 2: the modal).** On a UX item, **◫ UX View** opens a
+  full-screen overlay (shortcut `u`; every HTML visual also has **Open in UX
+  View**). It shows the item's HTML versions in an empty sandbox at Mobile,
+  Tablet, Desktop or Fit width, with a version stepper, **Generate ▾**,
+  **Save as component** and a Settings panel for the Claude Design link.
+  It sends the step 1 messages and writes no file. The Scripts switch comes
+  in a later step.
+
 Found while rendering the new README screenshots against a full
 example dashboard.
 
@@ -3108,7 +3116,7 @@ example dashboard.
   modal with Save, Generate and Generate with input; components saved
   to `components/<item>.md` with a dated backup, through the steward;
   new UX items placed into their lane automatically.
-- **Icons (D8).** A bundled subset of 23 Lucide icons (lucide-static
+- **Icons (D8).** A bundled subset of 24 Lucide icons (lucide-static
   0.460.0, ISC; the licence is in `vendor/LUCIDE-LICENSE.txt`), drawn
   inline with `currentColor`, so there is no icon font, no CDN and no
   request. Every tab, the More menu, the Chat ▾ menu and the footer's

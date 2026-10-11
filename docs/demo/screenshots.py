@@ -353,6 +353,17 @@ class Demo:
         asset("UI-1", "tabs-after.png", "Tab bar with icons: five tabs fit one line at 515px", "after", "agent-4",
               pr=214)
 
+        # 1.33: a UX item with two drawn versions of a component, for the UX View modal.
+        comp = (REPO / "plugin/skills/console-ux/references/example-plan-picker.html").read_text()
+        ureq = self.owner("/api/message", {"item": "UI-3", "text": "Draw the plan picker", "intent": "visual",
+                                           "purpose": "ux"})["record"]
+        self.agent("/visual", {"request": ureq["id"], "format": "html", "title": "Plan picker",
+                               "content": comp.replace("Pro", "Team", 1), "text": "First pass: three plans."}, "agent-4")
+        ureq2 = self.owner("/api/message", {"item": "UI-3", "text": "Make the price clearer", "intent": "visual",
+                                            "purpose": "ux"})["record"]
+        self.agent("/visual", {"request": ureq2["id"], "format": "html", "title": "Plan picker", "content": comp,
+                               "text": "Second pass: clearer price and a recommended plan."}, "agent-4")
+
         # The steward is watching and synced a minute ago.
         self.agent("/cursor", {"last_synced_at": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
                    "steward")
@@ -525,6 +536,14 @@ def capture(demo: Demo) -> list[str]:
             pg.wait_for_timeout(1200)
             panel(pg, "feature-assets")
         shot("feature-assets", feed_assets)
+
+        def ux_view(pg):
+            item(pg, "UI-3")
+            pg.get_by_role("button", name="Open UX View for UI-3").click()
+            pg.wait_for_selector("#ck-ux-view")
+            pg.wait_for_timeout(1200)
+            pg.screenshot(path=str(OUT / "feature-ux-view.png"))
+        shot("feature-ux-view", ux_view)
 
         def asset_viewer(pg):
             item(pg, "UI-1")
