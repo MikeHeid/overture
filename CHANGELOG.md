@@ -2992,6 +2992,17 @@ on its own.
 
 ## Unreleased
 
+- **Run the server your way: `server.py daemon|service|status|health`
+  (D1–D3).** `server.py daemon start|stop` runs the one server detached
+  with a pid file and a log; `service install|uninstall` writes and enables
+  the `overture-console.service` systemd user unit (Linux, WSL; `--start`
+  also starts it); `status` and `health` only read, and `health` reports the
+  agent door, each project's port, version skew and linger, and removes a
+  stale pid or socket file. A daemon and a service refuse to run together,
+  naming each other. When the one server is down, the SessionStart hook adds
+  one line saying how to ask. `server.py --all` in the foreground is
+  unchanged. macOS launchd comes next.
+
 - **UX View: the Scripts switch (step 4, D4).** A component can now run
   script, only if you turn it on. The visual an agent posts stays
   script-free; an agent may also store a scripted source beside it
