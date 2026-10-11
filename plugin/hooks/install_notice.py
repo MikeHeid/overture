@@ -104,76 +104,69 @@ def _is_windows_native() -> bool:
     return platform.system() == "Windows"
 
 
+KIT = Path(__file__).resolve().parent.parent / "kit"   # the kit this plugin carries, wherever it was installed
+JOIN = "https://github.com/MikeHeid/overture/blob/main/docs/JOIN.md"
+
+
 def _install_lines() -> list[str]:
-    """First-install banner body: register + start the user service."""
+    """First-install banner body: the one next step, onboarding, and where the server comes from.
+
+    Every command printed here must exist as printed (test_onboard.InstallNoticeTests).
+    """
     lines: list[str] = [
         "Welcome to Overture " + VERSION + ".",
         "",
-        "Register this project's server agent before Overture can serve its console:",
+        "Next step: set up the console for this project. In the project, type:",
         "",
+        "    /overture:console-onboard",
+        "",
+        "It asks for the project name and your Cloudflare details, writes the config,",
+        "and prints the commands that install and start the console server as a user",
+        "service. You run those yourself; nothing is installed behind your back.",
     ]
     if _is_windows_native():
         lines += [
-            "  # On Windows, the server runs inside WSL (POSIX only).",
-            "  # In WSL (Ubuntu-24.04 recommended):",
             "",
-            "    wsl -d Ubuntu-24.04 -- python3 ~/.local/share/overture/kit/plugin/kit/agent.py register",
-            "",
-            "  # Then in PowerShell, start the user service:",
-            "",
-            "    wsl -d Ubuntu-24.04 -- systemctl --user start overture.service",
-        ]
-    else:
-        lines += [
-            "  # Linux / macOS / WSL:",
-            "",
-            "    python3 ~/.local/share/overture/kit/plugin/kit/agent.py register",
-            "",
-            "  # Then start the user service:",
-            "",
-            "    systemctl --user start overture.service",
+            "  On Windows the server runs inside WSL2 (it needs POSIX file locks). Run the",
+            "  printed install commands in your WSL shell, e.g. `wsl -d Ubuntu-24.04`.",
         ]
     lines += [
         "",
-        "  Full install guide: https://github.com/MikeHeid/overture#install",
+        "  Already running Overture for another project? Join this one to the same",
+        "  server instead: " + JOIN,
+        "  Optional: set your master agent's name in /plugin -> overture -> configure.",
         "",
-        "  Tip: this reminder shows once per version; it will fire again the next time",
-        "  you upgrade. Nothing to clean up.",
+        "  This reminder shows once per version.",
     ]
     return lines
 
 
 def _upgrade_lines(prior: list[str]) -> list[str]:
-    """Upgrade banner body: restart the user service to pick up the new binary.
+    """Upgrade banner body: copy the new kit to the installed place and restart the server(s).
 
-    The register step from the first install is skipped — the agent is already registered
-    and the socket path has not moved. On a running service the correct action is a
-    restart, not a start.
+    Updating the plugin refreshes only the plugin's files; a running server keeps the kit
+    `deploy/install.sh` copied, until install.sh copies the new one and restarts the unit.
     """
     from_ver = prior[-1] if prior else "an earlier version"
+    install = KIT / "deploy" / "install.sh"
     lines: list[str] = [
         f"Upgraded to Overture {VERSION} (from {from_ver}).",
         "",
-        "Restart the server to pick up the new binary:",
+        "Your console server still runs the old kit until you re-install and restart it.",
+        "For each onboarded project (this copies the new kit and restarts <name>-console):",
         "",
+        f'    bash "{install}" --project <project dir> --start',
+        "",
+        "  Running the main server for several projects (docs/JOIN.md)? After install.sh:",
+        "",
+        "    systemctl --user restart overture-console",
     ]
     if _is_windows_native():
-        lines += [
-            "  # In PowerShell:",
-            "",
-            "    wsl -d Ubuntu-24.04 -- systemctl --user restart overture.service",
-        ]
-    else:
-        lines += [
-            "  # Linux / macOS / WSL:",
-            "",
-            "    systemctl --user restart overture.service",
-        ]
+        lines += ["", "  On Windows, run these inside WSL."]
     lines += [
         "",
         "  Changelog: https://github.com/MikeHeid/overture/blob/main/CHANGELOG.md",
-        "",
-        "  Tip: this reminder shows once per version; nothing to clean up.",
+        "  This reminder shows once per version.",
     ]
     return lines
 

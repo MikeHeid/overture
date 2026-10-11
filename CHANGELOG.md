@@ -3048,3 +3048,27 @@ example dashboard.
   round, Lock all, a stale ruling's diff, the command palette, and the
   status flowchart. `docs/demo/screenshots.py` now drives the real
   server.
+- **Master agent name in the plugin settings.** A new `steward` field
+  (`/plugin` → overture → configure) gives onboarding its default
+  master agent. `onboard.py write --steward NAME` checks the name and
+  prints it into the `register` step, followed by the
+  `/overture:as NAME` reminder. The name is never written into the
+  project, so a repository still cannot name the steward.
+- **docs/JOIN.md.** How to join another project to the main server
+  (`server.py --all`): a one-time systemd unit, then per project
+  `register`, the Cloudflare app and tunnel rule, `server add`, a
+  restart, and `health`. Every command was run in a sandbox first.
+  MIGRATION.md no longer says the shared server is unbuilt.
+- **docs/proposals/SERVER-HOSTING.md.** A write-up on running the
+  server: a per-OS user service (recommended), not one started from a
+  Claude session, plus a read-only session check.
+- **The first-run banner points to onboarding.** After a plugin install,
+  the banner told users to run
+  `~/.local/share/overture/kit/plugin/kit/agent.py register`. That path
+  does not exist, and `register` needs `--state` and `--project`. It
+  also told them to run `systemctl --user start overture.service`, a
+  unit that does not exist. It never mentioned
+  `/overture:console-onboard`. It now names that one next step, how the
+  server gets installed, and the join guide. The upgrade banner names
+  the real `install.sh` path and the units that exist. Tests check
+  that every command it prints is real.

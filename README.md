@@ -75,6 +75,9 @@ provides the login page that protects your inbox.
 The last command walks you through the rest, in your project. The full
 details are under [Install](#install).
 
+**Already running Overture for another project?** Join this one to the same
+server instead of starting a second one: [docs/JOIN.md](docs/JOIN.md).
+
 ## Words you'll see
 
 | Word | Plain meaning |
@@ -178,6 +181,7 @@ banner naming the new version and the commands most useful at that moment
 |---|---|
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Start here: what the console is, the pinned install, your day and the agents' day, and tips for spending fewer tokens. |
 | [INSTALL.md](INSTALL.md) | Installing the plugin and onboarding a project. |
+| [docs/JOIN.md](docs/JOIN.md) | Joining another project to the main Overture server (one server, many projects). |
 | [docs/MIGRATION.md](docs/MIGRATION.md) | Upgrading. Covers moving a vendored kit onto one pinned install, and the one-off steps each release needs. |
 | [docs/CLOUDFLARE.md](plugin/kit/docs/CLOUDFLARE.md) | The Access application, the tunnel and DNS. |
 | [docs/ADAPTER.md](plugin/kit/docs/ADAPTER.md) | Connecting the console to your project's work items and decision log. |

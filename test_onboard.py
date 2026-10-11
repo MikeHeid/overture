@@ -368,6 +368,82 @@ class CliTests(Base):
         self.assertEqual(rc, 0)
         self.assertIn("CONSOLE_NAME=acme\n", out)
 
+    def _write(self, *extra):
+        return self.run_main("write", "--project", str(self.project), "--name", "acme",
+                             "--team-domain", GOOD["team_domain"], "--aud", AUD,
+                             "--hostname", GOOD["hostname"], "--no-port-check", *extra)
+
+    def test_a_master_agent_name_lands_in_the_register_step_only(self):
+        # The steward is named in the owner's own registry, never by the repository (0.8.3):
+        # --steward goes into the printed `register` command and nowhere in the project's files.
+        rc, out, _ = self._write("--steward", "agent-1")
+        self.assertEqual(rc, 0)
+        self.assertIn('register --project', out)
+        self.assertIn("--steward agent-1\n", out)
+        self.assertIn("/overture:as agent-1", out)
+        for f in self.project.rglob("*"):
+            if f.is_file():
+                self.assertNotIn("agent-1", f.read_text(errors="replace"), f)
+
+    def test_no_master_agent_prints_no_steward_flag(self):
+        rc, out, _ = self._write()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("--steward", out)
+        self.assertNotIn("/overture:as", out)
+
+    def test_a_bad_master_agent_name_is_refused_before_anything_is_written(self):
+        for bad in ("Agent One", "owner", "x" * 40):
+            with self.subTest(bad=bad):
+                rc, out, err = self._write("--steward", bad)
+                self.assertEqual(rc, 2)
+                self.assertTrue(err.startswith("onboard: steward:"), err)
+                self.assertFalse((self.project / ".overture/console.env").exists())
+
+
+class InstallNoticeTests(unittest.TestCase):
+    """The one-time banner after installing or upgrading the plugin (plugin/hooks/install_notice.py).
+
+    Catches: a banner whose commands do not exist. Until this test the first-install banner told new
+    users to run `~/.local/share/overture/kit/plugin/kit/agent.py register` (no such path, and
+    register needs --state and --project) and `systemctl --user start overture.service` (no such
+    unit), and never named /overture:console-onboard, so a fresh install left people lost.
+    """
+
+    HOOK = Path(__file__).resolve().parent / "plugin" / "hooks" / "install_notice.py"
+
+    def banner(self, prior: str | None = None) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            if prior:
+                (Path(td) / "overture").mkdir()
+                (Path(td) / "overture" / f"install-notice-seen-{prior}").write_text("x")
+            env = {**os.environ, "XDG_STATE_HOME": td}
+            return subprocess.run([sys.executable, str(self.HOOK)], env=env, capture_output=True,
+                                  text=True, timeout=30, check=True).stdout
+
+    def test_a_first_install_points_at_onboarding(self):
+        out = self.banner()
+        self.assertIn("/overture:console-onboard", out)
+        skill = self.HOOK.parent.parent / "skills" / "console-onboard" / "SKILL.md"
+        self.assertTrue(skill.is_file(), skill)
+        for wrong in ("overture.service", "kit/plugin/kit", "agent.py register"):
+            self.assertNotIn(wrong, out)
+
+    def test_an_upgrade_names_an_install_script_that_exists(self):
+        out = self.banner(prior="0.0.1")
+        self.assertIn("Upgraded to Overture", out)
+        line = next(l for l in out.splitlines() if "install.sh" in l and "bash" in l)
+        script = Path(line.split('"')[1])
+        self.assertTrue(script.is_file(), script)
+        self.assertNotIn("overture.service", out)
+
+    def test_it_shows_once_per_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {**os.environ, "XDG_STATE_HOME": td}
+            run = lambda: subprocess.run([sys.executable, str(self.HOOK)], env=env, capture_output=True,
+                                         text=True, timeout=30, check=True).stdout
+            self.assertIn("Welcome", run())
+            self.assertEqual(run(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

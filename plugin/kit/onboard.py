@@ -73,6 +73,14 @@ def check(answers: dict) -> dict:
     for key, rx, want in rules:
         if not isinstance(a.get(key), str) or not rx.match(a[key]):
             raise OnboardError(f"{key}: {a.get(key)!r} is not valid: expected {want}")
+    # The master agent (steward): only checked and printed into the `register` step below. It is never
+    # written into the project's files: a repository must not be able to name the steward (0.8.3).
+    if a.get("steward"):
+        sys.path.insert(0, str(KIT))
+        from overture import names as N
+        why = N.problem(a["steward"])
+        if why:
+            raise OnboardError(f"steward: {why}")
     if a["hostname"].endswith(".cloudflareaccess.com"):
         raise OnboardError("hostname: that is the team domain; give the console's own hostname")
     port = a.get("port", 4793)
@@ -245,6 +253,10 @@ def next_steps(project: Path, a: dict) -> str:
     cfg = Path.home() / ".cloudflared" / f"config-{a['tunnel']}.yml"
     cert = Path.home() / ".cloudflared" / "cert.pem"
     login = "" if cert.exists() else "      cloudflared tunnel login        # once per machine; writes cert.pem\n"
+    steward = a.get("steward")
+    steward_flag = f" --steward {steward}" if steward else ""
+    steward_note = (f"    Then, in the Claude session that should process your answers (the master agent), type:\n"
+                    f"      /overture:as {steward}\n") if steward else ""
     return f"""
 Next, run these yourself, in order. Each one is yours to approve:
 
@@ -252,8 +264,8 @@ Next, run these yourself, in order. Each one is yours to approve:
       bash "{KIT}/deploy/install.sh" --project "{project}" --start
  2. Let your Claude sessions trust this project's console. It is a trust decision, so a
     session never runs it for you:
-      python3 ~/.local/share/overture/kit/agent.py --state "{state_dir(a['name'])}" register --project "{project}"
- 3. Create the Access application in Cloudflare Zero Trust for https://{a['hostname']}
+      python3 ~/.local/share/overture/kit/agent.py --state "{state_dir(a['name'])}" register --project "{project}"{steward_flag}
+{steward_note} 3. Create the Access application in Cloudflare Zero Trust for https://{a['hostname']}
     (docs/CLOUDFLARE.md, "Access application"). Its AUD tag is the one you gave.
  4. Create the tunnel, and route DNS WITH --config, or the record can land on another tunnel:
 {login}      cloudflared tunnel create {a['tunnel']}
@@ -405,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--adapter")
     w.add_argument("--audit-seat")
     w.add_argument("--audit-brief")
+    w.add_argument("--steward", help="the master agent's name: printed into the register step, never written "
+                                     "into the project (default: the plugin's `steward` setting)")
     w.add_argument("--force", action="store_true")
     w.add_argument("--no-port-check", action="store_true", help="skip the free-port check (re-running on a live port)")
     s = sub.add_parser("show", help="print the project's settings, re-validated (install.sh reads this)")
