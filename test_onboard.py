@@ -368,6 +368,37 @@ class CliTests(Base):
         self.assertEqual(rc, 0)
         self.assertIn("CONSOLE_NAME=acme\n", out)
 
+    def _write(self, *extra):
+        return self.run_main("write", "--project", str(self.project), "--name", "acme",
+                             "--team-domain", GOOD["team_domain"], "--aud", AUD,
+                             "--hostname", GOOD["hostname"], "--no-port-check", *extra)
+
+    def test_a_master_agent_name_lands_in_the_register_step_only(self):
+        # The steward is named in the owner's own registry, never by the repository (0.8.3):
+        # --steward goes into the printed `register` command and nowhere in the project's files.
+        rc, out, _ = self._write("--steward", "agent-1")
+        self.assertEqual(rc, 0)
+        self.assertIn('register --project', out)
+        self.assertIn("--steward agent-1\n", out)
+        self.assertIn("/overture:as agent-1", out)
+        for f in self.project.rglob("*"):
+            if f.is_file():
+                self.assertNotIn("agent-1", f.read_text(errors="replace"), f)
+
+    def test_no_master_agent_prints_no_steward_flag(self):
+        rc, out, _ = self._write()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("--steward", out)
+        self.assertNotIn("/overture:as", out)
+
+    def test_a_bad_master_agent_name_is_refused_before_anything_is_written(self):
+        for bad in ("Agent One", "owner", "x" * 40):
+            with self.subTest(bad=bad):
+                rc, out, err = self._write("--steward", bad)
+                self.assertEqual(rc, 2)
+                self.assertTrue(err.startswith("onboard: steward:"), err)
+                self.assertFalse((self.project / ".overture/console.env").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
