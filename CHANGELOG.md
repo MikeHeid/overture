@@ -2992,6 +2992,16 @@ on its own.
 
 ## Unreleased
 
+- **Attach your own images (F2).** In an item's Discussion box, **Attach
+  image** (or paste an image) puts your picture on that item beside the
+  agents' screenshots, shown as "you" in the Feed. It is checked like an
+  agent's (PNG, JPEG, WebP or GIF; 2 MiB, or 8 MiB for a GIF), is always a
+  screenshot, and has its own rate limit so it never uses an agent's.
+- **Fixes.** A Design link you are typing in UX View no longer disappears
+  when the console refreshes; UX View follows a new version when you are on
+  the newest one; the Feed can be filtered to merge requests and links back
+  to the PR tab.
+
 - **Run the server your way: `server.py daemon|service|status|health`
   (D1–D3).** `server.py daemon start|stop` runs the one server detached
   with a pid file and a log; `service install|uninstall` writes and enables

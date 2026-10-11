@@ -206,8 +206,8 @@ def check(data: bytes) -> tuple[str, int, int]:
 
 def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: str | None, now: str,
         starred: set[str] = frozenset(), qid: str | None = None, pr: int | None = None,
-        ticket: str | None = None) -> dict:
-    """Store one asset; return `{"asset": row, "pruned": [notes]}`. The caller has checked `item`,
+        ticket: str | None = None, by: str = "agent") -> dict:
+    """Store one asset (`by` "owner" for an image the owner attached, F2); return `{"asset": row, "pruned": [notes]}`. The caller has checked `item`,
     `qid` and `ticket` exist. Refusals raise AssetError, before anything is written."""
     fmt, w, h = check(data)
     caption = _one_line(caption, "caption", MAX_CAPTION)
@@ -229,8 +229,12 @@ def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: 
             if row.get("item") == item and row.get("sha256") == sha:
                 return {"asset": row, "pruned": [], "duplicate": True}
         recent = [r for r in rows.values() if t_now - _parse_time(r.get("at")) < RATE_WINDOW]
-        mine = [r for r in recent if r.get("agent") == agent]     # an unnamed agent shares one bucket
-        who = f"agent {agent}" if agent else "unnamed agents"
+        if by == "owner":
+            mine = [r for r in recent if r.get("by") == "owner"]
+            who = "you"
+        else:
+            mine = [r for r in recent if r.get("by", "agent") == "agent" and r.get("agent") == agent]   # unnamed share one
+            who = f"agent {agent}" if agent else "unnamed agents"
         if len(mine) >= RATE_COUNT:
             raise AssetError(f"{who} posted {len(mine)} assets in the last "
                              f"{RATE_WINDOW // 60} minutes; the limit is {RATE_COUNT}")
@@ -239,7 +243,8 @@ def add(state: Path, *, item: str, data: bytes, caption: str, kind: str, agent: 
                              f"the project's limit is {RATE_PROJECT}")
         row = {"id": "a" + secrets.token_hex(8), "item": item, "format": fmt, "mime": MIME[fmt],
                "width": w, "height": h, "bytes": len(data), "sha256": sha, "caption": caption,
-               "kind": kind, "by": "agent", "agent": agent, "at": now}
+               "kind": kind, "by": by if by in ("agent", "owner") else "agent", "agent": agent if by != "owner" else None,
+               "at": now}
         if qid:
             row["qid"] = qid
         if pr is not None:
@@ -369,7 +374,7 @@ def read(state: Path, asset_id: str) -> tuple[bytes, str]:
     return data, MIME[fmt]
 
 
-VIEW_FIELDS = ("id", "item", "format", "width", "height", "bytes", "caption", "kind", "agent", "at",
+VIEW_FIELDS = ("id", "item", "format", "width", "height", "bytes", "caption", "kind", "agent", "by", "at",
                "qid", "pr", "ticket")
 
 
