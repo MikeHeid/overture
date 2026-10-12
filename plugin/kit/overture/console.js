@@ -185,9 +185,8 @@
   const openForms = new Set(); // disclosure keys the owner left open
   let lockingAll = null;        // 0.8.5: the item whose answers are being locked in turn, or null
   const lockAllError = {};      // 0.8.5: item -> why its last 'Lock all' stopped
-  // CONSOLE-kit/Q33: one tap locks one answer after a countdown this page holds. Nothing is sent before it
-  // ends; Undo, leaving the question or leaving the page sends nothing. There is no server record of it.
-  // The 5-second lock countdown was removed; lock is immediate. These globals are retired.
+  // CONSOLE-kit/Q33: one tap locks one answer, at once (0.9.12 removed the countdown and Undo). Nothing
+  // locks without that tap: not leaving the question, the page or the tab.
   const lockErrors = {};          // qid -> why its last lock was refused
   const justLocked = new Set();   // qids locked from this page and not yet drawn rolled up (Q37's roll-up)
   // 0.7.0: the inbox's tabs, the round form, and the live loop.
@@ -3044,7 +3043,7 @@
     bar.appendChild(refreshBtn);
     // Every answer the console holds, from anywhere (§7.6). A toggle (owner,
     // 2026-09-29: "no way to get back to inbox"): on the sheet it reads as the
-    // way back, because the header's Back button shows only on narrow screens.
+    // way back alongside the header's Back button (shown at every width since 0.9.0).
     const onSheet = currentMode === 'sheet';
     const allBtn = el('button', {
       className: 'ck-refresh-btn ck-sheet-toggle', type: 'button', 'aria-pressed': onSheet ? 'true' : 'false'
@@ -9593,10 +9592,8 @@
     document.addEventListener('keydown', onRoundKey);
     panelEl.addEventListener('focusout', onPanelFocusOut);
     document.addEventListener('visibilitychange', onVisibility);
-    // Q33: a page leaving drops every countdown. Timers would die with it anyway, but a page kept in the
-    // back-forward cache resumes its timers when shown again, and its lock must not land then.
-    // Q33: a countdown never ends where the owner cannot see it. Leaving the page (pagehide, which also covers
-    // a back/forward-cache stop: its timers would otherwise resume on return) and hiding the tab both cancel.
+    // Q33: nothing locks where the owner cannot see it. The countdown is gone (0.9.12), so dropAllLocks has
+    // nothing to cancel; leaving the page (pagehide, back/forward cache included) or hiding the tab still calls it.
     window.addEventListener('pagehide', () => dropAllLocks());
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') dropAllLocks(); });
     injectItemButtons();
