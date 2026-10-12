@@ -2990,7 +2990,18 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
-## Unreleased
+## View (1.32.0)
+
+UX View is the headline: a component modal on UX items with versions,
+sizes, Generate, Save as component, a Claude Design link and its
+design-system picker, a Scripts switch, and Merge from the PR tab.
+Around it: a Tickets board with a blocker graph, Lucide icons and
+distinct state marks, tabs that fit on one line, lane colours,
+screenshots in the Feed, attachable images, a server daemon/service
+mode, and a Machine role setting. Security: published pages' own
+scripts run again under the nonce CSP (by exact hash), the console
+listens only to its own chart frames, and HTML visuals' controls are
+inert. Mermaid diagrams render again, and the browser suite is green.
 
 - **Design-system picker for UX View.** With a Claude Design linked, an
   agent can list the project's artifacts (`agent.py design-inventory`), and
