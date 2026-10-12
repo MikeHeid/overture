@@ -1,0 +1,18 @@
+# systemd USER unit for the ONE console server (`server.py --all`, D3): every project in server.json, one
+# process. Rendered by `server.py service install`: @KIT@ is the kit directory, @PYTHON@ the interpreter that
+# ran the command, @SERVER_FILE@ the server.json it serves. It listens on loopback only; the tunnel is separate.
+[Unit]
+Description=Overture console server (every project in server.json; loopback only, reached through Cloudflare Access)
+After=network-online.target
+# A server that cannot start (a missing dependency, a bad server.json) stops retrying instead of looping forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=@PYTHON@ @KIT@/server.py --all --server-file @SERVER_FILE@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

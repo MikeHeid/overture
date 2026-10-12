@@ -1,9 +1,18 @@
 # Scripts: progressive enhancement, once the owner's switch ships
 
-**Status: planned.** Scripts are always stripped today. This applies once
-UX-VIEW.md step 4 ships the owner's per-component **Scripts** switch and the
-`/api/component-render` route, and only to a component the owner switched
-on (front matter `scripts: true`).
+**Status: shipped (1.33).** Scripts are always stripped from the visual you
+post. A script reaches the owner only as a separate **scripted source** for
+that visual, and runs only while the owner's per-version **Scripts** switch
+is on (UX View, Settings). Post it after the visual:
+
+    A component-source --visual VISUAL_ID --file scripted.html
+
+It is write-once for that visual (a different source is refused), so a
+version the owner switched on cannot change under them. The visual you posted
+stays the no-script version; the source is its progressive enhancement and
+must contain the same working HTML. The owner turns it on at their end; if
+they save with it on, `ux-export` lands the scripted source with `scripts:
+true` in the front matter.
 
 ## The rule: enhance, never depend
 

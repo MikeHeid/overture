@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import base64
 import http.client
+import struct
 import io
 import json
 import re
 import os
 import stat
+import socket
 import subprocess
 import sys
 import tempfile
@@ -24,6 +27,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -1496,6 +1500,596 @@ class BacklinkTests(_Live, unittest.TestCase):
         self.assertIn("sandbox allow-scripts", directives)
 
 
+def tiny_png(w=2, h=2, seed=0) -> bytes:
+    """A real PNG built with the standard library; `seed` changes the pixels, so the bytes differ."""
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + b"".join(bytes([(seed + x + y) % 256, 0, 0]) for x in range(w)) for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+class HostingTests(unittest.TestCase):
+    """1.33 (D1-D3): `server.py daemon|service|status|health`, as separate processes on a temp XDG tree."""
+
+    def setUp(self):
+        from overture import serverfile as SF
+        from overture import registry as R
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.t = Path(os.path.realpath(tmp.name))
+        self.cfg, self.st = self.t / "cfg", self.t / "st"
+        reg = self.cfg / "overture" / "projects.json"
+        self.sfile = reg.parent / "server.json"
+        root, state = self.t / "root", self.t / "state"
+        root.mkdir()
+        state.mkdir()
+        R.register(root, state, HERE / "plugin" / "kit", path=reg)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+        SF.add("alpha", state, "a.example.com", AUD, self.port, TEAM, registry=reg, path=self.sfile)
+        self.state = state
+        self.bin = self.t / "bin"
+        self.bin.mkdir()
+        self.log = self.t / "systemctl.log"
+        sc = self.bin / "systemctl"
+        sc.write_text(f"#!/bin/sh\necho \"$@\" >> {self.log}\n"
+                      "case \"$2\" in is-active) if [ -f " + str(self.t / "ACTIVE") + " ]; then cat " + str(self.t / "ACTIVE") + "; else echo inactive; fi;; esac\n"
+                      "exit 0\n")
+        sc.chmod(0o755)
+        self.env = {**os.environ, "XDG_CONFIG_HOME": str(self.cfg), "XDG_STATE_HOME": str(self.st),
+                    "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+        self.addCleanup(self.stop_daemon)
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "server.py"), *args],
+                              capture_output=True, text=True, env=self.env, timeout=60)
+
+    def stop_daemon(self):
+        self.cli("daemon", "stop")
+
+    def test_daemon_start_status_health_stop(self):
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("daemon started", r.stdout)
+        self.assertEqual(self.cli("daemon", "start").returncode, 1)          # already running
+        s = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual((s["mode"], s["answering"], s["projects"]["alpha"]["port_open"]), ("daemon", True, True))
+        h = self.cli("health", "--json")
+        self.assertEqual(h.returncode, 0, h.stdout)
+        self.assertEqual(json.loads(h.stdout)["problems"], [])
+        self.assertTrue((self.st / "overture" / "server.pid").exists())
+        r = self.cli("daemon", "stop")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        s = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual((s["mode"], s["answering"]), ("stopped", False))
+        self.assertFalse((self.st / "overture" / "server.pid").exists())
+
+    def test_health_when_stopped_names_the_fix_and_cleans_stale_files(self):
+        run = self.st / "overture"
+        run.mkdir(parents=True)
+        (run / "server.pid").write_text(json.dumps({"pid": 2 ** 22 + 12345}))    # no such process
+        self.sfile.parent.mkdir(parents=True, exist_ok=True)
+        dead = socket.socket(socket.AF_UNIX)
+        dead.bind(str(self.sfile.parent / "server.sock"))
+        dead.close()                                                              # a socket file nobody listens on
+        r = self.cli("health", "--json")
+        doc = json.loads(r.stdout)
+        self.assertEqual(r.returncode, 1)
+        self.assertTrue(any("not running" in p for p in doc["problems"]))
+        self.assertEqual(len(doc["cleaned"]), 2)
+        self.assertFalse((run / "server.pid").exists())
+        self.assertFalse((self.sfile.parent / "server.sock").exists())
+
+    def test_service_install_writes_a_plain_unit_and_the_two_modes_refuse_each_other(self):
+        r = self.cli("service", "install", "--start")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        unit = (self.cfg / "systemd" / "user" / "overture-console.service").read_text()
+        self.assertIn(f"ExecStart={sys.executable} {HERE / 'plugin' / 'kit'}/server.py --all --server-file {self.sfile}", unit)
+        calls = self.log.read_text()
+        for want in ("--user daemon-reload", "--user enable overture-console.service", "--user restart overture-console.service"):
+            self.assertIn(want, calls)
+        (self.t / "ACTIVE").write_text("active\n")             # the fake systemctl now says the unit is active
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("service", r.stderr)
+        r = self.cli("service", "uninstall")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.cfg / "systemd" / "user" / "overture-console.service").exists())
+        self.assertEqual(self.cli("service", "uninstall").returncode, 1)
+
+    def test_a_daemon_blocks_service_install_and_an_unsafe_path_is_refused_by_name(self):
+        self.assertEqual(self.cli("daemon", "start").returncode, 0)
+        r = self.cli("service", "install")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("daemon is running", r.stderr)
+        sys.path.insert(0, str(HERE / "plugin" / "kit"))
+        import hosting
+        with self.assertRaises(ValueError) as cm:
+            hosting.render_unit(Path("/tmp/has space/server.json"))
+        self.assertIn("server file path", str(cm.exception))
+
+    def test_a_unit_that_is_still_starting_or_unsure_blocks_a_daemon_too(self):
+        self.cli("service", "install")
+        for word, needle in (("activating\n", "activating"), ("Failed to connect to bus\n", "does not say")):
+            (self.t / "ACTIVE").write_text(word)
+            r = self.cli("daemon", "start")
+            self.assertEqual(r.returncode, 1, word)
+            self.assertIn(needle, r.stderr)
+        self.assertFalse((self.st / "overture" / "server.pid").exists())
+
+    def test_health_never_removes_the_socket_of_a_server_that_is_slow_to_answer(self):
+        self.sfile.parent.mkdir(parents=True, exist_ok=True)
+        path = str(self.sfile.parent / "server.sock")
+        live = socket.socket(socket.AF_UNIX)
+        self.addCleanup(live.close)
+        live.bind(path)
+        live.listen(1)                                         # connects, never answers: busy or starting
+        r = self.cli("health", "--json")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(json.loads(r.stdout)["cleaned"], [])
+
+    def test_a_pid_file_naming_something_else_is_never_signalled(self):
+        run = self.st / "overture"
+        run.mkdir(parents=True)
+        me = subprocess.Popen(["sleep", "30"])                  # alive, but not `server.py --all`
+        self.addCleanup(me.kill)
+        (run / "server.pid").write_text(json.dumps({"pid": me.pid, "server_file": str(self.sfile)}))
+        r = self.cli("daemon", "stop")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stale pid file", r.stdout)
+        self.assertIsNone(me.poll())                            # still running: never signalled
+        (run / "server.pid").write_text(json.dumps({"pid": 1}))
+        self.assertEqual(self.cli("daemon", "stop").returncode, 1)   # pid 1 is no record at all
+
+    def test_no_projects_means_nothing_starts(self):
+        self.sfile.write_text(json.dumps({"team_domain": TEAM, "projects": {}}))
+        r = self.cli("daemon", "start")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no projects", r.stderr)
+
+    def test_the_session_hook_hints_when_the_server_is_down_and_only_then(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ss", HERE / "plugin" / "hooks" / "session_start.py")
+        ss = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.cfg)}):
+            spec.loader.exec_module(ss)
+            hint = ss._server_down(self.state, HERE / "plugin" / "kit")
+            self.assertIn("server.py", hint)
+            self.assertIn("status", hint)
+            self.sfile.parent.joinpath("server.sock").write_text("")      # a socket file is there: nothing to say
+            self.assertIsNone(ss._server_down(self.state, HERE / "plugin" / "kit"))
+            self.assertIsNone(ss._server_down(self.t / "elsewhere", HERE / "plugin" / "kit"))
+
+
+class DesignPickerTests(_Live, unittest.TestCase):
+    """1.33: an agent lists a Claude Design project's artifacts; the owner references some in a UX request."""
+    URL = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+    ARTS = [{"path": "buttons/primary.html", "title": "Primary button"}, {"path": "cards/plan card.html"}]
+
+    def inventory(self, url=None, arts=None, expect=200):
+        code, out = self.agent_post("/design-inventory", {"url": url or self.URL, "artifacts": self.ARTS if arts is None else arts,
+                                                          "nonce": "di" + os.urandom(6).hex()})
+        self.assertEqual(code, expect, out)
+        return out
+
+    def link(self):
+        self.owner_msg(item="LANE.1", intent="ux-link", text="link", url=self.URL)
+
+    def ask(self, refs, expect=200, **over):
+        body = {"item": "LANE.1", "intent": "visual", "purpose": "ux", "text": "Draw it", "refs": refs,
+                "nonce": "rq" + os.urandom(6).hex(), **over}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_the_list_is_kept_shown_to_the_owner_and_replaced_by_the_next(self):
+        self.assertEqual(self.inventory()["artifacts"], 2)
+        _, view = self.get("/api/view")
+        got = view["view"]["designs"][self.URL]
+        self.assertEqual([a["path"] for a in got["artifacts"]], ["buttons/primary.html", "cards/plan card.html"])
+        self.inventory(arts=[{"path": "forms/login.html"}])
+        _, view = self.get("/api/view")
+        self.assertEqual([a["path"] for a in view["view"]["designs"][self.URL]["artifacts"]], ["forms/login.html"])
+        code, out = SV.agent_request(self.cfg.socket, "GET", "/view")
+        self.assertNotIn("designs", out["view"])                  # the owner's picker data never goes to the agent door
+
+    def test_a_bad_list_is_refused_by_name(self):
+        for arts, needle in (([{"path": "../etc/passwd"}], "plain relative path"), ([], "non-empty"),
+                             ([{"path": "a.html"}, {"path": "a.html"}], "twice"),
+                             ([{"path": "a.html", "title": "x\ny"}], "one line"),
+                             ([{"path": "a.html", "kind": "x"}], "{path, title?}"),
+                             ([{"path": f"p{i}.html"} for i in range(301)], "limit")):
+            self.assertIn(needle, self.inventory(arts=arts, expect=400)["error"])
+        self.assertIn("Claude Design link", self.inventory(url="https://evil.example/design", expect=400)["error"])
+
+    def test_refs_must_name_listed_artifacts_of_the_items_linked_design(self):
+        refs = [{"path": "buttons/primary.html", "mode": "inspire"}]
+        self.assertIn("link this item", self.ask(refs, expect=409)["error"])
+        self.link()
+        self.assertIn("no artifact list", self.ask(refs, expect=409)["error"])
+        self.inventory()
+        rec = self.ask(refs)["record"]
+        self.assertEqual(rec["refs"], refs)
+        self.assertIn("not in the design's artifact list", self.ask([{"path": "other.html", "mode": "swap"}], expect=409)["error"])
+
+    def test_the_schema_holds_refs_to_a_ux_visual_request(self):
+        self.link()
+        self.inventory()
+        good = [{"path": "buttons/primary.html", "mode": "swap"}]
+        for bad, over in (([{"path": "buttons/primary.html", "mode": "copy"}], {}), (good * 2, {}), ([], {}),
+                          (good, {"purpose": None}), (good, {"intent": "chat"})):
+            body = {"item": "LANE.1", "intent": "visual", "purpose": "ux", "text": "x", "refs": bad,
+                    "nonce": "bd" + os.urandom(6).hex()}
+            body.update(over)
+            body = {k: v for k, v in body.items() if v is not None}
+            code, out = self.req("POST", "/api/message", body, tok=token())
+            self.assertEqual(code, 400, (bad, over, out))
+
+
+class ScriptsSwitchTests(_Live, unittest.TestCase):
+    """1.33 (UX-VIEW.md "Scripts in components"): raw source stored apart, run only while the owner's switch is on."""
+    def raw(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", path, headers={"Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        body = r.read()
+        headers = {k.lower(): v for k, v in r.getheaders()}
+        conn.close()
+        return r.status, headers, body
+
+    COMP = "<!doctype html><html><body><p>plain</p></body></html>"
+    RAW = "<!doctype html><html><body><p>plain</p><script>document.title='ran'</script></body></html>"
+
+    def drawn(self):
+        req = self.owner_msg(item="LANE.1", intent="visual", text="Draw it", purpose="ux")
+        code, out = self.agent_post("/visual", {"request": req["id"], "format": "html", "title": "Tabs", "content": self.COMP,
+                                                "text": "t", "nonce": "v" + os.urandom(6).hex()})
+        self.assertEqual(code, 200, out)
+        return out["record"]
+
+    def source(self, vid, content=None):
+        return self.agent_post("/component-source", {"visual_id": vid, "content": content or self.RAW,
+                                                     "nonce": "s" + os.urandom(6).hex()})
+
+    def switch(self, vid, on, expect=200):
+        body = {"item": "LANE.1", "intent": "ux-scripts", "visual_id": vid, "scripts": on, "text": "scripts",
+                "nonce": "sw" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_off_by_default_then_served_sealed_only_after_the_owners_switch(self):
+        vid = self.drawn()["id"]
+        code, out = self.source(vid)
+        self.assertEqual(code, 200, out)
+        code, _h, body = self.raw(f"/api/component-render?id={vid}")
+        self.assertEqual(code, 403)                       # stored, but never shown while the switch is off
+        self.assertNotIn(b"<script>", body)
+        self.switch(vid, True)
+        code, headers, body = self.raw(f"/api/component-render?id={vid}")
+        self.assertEqual(code, 200)
+        self.assertIn(b"document.title='ran'", body)
+        csp = headers["content-security-policy"]
+        for want in ("sandbox allow-scripts", "default-src 'none'", "connect-src 'none'", "form-action 'none'", "base-uri 'none'"):
+            self.assertIn(want, csp)
+        self.assertNotIn("allow-same-origin", csp)
+        self.switch(vid, False)
+        self.assertEqual(self.raw(f"/api/component-render?id={vid}")[0], 403)
+        # The ordinary visual route still serves only the sanitized, script-free version.
+        self.assertNotIn(b"<script", self.raw(f"/api/visual?id={vid}")[2])
+
+    def test_the_switch_needs_a_source_and_only_the_owner_flips_it(self):
+        vid = self.drawn()["id"]
+        self.assertIn("no scripted source", self.switch(vid, True, expect=409)["error"])
+        code, out = self.agent_post("/message", {"item": "LANE.1", "intent": "ux-scripts", "visual_id": vid,
+                                                 "scripts": True, "text": "x", "nonce": "ag" + os.urandom(6).hex()})
+        self.assertEqual(code, 400, out)
+        self.assertEqual(self.raw(f"/api/component-render?id={vid}")[0], 403)
+
+    def test_a_source_is_write_once_and_belongs_to_an_html_visual(self):
+        vid = self.drawn()["id"]
+        self.assertEqual(self.source(vid)[0], 200)
+        self.assertEqual(self.source(vid)[0], 200)                     # the same bytes again: fine
+        code, out = self.source(vid, self.RAW + "<!-- changed -->")
+        self.assertEqual(code, 409, out)
+        self.assertEqual(self.source("f" * 24)[0], 404)
+        self.assertEqual(self.agent_post("/component-source", {"visual_id": vid})[0], 400)
+
+    def test_export_carries_the_source_only_while_the_switch_is_on(self):
+        vid = self.drawn()["id"]
+        self.source(vid)
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save", visual_id=vid)
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual((code, out["scripts"], out["source"]), (200, False, None))
+        self.switch(vid, True)       # flipped AFTER the save, to preview: that save still exports without script
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual((out["scripts"], out["source"]), (False, None))
+        save2 = self.owner_msg(item="LANE.1", intent="ux-save", text="save again", visual_id=vid)
+        code, out = self.agent_post("/ux-export", {"save": save2["id"]})
+        self.assertEqual((out["scripts"], out["source"]), (True, self.RAW))
+        self.assertIn("frame-src 'self'", self.raw("/")[1].get("content-security-policy", ""))
+
+
+class PrMergeRequestTests(_Live, unittest.TestCase):
+    """1.33 (UX-VIEW.md, D7): the PR tab's Merge is an owner message on @prs; the server merges nothing."""
+    SHA = "c" * 40
+
+    def push(self, n=7, **over):
+        pr = {"number": n, "title": "t", "state": "open", "draft": False, "head": "feat/x", "base": "main",
+              "author": "dev", "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+              "merged_at": None, "closed_at": None, "url": f"https://github.com/acme/app/pull/{n}",
+              "merge_commit": None, "checks": "success", "head_sha": self.SHA}
+        pr.update(over)
+        code, out = self.agent_post("/prs", {"repo": "acme/app", "window_days": 30, "prs": [pr]})
+        self.assertEqual(code, 200, out)
+
+    def ask(self, n=7, sha=None, base="main", expect=200):
+        body = {"item": "@prs", "intent": "pr-merge", "pr": n, "expected_head_sha": sha or self.SHA,
+                "base": base, "text": f"Merge #{n}", "nonce": "pm" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_a_request_for_a_ready_pr_is_stored_waits_in_todo_and_rings_the_doorbell(self):
+        from overture import view as V
+        from overture import doorbell as DB
+        self.push()
+        rec = self.ask()["record"]
+        self.assertEqual((rec["item"], rec["intent"], rec["pr"]), ("@prs", "pr-merge", 7))
+        todo = V.todo(self.console.payload()["view"])
+        self.assertEqual([m["id"] for m in todo["merge"]], [rec["id"]])
+        self.assertIn("pr-merge", DB.WAKE_INTENTS)
+        # One at a time: a second request for the same PR is refused until a session answers.
+        self.assertIn("already requested", self.ask(expect=409)["error"])
+        code, _ = self.agent_post("/message", {"item": "@prs", "text": "Merged #7", "reply_to": rec["id"],
+                                               "nonce": "r" + os.urandom(6).hex()})
+        self.assertEqual(code, 200)
+        self.assertEqual(V.todo(self.console.payload()["view"])["merge"], [])
+
+    def test_the_server_refuses_what_the_steward_would_refuse_and_says_nothing_was_merged(self):
+        self.push(checks="pending")
+        self.assertIn("not passing", self.ask(expect=409)["error"])
+        self.push(draft=True)
+        self.assertIn("a draft", self.ask(expect=409)["error"])
+        self.push(state="merged", merged_at="2026-10-02T00:00:00Z", merge_commit="d" * 40)
+        self.assertIn("merged", self.ask(expect=409)["error"])
+        self.push()
+        self.assertIn("merges into main", self.ask(base="release", expect=409)["error"])
+        self.assertIn("moved since you looked", self.ask(sha="d" * 40, expect=409)["error"])
+        self.assertIn("not in the steward's last push", self.ask(n=99, expect=409)["error"])
+        self.assertEqual(len(self.console.payload()["view"]["threads"].get("@prs", [])), 0)
+
+    def test_the_feed_can_be_read_for_the_merge_requests_thread(self):
+        self.push()
+        self.ask()
+        code, out = self.req("GET", "/api/feed?item=%40prs", tok=token())
+        self.assertEqual(code, 200, out)
+        self.assertEqual([e["item"] for e in out["events"]], ["@prs"])
+
+    def test_nothing_pushed_yet_is_named(self):
+        self.assertIn("nothing to merge", self.ask(expect=409)["error"])
+
+    def test_an_agent_cannot_write_the_request_and_the_thread_takes_no_other_intent(self):
+        code, out = self.agent_post("/message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
+                                                 "expected_head_sha": self.SHA, "base": "main", "text": "x", "nonce": "ag" + os.urandom(6).hex()})
+        self.assertEqual(code, 400, out)
+        body = {"item": "@prs", "intent": "chat", "text": "hi", "nonce": "pm" + os.urandom(6).hex()}
+        code, out = self.req("POST", "/api/message", body, tok=token())
+        self.assertEqual(code, 400, out)
+
+
+class UxViewStepOneTests(_Live, unittest.TestCase):
+    """1.32 (UX-VIEW.md step 1): purpose on visual requests, ux-save and ux-link, todo.ux, /ux-export."""
+
+    COMP = ("<!doctype html><html><head><style>.btn > span{color:#0969da}</style></head>"
+            "<body><button class=\"btn\" type=\"button\"><span>Save</span></button></body></html>")
+
+    def drawn(self, fmt="html", content=None, item="LANE.1"):
+        req = self.owner_msg(item=item, intent="visual", text="Draw the save button", purpose="ux")
+        body = {"request": req["id"], "format": fmt, "title": "Save button",
+                "content": content or (self.COMP if fmt == "html" else "flowchart LR\n  A --> B\n"),
+                "text": "A primary button.", "nonce": "v" + os.urandom(6).hex()}
+        code, out = self.agent_post("/visual", body)
+        self.assertEqual(code, 200, out)
+        return out["record"]
+
+    def test_save_appears_in_todo_and_exports_as_a_component(self):
+        from overture import view as V
+        vis = self.drawn()
+        self.owner_msg(item="LANE.1", intent="ux-link", text="the design", url="https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1")
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save this one", visual_id=vis["id"])
+        todo = V.todo(self.console.payload()["view"])
+        self.assertIn({"id": save["id"], "item": "LANE.1", "intent": "ux-save", "visual_id": vis["id"]}, todo["ux"])
+        code, out = self.agent_post("/ux-export", {"save": save["id"]})
+        self.assertEqual(code, 200, out)
+        self.assertEqual((out["item"], out["design_url"]), ("LANE.1", "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"))
+        self.assertIn(".btn > span{color:#0969da}", out["visual"]["content"])
+        # An agent reply naming the save takes it off the list.
+        code, _ = self.agent_post("/message", {"item": "LANE.1", "text": "Landed in PR #9", "reply_to": save["id"],
+                                               "nonce": "r" + os.urandom(6).hex()})
+        self.assertEqual(code, 200)
+        self.assertNotIn(save["id"], [u["id"] for u in V.todo(self.console.payload()["view"])["ux"]])
+        # The doorbell wakes a watching session for it.
+        from overture import doorbell as DB
+        self.assertIn("ux-save", DB.WAKE_INTENTS)
+
+    def test_the_cli_writes_the_component_into_a_worktree_and_never_the_servers(self):
+        import subprocess as sp
+        vis = self.drawn()
+        save = self.owner_msg(item="LANE.1", intent="ux-save", text="save", visual_id=vis["id"])
+        with tempfile.TemporaryDirectory() as wt:
+            sp.run(["git", "init", "-q", wt], check=True)
+            rc, out, err = self.agent_cli("ux-export", "--project", wt, "--save", save["id"])
+            self.assertEqual(rc, 0, err)
+            md = (Path(wt) / "components" / "LANE.1.md").read_text()
+            self.assertIn(f"visual: {vis['id']}", md)
+            self.assertIn(".btn > span{color:#0969da}", (Path(wt) / "components" / "LANE.1.css").read_text())
+            rc, out, err = self.agent_cli("ux-export", "--project", wt, "--save", save["id"])
+            self.assertEqual(rc, 0, err)
+            self.assertTrue(json.loads(out)["unchanged"])
+            rc, _, err = self.agent_cli("ux-export", "--project", str(Path(wt) / "components"), "--save", save["id"])
+            self.assertEqual(rc, 1)
+            self.assertIn("top of your own git worktree", err)
+
+    def test_refusals_are_named(self):
+        mermaid = self.drawn(fmt="mermaid")
+        for body, word in (({"intent": "ux-save", "visual_id": mermaid["id"]}, "only an HTML visual"),
+                           ({"intent": "ux-save", "visual_id": "0" * 24}, "names no visual"),
+                           ({"intent": "ux-save"}, "visual_id"),
+                           ({"intent": "ux-link", "url": "https://evil.example/design/x"}, "Claude Design link"),
+                           ({"intent": "ux-link", "url": "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1?via=share"}, "without its query"),
+                           ({"intent": "chat", "purpose": "ux"}, "purpose belongs"),
+                           ({"intent": "visual", "purpose": "ux", "from": "figma"}, "from belongs")):
+            with self.subTest(body=body):
+                body = {"item": "LANE.1", "text": "x", "nonce": "o" + os.urandom(6).hex(), **body}
+                if body.get("intent") == "chat":
+                    body["item"] = "@chat"
+                code, out = self.req("POST", "/api/message", body, tok=token())
+                self.assertEqual(code, 400, out)
+                self.assertIn(word, out["error"])
+        # Only the owner saves: an agent's ux-save is refused by the schema.
+        vis = self.drawn()
+        code, out = self.agent_post("/message", {"item": "LANE.1", "text": "x", "intent": "ux-save",
+                                                 "visual_id": vis["id"], "nonce": "a" + os.urandom(6).hex()})
+        self.assertEqual(code, 400)
+        self.assertIn("only the owner", out["error"])
+        code, out = self.agent_post("/ux-export", {"save": vis["id"]})
+        self.assertEqual(code, 404)
+
+
+class ClientGoneTests(unittest.TestCase):
+    """A client that hangs up mid-answer is not an error (logged as a traceback through 1.31)."""
+
+    def test_raw_answers_to_a_closed_socket_raise_nothing(self):
+        h = SV.OwnerHandler.__new__(SV.OwnerHandler)
+        h.send_response = h.send_header = lambda *a, **k: None
+        h.end_headers = lambda: None
+
+        class Gone:
+            def write(self, _data):
+                raise BrokenPipeError(32, "Broken pipe")
+        h.wfile = Gone()
+        h.close_connection = False
+        h._send_raw(200, b"x" * 10, "image/png", "sandbox")     # must not raise
+        self.assertTrue(h.close_connection)
+        h.close_connection = False
+        h._send(200, {"ok": True})
+        self.assertTrue(h.close_connection)
+
+
+class AssetRouteTests(_Live, unittest.TestCase):
+    """1.32 (FEED-ASSETS.md): agents post screenshots on an item; the owner sees and deletes them."""
+
+    def post(self, data=None, **over):
+        body = {"item": "LANE.1", "content_b64": base64.b64encode(data or tiny_png()).decode(),
+                "caption": "Tabs with icons", "kind": "after"}
+        body.update(over)
+        return self.agent_post("/asset", body)
+
+    def raw(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", path, headers={"Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        data = r.read()
+        conn.close()
+        return r, data
+
+    def test_post_then_view_then_serve_then_delete(self):
+        png = tiny_png(seed=1)
+        code, out = self.post(png)
+        self.assertEqual(code, 200, out)
+        row = out["asset"]
+        self.assertEqual((row["format"], row["width"], row["height"], row["kind"]), ("png", 2, 2, "after"))
+        _, view = self.get("/api/view")
+        assets = view["view"]["assets"]
+        self.assertEqual([a["id"] for a in assets["by_item"]["LANE.1"]], [row["id"]])
+        self.assertNotIn("sha256", assets["recent"][0])
+        r, data = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual((r.status, data), (200, png))
+        self.assertEqual(r.getheader("Content-Type"), "image/png")
+        self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
+        self.assertIn("sandbox", r.getheader("Content-Security-Policy"))
+        self.assertEqual(r.getheader("Cross-Origin-Resource-Policy"), "same-origin")
+        code, out = self.req("POST", "/api/asset-delete", {"id": row["id"], "nonce": "del1"}, tok=token())
+        self.assertEqual(code, 200, out)
+        r, _ = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual(r.status, 404)
+
+    def upload(self, data=None, expect=200, **over):
+        body = {"item": "LANE.1", "content_b64": base64.b64encode(data or tiny_png(seed=7)).decode(),
+                "caption": "My mock", "nonce": "up" + os.urandom(6).hex()}
+        body.update(over)
+        code, out = self.req("POST", "/api/asset-upload", body, tok=token())
+        self.assertEqual(code, expect, out)
+        return out
+
+    def test_the_owner_can_attach_an_image_and_it_is_theirs(self):
+        row = self.upload()["asset"]
+        self.assertEqual((row["by"], row["agent"], row["kind"]), ("owner", None, "screenshot"))
+        _, view = self.get("/api/view")
+        self.assertEqual([(a["id"], a["by"]) for a in view["view"]["assets"]["by_item"]["LANE.1"]], [(row["id"], "owner")])
+        r, data = self.raw("/api/asset?id=" + row["id"])
+        self.assertEqual(r.status, 200)
+        code, out = self.req("POST", "/api/asset-delete", {"id": row["id"], "nonce": "del2"}, tok=token())
+        self.assertEqual(code, 200, out)
+
+    def test_an_owner_upload_is_checked_like_an_agents_and_is_owner_only(self):
+        self.upload(b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>", expect=400)
+        self.upload(item="NOPE.9", expect=400)
+        self.upload(qid="LANE.1/Q1", expect=400)                      # only item, content_b64, caption, nonce
+        self.upload(kind="after", expect=400)                         # an owner's image is always a screenshot
+        code, _ = self.req("POST", "/api/asset-upload", {"item": "LANE.1", "content_b64": "AAAA", "caption": "x"})
+        self.assertIn(code, (401, 403))                                # no owner token: refused
+        code, _ = self.agent_post("/asset-upload", {"item": "LANE.1"})
+        self.assertEqual(code, 404)                                    # not on the agent door
+
+    def test_owner_and_agent_images_have_their_own_rate_buckets(self):
+        import overture.assets as AS
+        for n in range(AS.RATE_COUNT):
+            self.upload(tiny_png(seed=100 + n))
+        self.upload(tiny_png(seed=999), expect=400)                    # the owner's bucket is full ("you")
+        code, out = self.post(tiny_png(seed=5))                        # an agent is not held up by it
+        self.assertEqual(code, 200, out)
+
+    def test_the_format_comes_from_the_bytes_never_the_name(self):
+        for bad, why in ((b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", "SVG"),
+                         (b"GIF8 not really", "not a PNG"), (b"hello", "not a PNG")):
+            with self.subTest(why=why):
+                code, out = self.post(bad)
+                self.assertEqual(code, 400)
+                self.assertIn(why, out["error"])
+
+    def test_unknown_item_question_or_ticket_is_refused_by_name(self):
+        for over, word in (({"item": "NOPE"}, "no item"), ({"qid": "LANE.1/Q99"}, "no question"),
+                           ({"ticket": "T-nope1234"}, "no ticket"), ({"kind": "gallery"}, "kind"),
+                           ({"caption": "two\nlines"}, "one line"), ({"ticket": ["T-x"]}, "must be a string"),
+                           ({"kind": {"a": 1}}, "must be a string")):
+            with self.subTest(over=over):
+                code, out = self.post(**over)
+                self.assertEqual(code, 400, out)
+                self.assertIn(word, out["error"])
+
+    def test_the_same_bytes_on_the_same_item_are_one_asset(self):
+        png = tiny_png(seed=7)
+        _, a = self.post(png)
+        _, b = self.post(png)
+        self.assertEqual(a["asset"]["id"], b["asset"]["id"])
+        self.assertTrue(b.get("duplicate"))
+
+    def test_only_the_owner_door_deletes_and_only_with_a_token(self):
+        _, out = self.post(tiny_png(seed=3))
+        code, _ = self.req("POST", "/api/asset-delete", {"id": out["asset"]["id"], "nonce": "d2"})
+        self.assertEqual(code, 403)
+        code, _ = self.agent_post("/asset-delete", {"id": out["asset"]["id"]})
+        self.assertEqual(code, 404)
+        r, _ = self.raw("/api/asset?id=" + out["asset"]["id"])
+        self.assertEqual(r.status, 200)
+
+
 class TicketRouteTests(_Live, unittest.TestCase):
     """The owner door's ticket routes (1.26): create, update, close, and view.tickets."""
 
@@ -2048,7 +2642,7 @@ class Phase4Tests(_Live, unittest.TestCase):
         # Catches: tags computed only in a test (never served), or config that never reaches the page.
         self.lock_seed()          # the seed cites architect/40-specs/..., outside this specs_dir: no refine
         view = self.get("/api/view")[1]["view"]
-        self.assertEqual(view["config"], {"specs_dir": "specs", "visuals_dir": "visuals", "sections": {}})
+        self.assertEqual(view["config"], {"specs_dir": "specs", "visuals_dir": "visuals", "sections": {}, "lanes": {}})
         self.assertIn("questions", view["tags"])
         # The seed picked "a" against the ★ "b": deliberate, with its reason.
         [t] = view["tags"]["questions"]["LANE.1/Q1"]
@@ -3034,6 +3628,8 @@ def spec_question(v1: str) -> dict:
 SPAWN_ALLOWED = {
     "overture/gitseam.py": "the one door for git; it starts nothing once the server closes it",
     "agent.py": "run by an agent inside its own jail; the server process never imports it",
+    "hosting.py": "operator tool: `server.py daemon|service|status|health` run systemctl and detach the server; "
+                  "the server never imports it",
     "onboard.py": "operator setup/verify tool (1.24.0 verify runs curl/systemctl); never imported by the server",
     "tools/": "operator tools (verify_vendor.py runs git on a kit clone); never imported by the server",
 }
@@ -3102,6 +3698,7 @@ sys.addaudithook(hook)
 
 import http.client, os, socket, threading, time
 from pathlib import Path
+from unittest import mock
 p = json.loads(sys.argv[1])
 sys.path.insert(0, p["kit"])
 from overture import server as SV
@@ -3670,7 +4267,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
         self.assertIn("subprocess.Popen", seen)
 
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
-    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/visual-export",
+    AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/design-inventory", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
                    "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
 
@@ -3990,6 +4587,7 @@ class StraceGateTests(unittest.TestCase):
 WRITE_FAULT_CHILD = r'''
 import errno, os, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import stewardgit as SG
 os.urandom = lambda n: b"\0" * n          # the temporary's name, fixed so the trace can be read for it
@@ -5751,6 +6349,7 @@ class SingleServerStartTests(unittest.TestCase):
 SET_ASIDE_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 IT.store_snapshot(Path(sys.argv[2]), json.loads(sys.argv[3]))
@@ -5974,6 +6573,7 @@ class SingleServerItemsTests(_SingleServer, unittest.TestCase):
 ITEMS_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 from overture import server as SV
@@ -6032,6 +6632,7 @@ def page_body(html: str, *, ref: str = "origin/main", commit: str = "c0ffee" + "
 PAGE_CHILD = r'''
 import json, sys
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, sys.argv[1])
 from overture import items as IT
 from overture import server as SV
@@ -7725,6 +8326,92 @@ class PrsPushCliTests(_SingleServer, unittest.TestCase):
             self.assertEqual(r.returncode, 1, extra)
             self.assertIn("refused, nothing sent", r.stderr)
         self.assertFalse(self.log.exists())
+
+
+FAKE_GH_MERGE = r"""#!{python}
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+if args[:2] == ["repo", "view"]:
+    print(json.dumps({{"nameWithOwner": "octo/repo"}}))
+elif args[:2] == ["pr", "view"]:
+    print(json.dumps({{"number": 7, "state": "OPEN", "isDraft": False, "baseRefName": "main",
+                      "headRefOid": os.environ.get("FAKE_HEAD", "{sha}"),
+                      "url": "https://github.com/octo/repo/pull/7",
+                      "statusCheckRollup": [{{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}}]}}))
+elif args[:2] == ["pr", "merge"]:
+    if os.environ.get("FAKE_MERGE_FAIL"):
+        sys.stderr.write("GraphQL: Head branch was modified\n")
+        sys.exit(1)
+"""
+
+
+class PrMergeCliTests(_SingleServer, unittest.TestCase):
+    """`agent.py pr-merge`, a separate process, merges with ITS gh after re-checking, and replies on @prs."""
+    SHA = "e" * 40
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(os.path.realpath(tmp.name))
+        self.single(self.base)
+        from overture import registry as R
+        reg = self.base / "cfg" / "overture" / "projects.json"
+        R.register(self.scfg.root, self.scfg.state, HERE / "plugin" / "kit", path=reg)
+        bindir = self.base / "bin"
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text(FAKE_GH_MERGE.format(python=sys.executable, sha=self.SHA))
+        gh.chmod(0o755)
+        self.log = self.base / "gh.log"
+        self.env = {**os.environ, "XDG_CONFIG_HOME": str(reg.parent.parent), "FAKE_GH_LOG": str(self.log),
+                    "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        self.env.pop("OVERTURE_AGENT", None)
+        pr = {"number": 7, "title": "t", "state": "open", "draft": False, "head": "f", "base": "main",
+              "author": "d", "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+              "merged_at": None, "closed_at": None, "url": "https://github.com/octo/repo/pull/7",
+              "merge_commit": None, "checks": "success", "head_sha": self.SHA}
+        self.sconsole.push_prs({"repo": "octo/repo", "window_days": 30, "prs": [pr]}, "steward")
+        self.req_id = self.sconsole.write("message", {"item": "@prs", "intent": "pr-merge", "pr": 7,
+                                                      "expected_head_sha": self.SHA, "base": "main",
+                                                      "text": "Merge #7", "nonce": "pmcli00001"}, "owner")["id"]
+
+    def run_cli(self, *extra, **env):
+        return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "agent.py"), "--state",
+                               str(self.scfg.state), "pr-merge", "--project", str(self.scfg.root),
+                               "--request", self.req_id, *extra],
+                              capture_output=True, text=True, env={**self.env, **env}, timeout=120, cwd=self.scfg.root)
+
+    def replies(self):
+        return [m["text"] for m in self.sview()["view"]["threads"].get("@prs", []) if m["by"] == "agent"]
+
+    def test_a_dry_run_checks_and_merges_and_replies_to_nothing(self):
+        r = self.run_cli("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["would_merge"], 7)
+        self.assertFalse(any(json.loads(ln)[:2] == ["pr", "merge"] for ln in self.log.read_text().splitlines()))
+        self.assertEqual(self.replies(), [])
+
+    def test_it_merges_at_the_seen_commit_and_replies(self):
+        r = self.run_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = [json.loads(ln) for ln in self.log.read_text().splitlines()]
+        self.assertIn(["pr", "merge", "7", "--squash", "--match-head-commit", self.SHA], calls)
+        self.assertTrue(self.replies()[0].startswith("Merged #7"))
+        self.assertEqual(self.run_cli().returncode, 1)     # answered: it will not merge twice
+
+    def test_a_pr_that_moved_is_refused_by_name_and_the_reply_says_so(self):
+        r = self.run_cli(FAKE_HEAD="f" * 40)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("new commits", r.stderr)
+        self.assertFalse(any(json.loads(ln)[:2] == ["pr", "merge"] for ln in self.log.read_text().splitlines()))
+        self.assertIn("Nothing was merged", self.replies()[0])
+
+    def test_a_gh_merge_failure_is_replied_not_swallowed(self):
+        r = self.run_cli(FAKE_MERGE_FAIL="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Head branch was modified", self.replies()[0])
 
 
 class OneServerPrsTests(_OneServer, unittest.TestCase):

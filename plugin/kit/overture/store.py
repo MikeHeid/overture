@@ -196,7 +196,7 @@ class Store:
         item = rec.get("item")
         # The chat's thread (0.7.0) is not a register item, and the schema admits it
         # only on a message; every other record still names a register item (R7).
-        if item == S.CHAT_ITEM and kind == "message":
+        if item in (S.CHAT_ITEM, S.PRS_ITEM) and kind == "message":
             pass
         elif item is not None and self.known_items is not None and item not in self.known_items:
             # 0.9.1: name the push the owner needs to run; before this, the refusal was silent about it.
@@ -216,6 +216,15 @@ class Store:
                 self._check_about(rec)
             if S.ROAR in (rec.get("roles") or ()):
                 self._check_roar_once(rec)
+            if rec.get("intent") in ("ux-save", "ux-scripts"):
+                # 1.32: a ux-save names (1.33: and so does a ux-scripts) an HTML visual on the same item; anything else could not be a component.
+                v = self._by_id.get(rec["visual_id"])
+                if v is None or v["type"] != "visual":
+                    raise StoreError(f"visual_id {rec['visual_id']!r} names no visual")
+                if v["item"] != rec["item"]:
+                    raise StoreError(f"visual {v['id']} is on item {v['item']!r}; save it from that item")
+                if v["format"] != "html":
+                    raise StoreError(f"visual {v['id']} is {v['format']}; only an HTML visual can be a component")
         elif kind == "answer":
             self._check_answer(rec)
         elif kind == "lock":

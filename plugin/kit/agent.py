@@ -33,6 +33,15 @@
                                                 answer an owner's visual request: the server stores FILE
                                                 and its doc in its STATE dir (never in the project) and
                                                 shows it on the item
+    agent.py --state DIR asset ITEM --file IMAGE --caption TEXT [--kind before|after|screenshot|recording]
+                               [--qid QID] [--pr N] [--ticket T-ID]
+                                                post a screenshot or recording on an item (1.32): PNG,
+                                                JPEG, WebP or GIF, judged by its bytes; it shows in the
+                                                Feed and on the item. The server stores it in STATE.
+    agent.py --state DIR ux-export --project WORKTREE --save MESSAGE_ID
+                                                land an owner's ux-save (1.32): write components/<item>.md
+                                                (+ .css) in YOUR worktree, the old version kept under
+                                                components/.history/; then open the PR yourself
     agent.py --state DIR visual-export --project WORKTREE [--visual ID ...]
                                                 copy stored visuals (default: all; identical files are
                                                 skipped) into WORKTREE/<visuals_dir>/ and regenerate its
@@ -132,6 +141,7 @@ environment as OVERTURE_SESSION. This session's name is then, in order:
 """
 
 import argparse
+import base64
 import datetime as dt
 import json
 import os
@@ -428,6 +438,7 @@ def _call(state: Path, method: str, path: str, body=None, agent: str | None = No
 
 
 READ_CAP = 1 << 20  # a transcript or visual file larger than this is refused before it is sent
+ASSET_READ_CAP = 8 << 20  # 1.32: an asset (a GIF at most 8 MiB); the server applies the per-format limits
 
 
 def _read_text(path: Path, what: str) -> str | None:
@@ -463,6 +474,36 @@ def _git_top(d: Path) -> Path | None:
     if len(lines) != 2 or lines[0].strip() != "true":
         return None
     return Path(lines[1]).resolve()
+
+
+def _ux_export(state: Path, project: Path, save: str) -> int:
+    """Write the owner's saved component into PROJECT/components (1.32). 0 written or unchanged; 1 refused; 2 no server."""
+    from overture import components as CO
+    dest = Path(project).resolve()
+    top = _git_top(dest)
+    if top is None or top != dest:
+        print(f"refused: {project} must be the top of your own git worktree, on a branch", file=sys.stderr)
+        return 1
+    try:
+        code, out = _req(state, "POST", "/ux-export", {"save": save})
+    except OSError as e:
+        print(f"cannot reach the console server at {_where(state)}: {e}", file=sys.stderr)
+        return 2
+    if code != 200:
+        print(f"refused: {out.get('error', out)}", file=sys.stderr)
+        return 1
+    server_root = Path(out["root"]).resolve()
+    if dest in (server_root, _git_top(server_root)):
+        print(f"refused: {project} is the directory the console server runs from ({server_root}); write into "
+              f"your own worktree on a branch and land it by PR", file=sys.stderr)
+        return 1
+    try:
+        done = CO.write(dest, out["item"], out)
+    except (CO.ComponentError, OSError) as e:
+        print(f"refused, nothing overwritten: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(_json({"project": str(dest), "item": out["item"], **done}))
+    return 0
 
 
 def _visual_export(state: Path, project: Path, ids: list[str]) -> int:
@@ -1092,6 +1133,97 @@ def _prs_push(a) -> int:
     return 0
 
 
+def _pr_merge(a) -> int:
+    """`pr-merge`: merge the pull request the owner asked for from the PR tab (1.33, D7), with THIS process's gh.
+
+    Re-reads the PR from GitHub now, refuses by name when it is not open, ready, passing and still at the
+    commit the owner saw (or the request is over 24 hours old), merges with `--match-head-commit`, and replies
+    on @prs either way. `--dry-run` checks and prints, merges and replies to nothing. 0 merged (or dry run ok);
+    1 refused (and the reply says why); 2 the server cannot be reached.
+    """
+    import datetime as dt
+    from overture import prs as PR
+    from overture import schema as S
+    state = os.path.realpath(a.state)
+    found = R.enclosing(a.project)
+    if found is None or found[1].get("state") != state:
+        print(f"refused: {Path(a.project).resolve()} is not a project registered on the console at {state}", file=sys.stderr)
+        return 1
+    root = Path(found[0])
+    try:
+        code, view = _req(state, "GET", "/view", None, agent=a.agent)
+    except OSError as e:
+        print(f"cannot reach the console server at {_where(state)}: {e}", file=sys.stderr)
+        return 2
+    if code != 200:
+        print(f"refused: {view.get('error', view)}", file=sys.stderr)
+        return 1
+    msgs = (view.get("view") or view).get("threads", {}).get(S.PRS_ITEM, [])
+    req = next((m for m in msgs if m["id"] == a.request), None)
+    if req is None or req["by"] != "owner" or req.get("intent") != "pr-merge":
+        print(f"refused: {a.request} is not an owner pr-merge request on {S.PRS_ITEM}", file=sys.stderr)
+        return 1
+    if any(m["by"] == "agent" and m.get("reply_to") == req["id"] for m in msgs):
+        print(f"refused: {a.request} already has an answer", file=sys.stderr)
+        return 1
+
+    def reply(text: str) -> bool:
+        if a.dry_run:
+            return True
+        try:
+            code, out = _req(state, "POST", "/message", {"item": S.PRS_ITEM, "text": text[:2000], "reply_to": req["id"],
+                                                          "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+        except OSError as e:
+            code, out = 0, {"error": str(e)}
+        if code != 200:
+            print(f"warning: the reply on {S.PRS_ITEM} was not stored ({out.get('error', code)}); say so to the "
+                  f"owner, the request is still unanswered", file=sys.stderr)
+        return code == 200
+
+    def gh_json(args: list[str]):
+        out = G.gh(args, root)
+        if isinstance(out, G.Unavailable):
+            return None, f"gh is {out.reason}"
+        rc, stdout, stderr = out
+        if rc != 0:
+            return None, f"`gh {' '.join(args[:3])}` failed ({rc}): {stderr.strip()[:300] or 'no message'}"
+        try:
+            return json.loads(stdout), None
+        except ValueError as e:
+            return None, f"`gh {' '.join(args[:3])}` did not print JSON: {e}"
+
+    def refuse(why: str) -> int:
+        reply(why if why.startswith("Merge refused") else f"Merge refused: {why}. Nothing was merged")
+        print(f"refused: {why}", file=sys.stderr)
+        return 1
+
+    repo_doc, why = gh_json(["repo", "view", "--json", "nameWithOwner"])
+    if why:
+        return refuse(why)
+    repo = repo_doc.get("nameWithOwner") if isinstance(repo_doc, dict) else None
+    if not isinstance(repo, str) or not PR.REPO.match(repo):
+        return refuse("gh gave no repository name")
+    row, why = gh_json(["pr", "view", str(req["pr"]), "--json", PR.GH_MERGE_FIELDS])
+    if why:
+        return refuse(why)
+    why = PR.merge_problem(req, row, repo, dt.datetime.now(dt.timezone.utc))
+    if why:
+        return refuse(why)
+    if a.dry_run:
+        print(_json({"would_merge": req["pr"], "repo": repo, "head": req["expected_head_sha"], "method": a.method}))
+        return 0
+    out = G.gh(["pr", "merge", str(req["pr"]), f"--{a.method}", "--match-head-commit", req["expected_head_sha"]], root)
+    if isinstance(out, G.Unavailable):
+        return refuse(f"gh is {out.reason}")
+    rc, _stdout, stderr = out
+    if rc != 0:
+        return refuse(f"gh refused the merge ({rc}): {stderr.strip()[:300] or 'no message'}")
+    stored = reply(f"Merged #{req['pr']} \"{str(row.get('title'))[:120]}\" into {row.get('baseRefName')} "
+                   f"({a.method}), head {req['expected_head_sha'][:8]}.")
+    print(_json({"merged": req["pr"], "repo": repo, "method": a.method, "replied": stored}))
+    return 0 if stored else 3
+
+
 def _issues_push(a) -> int:
     """`issues-push`: mirror of `_prs_push` against gh issue list. See prs-push for the full contract."""
     from overture import issues as IS
@@ -1226,6 +1358,48 @@ def main(argv=None) -> int:
     s.add_argument("--file", type=Path, required=True)
     s.add_argument("--doc", type=Path, required=True)
     s.add_argument("--title", required=True)
+    s = sub.add_parser("asset", description=(
+        "Post a screenshot or recording on an item (1.32, FEED-ASSETS.md). PNG, JPEG, WebP or GIF, judged by "
+        "the file's own bytes; at most 2 MiB for a still and 8 MiB for a GIF. It shows in the owner's Feed "
+        "and on the item. Post a `before` and an `after` for every visible change to a UX item."))
+    s.add_argument("item")
+    s.add_argument("--file", type=Path, required=True)
+    s.add_argument("--caption", required=True, help="one line, at most 200 characters")
+    s.add_argument("--kind", default="screenshot", choices=("before", "after", "screenshot", "recording"))
+    s.add_argument("--qid", help="the question it illustrates")
+    s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
+    s.add_argument("--ticket", help="the ticket it shows")
+    s = sub.add_parser("design-inventory", description=(
+        "List the artifacts of the owner's Claude Design project for UX View's picker (1.33). Open the design the "
+        "way you read it for a component (the owner's login), then send what is in it: FILE is JSON "
+        "([{\"path\": \"buttons/primary.html\", \"title\": \"Primary button\"}, ...]) or one path per line. "
+        "At most 300 artifacts; a new list replaces the last one for that link. The owner picks from it; the "
+        "console never reads or opens the design."))
+    s.add_argument("--url", required=True, help="the design link, https://claude.ai/design/p/<project id>")
+    s.add_argument("--file", type=Path, required=True)
+    s = sub.add_parser("component-source", description=(
+        "Store the raw, scripted source of an HTML visual you already posted (1.33, UX-VIEW.md): the visual stays "
+        "the sanitized, script-free version, and this is its progressive enhancement. Nothing runs it until the "
+        "owner switches Scripts on for that version in UX View. Write-once per visual; see the console-ux skill's "
+        "scripts.md for how to write it."))
+    s.add_argument("--visual", required=True, metavar="ID", help="the HTML visual's record id")
+    s.add_argument("--file", type=Path, required=True, help="the scripted HTML document")
+    s = sub.add_parser("pr-merge", description=(
+        "Merge the pull request the owner asked for from the PR tab (1.33, UX-VIEW.md D7), using YOUR gh in "
+        "PROJECT's checkout. It re-reads the PR from GitHub, refuses (and replies on @prs saying why) unless it is "
+        "open, not a draft, passing, still at the head commit the owner saw, and the request is under 24 hours "
+        "old; then runs `gh pr merge --match-head-commit`. The console server merges nothing."))
+    s.add_argument("--project", type=Path, required=True, help="a checkout of the repository, registered on the console")
+    s.add_argument("--request", required=True, metavar="MESSAGE_ID", help="the owner's pr-merge message id (todo.merge)")
+    s.add_argument("--method", default="squash", choices=("squash", "merge", "rebase"))
+    s.add_argument("--dry-run", action="store_true", help="check and print; merge and reply to nothing")
+    s = sub.add_parser("ux-export", description=(
+        "Land the owner's ux-save (1.32, UX-VIEW.md): write components/<item>.md and components/<item>.css into "
+        "PROJECT, the top of YOUR git worktree on a branch (never the server's checkout). A previous version is "
+        "moved to components/.history/<item>-<hash>.md first; running it twice changes nothing. It writes files "
+        "only: commit them and open the pull request yourself."))
+    s.add_argument("--project", type=Path, required=True)
+    s.add_argument("--save", required=True, metavar="MESSAGE_ID", help="the owner's ux-save message id (from todo.ux)")
     s = sub.add_parser("visual-export", description=(
         "Copy stored visuals into PROJECT/<visuals_dir>/ and regenerate its INDEX.md, to land by PR. PROJECT "
         "must be the top of your own git work tree (visuals_dir is a path from the repository's top), never a "
@@ -1249,6 +1423,11 @@ def main(argv=None) -> int:
     s.add_argument("--project", type=Path, required=True)
     s.add_argument("--steward", metavar="NAME",
                    help="the one session that may watch, sync and fold this console (0.8.3; default: keep it)")
+    s = sub.add_parser("role", description="Show or set what THIS machine is for (D11, 1.33): `worker` means no "
+                       "session on this machine is ever the steward, whatever it is named; `steward` says the steward "
+                       "runs here; `clear` removes it. Stored in your own registry; the plugin's Machine role setting "
+                       "says the same thing to the hooks, and the stricter of the two holds.")
+    s.add_argument("value", nargs="?", choices=("steward", "worker", "clear"))
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1400,7 +1579,7 @@ def main(argv=None) -> int:
         _DOOR = None
 
 
-USER_COMMANDS = ("register", "steward", "server", "costs", "next-step")
+USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1414,6 +1593,10 @@ def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
     stewards: a lock the user set does not quietly switch itself off.
     """
     name = R.steward_for_state(state)
+    if name is not None and agent == name and R.machine_role() == "worker":
+        return (f"refused: {what} belongs to this console's steward, {name}, and this machine's role is `worker`, so "
+                f"no session here is the steward, even one named {name}. Run it on the steward's machine. (The role "
+                f"is set with `agent.py role` and the plugin's Machine role setting.)")
     if name is None or agent == name:
         return None
     who = f"this session ({agent})" if agent else "this session (unnamed)"
@@ -1429,6 +1612,14 @@ def _run(a, bell: Path) -> int:
         e = R.register(a.project, a.state, Path(__file__).resolve().parent, steward=a.steward)
         print(f"registered {Path(a.project).resolve()}: state {e['state']}, kit {e['kit']}"
               + (f", steward {e[R.STEWARD]}" if R.STEWARD in e else "") + f" in {R.location()}")
+        return 0
+    if a.cmd == "role":
+        if a.value is None:
+            r = R.machine_role()
+            print(f"role: {r}" if r else "no role: any session here may be the steward, as the registry names it")
+            return 0
+        R.set_machine_role(None if a.value == "clear" else a.value)
+        print(f"role {a.value}" if a.value != "clear" else "role cleared", f"in {R.location()}")
         return 0
     if a.cmd == "steward":
         if a.name is None and not a.clear:
@@ -1596,6 +1787,50 @@ def _run(a, bell: Path) -> int:
         return _call(a.state, "POST", "/visual", {"request": a.request, "format": a.format, "title": a.title,
                                                   "content": content, "text": doc,
                                                   "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+    if a.cmd == "asset":
+        try:
+            data = R.read_regular(a.file, ASSET_READ_CAP + 1)
+        except R.RegistryError as e:
+            print(f"asset {a.file}: {e}", file=sys.stderr)
+            return 1
+        if data is None:
+            print(f"asset {a.file} does not exist", file=sys.stderr)
+            return 1
+        if len(data) > ASSET_READ_CAP:
+            print(f"asset {a.file} is over {ASSET_READ_CAP} bytes; refused, not cut", file=sys.stderr)
+            return 1
+        body = {"item": a.item, "content_b64": base64.b64encode(data).decode("ascii"), "caption": a.caption,
+                "kind": a.kind, "nonce": secrets.token_urlsafe(12)}
+        for k in ("qid", "pr", "ticket"):
+            if getattr(a, k) is not None:
+                body[k] = getattr(a, k)
+        return _call(a.state, "POST", "/asset", body, agent=a.agent)
+    if a.cmd == "ux-export":
+        return _ux_export(a.state, a.project, a.save)
+    if a.cmd == "pr-merge":
+        return _pr_merge(a)
+    if a.cmd == "design-inventory":
+        try:
+            text = a.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: cannot read {a.file}: {e}", file=sys.stderr)
+            return 1
+        try:
+            arts = json.loads(text)
+        except ValueError:
+            arts = [{"path": ln.strip()} for ln in text.splitlines() if ln.strip()]
+        if isinstance(arts, list):
+            arts = [{"path": x} if isinstance(x, str) else x for x in arts]
+        return _call(a.state, "POST", "/design-inventory", {"url": a.url, "artifacts": arts,
+                                                            "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+    if a.cmd == "component-source":
+        try:
+            text = a.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: cannot read {a.file}: {e}", file=sys.stderr)
+            return 1
+        return _call(a.state, "POST", "/component-source", {"visual_id": a.visual, "content": text,
+                                                            "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":

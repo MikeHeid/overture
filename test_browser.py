@@ -104,6 +104,10 @@ class _Handler(BaseHTTPRequestHandler):
     view_multiline = False  # /view carries a thread whose messages span several lines (0.8.4)
     view_working = False  # ...and the cursor says an agent is working on it
     view_listening = None  # the cursor's `listening`; None leaves it out, as a pre-0.6.0 server
+    view_designs = False  # ...and it links a Claude Design whose artifact list an agent posted (1.33)
+    view_scripts = False  # ...and its newest version has the owner's Scripts switch on (1.33)
+    view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
+    posts: list = []    # the JSON bodies POSTed to /api/message
     board: object = None   # what /api/board answers; None is 404, as a project with no board()
     board_status = 200
     board_hits = 0
@@ -119,11 +123,44 @@ class _Handler(BaseHTTPRequestHandler):
             status = 503 if _Handler.view_fails else 200
             payload = dict(VIEW_MULTILINE if _Handler.view_multiline else VIEW_AGENT2 if _Handler.view_agent == 2
                            else VIEW_AGENT if _Handler.view_agent else VIEW)
+            if _Handler.view_ux:
+                payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "ux": True}}
+                vs = [{"id": f"v{n}", "seq": 10 + n, "ts": f"2026-10-11T0{n}:00:00Z", "item": "LANE.1", "request": "rq",
+                       "format": "html", "title": "Save button", "text": f"Version {n}", "path": f"p{n}.html",
+                       "doc_path": f"p{n}.md", "bytes": 40, "agent": "agent-2"}
+                       for n in range(1, (_Handler.view_ux if isinstance(_Handler.view_ux, int) and _Handler.view_ux > 1 else 2) + 1)]
+                payload["view"] = {**payload["view"], "visuals": {"LANE.1": vs}}
+                if _Handler.view_designs:
+                    url = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+                    payload["items"] = {**payload["items"], "LANE.1": {**payload["items"]["LANE.1"], "design": url}}
+                    arts = [{"path": f"buttons/b{i}.html", "title": f"Button {i}"} for i in range(12)]
+                    payload["view"] = {**payload["view"], "designs": {url: {"artifacts": arts, "pushed_at": "2026-10-11T08:00:00Z", "by": "agent-2"}}}
+                if _Handler.view_scripts:
+                    sw = {"id": "s" * 24, "seq": 99, "ts": "2026-10-11T09:00:00Z", "item": "LANE.1", "by": "owner",
+                          "type": "message", "intent": "ux-scripts", "visual_id": "v2", "scripts": True, "text": "on"}
+                    thr = payload["view"].get("threads", {})
+                    payload["view"] = {**payload["view"], "threads": {**thr, "LANE.1": [*thr.get("LANE.1", []), sw]}}
             if _Handler.view_working:  # an agent has marked this item id as in hand
                 payload["cursor"] = {"working": {_Handler.view_working: "2026-09-29T10:00:00Z"}}
             if _Handler.view_listening is not None:  # the watch heartbeat, as the server judged it
                 payload["cursor"] = {**payload.get("cursor", {}), "listening": _Handler.view_listening}
             body, ctype = json.dumps(payload), "application/json"
+        elif self.path.startswith("/api/prs"):
+            sha = "a" * 40
+            row = lambda n, **o: {"number": n, "title": f"PR {n}", "state": "open", "draft": False, "head": f"f{n}",
+                                  "base": "main", "author": "dev", "created_at": "2026-10-01T00:00:00Z",
+                                  "updated_at": "2026-10-01T00:00:00Z", "merged_at": None, "closed_at": None,
+                                  "url": f"https://github.com/acme/app/pull/{n}", "merge_commit": None,
+                                  "checks": "success", "head_sha": sha, **o}
+            body, ctype = json.dumps({"pushed": True, "note": None, "repo": "acme/app", "window_days": 30,
+                                      "pushed_at": "2026-10-11T10:00:00Z", "by": "steward",
+                                      "prs": [row(5), row(6, checks="pending"), row(8, draft=True), row(9, head_sha=None)]}), "application/json"
+        elif self.path.startswith("/api/component-render"):
+            from overture import server as SV
+            body, ctype = SCRIPTED, "text/html"
+            csp = SV.COMPONENT_CSP
+        elif self.path.startswith("/api/visual"):
+            body, ctype = "<!doctype html><title>mock</title><h1>mock</h1>", "text/html"
         elif self.path.startswith("/api/board"):
             _Handler.board_hits += 1
             status = 404 if _Handler.board is None else _Handler.board_status
@@ -134,11 +171,37 @@ class _Handler(BaseHTTPRequestHandler):
             body, ctype = PAGE, "text/html"
         data = body.encode()
         self.send_response(status)
+        if self.path.startswith("/api/component-render"):
+            self.send_header("Content-Security-Policy", csp)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        _Handler.posts.append(json.loads(raw or b"{}"))
+        data = b'{"record": {}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+# A hostile scripted component: every way out of the sealed frame it can think of, recorded in the DOM.
+SCRIPTED = """<!doctype html><html><body><p id="out">pending</p><script>
+const r = {};
+const t = (k, f) => { try { f(); r[k] = 'reached'; } catch (e) { r[k] = 'blocked'; } };
+t('parent', () => { parent.document.title; });
+t('storage', () => { localStorage.getItem('x'); });
+t('cookie', () => { if (document.cookie === undefined) throw 1; document.cookie; });
+t('top', () => { top.location.href = 'http://127.0.0.1:1/'; top.location.href; });
+parent.postMessage({type: 'ck-chart-export', svg: '<svg xmlns="http://www.w3.org/2000/svg"/>', filename: 'pwned'}, '*');
+fetch('/api/view').then(() => { r.fetch = 'reached'; }, () => { r.fetch = 'blocked'; }).then(() => {
+  document.getElementById('out').textContent = JSON.stringify(r); });
+</script></body></html>"""
 
 STATE = """() => {
   const q = s => document.querySelector(s);
@@ -237,6 +300,7 @@ class DockTests(unittest.TestCase):
         cls.server.shutdown()
 
     def setUp(self):
+        _Handler.view_ux, _Handler.view_scripts, _Handler.view_designs, _Handler.posts = False, False, False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline = None, False
 
@@ -665,6 +729,233 @@ SIGNATURE = """() => Array.from(document.querySelectorAll('%s')).map(e => [
   Array.from(e.classList).filter(c => c.startsWith('s-')).join(' ')])""" % LIVE_MARKS
 COUNT_UPDATES = """window.__boardChanged = 0;
 document.addEventListener('ck:board-updated', e => { window.__boardChanged += e.detail.changed; });"""
+
+
+class UxViewTests(unittest.TestCase):
+    """UX View (1.33): the modal over an item's HTML visuals, against the stub server."""
+
+    @classmethod
+    def setUpClass(cls):
+        DockTests.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        DockTests.tearDownClass.__func__(cls)
+
+    setUp = DockTests.setUp
+    _page = DockTests._page
+
+    def _open(self, width=1280):
+        _Handler.view_ux = True
+        page = self._page("chromium", width)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.evaluate("window.location.hash = 'item=LANE.1'")
+        page.wait_for_selector("text=UX View")
+        page.get_by_role("button", name="Open UX View for LANE.1").click()
+        page.wait_for_selector("#ck-ux-view")
+        return page
+
+    def test_ux_item_gets_the_modal_with_versions_sizes_and_a_sandboxed_preview(self):
+        page = self._open()
+        self.assertEqual(page.locator("#ck-ux-view[role=dialog][aria-modal=true]").count(), 1)
+        self.assertIn("v2 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        self.assertEqual(page.locator(".ck-ux-frame").get_attribute("sandbox"), "")
+        self.assertIn("not saved", page.locator(".ck-ux-status").inner_text())
+        page.get_by_role("button", name="Previous version").click()
+        self.assertIn("v1 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        page.get_by_role("radio", name="Mobile").click()
+        self.assertIn("375px", page.locator(".ck-ux-scale").inner_text())
+        self.assertTrue(page.evaluate("document.querySelector('.ck-panel').inert"))
+        page.keyboard.press("Escape")
+        self.assertEqual(page.locator("#ck-ux-view").count(), 0)
+
+    def test_save_and_generate_send_the_owner_messages_step_one_defined(self):
+        page = self._open()
+        page.get_by_role("button", name="Save as component").click()
+        page.wait_for_timeout(300)
+        save = [m for m in _Handler.posts if m.get("intent") == "ux-save"]
+        self.assertEqual([(m["item"], m["visual_id"]) for m in save], [("LANE.1", "v2")])
+        page.get_by_role("button", name="Generate", exact=True).click()
+        page.wait_for_timeout(300)
+        gen = [m for m in _Handler.posts if m.get("intent") == "visual"]
+        self.assertEqual([(m["item"], m["purpose"]) for m in gen], [("LANE.1", "ux")])
+        self.assertNotIn("from", gen[0])
+
+    def test_generate_from_design_is_disabled_until_a_link_is_set(self):
+        page = self._open()
+        page.get_by_role("button", name="More ways to generate").click()
+        self.assertTrue(page.get_by_role("menuitem", name="Generate from design").is_disabled())
+        page.keyboard.press("Escape")
+        page.locator(".ck-ux-settings summary").click()
+        page.fill("#ck-ux-link", "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1")
+        page.get_by_role("button", name="Link design").click()
+        page.wait_for_timeout(300)
+        link = [m for m in _Handler.posts if m.get("intent") == "ux-link"]
+        self.assertEqual([m["url"] for m in link], ["https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"])
+
+    def test_a_scripted_component_runs_sealed_and_reaches_nothing(self):
+        _Handler.view_scripts = True
+        page = self._open()
+        frame_el = page.locator(".ck-ux-frame")
+        self.assertEqual(frame_el.get_attribute("sandbox"), "allow-scripts")
+        self.assertIn("component-render", frame_el.get_attribute("src"))
+        self.assertTrue(page.locator(".ck-ux-scripts-badge").is_visible())
+        frame = next(f for f in page.frames if "component-render" in f.url)
+        frame.wait_for_function("document.getElementById('out').textContent !== 'pending'")
+        got = json.loads(frame.evaluate("document.getElementById('out').textContent"))
+        self.assertEqual(got, {"parent": "blocked", "storage": "blocked", "cookie": "blocked",
+                               "top": "blocked", "fetch": "blocked"})
+        page.wait_for_timeout(300)
+        # The console ignored the frame's message (it is not one of the console's own chart frames).
+        self.assertNotIn("pwned", page.evaluate("document.body.innerText"))
+        self.assertEqual(page.evaluate("document.querySelectorAll('a[download]').length"), 0)
+
+    def test_a_viewer_on_the_newest_version_follows_a_new_one_but_not_from_an_older_one(self):
+        page = self._open()
+        self.assertIn("v2 of 2", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 3                                    # a third version arrives on the next refresh
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('v3 of 3')")
+        page.get_by_role("button", name="Previous version").click()
+        self.assertIn("v2 of 3", page.locator(".ck-ux-vlabel").inner_text())
+        _Handler.view_ux = 4
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+        page.wait_for_function("document.querySelector('.ck-ux-vlabel').textContent.includes('of 4')")
+        self.assertIn("v2 of 4", page.locator(".ck-ux-vlabel").inner_text())
+
+    PNG = __import__("base64").b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+    def _item(self):
+        _Handler.view_ux = True
+        page = self._page("chromium", 1280)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.evaluate("window.location.hash = 'item=LANE.1'")
+        page.wait_for_selector(".ck-thread .ck-textarea")
+        return page
+
+    def test_the_owner_can_attach_an_image_by_choosing_a_file(self):
+        import base64
+        page = self._item()
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "my mock.png", "mimeType": "image/png",
+                                                                          "buffer": self.PNG}])
+        page.wait_for_function("document.querySelector('.ck-attach-status') === null || document.querySelector('.ck-attach-status').textContent !== ''")
+        page.wait_for_timeout(400)
+        up = [m for m in _Handler.posts if "content_b64" in m]
+        self.assertEqual([(m["item"], m["caption"]) for m in up], [("LANE.1", "my mock")])
+        self.assertEqual(base64.b64decode(up[0]["content_b64"]), self.PNG)
+        self.assertNotIn("kind", up[0])
+
+    def test_pasting_an_image_attaches_it_and_a_non_image_is_refused_before_sending(self):
+        page = self._item()
+        page.evaluate("""(b64) => {
+          const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+          const dt = new DataTransfer();
+          dt.items.add(new File([bin], 'pasted.png', {type: 'image/png'}));
+          document.querySelector('.ck-thread .ck-textarea').dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        }""", __import__("base64").b64encode(self.PNG).decode())
+        page.wait_for_timeout(500)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+        page.set_input_files(".ck-attach-row input[type=file]", files=[{"name": "x.txt", "mimeType": "text/plain", "buffer": b"hi"}])
+        page.wait_for_timeout(300)
+        self.assertEqual(len([m for m in _Handler.posts if "content_b64" in m]), 1)
+
+    def test_the_owner_picks_design_artifacts_and_generate_sends_them(self):
+        _Handler.view_designs = True
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        self.assertIn("12 listed", page.locator(".ck-ux-refs").inner_text())
+        page.fill("[aria-label='Filter design artifacts']", "Button 1")          # Button 1, 10 and 11
+        self.assertEqual(page.locator(".ck-ux-ref").count(), 3)
+        page.fill("[aria-label='Filter design artifacts']", "")
+        page.locator(".ck-ux-ref input[type=checkbox]").nth(0).check()
+        page.locator(".ck-ux-ref input[type=checkbox]").nth(1).check()
+        page.locator(".ck-ux-refmode").nth(1).select_option("swap")
+        self.assertIn("2 of 10 picked", page.locator(".ck-ux-refs").inner_text())
+        self.assertIn("The next Generate uses 2 design artifacts", page.locator(".ck-ux-refs-line").inner_text())
+        page.get_by_role("button", name="Generate", exact=True).click()
+        page.wait_for_timeout(400)
+        gen = [m for m in _Handler.posts if m.get("intent") == "visual"]
+        self.assertEqual(gen[0]["refs"], [{"path": "buttons/b0.html", "mode": "inspire"}, {"path": "buttons/b1.html", "mode": "swap"}])
+
+    def test_no_more_than_ten_artifacts_can_be_picked(self):
+        _Handler.view_designs = True
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        boxes = page.locator(".ck-ux-ref input[type=checkbox]")
+        for i in range(12):
+            boxes.nth(i).check() if i < 10 else boxes.nth(i).evaluate("e => { e.checked = true; e.dispatchEvent(new Event('change')); }")
+        self.assertIn("10 of 10 picked", page.locator(".ck-ux-refs").inner_text())
+        self.assertFalse(boxes.nth(11).is_checked())
+
+    def test_without_a_design_link_the_picker_says_so(self):
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        self.assertIn("Link a Claude Design project", page.locator(".ck-ux-refs").inner_text())
+
+    def test_a_link_being_typed_survives_a_live_refresh(self):
+        page = self._open()
+        page.locator(".ck-ux-settings summary").click()
+        page.fill("#ck-ux-link", "https://claude.ai/design/p/fee63c71-69b8")
+        page.evaluate("document.querySelector('.ck-refresh-btn').click()")      # the view is fetched and repainted
+        page.wait_for_timeout(600)
+        self.assertEqual(page.input_value("#ck-ux-link"), "https://claude.ai/design/p/fee63c71-69b8")
+
+    def test_full_screen_and_no_overflow_on_a_phone(self):
+        page = self._open(width=375)
+        box = page.locator(".ck-ux-box").bounding_box()
+        self.assertEqual(round(box["width"]), 375)
+        self.assertFalse(page.evaluate("document.documentElement.scrollWidth > innerWidth"))
+
+
+class PrMergeButtonTests(unittest.TestCase):
+    """Merge from the PR tab (1.33): shown only on a ready, passing PR; confirmed inline; sends a pr-merge."""
+
+    @classmethod
+    def setUpClass(cls):
+        DockTests.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        DockTests.tearDownClass.__func__(cls)
+
+    setUp = DockTests.setUp
+    _page = DockTests._page
+
+    def _prs(self):
+        page = self._page("chromium", 1280)
+        page.keyboard.press("Escape")
+        page.evaluate("document.querySelector('.ck-dock-strip').click()")
+        page.wait_for_selector(".ck-panel[data-open=true]")
+        page.locator("#ck-tab-prs").click()
+        page.wait_for_selector(".ck-pr-row")
+        return page
+
+    def test_only_a_ready_passing_pr_with_a_known_head_gets_the_button(self):
+        page = self._prs()
+        row = lambda n: page.locator(f".ck-pr-row[data-number='{n}']")
+        self.assertEqual(row(5).get_by_role("button", name="Merge pull request 5 into main").count(), 1)
+        self.assertIn("Merge when checks pass", row(6).inner_text())
+        self.assertEqual(row(6).get_by_role("button").filter(has_text="Merge").count(), 0)
+        self.assertEqual(row(8).get_by_role("button").filter(has_text="Merge").count(), 0)
+        self.assertIn("prs-push", row(9).inner_text())
+
+    def test_it_confirms_inline_then_sends_the_request_naming_the_commit(self):
+        page = self._prs()
+        page.get_by_role("button", name="Merge pull request 5 into main").click()
+        self.assertIn("Merge #5 into main?", page.locator(".ck-pr-merge-confirm").inner_text())
+        page.get_by_role("button", name="Cancel").click()
+        self.assertEqual(page.locator(".ck-pr-merge-confirm").count(), 0)
+        self.assertEqual(_Handler.posts, [])
+        page.get_by_role("button", name="Merge pull request 5 into main").click()
+        page.locator(".ck-pr-merge-confirm").get_by_role("button", name="Merge", exact=True).click()
+        page.wait_for_timeout(400)
+        self.assertEqual([(m["item"], m["intent"], m["pr"], m["expected_head_sha"], m["base"]) for m in _Handler.posts],
+                         [("@prs", "pr-merge", 5, "a" * 40, "main")])
 
 
 class LiveBoardTests(unittest.TestCase):

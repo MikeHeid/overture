@@ -10,6 +10,10 @@ session. A session can *check* the server and say how to start it, but it
 never launches it.
 
 Status: decided on 2026-10-11, with amendments. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
+**Built for Linux and WSL in 1.33:** `server.py daemon start|stop`,
+`service install|uninstall`, `status`, `health` (`plugin/kit/hosting.py`),
+the `overture-console.service` template, and the SessionStart one-line hint.
+macOS launchd (D2) is the next, separate change.
 
 ---
 

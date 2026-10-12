@@ -79,14 +79,85 @@ QUESTION_KINDS = ("single", "multi", "free")
 # BEFORE it spawns work. The grill-me skill picks it up and writes N open-ended
 # questions back through the regular /question path, so each answered grill
 # becomes a locked ruling in the audit trail.
-INTENTS = ("fork", "process", "chat", "visual", "move", "grill")
+# 1.32 (UX-VIEW.md, step 1): "ux-save" marks a visual as the item's component (the steward lands it by PR
+# with `agent.py ux-export`); "ux-link" ties the item to a Claude Design link (D13), or unties it with "".
+INTENTS = ("fork", "process", "chat", "visual", "move", "grill", "ux-save", "ux-link", "pr-merge", "ux-scripts")
 OWNER_INTENTS = frozenset(INTENTS)
 # The chat's thread (0.7.0). It is not a register item: it can never be one,
 # because ITEM_ID refuses a leading "@", so no project item can share its
 # thread. A kit before 0.7.0 refuses a store holding it BY NAME (the item id
 # and the intent), rather than reading the chat as some item's thread.
 CHAT_ITEM = "@chat"
+# 1.33 (D7): the owner's request that the steward merge a pull request lives on a second reserved thread, for
+# the same reason as the chat: it is no register item, and ITEM_ID refuses the leading "@".
+PRS_ITEM = "@prs"
 MAX_CHAT = 4000          # characters in one chat message: a question, not a document
+# 1.32: a visual request may say what it is for, and where to start from.
+PURPOSES = ("ux",)
+FROMS = ("design",)
+# D13: a Claude Design link, held to an exact shape and never fetched by the server. Pinned 2026-10-11 from a
+# real link the owner gave: https://claude.ai/design/p/<uuid>. A shared copy adds "?via=share"; the server takes
+# the link without it (no query or fragment is ever stored), and says so by name.
+DESIGN_URL = re.compile(r"^https://claude\.ai/design/p/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+_DESIGN_LOOSE = re.compile(r"^https://claude\.ai/design/p/[0-9a-f-]{36}[?#]")
+
+
+# 1.33: a UX visual request may point at artifacts of the project's Claude Design (the owner's picker):
+# [{path, mode}], "inspire" (borrow the look) or "swap" (build the new version from that artifact).
+MAX_REFS = 10
+REF_MODES = ("inspire", "swap")
+PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .()/-]{0,199}\Z")
+
+
+def path_problem(p: object, where: str) -> str | None:
+    if not isinstance(p, str) or not PATH.match(p) or ".." in p.split("/") or "//" in p or p.endswith("/"):
+        return f"{where} must be a plain relative path (letters, digits, _ . ( ) - space and /), at most 200 characters"
+    return None
+
+
+def refs_problem(refs: object) -> str | None:
+    """Why a request's `refs` is not [{path, mode}] of at most MAX_REFS distinct artifacts; None when it is."""
+    if not isinstance(refs, list) or not refs or len(refs) > MAX_REFS:
+        return f"refs is a list of 1 to {MAX_REFS} of {{path, mode}}"
+    seen: set[str] = set()
+    for i, r in enumerate(refs):
+        if not isinstance(r, dict) or set(r) != {"path", "mode"}:
+            return f"refs[{i}] is {{path, mode}}"
+        why = path_problem(r["path"], f"refs[{i}].path")
+        if why:
+            return why
+        if r["mode"] not in REF_MODES:
+            return f"refs[{i}].mode is one of {', '.join(REF_MODES)}"
+        if r["path"] in seen:
+            return f"refs[{i}].path {r['path']!r} is listed twice"
+        seen.add(r["path"])
+    return None
+
+
+def design_url_problem(url: object) -> str | None:
+    """Why `url` is not an accepted Claude Design link, or None. "" is accepted (it unlinks)."""
+    if url == "":
+        return None
+    if isinstance(url, str) and _DESIGN_LOOSE.match(url):
+        return ("url must be the design link without its query or fragment: drop the part from '?' "
+                "(for example '?via=share')")
+    if not isinstance(url, str) or len(url) > 200 or not DESIGN_URL.match(url):
+        return "url must be a Claude Design link: https://claude.ai/design/p/<project id>"
+    return None
+
+
+def design_url_clean(text: str) -> str | None:
+    """The canonical link inside what an owner pasted (a share link included), or None when it is not one."""
+    m = re.match(r"^\s*(https://claude\.ai/design/p/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+                 r"(?:[?#][^\s]*)?\s*\Z", text or "")
+    return m.group(1) if m else None
+    if not isinstance(url, str) or len(url) > 200 or not DESIGN_URL.match(url):
+        return ("url must be a Claude Design link: https://claude.ai/design/<id> (or /artifact/<id>), with no "
+                "query, fragment or extra host")
+    if "/share" in url or "//" in url[len("https://"):]:
+        return "url must not be a share link; link the design itself"
+    return None
+
 FOCUSES = ("code", "design", "ui", "backend", "whole")
 MODES = ("explore", "tighten")
 # The seats a follow-up round may call (D13), and a typed seat: `other:<role>`,
@@ -177,7 +248,9 @@ OPTIONAL = {
     # 0.7.0: `evidence`. A kit before it refuses a question carrying it, by name.
     "question": frozenset({"forked_from", "star_by", "evidence"}),
     # 0.8.0: `step`. A kit before it refuses a message carrying it, by name.
-    "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to"}),
+    "message": frozenset({"reply_to", "intent", "focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to",
+                          # 1.32 (UX-VIEW.md): a visual request's purpose and source; ux-save and ux-link.
+                          "purpose", "from", "visual_id", "url", "pr", "expected_head_sha", "base", "scripts", "refs"}),
     "answer": frozenset({"supersedes", "reason"}),
     # 0.5.0: the conditions a RE-lock was taken against, computed by the server.
     # Written only when they differ from the question's `valid_if`, so a store
@@ -429,7 +502,8 @@ def _check_condition(c: object) -> list[str]:
 def _check_message(rec: dict) -> list[str]:
     errs = _text(rec, "text")
     chat = rec["item"] == CHAT_ITEM
-    if not chat and (not isinstance(rec["item"], str) or not ITEM_ID.match(rec["item"])):
+    prs = rec["item"] == PRS_ITEM
+    if not chat and not prs and (not isinstance(rec["item"], str) or not ITEM_ID.match(rec["item"])):
         errs.append(f"item {rec['item']!r} is not an item id")
     if "reply_to" in rec and not isinstance(rec["reply_to"], str):
         errs.append("reply_to must be a record id")
@@ -471,11 +545,76 @@ def _check_message(rec: dict) -> list[str]:
         present = [f for f in ("focus", "mode", "roles", "follow_up_of", "about_qid", "step", "move_to") if f in rec]
         if present:
             errs.append(f"{', '.join(present)} belong(s) to a fork or move: set the right intent or leave them out")
+    errs += _check_ux(rec, intent, chat)
+    errs += _check_pr_merge(rec, intent, prs)
     if "focus" in rec and rec["focus"] not in FOCUSES:
         errs.append(f"focus {rec['focus']!r} is not one of {', '.join(FOCUSES)}")
     if "mode" in rec and rec["mode"] not in MODES:
         errs.append(f"mode {rec['mode']!r} is not one of {', '.join(MODES)}")
     errs += _check_follow_up(rec)
+    return errs
+
+
+def _check_ux(rec: dict, intent: object, chat: bool) -> list[str]:
+    """1.32 (UX-VIEW.md): `purpose`/`from` ride a visual request; `visual_id` a ux-save; `url` a ux-link."""
+    errs = []
+    if "purpose" in rec and (intent != "visual" or rec["purpose"] not in PURPOSES):
+        errs.append(f"purpose belongs to a visual request and is one of {', '.join(PURPOSES)}")
+    if "refs" in rec:
+        if intent != "visual" or rec.get("purpose") != "ux":
+            errs.append("refs belongs to a visual request with purpose 'ux'")
+        else:
+            why = refs_problem(rec["refs"])
+            if why:
+                errs.append(why)
+    if "from" in rec and (intent != "visual" or rec.get("purpose") != "ux" or rec["from"] not in FROMS):
+        errs.append(f"from belongs to a visual request with purpose 'ux' and is one of {', '.join(FROMS)}")
+    if intent in ("ux-save", "ux-link", "ux-scripts") and chat:
+        errs.append(f"intent {intent!r} belongs to an item's thread, not the chat")
+    if intent in ("ux-save", "ux-scripts"):
+        v = rec.get("visual_id")
+        if not isinstance(v, str) or not RECORD_ID.match(v):
+            errs.append(f"a {intent} names the visual it is about: visual_id, a record id")
+    elif "visual_id" in rec:
+        errs.append("visual_id belongs to a ux-save or ux-scripts")
+    if intent == "ux-scripts":
+        if not isinstance(rec.get("scripts"), bool):
+            errs.append("a ux-scripts says scripts: true or false")
+    elif "scripts" in rec:
+        errs.append("scripts belongs to a ux-scripts")
+    if intent == "ux-link":
+        if "url" not in rec:
+            errs.append('a ux-link carries url: a Claude Design link, or "" to unlink')
+        else:
+            why = design_url_problem(rec["url"])
+            if why:
+                errs.append(why)
+    elif "url" in rec:
+        errs.append("url belongs to a ux-link")
+    return errs
+
+
+def _check_pr_merge(rec: dict, intent: object, prs: bool) -> list[str]:
+    """1.33 (D7): `pr-merge` is the owner's, on @prs, naming the PR and the head commit the owner saw."""
+    errs = []
+    if intent == "pr-merge":
+        if not prs:
+            errs.append(f"intent 'pr-merge' belongs to the thread {PRS_ITEM!r}")
+        n = rec.get("pr")
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 10**9:
+            errs.append("a pr-merge names the pull request: pr, a whole number from 1")
+        base = rec.get("base")
+        if not isinstance(base, str) or not base or len(base) > 255 or re.search(r"[\x00-\x1f\x7f]", base):
+            errs.append("a pr-merge names the branch the owner saw it merge into: base, a branch name")
+        sha = rec.get("expected_head_sha")
+        if not isinstance(sha, str) or not re.match(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z", sha):
+            errs.append("a pr-merge names the head commit the owner saw: expected_head_sha, a full commit id")
+    else:
+        for k in ("pr", "expected_head_sha", "base"):
+            if k in rec:
+                errs.append(f"{k} belongs to a pr-merge")
+        if prs and rec["by"] == "owner":
+            errs.append(f"an owner message on {PRS_ITEM} carries intent 'pr-merge'")
     return errs
 
 

@@ -43,6 +43,10 @@ from . import names as N
 FILE = "projects.json"
 REQUIRED = frozenset({"state", "kit"})
 STEWARD = "steward"
+# D11 (1.33): what THIS machine is for. "worker" means no session here is ever the steward, whatever it is named;
+# "steward" says the steward runs here (nothing extra is enforced); unset is today's behaviour.
+ROLES = ("steward", "worker")
+ROLE_ENV = "CLAUDE_PLUGIN_OPTION_ROLE"     # the plugin's `role` setting, as Claude Code exports it to hooks
 MAX_REGISTRY = 1 << 20
 # A path the plugin prints into a command and a session runs: absolute, and only
 # characters no shell treats specially. Anything else is refused, never quoted around.
@@ -102,6 +106,39 @@ def load(path: Path | None = None) -> dict[str, dict]:
     return projects
 
 
+def _doc(p: Path) -> dict:
+    raw = read_regular(p, MAX_REGISTRY)
+    try:
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else {}
+    except (UnicodeDecodeError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def machine_role(path: Path | None = None, env: dict | None = None) -> str | None:
+    """This machine's role: "worker" if the registry or the plugin's setting says so, else "steward" if either
+    does, else None. A worker wins, so the stricter of the two settings holds."""
+    e = os.environ if env is None else env
+    found = []
+    reg = _doc(path or location()).get("role")
+    for v in (reg, (e.get(ROLE_ENV) or "").strip().lower() or None):
+        if v in ROLES:
+            found.append(v)
+    return "worker" if "worker" in found else ("steward" if found else None)
+
+
+def set_machine_role(role: str | None, path: Path | None = None) -> None:
+    """Record (or with None, clear) this machine's role in the registry; the projects are untouched."""
+    if role is not None and role not in ROLES:
+        raise RegistryError(f"role is one of {', '.join(ROLES)}")
+    p = path or location()
+    projects = load(p) if p.exists() else {}
+    extra = {k: v for k, v in _doc(p).items() if k not in ("projects", "role")}
+    if role is not None:
+        extra["role"] = role
+    _write(p, projects, extra)
+
+
 def lookup(project: Path, path: Path | None = None) -> dict | None:
     """This project's entry, or None when the user never registered it."""
     e = load(path).get(os.path.realpath(project))
@@ -133,11 +170,13 @@ def enclosing(target: Path, projects: dict | None = None, path: Path | None = No
     return None
 
 
-def _write(p: Path, projects: dict) -> None:
+def _write(p: Path, projects: dict, extra: dict | None = None) -> None:
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if extra is None:       # keep the file's other top-level keys (the machine role) when only projects change
+        extra = {k: v for k, v in _doc(p).items() if k != "projects"}
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".projects.", suffix=".tmp")  # 0600 from creation
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump({"projects": projects}, fh, indent=2, sort_keys=True)
+        json.dump({**extra, "projects": projects}, fh, indent=2, sort_keys=True)
         fh.write("\n")
     os.replace(tmp, p)
 

@@ -208,6 +208,268 @@ class ConsoleUxSkillTests(unittest.TestCase):
         self.assertIn("**console-ux** skill", process)
 
 
+def _png(w=2, h=2, seed=0) -> bytes:
+    import struct as _st
+    import zlib
+    def chunk(kind, data):
+        return _st.pack(">I", len(data)) + kind + data + _st.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + b"".join(bytes([(seed + x + y) % 256, 0, 0]) for x in range(w)) for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", _st.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+class AssetTests(Tmp):
+    """assets.py (1.32, FEED-ASSETS.md): sniffing, caps, the rate limit, and F1 pruning."""
+
+    def setUp(self):
+        super().setUp()
+        from overture import assets
+        self.A = assets
+
+    def add(self, seed, item="LANE.1", at=None, agent="agent-1", **kw):
+        return self.A.add(self.dir, item=item, data=_png(seed=seed), caption=f"shot {seed}", kind="screenshot",
+                          agent=agent, now=at or self.clock(), **kw)
+
+    def test_formats_come_from_magic_bytes(self):
+        import struct as _st
+        self.assertEqual(self.A.sniff(_png(5, 3)), ("png", 5, 3))
+        self.assertEqual(self.A.sniff(b"GIF89a" + _st.pack("<HH", 40, 30) + b"\x00" * 8), ("gif", 40, 30))
+        jpeg = b"\xff\xd8\xff\xe0" + _st.pack(">H", 16) + b"JFIF\x00" + b"\x00" * 9 \
+            + b"\xff\xc0" + _st.pack(">HBHH", 17, 8, 120, 160) + b"\x00" * 12
+        self.assertEqual(self.A.sniff(jpeg), ("jpeg", 160, 120))
+        vp8x = b"RIFF" + b"\x00" * 4 + b"WEBPVP8X" + b"\x00" * 8 + (639).to_bytes(3, "little") + (479).to_bytes(3, "little")
+        self.assertEqual(self.A.sniff(vp8x), ("webp", 640, 480))
+        for bad in (b"<svg onload=alert(1)>", b'<?xml version="1.0"?><svg/>', b"%PDF-1.7", b""):
+            with self.assertRaises(self.A.AssetError):
+                self.A.sniff(bad)
+
+    def test_size_and_side_caps(self):
+        with self.assertRaisesRegex(self.A.AssetError, "each side"):
+            self.A.add(self.dir, item="X", data=_png(9000, 1), caption="c", kind="screenshot", agent=None,
+                       now=self.clock())
+
+    def test_the_rate_limit_is_per_agent_per_window(self):
+        for i in range(self.A.RATE_COUNT):
+            self.add(i, at="2026-10-11T10:00:00Z")
+        with self.assertRaisesRegex(self.A.AssetError, "the limit is"):
+            self.add(999, at="2026-10-11T10:05:00Z")
+        self.add(999, at="2026-10-11T10:05:00Z", agent="agent-2")     # another agent is not slowed
+        self.add(1000, at="2026-10-11T10:11:00Z")                     # the window moved on
+
+    def test_f1_prunes_the_oldest_unprotected_and_notes_it(self):
+        old = self.A.PER_ITEM
+        self.A.PER_ITEM = 3
+        try:
+            a = self.add(1, pr=12)["asset"]                      # linked to a PR: kept
+            b = self.add(2)["asset"]                             # starred below: kept
+            c = self.add(3)["asset"]                             # the oldest unprotected
+            out = self.add(4, starred={"asset:" + b["id"]})
+            self.assertEqual([n["id"] for n in out["pruned"]], [c["id"]])
+            left = self.A.load(self.dir)["assets"]
+            self.assertEqual(set(left), {a["id"], b["id"], out["asset"]["id"]})
+            self.assertEqual(self.A.as_view(self.A.load(self.dir))["pruned"][0]["id"], c["id"])
+            # The pruned file is gone from disk; the kept ones are still served.
+            files = {p.name for p in (self.dir / "assets").iterdir()}
+            self.assertNotIn(c["sha256"] + ".png", files)
+            self.assertEqual(self.A.read(self.dir, a["id"])[1], "image/png")
+            # Nothing left to prune: refused by name, nothing written.
+            with self.assertRaisesRegex(self.A.AssetError, "starred or linked to a PR"):
+                self.add(5, starred={"asset:" + b["id"], "asset:" + out["asset"]["id"]}, pr=None)
+        finally:
+            self.A.PER_ITEM = old
+
+    def test_unnamed_agents_share_a_bucket_and_the_project_has_its_own_limit(self):
+        # Review: the agent name is self-declared, and an unnamed post skipped the limit entirely.
+        for i in range(self.A.RATE_COUNT):
+            self.add(i, at="2026-10-11T10:00:00Z", agent=None)
+        with self.assertRaisesRegex(self.A.AssetError, "unnamed agents"):
+            self.add(500, at="2026-10-11T10:01:00Z", agent=None)
+        old = self.A.RATE_PROJECT
+        self.A.RATE_PROJECT = self.A.RATE_COUNT + 2
+        try:
+            self.add(600, at="2026-10-11T10:01:00Z", agent="b1")
+            self.add(601, at="2026-10-11T10:01:00Z", agent="b2")
+            with self.assertRaisesRegex(self.A.AssetError, "project's limit"):
+                self.add(602, at="2026-10-11T10:01:00Z", agent="b3")
+        finally:
+            self.A.RATE_PROJECT = old
+
+    def test_tiny_files_cannot_fill_the_index_for_good(self):
+        # Review: thousands of 33-byte PNGs never reach MAX_TOTAL; MAX_ROWS prunes them like any other cap.
+        old = self.A.MAX_ROWS
+        self.A.MAX_ROWS = 3
+        try:
+            first = self.add(1, item="A.1")["asset"]
+            self.add(2, item="A.2"); self.add(3, item="A.3")
+            out = self.add(4, item="A.4")
+            self.assertEqual([n["id"] for n in out["pruned"]], [first["id"]])
+            self.assertEqual(len(self.A.load(self.dir)["assets"]), 3)
+        finally:
+            self.A.MAX_ROWS = old
+
+    def test_the_jpeg_scan_is_bounded(self):
+        import time as _t
+        crafted = b"\xff\xd8\xff\xe0\x00\x10" + b"\x00" * (8 << 20)
+        t0 = _t.monotonic()
+        with self.assertRaises(self.A.AssetError):
+            self.A.check(crafted)
+        self.assertLess(_t.monotonic() - t0, 0.25)
+
+    def test_a_malformed_index_row_is_skipped_not_a_crash(self):
+        row = self.add(1)["asset"]
+        idx = self.dir / "assets" / "index.json"
+        doc = json.loads(idx.read_text())
+        doc["assets"]["a" + "0" * 16] = {"id": "a" + "0" * 16, "item": "X"}     # no sha256, format, ...
+        idx.write_text(json.dumps(doc))
+        self.assertEqual(set(self.A.load(self.dir)["assets"]), {row["id"]})
+        self.add(2)                                                          # and writes still work
+
+    def test_a_starred_after_keeps_its_before(self):
+        old = self.A.PER_ITEM
+        self.A.PER_ITEM = 2
+        try:
+            before = self.A.add(self.dir, item="LANE.1", data=_png(seed=1), caption="b", kind="before", agent="x",
+                                now="2026-10-11T10:00:00Z")["asset"]
+            after = self.A.add(self.dir, item="LANE.1", data=_png(seed=2), caption="a", kind="after", agent="x",
+                               now="2026-10-11T10:05:00Z")["asset"]
+            with self.assertRaisesRegex(self.A.AssetError, "starred or linked"):
+                self.A.add(self.dir, item="LANE.1", data=_png(seed=3), caption="c", kind="screenshot", agent="x",
+                           now="2026-10-11T10:06:00Z", starred={"asset:" + after["id"]})
+            self.assertIn(before["id"], self.A.load(self.dir)["assets"])
+        finally:
+            self.A.PER_ITEM = old
+
+    def test_a_file_changed_on_disk_is_not_served(self):
+        row = self.add(1)["asset"]
+        (self.dir / "assets" / (row["sha256"] + ".png")).write_bytes(_png(seed=99))
+        with self.assertRaisesRegex(self.A.AssetError, "changed on disk"):
+            self.A.read(self.dir, row["id"])
+
+    def test_a_symlinked_assets_folder_is_refused(self):
+        other = self.dir / "elsewhere"
+        other.mkdir()
+        (self.dir / "assets").symlink_to(other)
+        with self.assertRaises(OSError):
+            self.add(1)
+
+
+class ComponentTests(Tmp):
+    """components.py (1.32, UX-VIEW.md "Saving"): components/<item>.md with hash-named backups."""
+
+    def export(self, html, vid="a" * 24, design=None):
+        return {"item": "UI-2", "design_url": design,
+                "save": {"id": "b" * 24, "by": "owner", "ts": "2026-10-11T10:00:00Z"},
+                "visual": {"id": vid, "title": "Save button", "doc": "A primary button.", "content": html}}
+
+    def test_render_has_front_matter_doc_fenced_html_and_css(self):
+        from overture import components as CO
+        md, css = CO.render("UI-2", self.export("<style>.a > b{x:1}</style><p>```odd```</p>",
+                                                design="https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"))
+        self.assertTrue(md.startswith("---\nitem: \"UI-2\"\nvisual: " + "a" * 24))
+        self.assertIn('design:\n  url: "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"', md)
+        self.assertIn("# Save button\n\nA primary button.", md)
+        self.assertIn("````html\n", md)             # a longer fence than any run inside the content
+        self.assertIn(".a > b{x:1}", css)
+
+    def test_a_component_switched_to_scripts_carries_its_source_and_says_so(self):
+        from overture import components as CO
+        ex = self.export("<p>plain</p>")
+        plain, _ = CO.render("UI-2", ex)
+        self.assertNotIn("scripts: true", plain)
+        self.assertNotIn("scripts: true", CO.render("UI-2", dict(ex, scripts=False, source="<script>1</script>"))[0])
+        md, _ = CO.render("UI-2", dict(ex, scripts=True, source="<p>x</p><script>go()</script>"))
+        self.assertIn("scripts: true", md)
+        self.assertIn("<script>go()</script>", md)
+        self.assertNotIn("<p>plain</p>", md)
+
+    def test_the_scripted_source_is_stored_beside_the_visual_write_once_and_jailed(self):
+        from overture import visuals as VIS
+        path, doc = VIS.paths("UI-2", "a" * 24, "html", "e" * 64)
+        rec = {"item": "UI-2", "request": "a" * 24, "format": "html", "sha256": "e" * 64, "path": path, "doc_path": doc}
+        self.assertIsNone(VIS.read_source(self.dir, rec))
+        self.assertTrue(VIS.store_source(self.dir, rec, b"<script>1</script>"))
+        self.assertFalse(VIS.store_source(self.dir, rec, b"<script>1</script>"))     # same bytes: nothing to do
+        self.assertEqual(VIS.read_source(self.dir, rec), b"<script>1</script>")
+        with self.assertRaises(VIS.VisualError):
+            VIS.store_source(self.dir, rec, b"<script>2</script>")                    # never replaced
+        with self.assertRaises(VIS.VisualError):
+            VIS.store_source(self.dir, dict(rec, format="mermaid"), b"x")
+
+    def test_ux_scripts_is_the_owners_on_off_for_one_visual(self):
+        from overture import schema as S
+        base = {"type": "message", "schemaVersion": 1, "item": "UI-2", "text": "on", "by": "owner",
+                "nonce": "n" * 10, "intent": "ux-scripts", "visual_id": "a" * 24, "scripts": True}
+        self.assertEqual(S.validate(base), [])
+        self.assertTrue(any("only the owner" in e for e in S.validate(dict(base, by="agent"))))
+        self.assertTrue(any("scripts: true or false" in e for e in S.validate(dict(base, scripts="yes"))))
+        self.assertTrue(any("names the visual" in e for e in S.validate({k: v for k, v in base.items() if k != "visual_id"})))
+        self.assertTrue(any("belongs to a ux-scripts" in e for e in S.validate(dict(base, intent="ux-save"))))
+
+    def test_writes_backs_up_by_hash_is_idempotent_and_keeps_ten(self):
+        from overture import components as CO
+        top = self.dir
+        first = CO.write(top, "UI-2", self.export("<style>p{a:1}</style><p>v1</p>"))
+        self.assertEqual(first["written"], ["components/UI-2.md", "components/UI-2.css"])
+        self.assertTrue(CO.write(top, "UI-2", self.export("<style>p{a:1}</style><p>v1</p>"))["unchanged"])
+        second = CO.write(top, "UI-2", self.export("<p>v2, no styles</p>", vid="c" * 24))
+        self.assertEqual(len(second["backed_up"]), 2)              # the old .md and .css
+        self.assertIn("components/UI-2.css (removed)", second["written"])
+        self.assertFalse((top / "components" / "UI-2.css").exists())
+        for n in range(3, 15):
+            CO.write(top, "UI-2", self.export(f"<p>v{n}</p>", vid=f"{n:024x}"))
+        kept = list((top / "components" / ".history").glob("UI-2-*.md"))
+        self.assertEqual(len(kept), CO.HISTORY_KEEP)
+
+    def test_a_symlinked_components_folder_is_refused(self):
+        from overture import components as CO
+        other = self.dir / "elsewhere"
+        other.mkdir()
+        (self.dir / "components").symlink_to(other)
+        with self.assertRaisesRegex(CO.ComponentError, "symlink"):
+            CO.write(self.dir, "UI-2", self.export("<p>x</p>"))
+        self.assertEqual(list(other.iterdir()), [])
+
+
+class DesignLinkTests(unittest.TestCase):
+    """D13 (pinned from a real link, 2026-10-11): https://claude.ai/design/p/<uuid>, nothing after it."""
+
+    U = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+
+    def test_the_exact_shape_is_accepted_and_a_share_link_is_cleaned_not_stored(self):
+        self.assertIsNone(S.design_url_problem(self.U))
+        self.assertIsNone(S.design_url_problem(""))                      # unlinks
+        self.assertIn("without its query", S.design_url_problem(self.U + "?via=share"))
+        self.assertEqual(S.design_url_clean(self.U + "?via=share"), self.U)
+        self.assertEqual(S.design_url_clean("  " + self.U + "  "), self.U)
+
+    def test_everything_else_is_refused(self):
+        for bad in ("http://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://claude.ai.evil.example/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://evil.example/https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    "https://claude.ai/design/p/not-a-uuid", "https://claude.ai/design/abc123",
+                    "https://user@claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1",
+                    self.U + "/x", self.U + "\n", 5, None):
+            with self.subTest(bad=bad):
+                self.assertIsNotNone(S.design_url_problem(bad))
+        self.assertIsNone(S.design_url_clean("https://claude.ai/design/abc123"))
+        self.assertIsNone(S.design_url_clean(self.U + "/x"))
+
+
+class UxItemFieldTests(unittest.TestCase):
+    """1.32: an item may say it is a UX component (`ux`) and carry its Claude Design link (`design`)."""
+
+    def test_ux_and_design_fields(self):
+        from overture import items as IT
+        ok = {"items": {"UI-2": {"title": "t", "ux": True, "design": "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"}}}
+        self.assertIsNone(IT.snapshot_problem(ok))
+        for bad, word in (({"ux": "yes"}, "ux"), ({"design": "https://figma.com/x"}, "Claude Design link"),
+                          ({"design": "https://claude.ai/design/abc?x=1"}, "Claude Design link")):
+            with self.subTest(bad=bad):
+                why = IT.snapshot_problem({"items": {"UI-2": {"title": "t", **bad}}})
+                self.assertIsNotNone(why)
+                self.assertIn(word, why)
+
+
 class SchemaTests(unittest.TestCase):
     def test_well_formed_records_pass(self):
         for r in (question(), question(kind="free"), question(kind="multi"), answer(), message()):
@@ -730,6 +992,74 @@ class PublishTests(unittest.TestCase):
         shapes = dict(re.findall(r"(\w+): '([a-z-]+)'", state_icons))
         acted = [shapes[s] for s in ("awaiting_you", "unlocked", "locked", "stale")]
         self.assertEqual(len(set(acted)), len(acted))
+
+    def test_lane_palette_is_one_list_and_readable_in_both_themes(self):
+        # D10: the console and the config parser agree on the palette, and every lane colour is
+        # at least 3:1 against the surfaces it sits on (WCAG 1.4.11), in light and in dark.
+        from overture import projectcfg as PC
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        js_list = re.findall(r"'([a-z]+)'", re.search(r"const LANE_COLORS = \[(.*?)\];", js).group(1))
+        self.assertEqual(tuple(js_list), PC.LANE_COLORS)
+
+        def lum(hexc):
+            rgb = [int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+            return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+        def ratio(a, b):
+            la, lb = sorted((lum(a), lum(b)), reverse=True)
+            return (la + 0.05) / (lb + 0.05)
+        blocks = re.findall(r"(--ck-lane-blue:.*?--ck-lane-pink: #[0-9a-f]{6};)", css, re.S)
+        self.assertEqual(len(blocks), 3)   # light, dark by preference, dark by choice
+        for block, surfaces in ((blocks[0], ("#ffffff", "#f4f6f8")), (blocks[1], ("#161b22", "#0d1117")),
+                                (blocks[2], ("#161b22", "#0d1117"))):
+            colours = dict(re.findall(r"--ck-lane-([a-z]+): (#[0-9a-f]{6})", block))
+            self.assertEqual(set(colours), set(PC.LANE_COLORS))
+            for name, c in colours.items():
+                for bg in surfaces:
+                    self.assertGreaterEqual(ratio(c, bg), 3.0, f"{name} {c} on {bg}")
+
+    def test_the_chart_and_the_console_pick_the_same_lane_colour(self):
+        # D10: the project map (chart.py) and the console (console.js) hash a lane name to the
+        # same palette colour, so a lane looks the same in the map, the inbox and the dashboard.
+        import shutil
+        from overture import chart as CH
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = (KIT / "overture" / "console.js").read_text()
+        body = js[js.index("const LANE_COLORS"):js.index("  function segWords")]
+        names = ["lane-api", "lane-ui", "lane-data", "lane-infra", "lane-security", "lane-ops", "lane-web-ui"]
+        items = {f"I{i}": {"title": n, "parent": None, "section": "wave-1/" + n} for i, n in enumerate(names)}
+        cfg = {"lane-ops": {"color": "pink"}}
+        script = (f"let view = {{config: {{lanes: {json.dumps(cfg)}}}}}; let items = {json.dumps(items)};" + body
+                  + "console.log(JSON.stringify(" + json.dumps(names) + ".map(laneColor)));")
+        out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout
+        want = CH.lane_colors(CH.project_lanes(items, cfg), cfg)
+        self.assertEqual(json.loads(out), [want[n] for n in names])
+        self.assertEqual(want["lane-ops"], "pink")
+        self.assertEqual(len(set(want.values())), len(names))   # 7 lanes, 7 colours: no collision
+
+    def test_the_project_map_boxes_items_by_lane(self):
+        from overture import chart as CH
+        items = {"A": {"title": "Api", "parent": None, "section": "wave-2/lane-api"},
+                 "A1": {"title": "child", "parent": "A"},
+                 "N": {"title": "no lane", "parent": None}}
+        src = CH.build_project({"questions": {}, "config": {"lanes": {"lane-api": {"color": "pink"}}}}, items)
+        api = src[src.index('subgraph L_lane_api["API"]'):src.index("  end")]
+        self.assertIn("I_A(", api)
+        self.assertIn("I_A1(", api)               # inherits its parent's lane
+        self.assertNotIn("I_N(", api)
+        self.assertIn("style L_lane_api fill:transparent,stroke:#bf3989", src)
+
+    def test_the_status_chip_sits_in_the_header_row(self):
+        # Through 1.31 the chip floated at a fixed offset and covered the skin and theme toggles.
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        self.assertIn("hdr.insertBefore(statusChip, anchor);", js)
+        self.assertIn("placeStatusChip();", js)
+        self.assertIn(".ck-status-chip.ck-status-chip-inline { position: static;", css)
 
     def test_docked_column_fits_its_tab_row(self):
         # D9: the docked column is never narrower than its tab row, so tabs
@@ -2026,6 +2356,29 @@ class StewardLockTests(_Steward):
         self.assertFalse((self.state / "watch.json").exists())      # a refused watch never says "listening"
         self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
         self.assertEqual(self.agent("--as", "agent-5", "watch", "--timeout", "0.1", agent="agent-6")[0], 3)
+
+    def test_a_worker_machine_never_runs_the_steward_even_under_its_name(self):
+        # D11: `role worker` in the registry, or the plugin's setting in the environment, turns the steward lock
+        # into a refusal for the steward's own name too; `steward` and no role change nothing; the projects stay.
+        self.register("--steward", "agent-5")
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        self.assertEqual(self.agent("role", "steward")[0], 0)
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        rc, out, _ = self.agent("role", "worker")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.agent("role")[1].strip(), "role: worker")
+        rc, _, err = self.agent("watch", "--timeout", "0.1", agent="agent-5")
+        self.assertEqual(rc, 1, err)
+        self.assertIn("role is `worker`", err)
+        self.assertIn("agent-5", self.registry()[next(iter(self.registry()))]["steward"])   # the registry kept it all
+        self.assertEqual(self.agent("role", "clear")[0], 0)
+        self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
+        # The plugin's setting says the same to the CLI when Claude Code exports it, and the stricter wins.
+        r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.state), "synced", "--through", "1"],
+                           env=self.env("agent-5", CLAUDE_PLUGIN_OPTION_ROLE="worker"), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("role is `worker`", r.stderr)
+        self.assertEqual(self.agent("role", "bogus")[0], 2)
 
     def test_synced_refuses_all_but_the_steward_and_moves_no_cursor(self):
         self.register("--steward", "agent-5")
@@ -3438,6 +3791,24 @@ class ProjectConfigTests(Tmp):
         (self.dir / ".overture.json").write_text(json.dumps(doc))
         return PC.load(self.dir)
 
+    def test_lanes_take_palette_names_only(self):
+        # D10: a repository's config names a colour from the palette, never raw CSS.
+        from overture import projectcfg as PC
+        cfg = self.load({"lanes": {"lane-api": {"color": "blue", "label": "API", "ux": False},
+                                   "lane-ui": {"ux": True}}})
+        self.assertEqual(cfg.lanes, {"lane-api": {"color": "blue", "label": "API", "ux": False},
+                                     "lane-ui": {"ux": True}})
+        self.assertEqual(self.load({}).lanes, {})
+        for bad, why in (({"lane-api": {"color": "#f00"}}, "must be one of"),
+                         ({"lane-api": {"color": "red; background:url(x)"}}, "must be one of"),
+                         ({"api": {"color": "red"}}, "lane segment"),
+                         ({"lane-api": {"style": "x"}}, "takes only"),
+                         ({"lane-api": {"label": "a\nb"}}, "one line"),
+                         ({"lane-api": {"ux": "yes"}}, "true or false")):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(PC.ConfigError, why):
+                    self.load({"lanes": bad})
+
     def test_dirs_are_jailed_and_refused_by_name(self):
         # Catches: a visuals_dir that writes outside the project, into .git, over the root's own
         # files ("." would regenerate an INDEX.md at the top), or through a symlink.
@@ -4082,6 +4453,39 @@ class SessionNameTests(_Steward):
         self.assertIsNotNone(self.ask(SID6, agent="agent-5"))       # the session's own name beats the variable
         self.prompt("/overture:as agent-5", sid=SID6)             # the last line for a session wins
         self.assertIsNone(self.ask(SID6))
+
+    def test_a_worker_machine_refuses_to_name_the_steward_blocks_asking_and_says_so(self):
+        # D11, in the three hooks: /overture:as <steward> is refused and writes nothing; a session started under
+        # the steward's name is told it is not the steward and may not ask live; other names work as before.
+        self.register("--steward", "agent-5")
+        self.assertEqual(self.agent("role", "worker")[0], 0)
+        why = self.prompt("/overture:as agent-5", sid=SID5)
+        self.assertIn("nothing recorded", why)
+        self.assertIn("role is `worker`", why)
+        self.assertFalse(self.file.exists())
+        self.assertIn("recorded", self.prompt("/overture:as agent-6", sid=SID6) or "this session is now agent-6")
+        self.assertEqual([r["agent"] for r in self.lines()], ["agent-6"])
+        blocked = self.ask(SID5, agent="agent-5")                      # started as the steward on a worker machine
+        self.assertIn("role is `worker`", blocked)
+        self.assertIn("--as agent-5 ask", blocked)
+        hook = self.hook_module()
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.cfg_home), "OVERTURE_AGENT": "agent-5"}):
+            e = hook.enclosing_entry({"cwd": str(self.project)})
+            note, mine = hook.steward_line(e, "agent", "agent-5")
+        self.assertFalse(mine)
+        self.assertIn("role is `worker`", note)
+        self.assertEqual(self.agent("role", "clear")[0], 0)
+        self.assertIn("this session is now agent-5", self.prompt("/overture:as agent-5", sid=SID5))
+        self.assertIsNone(self.ask(SID5, agent="agent-5"))
+
+    def test_the_plugin_setting_alone_makes_a_worker(self):
+        self.register("--steward", "agent-5")
+        out = self.run_hook(self.NAMER, {"session_id": SID5, "cwd": str(self.project), "hook_event_name":
+                                         "UserPromptSubmit", "prompt": "/overture:as agent-5"},
+                            CLAUDE_PLUGIN_OPTION_ROLE="worker")
+        self.assertIn("role is `worker`", out["additionalContext"])
+        self.assertFalse(self.file.exists())
 
     def test_the_environment_fallback_still_works(self):
         self.register("--steward", "agent-5")
@@ -5286,6 +5690,129 @@ class MultiStoreTests(unittest.TestCase):
         self.assertEqual(bad.read_text(), '{"not": "a record"}\n')      # never repaired or rewritten
 
 
+class DesignInventoryTests(Tmp):
+    """designs.py (1.33): the artifact lists agents post for the UX View picker."""
+    URL = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+
+    def test_store_round_trips_replaces_and_stamps_who_and_when(self):
+        from overture import designs as DG
+        self.assertEqual(DG.load(self.dir), {})
+        DG.store(self.dir, self.URL, [{"path": "a.html", "title": "A"}], "agent-2", at="2026-10-11T08:00:00Z")
+        DG.store(self.dir, self.URL, [{"path": "b.html"}], "agent-3", at="2026-10-11T09:00:00Z")
+        got = DG.load(self.dir)[self.URL]
+        self.assertEqual((got["artifacts"], got["by"], got["pushed_at"]), ([{"path": "b.html"}], "agent-3", "2026-10-11T09:00:00Z"))
+
+    def test_only_the_newest_twenty_links_are_kept(self):
+        from overture import designs as DG
+        for i in range(DG.MAX_DESIGNS + 2):
+            url = f"https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-{i:012x}"
+            DG.store(self.dir, url, [{"path": "a.html"}], "x", at=f"2026-10-11T08:{i:02d}:00Z")
+        kept = DG.load(self.dir)
+        self.assertEqual(len(kept), DG.MAX_DESIGNS)
+        self.assertNotIn("https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-000000000000", kept)
+
+    def test_a_damaged_or_foreign_file_is_empty_never_an_error(self):
+        from overture import designs as DG
+        (self.dir / DG.FILE).write_text("not json")
+        self.assertEqual(DG.load(self.dir), {})
+        (self.dir / DG.FILE).write_text(json.dumps({"designs": {"https://evil.example/x": {"artifacts": [{"path": "a"}]},
+                                                                self.URL: {"artifacts": [{"path": "../x"}]}}}))
+        self.assertEqual(DG.load(self.dir), {})
+
+    def test_refs_have_a_closed_shape(self):
+        from overture import schema as S
+        ok = [{"path": "a/b.html", "mode": "inspire"}]
+        self.assertIsNone(S.refs_problem(ok))
+        for bad in ("x", [], [{"path": "a", "mode": "x"}], [{"path": "a"}], [{"path": "a", "mode": "swap", "x": 1}],
+                    ok * 2, [{"path": f"p{i}", "mode": "swap"} for i in range(S.MAX_REFS + 1)], [{"path": "/abs", "mode": "swap"}]):
+            self.assertIsNotNone(S.refs_problem(bad), bad)
+
+
+class PrMergeTests(Tmp):
+    """1.33 (UX-VIEW.md, D7): head_sha in the snapshot, the @prs thread, and the steward's merge checks."""
+    SHA = "a" * 40
+
+    def row(self, **over):
+        row = {"number": 7, "state": "OPEN", "isDraft": False, "headRefOid": self.SHA, "baseRefName": "main",
+               "url": "https://github.com/octo/repo/pull/7",
+               "statusCheckRollup": [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}]}
+        row.update(over)
+        return row
+
+    def req(self, **over):
+        r = {"id": "m1", "pr": 7, "expected_head_sha": self.SHA, "base": "main", "ts": "2026-10-11T10:00:00Z"}
+        r.update(over)
+        return r
+
+    NOW = None
+
+    def check(self, row=None, **over):
+        import datetime as dt
+        from overture import prs as PR
+        now = dt.datetime(2026, 10, 11, 12, 0, tzinfo=dt.timezone.utc)
+        return PR.merge_problem(self.req(**over), self.row() if row is None else row, "octo/repo", now)
+
+    def test_a_ready_pr_at_the_seen_commit_may_merge(self):
+        self.assertIsNone(self.check())
+
+    def test_every_refusal_says_nothing_was_merged(self):
+        cases = [
+            ({"ts": "2026-10-10T09:00:00Z"}, None, "older than 24 hours"),
+            ({}, self.row(isDraft=True), "a draft"),
+            ({}, self.row(state="MERGED"), "merged"),
+            ({}, self.row(statusCheckRollup=[{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]), "failure"),
+            ({}, self.row(statusCheckRollup=[]), "none"),
+            ({}, self.row(headRefOid="b" * 40), "new commits"),
+            ({}, self.row(baseRefName="release"), "now merges into release"),
+            ({}, self.row(url="https://github.com/other/repo/pull/7"), "not in octo/repo"),
+            ({}, self.row(number=8), "did not return"),
+            ({}, "nope", "did not return"),
+        ]
+        for over, row, needle in cases:
+            why = self.check(row=row if row is not None else None, **over) if row is not None else self.check(**over)
+            self.assertIsNotNone(why, needle)
+            self.assertIn(needle, why)
+            self.assertIn("Nothing was merged", why)
+
+    def test_head_sha_is_optional_and_checked(self):
+        from overture import prs as PR
+        gh = PrsFromGhTests.gh_row(3)
+        self.assertNotIn("head_sha", PR.from_gh({"nameWithOwner": "octo/repo"}, [gh], [], 30)["prs"][0])
+        body = PR.from_gh({"nameWithOwner": "octo/repo"}, [dict(gh, headRefOid=self.SHA)], [], 30)
+        self.assertEqual(body["prs"][0]["head_sha"], self.SHA)
+        self.assertIsNone(PR.snapshot_problem(body))
+        body["prs"][0]["head_sha"] = "xyz"
+        self.assertIn("head_sha", PR.snapshot_problem(body))
+        self.assertIn("headRefOid", PR.GH_FIELDS)
+
+    def msg(self, **over):
+        rec = {"type": "message", "schemaVersion": 1, "item": "@prs", "text": "Merge #7", "by": "owner", "nonce": "n" * 10,
+               "intent": "pr-merge", "pr": 7, "expected_head_sha": self.SHA, "base": "main"}
+        rec.update(over)
+        return rec
+
+    def test_the_schema_holds_pr_merge_to_the_prs_thread_and_the_owner(self):
+        from overture import schema as S
+        self.assertEqual(S.validate(self.msg()), [])
+        for bad, needle in [(self.msg(item="API-1"), "belongs to the thread"),
+                            (self.msg(by="agent"), "only the owner"),
+                            (self.msg(pr="7"), "names the pull request"),
+                            (self.msg(expected_head_sha="abc"), "head commit"),
+                            (self.msg(intent="chat"), "belongs to a pr-merge"),
+                            ({k: v for k, v in self.msg().items() if k != "intent"}, "carries intent 'pr-merge'")]:
+            self.assertTrue(any(needle in e for e in S.validate(bad)), (needle, S.validate(bad)))
+
+    def test_waiting_merges_lists_unanswered_requests_oldest_first(self):
+        from overture import view as V
+        base = {"type": "message", "item": "@prs", "by": "owner", "intent": "pr-merge", "expected_head_sha": self.SHA,
+                "ts": "2026-10-11T10:00:00Z", "text": "m"}
+        threads = {"@prs": [dict(base, id="a", seq=1, pr=1), dict(base, id="b", seq=2, pr=2),
+                            {"type": "message", "item": "@prs", "by": "agent", "id": "c", "seq": 3, "reply_to": "a",
+                             "ts": "x", "text": "Merged"}]}
+        self.assertEqual([w["id"] for w in V.waiting_merges(threads)], ["b"])
+        self.assertIn("pr-merge", __import__("overture.doorbell", fromlist=["x"]).WAKE_INTENTS)
+
+
 class PrsFromGhTests(Tmp):
     """`agent.py prs-push`'s parser: gh's JSON into the closed shape the server checks (no real gh is run)."""
 
@@ -5323,7 +5850,7 @@ class PrsFromGhTests(Tmp):
         self.assertEqual((five["draft"], five["checks"], five["merge_commit"]), (True, "pending", None))
         self.assertEqual((four["author"], four["checks"], four["merge_commit"]), (None, "failure", "d" * 40))
         self.assertEqual((two["merged_at"], two["closed_at"], two["checks"]), (None, "2026-09-20T00:00:00Z", "none"))
-        self.assertEqual(set(five), PR.PR_FIELDS)
+        self.assertEqual(set(five), PR.PR_REQUIRED)
 
     def test_a_pr_in_both_lists_is_kept_once(self):
         body = self.build([self.gh_row(7)], [self.gh_row(7, state="MERGED", mergedAt="2026-09-25T00:00:00Z",

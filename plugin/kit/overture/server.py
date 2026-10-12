@@ -52,6 +52,8 @@ gate. See `HealthHandler` for why the health door is safe to leave ungated.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import calendar
 import collections
 import hashlib
@@ -87,9 +89,11 @@ from . import items as IT
 from . import pagesnap as PS
 from . import playbooks as PB
 from . import triggers as TR
+from . import designs as DG
 from . import prs as PR
 from . import issues as IS
 from . import tickets as TK
+from . import assets as AS
 from . import names as N
 from . import peers as PE
 from . import projectcfg as PC
@@ -118,6 +122,9 @@ OWNER_CSRF_ROTATE = "/api/csrf-rotate"   # invalidate all pages' CSRF without a 
 OWNER_TICKET_CREATE = "/api/ticket-create"
 OWNER_TICKET_UPDATE = "/api/ticket-update"
 OWNER_TICKET_CLOSE = "/api/ticket-close"
+# 1.32 (FEED-ASSETS.md): the owner deletes an asset an agent posted. Agents post on their own door.
+OWNER_ASSET_DELETE = "/api/asset-delete"
+OWNER_ASSET_UPLOAD = "/api/asset-upload"     # F2: the owner attaches an image to an item
 # The live console (0.7.0). A long poll: the page asks "has anything changed
 # since seq S?" and the server answers the moment something does, or after at
 # most WAIT_MAX seconds with "no". Well inside Cloudflare's 100 s response
@@ -136,6 +143,16 @@ AGENT_ROUTES = {"/question": "question", "/message": "message", "/transcript": "
 # and a visual up to 256 KiB, and JSON escaping can grow either several times.
 # The door is a user-only Unix socket; the owner's door keeps MAX_BODY.
 AGENT_MAX_BODY = 2 << 20
+# An asset arrives base64 in JSON: an 8 MiB GIF is about 10.7 MiB of body. Raised on /asset only.
+ASSET_MAX_BODY = 12 << 20
+# 1.33 (UX-VIEW.md "Scripts in components"): the one place an agent's script runs. The frame is sandboxed
+# (allow-scripts only: no same-origin, forms, popups or top navigation), so it is an opaque origin; the policy
+# blocks every fetch and any outside source. Served only while the owner's ux-scripts switch is on.
+COMPONENT_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                 "img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; "
+                 "frame-ancestors 'self'")
+# A stored asset opened in its own tab runs nothing and loads nothing.
+ASSET_CSP = "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'"
 # /view's answer when a stored file fails its check: what to do, never where the file is.
 VIEW_UNREADABLE = ("the console's stored state could not be read just now; if the stored items are the cause, "
                    "the steward should push them again (agent.py items-push)")
@@ -616,8 +633,13 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
           "var vb=svg.viewBox.baseVal;if(!vb.width||!vb.height){return;}"
           "svg.style.maxWidth='none';svg.style.width=vb.width+'px';svg.style.height=vb.height+'px';"
           "var r=stage.getBoundingClientRect();"
-          "scale=Math.max(0.1,Math.min(2,Math.min((r.width-24)/vb.width,(r.height-24)/vb.height)));"
-          "tx=0;ty=0;apply();};"
+          "var byW=(r.width-24)/vb.width,byH=(r.height-24)/vb.height;"
+          # A tall chart (the project map, drawn left to right) fits to WIDTH and starts at its top, so its
+          # labels stay readable; drag or the buttons move through the rest. Others fit whole.
+          "if(byH<byW*0.6){scale=Math.max(0.1,Math.min(1.2,byW));tx=0;"
+          "ty=Math.max(0,(vb.height*scale-(r.height-24))/2);}"
+          "else{scale=Math.max(0.1,Math.min(2,Math.min(byW,byH)));tx=0;ty=0;}"
+          "apply();};"
         "document.getElementById('ck-zoom-reset').addEventListener('click',function(){window.ckFit();});"
         "})();"
         "document.getElementById('ck-save').addEventListener('click',function(){"
@@ -655,7 +677,9 @@ SECURITY_HEADERS = (
     # on the page. Both are no-op for the honest console (which uses neither). `script-src 'self'`
     # is NOT added here because publish.py injects console.js inline — tightening script-src
     # requires a per-request nonce in the <script> tag, which is 1.31 scope.
-    ("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"),
+    # 1.33: `frame-src 'self'` keeps a scripted component (sandboxed, opaque origin) from navigating its own
+    # frame to an outside page inside the console: every frame the console embeds is one of its own routes.
+    ("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; frame-src 'self'"),
     # adversarial review flagged that the brief claimed cross-origin isolation
     # was set but no COOP header actually was. COOP: same-origin isolates the owner
     # window from any opener (ad hoc tab opens pointing here lose the WindowProxy),
@@ -1028,6 +1052,40 @@ class Console:
             raise RequestError(400, "; ".join(errs))
         return {**body, "evidence": rows}
 
+    def _merge_gate(self, body: dict) -> None:
+        """1.33 (D7): an owner's pr-merge is stored only for a PR the steward's last push shows open, not draft,
+        passing, and still at the head commit the owner saw, and only one at a time per PR. The server merges
+        nothing; this keeps a stale click, or a request for a PR the steward never listed, out of the store.
+        The caller holds `_lock`. A body the schema would refuse is left to the store, which names why."""
+        n, sha = body.get("pr"), body.get("expected_head_sha")
+        if not isinstance(n, int) or isinstance(n, bool) or not isinstance(sha, str):
+            return
+        snap = PR.load(self.cfg.state)
+        if not snap.get("pushed"):
+            raise RequestError(409, "no pull requests have been pushed, so there is nothing to merge; "
+                                    "the steward runs agent.py prs-push first. Nothing was merged")
+        pr = next((p for p in snap["prs"] if p["number"] == n), None)
+        if pr is None:
+            raise RequestError(409, f"#{n} is not in the steward's last push. Nothing was merged")
+        if pr["state"] != "open" or pr["draft"]:
+            raise RequestError(409, f"#{n} is {'a draft' if pr['draft'] else pr['state']}, not an open PR "
+                                    f"ready to merge. Nothing was merged")
+        if pr["checks"] != "success":
+            raise RequestError(409, f"#{n}'s checks are {pr['checks']}, not passing. Nothing was merged")
+        if body.get("base") != pr["base"]:
+            raise RequestError(409, f"#{n} merges into {pr['base']} in the steward's last push, not "
+                                    f"{body.get('base')!r}. Reload the PR tab. Nothing was merged")
+        if pr.get("head_sha") != sha:
+            raise RequestError(409, f"#{n} has moved since you looked (its head is not {sha[:8]} in the steward's "
+                                    f"last push). Reload the PR tab. Nothing was merged")
+        msgs = self.store.records()
+        answered = {m.get("reply_to") for m in msgs if m["type"] == "message" and m["by"] == "agent"}
+        stale = (datetime.now(timezone.utc) - PR.MERGE_MAX_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # A request over 24 hours old is dead (the steward refuses it), so it no longer blocks a new one.
+        if any(m["type"] == "message" and m.get("item") == S.PRS_ITEM and m.get("intent") == "pr-merge"
+               and m.get("pr") == n and m["id"] not in answered and m["ts"] >= stale for m in msgs):
+            raise RequestError(409, f"a merge of #{n} is already requested and no session has answered yet")
+
     def _chat_gate(self) -> None:
         """Refuse an owner chat message past CHAT_PER_MINUTE a minute or CHAT_PER_HOUR an hour; the caller holds `_lock`."""
         now = time.monotonic()
@@ -1082,7 +1140,7 @@ class Console:
         view = V.build(self.store, items, holds, names=self.names.mapping())
         view["tags"] = self.tags(view, items)
         view["config"] = {"specs_dir": self.project.specs_dir, "visuals_dir": self.project.visuals_dir,
-                          "sections": self.project.sections}
+                          "sections": self.project.sections, "lanes": self.project.lanes}
         view["playbooks"] = [p.to_dict() for p in PB.load(self.cfg.root).values()]
         view["triggers"] = [t.to_public() for t in self.triggers.all().values()]
         view["trigger_log"] = self.triggers.recent(20)
@@ -1125,6 +1183,14 @@ class Console:
         except (TK.TicketError, OSError) as e:
             sys.stderr.write(f"console tickets: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "tickets": {"by_item": {}, "counts": {}}}
+        # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
+        out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
+        # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
+        try:
+            out["view"] = {**out["view"], "assets": AS.as_view(AS.load(self.cfg.state))}
+        except (AS.AssetError, OSError) as e:
+            sys.stderr.write(f"console assets: {type(e).__name__}: {e}\n")
+            out["view"] = {**out["view"], "assets": AS.as_view({})}
         # Rulings → PRs backlinks. Each locked ruling has a stable qid like "A/Q1";
         # PR titles that mention a qid literally are threaded back to the question card so
         # operators can see which shipped work ties to which ruling. Owner-door only (needs
@@ -1725,6 +1791,79 @@ class Console:
             raise RequestError(err_code, err)
         return out
 
+    # ---- Assets (1.32, FEED-ASSETS.md) ------------------------------------------------------
+    # Screenshots and recordings an agent posts on an item, unasked. Stored under STATE/assets
+    # (assets.py), outside the store; the page re-reads `view.assets` on the next wake.
+    def add_asset(self, body: object, agent: str | None, by: str = "agent") -> dict:
+        fields = {"item", "content_b64", "caption", "kind", "qid", "pr", "ticket", "nonce"}
+        if not isinstance(body, dict) or set(body) - fields or not {"item", "content_b64", "caption"} <= set(body):
+            raise RequestError(400, '/asset takes {"item", "content_b64", "caption", "kind"?, "qid"?, "pr"?, '
+                                    '"ticket"?, "nonce"?}')
+        item = body["item"]
+        if not isinstance(item, str) or item not in self.items():
+            raise RequestError(400, f"no item {item!r} in the project's item list")
+        try:
+            data = base64.b64decode(body["content_b64"], validate=True) if isinstance(body["content_b64"], str) \
+                else None
+        except (ValueError, binascii.Error):
+            data = None
+        if not data:
+            raise RequestError(400, "content_b64 must be the file's bytes, base64-encoded")
+        for k in ("caption", "kind", "qid", "ticket"):
+            if body.get(k) is not None and not isinstance(body[k], str):
+                raise RequestError(400, f"{k} must be a string")
+        # Format, size and sides are checked BEFORE the lock: a crafted file costs its own request, not every
+        # other owner write and wake (review, 1.32).
+        try:
+            AS.check(data)
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        qid = body.get("qid")
+        if qid is not None:
+            if qid not in self.payload().get("view", {}).get("questions", {}):
+                raise RequestError(400, f"no question {qid!r}")
+        ticket = body.get("ticket")
+        if ticket is not None:
+            try:
+                known = TK.load(self.cfg.state)["tickets"]
+            except (TK.TicketError, OSError):
+                known = {}
+            if ticket not in known:
+                raise RequestError(400, f"no ticket {ticket!r}")
+        try:
+            starred = set(self.favorites.list())
+        except (ValueError, OSError):
+            starred = set()
+        try:
+            with self._lock:
+                out = AS.add(self.cfg.state, item=item, data=data, caption=body["caption"],
+                             kind=body.get("kind") or "screenshot", agent=agent, now=_iso_now(),
+                             starred=starred, qid=qid, pr=body.get("pr"), ticket=ticket, by=by)
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        except OSError as e:
+            sys.stderr.write(f"console assets: write failed: {type(e).__name__}: {e}\n")
+            raise RequestError(500, "could not store the asset; see server log") from None
+        self._bump()
+        return out
+
+    def asset(self, asset_id: str) -> tuple[bytes, str]:
+        try:
+            return AS.read(self.cfg.state, asset_id)
+        except AS.AssetError as e:
+            raise RequestError(404, str(e)) from None
+
+    def asset_delete(self, body: object) -> dict:
+        if not isinstance(body, dict) or set(body) - {"id", "nonce"} or "id" not in body:
+            raise RequestError(400, '/api/asset-delete takes {"id", "nonce"?}')
+        try:
+            with self._lock:
+                row = AS.delete(self.cfg.state, body["id"])
+        except AS.AssetError as e:
+            raise RequestError(400, str(e)) from None
+        self._bump()
+        return {"deleted": row["id"]}
+
     def favorite_toggle(self, body: object) -> dict:
         """Toggle `body['id']` in STATE/favorites.json; return the new state and the keys.
 
@@ -1812,6 +1951,104 @@ class Console:
                 "stored in the console's state and shown in the console; this project sets no visuals_dir, "
                 "so it has nowhere to land in the repository")
         return {"record": stored, "land": land}
+
+    def _item_design(self, item: str) -> str | None:
+        """The item's Claude Design link: its newest owner ux-link ("" unlinks), else the item's own `design`."""
+        design = (self.items().get(item) or {}).get("design") or None
+        for r in self.store.records():
+            if r["type"] == "message" and r.get("intent") == "ux-link" and r["item"] == item and r["by"] == "owner":
+                design = r["url"] or None
+        return design
+
+    def add_design_inventory(self, body: object, agent: str | None = None) -> dict:
+        """1.33: keep an agent's list of the artifacts in a Claude Design project, for the owner's picker.
+
+        The server never reads or fetches the design; this is only what the agent says is in it, checked against
+        the closed shape (`designs.py`) and shown to the owner as text."""
+        keys = {"url", "artifacts", "nonce"}
+        if not isinstance(body, dict) or set(body) != keys:
+            raise RequestError(400, f"design-inventory takes exactly {', '.join(sorted(keys))}")
+        with self._lock:
+            try:
+                doc = DG.store(self.cfg.state, body["url"], body["artifacts"], agent)
+            except DG.DesignError as e:
+                raise RequestError(400, str(e)) from None
+            except OSError as e:
+                sys.stderr.write(f"console designs: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not store the list; see server log") from None
+        self._bump()
+        return {"stored": True, "url": body["url"], "artifacts": len(doc["artifacts"])}
+
+    def _refs_gate(self, body: dict) -> None:
+        """An owner's UX request that references design artifacts must name ones the agent listed for the item's
+        linked design: the picker cannot offer anything else, so a path outside the list is a stale or forged ask."""
+        refs = body.get("refs")
+        if refs is None or S.refs_problem(refs):
+            return                      # no refs, or a shape the store refuses with its own words
+        url = self._item_design(body.get("item")) if isinstance(body.get("item"), str) else None
+        if not url:
+            raise RequestError(409, "link this item to a Claude Design project before referencing its artifacts")
+        listed = {a["path"] for a in DG.load(self.cfg.state).get(url, {}).get("artifacts", [])}
+        if not listed:
+            raise RequestError(409, "no artifact list has been posted for this design yet; ask an agent to run "
+                                    "`agent.py design-inventory`")
+        missing = [r["path"] for r in refs if r["path"] not in listed]
+        if missing:
+            raise RequestError(409, f"{missing[0]!r} is not in the design's artifact list; reload UX View")
+
+    def scripts_on(self, visual_id: str, before_seq: int | None = None) -> bool:
+        """Whether the owner's newest ux-scripts for this visual says scripts are on. The owner's record only.
+
+        `before_seq` reads the switch as it stood when a ux-save was made, so a later flip to preview a version
+        never changes what an earlier save exports."""
+        on = False
+        for r in self.store.records():
+            if r["type"] == "message" and r["by"] == "owner" and r.get("intent") == "ux-scripts" \
+                    and r.get("visual_id") == visual_id and (before_seq is None or r["seq"] < before_seq):
+                on = r["scripts"] is True
+        return on
+
+    def add_component_source(self, body: object, agent: str | None = None) -> dict:
+        """1.33: keep an agent's raw, scripted source for an existing HTML visual, beside its sanitized version.
+
+        Nothing runs it until the owner switches scripts on for that visual (`component_render`). It is
+        write-once: a different source for the same visual is refused, so a switched-on version cannot change.
+        """
+        keys = {"visual_id", "content", "nonce"}
+        if not isinstance(body, dict) or set(body) != keys:
+            raise RequestError(400, f"component-source takes exactly {', '.join(sorted(keys))}")
+        vid, content = body["visual_id"], body["content"]
+        if not isinstance(vid, str) or not S.RECORD_ID.match(vid):
+            raise RequestError(400, "visual_id must be a visual's record id")
+        if not isinstance(content, str) or not content.strip():
+            raise RequestError(400, "content must be the scripted HTML document")
+        data = content.encode("utf-8")
+        if len(data) > S.MAX_VISUAL:
+            raise RequestError(413, f"the source is {len(data)} bytes; the limit is {S.MAX_VISUAL}")
+        with self._lock:
+            rec = self.store.get(vid)
+            if rec is None or rec["type"] != "visual" or rec["format"] != "html":
+                raise RequestError(404, f"no HTML visual {vid}")
+            try:
+                written = VIS.store_source(self.cfg.state, rec, data)
+            except (VIS.VisualError, OSError) as e:
+                raise RequestError(409, f"the source was not stored: {e}") from None
+        return {"stored": True, "written": written, "visual_id": vid, "bytes": len(data),
+                "note": "it runs only when the owner switches Scripts on for this version in UX View"}
+
+    def component_render(self, rid: str) -> bytes:
+        rec = self.store.get(rid)
+        if rec is None or rec["type"] != "visual" or rec["format"] != "html":
+            raise RequestError(404, f"no HTML visual {rid}")
+        if not self.scripts_on(rid):
+            raise RequestError(403, "scripts are off for this version; the owner turns them on in UX View")
+        try:
+            data = VIS.read_source(self.cfg.state, rec)
+        except VIS.VisualError as e:
+            raise RequestError(409, str(e)) from None
+        if data is None:
+            raise RequestError(404, "this version has no scripted source")
+        return data
 
     def visual(self, rid: str) -> tuple[bytes, str]:
         """A stored visual's bytes and format, read from STATE and checked now; refused by name when changed."""
@@ -2016,6 +2253,41 @@ class Console:
             out.append({**r, "content": content, "doc": doc})
         return {"root": str(Path(self.cfg.root).resolve()), "visuals_dir": vdir, "visuals": out,
                 "refused": refused, "records": records}
+
+    def ux_export(self, body: object) -> dict:
+        """1.32 (UX-VIEW.md): what `agent.py ux-export` needs to land one owner ux-save. Writes nothing.
+
+        `save` names the owner's ux-save message. The answer carries the saved HTML visual (read from STATE and
+        re-checked, like visual-export), its doc, the item's Claude Design link (its newest ux-link, else the
+        item's own `design` field), and `root` so the agent can refuse to write into the server's checkout.
+        """
+        if not isinstance(body, dict) or set(body) != {"save"} or not isinstance(body["save"], str) \
+                or not S.RECORD_ID.match(body["save"]):
+            raise RequestError(400, "ux-export takes exactly save: the record id of an owner ux-save message")
+        msg = self.store.get(body["save"])
+        if not msg or msg["type"] != "message" or msg.get("intent") != "ux-save" or msg["by"] != "owner":
+            raise RequestError(404, f"no owner ux-save {body['save']}")
+        rec = self.store.get(msg["visual_id"])
+        if not rec or rec["type"] != "visual":
+            raise RequestError(404, f"no visual {msg['visual_id']}")
+        req = self.store.get(rec["request"]) or {}
+        try:
+            content = VIS.read(self.cfg.state, rec).decode("utf-8")
+            doc = VIS.read_doc(self.cfg.state, rec, req.get("text", ""))
+        except (VIS.VisualError, UnicodeDecodeError) as e:
+            raise RequestError(409, f"visual {rec['id']} cannot be exported: {e}") from None
+        scripts = self.scripts_on(rec["id"], msg["seq"])     # the switch as it was when the owner saved
+        source = None
+        if scripts:   # the owner switched scripts on for this exact version: the component carries its source
+            try:
+                raw = VIS.read_source(self.cfg.state, rec)
+            except VIS.VisualError as e:
+                raise RequestError(409, f"visual {rec['id']}'s scripted source cannot be exported: {e}") from None
+            source = raw.decode("utf-8") if raw is not None else None
+        design = self._item_design(msg["item"])
+        return {"root": str(Path(self.cfg.root).resolve()), "item": msg["item"], "save": msg,
+                "visual": {**rec, "content": content, "doc": doc}, "design_url": design,
+                "scripts": source is not None, "source": source}
 
     @staticmethod
     def _status(items: dict[str, dict]) -> dict[str, str | None]:
@@ -2795,6 +3067,21 @@ class Console:
             chat = kind == "message" and by == "owner" and body.get("item") == S.CHAT_ITEM
             if chat and self.store.existing({**body, "type": kind, "by": by}) is None:
                 self._chat_gate()  # a retry of a message already stored is not a new message
+            if kind == "message" and by == "owner" and body.get("intent") == "visual" and "refs" in body:
+                self._refs_gate(body)
+            if kind == "message" and by == "owner" and body.get("intent") == "ux-scripts" and body.get("scripts") is True:
+                vrec = self.store.get(body.get("visual_id")) if isinstance(body.get("visual_id"), str) else None
+                try:
+                    has = vrec is not None and vrec["type"] == "visual" and vrec["format"] == "html" \
+                        and VIS.read_source(self.cfg.state, vrec) is not None
+                except VIS.VisualError:
+                    has = False
+                if vrec is not None and not has:
+                    raise RequestError(409, "this version has no scripted source to switch on; ask for one "
+                                            "(Generate with notes: add a progressive-enhancement script)")
+            if (kind == "message" and by == "owner" and body.get("intent") == "pr-merge"
+                    and self.store.existing({**body, "type": kind, "by": by}) is None):
+                self._merge_gate(body)
             before = self.store.seq()
             rec = self._append(kind, body, by, items)
             if chat and self.store.seq() > before:
@@ -3120,7 +3407,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(self.timeout)   # the answer is written under the usual per-write timeout
         return b"".join(chunks)
 
-    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str) -> None:
+    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str, corp: str = "cross-origin") -> None:
         """A body that is not JSON, under its own Content-Security-Policy (0.8.0, a stored visual).
 
         0.9.8: `Cross-Origin-Resource-Policy: cross-origin`, not same-origin. Raw responses are consumed
@@ -3137,7 +3424,7 @@ class _Handler(BaseHTTPRequestHandler):
             if k != "Content-Security-Policy":
                 self.send_header(k, v)
         self.send_header("Content-Security-Policy", csp)
-        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+        self.send_header("Cross-Origin-Resource-Policy", corp)
         self.end_headers()
         self.wfile.write(data)
 
@@ -3198,6 +3485,14 @@ class OwnerHandler(_Handler):
             # (0.7.0). Nothing is owed to a client that is gone, and no traceback is logged.
             self.close_connection = True
 
+    def _send_raw(self, code: int, data: bytes, ctype: str, csp: str, corp: str = "cross-origin") -> None:
+        try:
+            super()._send_raw(code, data, ctype, csp, corp)
+        except (BrokenPipeError, ConnectionResetError):
+            # The same for a chart, visual or screenshot: the frame or <img> was dropped mid-answer
+            # (a re-render, a closed fold). Logged as a traceback through 1.31.
+            self.close_connection = True
+
     def _gate(self) -> bool:
         try:
             self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))
@@ -3227,7 +3522,7 @@ class OwnerHandler(_Handler):
             # Overriding CSP: adds script-src nonce-… alongside the shared defaults.
             self.send_header(
                 "Content-Security-Policy",
-                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; frame-src 'self'; "
                 f"script-src 'nonce-{nonce}'" + "".join(" " + h for h in hashes),
             )
             self.end_headers()
@@ -3304,8 +3599,8 @@ class OwnerHandler(_Handler):
             except RequestError as e:
                 return self._send(e.code, {"error": str(e)})
         live = {"/api/wait": self._wait, "/api/feed": self._feed, "/api/evidence": self._evidence,
-                "/api/visual": self._visual, "/api/visual-render": self._visual_render,
-                "/api/item-chart": self._item_chart, "/api/impact-graph": self._impact_graph}.get(route)
+                "/api/visual": self._visual, "/api/visual-render": self._visual_render, "/api/asset": self._asset,
+                "/api/component-render": self._component_render, "/api/item-chart": self._item_chart, "/api/impact-graph": self._impact_graph}.get(route)
         if live is not None and query is not None:
             try:
                 return live(query)
@@ -3364,7 +3659,7 @@ class OwnerHandler(_Handler):
             if bad:
                 raise RequestError(400, f"kind {', '.join(bad)} is not one of {', '.join(V.FEED_KINDS)}")
         item = query.get("item") or None
-        if item is not None and item != S.CHAT_ITEM and (len(item) > 128 or not S.ITEM_ID.match(item)):
+        if item is not None and item not in (S.CHAT_ITEM, S.PRS_ITEM) and (len(item) > 128 or not S.ITEM_ID.match(item)):
             raise RequestError(400, "item must be an item id")
         before = self._int(query.get("before"), "before", 1, 10**9)
         limit = self._int(query.get("limit"), "limit", 1, V.FEED_MAX) or V.FEED_DEFAULT
@@ -3394,6 +3689,21 @@ class OwnerHandler(_Handler):
         if fmt == "html":
             return self._send_raw(200, data, "text/html; charset=utf-8", VISUAL_HTML_CSP)
         self._send_raw(200, data, "text/plain; charset=utf-8", VISUAL_TEXT_CSP)
+
+    def _asset(self, query: dict[str, str]) -> None:
+        """1.32: one stored asset's bytes, typed by its magic bytes, sandboxed if opened on its own."""
+        self._only(query, {"id"}, "/api/asset")
+        data, mime = self.console.asset(query.get("id", ""))
+        # Same-origin: the page loads assets as <img>, never from a sandboxed frame.
+        self._send_raw(200, data, mime, ASSET_CSP, corp="same-origin")
+
+    def _component_render(self, query: dict[str, str]) -> None:
+        """1.33: a visual's scripted source, only while the owner's switch is on for it, under COMPONENT_CSP."""
+        self._only(query, {"id"}, "/api/component-render")
+        rid = query.get("id")
+        if not isinstance(rid, str) or not S.RECORD_ID.match(rid):
+            raise RequestError(400, "id must be a visual's record id (24 lowercase hex)")
+        self._send_raw(200, self.console.component_render(rid), "text/html; charset=utf-8", COMPONENT_CSP)
 
     def _visual_render(self, query: dict[str, str]) -> None:
         """0.8.19: a Mermaid visual rendered as a diagram inside the console's sandboxed iframe."""
@@ -3503,7 +3813,7 @@ class OwnerHandler(_Handler):
                                               "/api/refactor", OWNER_FAVORITE, OWNER_PLAYBOOK,
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
-                                              OWNER_CSRF_ROTATE):
+                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -3545,6 +3855,14 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.ticket_update(self._body()))
             if self.path == OWNER_TICKET_CLOSE:     # close a ticket; dependents unblock as needed
                 return self._send(200, self.console.ticket_close(self._body()))
+            if self.path == OWNER_ASSET_UPLOAD:     # F2: an image the owner attached or pasted
+                self.max_body = ASSET_MAX_BODY
+                body = self._body()
+                if not isinstance(body, dict) or set(body) - {"item", "content_b64", "caption", "nonce"}:
+                    raise RequestError(400, '/api/asset-upload takes {"item", "content_b64", "caption", "nonce"?}')
+                return self._send(200, self.console.add_asset({**body, "kind": "screenshot"}, None, by="owner"))
+            if self.path == OWNER_ASSET_DELETE:     # 1.32: the owner removes an agent's asset
+                return self._send(200, self.console.asset_delete(self._body()))
             self._send(200, {"record": self.console.write(kind, self._body(), "owner")})
         except RequestError as e:
             self._send(e.code, {**e.extra, "error": str(e)})
@@ -3591,6 +3909,15 @@ class AgentHandler(_Handler):
                 return self._send(200, self.console.reanchor(self._body()))
             if self.path == "/visual":  # 0.8.1: the server stores the file in STATE, never in the project
                 return self._send(200, self.console.add_visual(self._body(), agent))
+            if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)
+                self.max_body = ASSET_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
+                return self._send(200, self.console.add_asset(self._body(), agent))
+            if self.path == "/design-inventory":  # 1.33: what an agent says is in the owner's Claude Design project
+                return self._send(200, self.console.add_design_inventory(self._body(), agent))
+            if self.path == "/component-source":  # 1.33: the raw scripted source of an HTML visual, stored apart
+                return self._send(200, self.console.add_component_source(self._body(), agent))
+            if self.path == "/ux-export":  # 1.32: a read; agent.py writes components/<item>.md in its own worktree
+                return self._send(200, self.console.ux_export(self._body()))
             if self.path == "/visual-export":  # 0.8.1: a read; agent.py writes into the agent's own worktree
                 return self._send(200, self.console.visual_export(self._body()))
             if self.path == "/history-blob":   # Q23 part 2: one past version, proved by its own hash

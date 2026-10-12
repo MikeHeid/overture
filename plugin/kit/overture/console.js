@@ -41,6 +41,7 @@
     'lightbulb': [["path",{"d":"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"}],["path",{"d":"M9 18h6"}],["path",{"d":"M10 22h4"}]],
     'user-round-plus': [["path",{"d":"M2 21a8 8 0 0 1 13.292-6"}],["circle",{"cx":"10","cy":"8","r":"5"}],["path",{"d":"M19 16v6"}],["path",{"d":"M22 19h-6"}]],
     'keyboard': [["path",{"d":"M10 8h.01"}],["path",{"d":"M12 12h.01"}],["path",{"d":"M14 8h.01"}],["path",{"d":"M16 12h.01"}],["path",{"d":"M18 8h.01"}],["path",{"d":"M6 8h.01"}],["path",{"d":"M7 16h10"}],["path",{"d":"M8 12h.01"}],["rect",{"width":"20","height":"16","x":"2","y":"4","rx":"2"}]],
+    'x': [["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],
     'image': [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2","ry":"2"}],["circle",{"cx":"9","cy":"9","r":"2"}],["path",{"d":"m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"}]]
 
   };
@@ -196,6 +197,7 @@
   let knownVisualIds = null;    // 0.8.19: every visual record id the page has seen
   let seenAtOpen = 0;           // the seen seq when the inbox was opened: what the Feed marks "new"
   const CHAT_ITEM = '@chat';    // mirrors schema.CHAT_ITEM
+  const PRS_ITEM = '@prs';      // mirrors schema.PRS_ITEM
   const MAX_CHAT = 4000;        // mirrors schema.MAX_CHAT
   const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
 
@@ -955,6 +957,7 @@
       updateInboxButton();
       updateItemButtons();
       updateSectionBadges();   // Overlay a tiny count on any [data-ck-item] section on the host page.
+      refreshUxView();         // an open UX View shows what the view now says
       return data;
     } catch (e) {
       cursor = cursor || {};
@@ -1440,6 +1443,10 @@
       if (!data) return;
       const rc = rings[id];
       const t = data.total;
+      // D10: the dashboard can colour each item's block by its lane, from these attributes and the
+      // --ck-lane-<colour> custom properties console.css publishes.
+      const lane = laneOf(id);
+      if (lane) { det.setAttribute('data-ck-lane', lane); det.setAttribute('data-ck-lane-color', laneColor(lane)); }
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', t.awaiting_you + ' you']);
       if (t.awaiting_agent > 0) parts.push(['awaiting_agent', t.awaiting_agent + (agentActive(id) ? ' agent active' : ' agent')]);
@@ -1474,6 +1481,8 @@
       if (!id || !items[id]) return;
       const t = view.items && view.items[id] && view.items[id].total;
       if (!t) return;
+      const secLane = laneOf(id);
+      if (secLane) { el.setAttribute('data-ck-lane', secLane); el.setAttribute('data-ck-lane-color', laneColor(secLane)); }
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', String(t.awaiting_you)]);
       if (t.unlocked > 0) parts.push(['unlocked', String(t.unlocked)]);
@@ -1673,6 +1682,9 @@
     }
     if (e.key === 'g') { shortcutGpfx = now; return; }
     if (e.key === '?') { e.preventDefault(); openShortcutHelp(); return; }
+    if (e.key === 'u' && panelEl.getAttribute('data-open') === 'true' && currentMode === 'item' && currentItem && isUxItem(currentItem)) {
+      e.preventDefault(); openUxView(currentItem); return;
+    }
     if (e.key === '.') {
       e.preventDefault();
       if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
@@ -1714,6 +1726,7 @@
       ['g o', 'Open Portfolio tab'], ['g s', 'Open Favorite tab'], ['g c', 'Open Chat tab'],
       ['g b', 'Close panel (back to board)'],
       ['.',   'Focus the Delegate bar'],
+      ['u',   'Open UX View (on a UX item)'],
       ['j / k', 'Next / previous row'],
       ['Enter / Space', 'Open the focused row'],
       ['?',   'Show this help'],
@@ -2117,6 +2130,20 @@
     // closePanel() when the whole panel is dismissed.
     const auxPaneEl = document.getElementById('ck-launch-pane');
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
+    placeStatusChip();
+  }
+  // The status chip sits IN the header's row, before the skin and theme toggles, so it takes its own
+  // space. Through 1.31 it floated at a fixed offset from the right and covered those toggles.
+  function placeStatusChip() {
+    if (!statusChip) return;
+    const hdr = panelEl.querySelector('.ck-header');
+    const anchor = hdr && hdr.querySelector('.ck-skin-toggle, .ck-theme-toggle, .ck-close-btn');
+    if (anchor) {
+      hdr.insertBefore(statusChip, anchor);
+      statusChip.classList.add('ck-status-chip-inline');
+    } else {
+      statusChip.classList.remove('ck-status-chip-inline');
+    }
   }
 
   // Render inbox mode
@@ -2437,7 +2464,7 @@
         const row = el('div', { className: 'ck-inbox-item ck-inbox-item-visual', tabindex: '0',
           'aria-label': 'New visual on ' + it + (itemData ? ', ' + itemData.title : '') }, [
           el('span', { className: 'ck-q-state', dataState: 'visual' }, ['◫ ', vs.length === 1 ? 'drawn' : vs.length + ' drawn']),
-          renderItemRefTag(it),
+          renderItemRefTag(it), renderLaneChip(it),
           el('span', { className: 'ck-inbox-item-id' }, [it]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
           renderStarButton('item:' + it, 'this item')
@@ -2528,7 +2555,7 @@
         const row = el('div', { className: 'ck-inbox-item ck-inbox-item-answered', tabindex: '0',
           role: 'button', 'aria-label': 'Open item ' + it + ' (recently answered)' + (itemData ? ', ' + itemData.title : '') }, [
           el('span', { className: 'ck-q-state', dataState: 'locked' }, [stateMark('locked'), ' locked']),
-          renderItemRefTag(it),
+          renderItemRefTag(it), renderLaneChip(it),
           el('span', { className: 'ck-inbox-item-id' }, [it]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
           renderStarButton('item:' + it, 'this item')
@@ -2564,7 +2591,7 @@
           el('span', { className: 'ck-q-state', dataState: agentActive(itemId) ? 'agent_active' : 'awaiting_agent' }, [
             stateMark('awaiting_agent'), ' ' + agentWords(itemId)
           ]),
-          renderItemRefTag(itemId),
+          renderItemRefTag(itemId), renderLaneChip(itemId),
           el('span', { className: 'ck-inbox-item-id' }, [itemId]),
           el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : ''])
         ]);
@@ -2653,7 +2680,7 @@
       el('span', { className: 'ck-q-state', dataState: q.state }, [
         stateMark(q.state), ' ', q.state.replace('_', ' ')
       ]),
-      renderItemRefTag(q.question.item),
+      renderItemRefTag(q.question.item), renderLaneChip(q.question.item),
       el('span', { className: 'ck-inbox-item-id' }, [q.question.item]),
       el('span', { className: 'ck-inbox-item-qnum', title: qid }, ['Q' + qNum(qid)]),
       el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
@@ -2752,7 +2779,7 @@
     btn.addEventListener('click', () => openLooseRound(c));
     const card = el('div', { className: 'ck-cluster', dataCluster: c.id }, [
       el('div', { className: 'ck-cluster-head' }, [
-        renderItemRefTag(c.item),
+        renderItemRefTag(c.item), renderLaneChip(c.item),
         el('span', { className: 'ck-inbox-item-id' }, [c.item]),
         ' ' + n + ' questions from ' + c.agent + ' · asked ' + relTime(c.qs[n - 1].question.ts)]),
       btn
@@ -2853,6 +2880,8 @@
       qs.sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state));
 
       // Dashboard section links: `.overture.json` can map this item to one or more #anchors on the host page.
+      const laneTrail = renderLaneTrail(itemId);
+      if (laneTrail) body.appendChild(laneTrail);
       const sectionLinks = renderSectionLinks(itemId);
       if (sectionLinks) body.appendChild(sectionLinks);
       body.appendChild(renderItemTools(itemId));
@@ -2879,6 +2908,9 @@
       // create-ticket form. Opened by Launch Idea when it spawns tickets; opened by
       // the operator for ad-hoc bugs / research notes on this item.
       body.appendChild(renderTicketsFold(itemId));
+      // 1.32: the screenshots and recordings agents posted on this item (FEED-ASSETS.md).
+      const assetsFold = renderAssetsFold(itemId);
+      if (assetsFold) body.appendChild(assetsFold);
       // Active agents on this item : a fold listing every named agent currently
       // holding a working mark on this item, with the time it was marked. Reads
       // cursor.working_by (no new server call). Hidden when nothing is active.
@@ -4036,10 +4068,10 @@
   let projectMapFilter = '';   // '' = all; else one of the state keys
   const MAP_CHIPS = [
     ['', 'All'],
-    ['awaiting_you', '? Awaiting you'],
-    ['stale', '! Stale'],
-    ['unlocked', '~ Unlocked'],
-    ['locked', 'o Locked']
+    ['awaiting_you', 'Awaiting you'],
+    ['stale', 'Stale'],
+    ['unlocked', 'Unlocked'],
+    ['locked', 'Locked']
   ];
   function renderProjectMap() {
     const wrap = el('details', { className: 'ck-project-map' });
@@ -4069,7 +4101,7 @@
         className: 'ck-chip' + (on ? ' ck-chip-on' : ''),
         type: 'button', role: 'tab',
         'aria-pressed': on ? 'true' : 'false'
-      }, [label]);
+      }, [key ? stateMark(key) : null, label]);   // the same state icons as everywhere else (D8)
       b.addEventListener('click', () => {
         projectMapFilter = key;
         for (const other of chips.querySelectorAll('.ck-chip')) {
@@ -4163,6 +4195,10 @@
     box.appendChild(doc);
     const src = config.api + '/visual?id=' + encodeURIComponent(v.id);
     if (v.format === 'html') {
+      const uxOpen = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-visual-ux',
+        'aria-label': 'Open ' + v.title + ' in UX View' }, ['Open in UX View']);
+      uxOpen.addEventListener('click', () => openUxView(v.item || currentItem));
+      box.appendChild(uxOpen);
       // The ONLY way a mock reaches the page: an iframe whose sandbox grants nothing
       // (no scripts, no same-origin, no forms, no popups, no top navigation). The
       // server's CSP on the response says the same, even if the URL is opened alone.
@@ -5561,6 +5597,25 @@
     if (draftTexts[draftKey]) inputTextarea.value = draftTexts[draftKey];
     inputTextarea.addEventListener('input', () => { setDraft(draftKey, inputTextarea.value); });
     authorInput.appendChild(inputTextarea);
+    // F2: attach or paste an image of your own; it lands on this item beside the agents' screenshots.
+    const attachStatus = el('span', { className: 'ck-muted ck-attach-status', role: 'status', 'aria-live': 'polite' });
+    const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: 'hidden',
+      'aria-label': 'Choose an image to attach to ' + itemId });
+    const attachBtn = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
+      'aria-label': 'Attach an image to ' + itemId }, [icon('image') || '', ' Attach image']);
+    attachBtn.addEventListener('click', () => fileInput.click());
+    const doAttach = async file => {
+      attachStatus.textContent = 'Attaching\u2026';
+      const r = await attachImage(itemId, file);
+      attachStatus.textContent = r.error ? 'Not attached: ' + r.error : 'Attached.';
+      announce(attachStatus.textContent);
+      if (!r.error) renderPanel();
+    };
+    fileInput.addEventListener('change', () => { const f = fileInput.files && fileInput.files[0]; if (f) doAttach(f); fileInput.value = ''; });
+    inputTextarea.addEventListener('paste', e => {
+      const f = Array.from((e.clipboardData && e.clipboardData.files) || []).find(x => /^image\//.test(x.type));
+      if (f) { e.preventDefault(); doAttach(f); }
+    });
     const sendBtn = el('button', { className: 'ck-btn ck-btn-primary', type: 'button', style: 'margin-top: 8px;' },
       ['Send']);
     sendBtn.addEventListener('click', async () => {
@@ -5577,7 +5632,7 @@
         renderPanel();
       }
     });
-    authorInput.appendChild(sendBtn);
+    authorInput.appendChild(el('div', { className: 'ck-attach-row' }, [sendBtn, attachBtn, fileInput, attachStatus]));
     wrap.appendChild(authorInput);
 
     // Messages
@@ -5879,14 +5934,391 @@
     return [btn, slot];
   }
 
+  // ---- UX View (1.33, UX-VIEW.md "The modal") -------------------------------------------------------
+  // A viewport overlay over the item's HTML visuals: preview at a true width, versions, Generate, Save as
+  // component, and the Claude Design link. It sends the same owner messages step 1 added (a visual request
+  // with purpose 'ux', ux-save, ux-link); it writes no file. Scripts stay off (the sandbox below is empty).
+  const UX_LANES = ['lane-ui', 'lane-ux'];
+  const UX_SIZES = [['mobile', 'Mobile', 375], ['tablet', 'Tablet', 768], ['desktop', 'Desktop', 1280], ['fit', 'Fit', 0]];
+  let uxState = null;
+
+  function isUxItem(id) {
+    const it = items && items[id];
+    if (!it) return false;
+    if (it.ux === true) return true;
+    const lane = laneOf(id);
+    if (!lane) return false;
+    const cfg = laneConfig(lane);
+    return typeof cfg.ux === 'boolean' ? cfg.ux : UX_LANES.indexOf(lane) >= 0;
+  }
+  function uxThread(id) { return ((view && view.threads) || {})[id] || []; }
+  // Everything the modal shows is read from the view: the item's HTML visuals oldest first, its ux-saves,
+  // the newest ux-link, and whether a purpose-ux request is still waiting for a drawing.
+  function uxFacts(id) {
+    const thread = uxThread(id);
+    const visuals = (((view && view.visuals) || {})[id] || []).filter(v => v.format === 'html')
+      .sort((a, b) => (a.ts || '').localeCompare(b.ts || '') || (a.seq || 0) - (b.seq || 0));
+    const saves = thread.filter(m => m.by === 'owner' && m.intent === 'ux-save').sort((a, b) => a.seq - b.seq);
+    const save = saves.length ? saves[saves.length - 1] : null;
+    const reply = save ? thread.filter(m => m.by === 'agent' && m.reply_to === save.id).sort((a, b) => b.seq - a.seq)[0] : null;
+    const links = thread.filter(m => m.by === 'owner' && m.intent === 'ux-link').sort((a, b) => a.seq - b.seq);
+    const item = (items && items[id]) || {};
+    const design = links.length ? links[links.length - 1].url : (typeof item.design === 'string' ? item.design : '');
+    const waiting = ((view && view.waiting_visuals) || []).some(w => w.item === id &&
+      (thread.find(m => m.id === w.id) || {}).purpose === 'ux');
+    return { visuals, save, reply, design: design || '', waiting, linkWaiting: ((view && view.waiting_ux) || [])
+      .some(w => w.item === id && w.intent === 'ux-link') };
+  }
+  // The owner's newest ux-scripts for a visual: true only if their record says so (never an agent's field).
+  function uxScriptsOn(id, visualId) {
+    const on = uxThread(id).filter(m => m.by === 'owner' && m.intent === 'ux-scripts' && m.visual_id === visualId)
+      .sort((a, b) => a.seq - b.seq);
+    return on.length > 0 && on[on.length - 1].scripts === true;
+  }
+  function uxStatus(f, idx) {
+    const n = f.visuals.length;
+    if (!n) return f.waiting ? 'Asked an agent · waiting for a session…'
+      : 'No version yet. Generate one, or describe what you want.';
+    const cur = f.visuals[idx], v = 'v' + (idx + 1);
+    const savedIdx = f.save ? f.visuals.findIndex(x => x.id === f.save.visual_id) : -1;
+    const savedName = savedIdx >= 0 ? 'v' + (savedIdx + 1) : 'an earlier version';
+    if (f.waiting) return 'Asked an agent for another version · waiting for a session…';
+    if (f.save && f.save.visual_id === cur.id) {
+      return f.reply ? 'Saved ' + v + ' · ' + String(f.reply.text || '').split('\n')[0].slice(0, 140)
+        : 'Saved ' + v + ' · waiting for the steward to write components/' + (uxState ? uxState.item : '') + '.md';
+    }
+    if (f.save) return 'Viewing ' + v + ' · the saved component is ' + savedName;
+    return v + ' of ' + n + ' · not saved';
+  }
+  function uxSizePref() {
+    try { const s = localStorage.getItem('ck-ux-size'); if (UX_SIZES.some(x => x[0] === s)) return s; } catch (_e) { /* private mode */ }
+    return 'desktop';
+  }
+
+  // The artifacts the owner ticked in UX View's picker that the agent's list still holds, as [{path, mode}].
+  function uxPickedRefs(itemId, st) {
+    const f = uxFacts(itemId);
+    const list = ((((view && view.designs) || {})[f.design] || {}).artifacts) || [];
+    const have = new Set(list.map(a => a.path));
+    return Array.from((st.refs || new Map()).entries()).filter(([p]) => have.has(p)).slice(0, 10)
+      .map(([path, mode]) => ({ path, mode }));
+  }
+  function renderRefPicker(itemId, f, st, onChange) {
+    const wrap = el('div', { className: 'ck-ux-refs' });
+    wrap.appendChild(el('h4', { className: 'ck-ux-h4' }, ['Design system artifacts']));
+    if (!f.design) {
+      wrap.appendChild(el('p', { className: 'ck-muted' }, ['Link a Claude Design project above to pick its artifacts.']));
+      return wrap;
+    }
+    const inv = ((view && view.designs) || {})[f.design];
+    if (!inv || !(inv.artifacts || []).length) {
+      wrap.appendChild(el('p', { className: 'ck-muted' }, ['No artifact list yet. An agent that can open the design lists it for you.']));
+      const ask = el('button', { type: 'button', className: 'ck-btn' }, ['Ask an agent to list it']);
+      ask.addEventListener('click', async () => {
+        ask.disabled = true;
+        const r = await apiPost('/message', { item: itemId, text: 'Please list the artifacts of the linked Claude Design project '
+          + '(agent.py design-inventory --url ' + f.design + ' --file LIST) so UX View can offer them.' }, 'ux-inv-' + itemId);
+        announce(r.error ? 'Not sent: ' + r.error : 'Asked an agent to list the design.');
+        ask.textContent = r.error ? 'Ask again' : 'Asked';
+        ask.disabled = !!r.error ? false : true;
+      });
+      wrap.appendChild(ask);
+      return wrap;
+    }
+    if (!st.refs) st.refs = new Map();
+    const arts = inv.artifacts;
+    wrap.appendChild(el('p', { className: 'ck-muted' }, [arts.length + ' listed ' + relTime(inv.pushed_at) +
+      '. Inspire borrows the look; swap builds the new version from that artifact.']));
+    const filter = el('input', { type: 'search', className: 'ck-input', 'aria-label': 'Filter design artifacts',
+      placeholder: 'Filter', value: st.refFilter || '' });
+    const count = el('p', { className: 'ck-muted', role: 'status', 'aria-live': 'polite' });
+    const list = el('div', { className: 'ck-ux-reflist', role: 'group', 'aria-label': 'Design artifacts' });
+    const sync = () => { count.textContent = st.refs.size + ' of 10 picked'; onChange(); };
+    const draw = () => {
+      list.textContent = '';
+      const q = (filter.value || '').toLowerCase();
+      for (const a of arts) {
+        if (q && (a.path + ' ' + (a.title || '')).toLowerCase().indexOf(q) < 0) continue;
+        const id = 'ck-ref-' + arts.indexOf(a);
+        const cb = el('input', { type: 'checkbox', id });
+        cb.checked = st.refs.has(a.path);
+        const mode = el('select', { className: 'ck-ux-refmode', 'aria-label': 'How to use ' + a.path, hidden: cb.checked ? null : 'hidden' }, [
+          el('option', { value: 'inspire' }, ['inspire']), el('option', { value: 'swap' }, ['swap'])]);
+        mode.value = st.refs.get(a.path) || 'inspire';
+        cb.addEventListener('change', () => {
+          if (cb.checked && st.refs.size >= 10) { cb.checked = false; announce('At most 10 artifacts.'); return; }
+          if (cb.checked) st.refs.set(a.path, mode.value); else st.refs.delete(a.path);
+          mode.hidden = !cb.checked; sync();
+        });
+        mode.addEventListener('change', () => { if (st.refs.has(a.path)) { st.refs.set(a.path, mode.value); sync(); } });
+        list.appendChild(el('div', { className: 'ck-ux-ref' }, [cb,
+          el('label', { for: id }, [a.title ? a.title : a.path.split('/').pop(), el('span', { className: 'ck-muted ck-ux-refpath' }, [a.path])]), mode]));
+      }
+      if (!list.childNodes.length) list.appendChild(el('p', { className: 'ck-muted' }, ['Nothing matches.']));
+    };
+    filter.addEventListener('input', () => { st.refFilter = filter.value; draw(); });
+    wrap.appendChild(filter); wrap.appendChild(list); wrap.appendChild(count);
+    draw(); sync();
+    return wrap;
+  }
+
+  function openUxView(itemId) {
+    if (document.getElementById('ck-ux-view')) return;
+    const opener = document.activeElement;
+    const st = uxState = { item: itemId, idx: -1, size: uxSizePref(), notesOpen: false, busy: false };
+    const itemTitle = (items && items[itemId] && items[itemId].title) || '';
+    const titleId = 'ck-ux-title';
+    const dlg = el('div', { id: 'ck-ux-view', className: 'ck-ux-view', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': titleId });
+    const box = el('div', { className: 'ck-ux-box' });
+    const closeBtn = el('button', { type: 'button', className: 'ck-btn ck-ux-close', 'aria-label': 'Close UX View' }, [icon('x') || '✕']);
+    box.appendChild(el('div', { className: 'ck-ux-head' }, [
+      el('h2', { id: titleId }, ['UX View · ' + itemId + (itemTitle ? ' ' + itemTitle : '')]), closeBtn]));
+    const prev = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Previous version' }, ['◂']);
+    const next = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', 'aria-label': 'Next version' }, ['▸']);
+    const vlabel = el('span', { className: 'ck-ux-vlabel', 'aria-live': 'polite' });
+    const scriptsBadge = el('span', { className: 'ck-ux-scripts-badge', hidden: 'hidden' }, ['\u26a1 Scripts on']);
+    const sizes = el('div', { className: 'ck-ux-sizes', role: 'radiogroup', 'aria-label': 'Preview width' });
+    const radios = {};
+    for (const [key, label, px] of UX_SIZES) {
+      const r = el('button', { type: 'button', role: 'radio', className: 'ck-btn ck-btn-quiet ck-ux-size',
+        'aria-checked': key === st.size ? 'true' : 'false', title: px ? px + 'px wide' : 'Fill the space' }, [label]);
+      r.addEventListener('click', () => { st.size = key; try { localStorage.setItem('ck-ux-size', key); } catch (_e) { /* ok */ } paint(); });
+      radios[key] = r; sizes.appendChild(r);
+    }
+    box.appendChild(el('div', { className: 'ck-ux-bar' }, [prev, vlabel, next, scriptsBadge, sizes]));
+    const stage = el('div', { className: 'ck-ux-stage' });
+    const scaleNote = el('div', { className: 'ck-ux-scale ck-muted' });
+    const side = el('aside', { className: 'ck-ux-side', 'aria-label': 'Component' });
+    const body = el('div', { className: 'ck-ux-body' }, [el('div', { className: 'ck-ux-previewcol' }, [stage, scaleNote]), side]);
+    box.appendChild(body);
+    const status = el('p', { className: 'ck-ux-status', role: 'status', 'aria-live': 'polite' });
+    box.appendChild(status);
+    const err = el('p', { className: 'ck-error-msg ck-ux-err', role: 'alert', hidden: 'hidden' });
+    box.appendChild(err);
+    const notes = el('textarea', { className: 'ck-textarea ck-ux-notes', rows: '3', hidden: 'hidden',
+      'aria-label': 'Notes for the agent', placeholder: 'What should change? Name design artifacts to use, e.g. buttons/primary.html' });
+    box.appendChild(notes);
+    const refsLine = el('p', { className: 'ck-muted ck-ux-refs-line', hidden: 'hidden' });
+    box.appendChild(refsLine);
+    const refsNote = () => {
+      const picked = uxPickedRefs(itemId, st);
+      refsLine.hidden = !picked.length;
+      refsLine.textContent = picked.length ? 'The next Generate uses ' + picked.length + ' design artifact' + (picked.length === 1 ? '' : 's') + ': '
+        + picked.map(r => r.path.split('/').pop() + ' (' + r.mode + ')').join(', ') : '';
+    };
+    const genFace = el('button', { type: 'button', className: 'ck-btn ck-split-main' }, ['Generate']);
+    const genMore = el('button', { type: 'button', className: 'ck-btn ck-split-more', 'aria-haspopup': 'menu',
+      'aria-expanded': 'false', 'aria-label': 'More ways to generate' }, [icon('chevron-down') || '▾']);
+    const menu = el('div', { className: 'ck-ux-menu', role: 'menu', hidden: 'hidden' });
+    const saveBtn = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Save as component']);
+    box.appendChild(el('div', { className: 'ck-ux-foot' }, [
+      el('span', { className: 'ck-split ck-ux-gen' }, [genFace, genMore, menu]), saveBtn]));
+    dlg.appendChild(box);
+
+    function paint() {
+      const f = uxFacts(itemId);
+      const n = f.visuals.length;
+      // Newest by default; a walk to an older version is kept, but a viewer on the newest follows a new arrival.
+      if (st.idx < 0 || st.idx >= n || (n > (st.n || 0) && st.idx === (st.n || 0) - 1)) st.idx = n - 1;
+      st.n = n;
+      const cur = n ? f.visuals[st.idx] : null;
+      const px = (UX_SIZES.find(x => x[0] === st.size) || [])[2] || 0;
+      for (const k of Object.keys(radios)) radios[k].setAttribute('aria-checked', k === st.size ? 'true' : 'false');
+      scriptsBadge.hidden = !(cur && uxScriptsOn(itemId, cur.id));
+      vlabel.textContent = n ? 'v' + (st.idx + 1) + ' of ' + n + (cur.agent ? ' · by ' + cur.agent : '') + ' · ' + relTime(cur.ts) : 'No versions';
+      prev.disabled = !(n && st.idx > 0); next.disabled = !(n && st.idx < n - 1);
+      stage.textContent = '';
+      if (cur) {
+        const frame = document.createElement('iframe');
+        // Scripts off: an empty sandbox. Scripts on (the owner's switch): allow-scripts and nothing else, so the
+        // frame is an opaque origin that cannot reach the console, its cookies or its storage.
+        const scripted = uxScriptsOn(itemId, cur.id);
+        frame.setAttribute('sandbox', scripted ? 'allow-scripts' : '');
+        frame.setAttribute('referrerpolicy', 'no-referrer');
+        frame.setAttribute('title', (cur.title || itemId) + ' v' + (st.idx + 1) + (px ? ', ' + px + 'px' : ', fit') + (scripted ? ', scripts on' : ''));
+        frame.className = 'ck-ux-frame';
+        frame.src = config.api + (scripted ? '/component-render?id=' : '/visual?id=') + encodeURIComponent(cur.id);
+        stage.appendChild(frame);
+        const fit = () => {
+          const w = stage.clientWidth || 1, s = px ? Math.min(1, w / px) : 1;
+          frame.style.width = px ? px + 'px' : '100%';
+          frame.style.height = (stage.clientHeight / s) + 'px';
+          frame.style.transform = s < 1 ? 'scale(' + s + ')' : '';
+          const name = (UX_SIZES.find(x => x[0] === st.size) || ['', ''])[1];
+          scaleNote.textContent = px ? name + ' · ' + px + 'px · ' + Math.round(s * 100) + '%' : 'Fit · 100%';
+        };
+        fit();
+        if (typeof ResizeObserver === 'function') {
+          if (st.ro) st.ro.disconnect();
+          st.ro = new ResizeObserver(fit); st.ro.observe(stage);
+        }
+      } else {
+        stage.appendChild(el('p', { className: 'ck-muted ck-ux-empty' }, ['Nothing drawn yet.']));
+        scaleNote.textContent = '';
+      }
+      status.textContent = uxStatus(f, st.idx);
+      refsNote();
+      // Component panel + settings
+      side.textContent = '';
+      side.appendChild(el('h3', { className: 'ck-ux-h3' }, ['Component']));
+      const savedIdx = f.save ? f.visuals.findIndex(x => x.id === f.save.visual_id) : -1;
+      side.appendChild(el('p', { className: 'ck-muted' }, [f.save
+        ? 'Saved: ' + (savedIdx >= 0 ? 'v' + (savedIdx + 1) : 'an earlier version') + ' · components/' + itemId + '.md'
+        : 'Not saved yet. Save writes components/' + itemId + '.md by a pull request.']));
+      const det = el('details', { className: 'ck-ux-settings' }, [el('summary', {}, ['Settings'])]);
+      const linkId = 'ck-ux-link';
+      // What the owner is typing survives the live refresh that repaints this panel.
+      const link = el('input', { type: 'url', id: linkId, className: 'ck-input',
+        value: st.linkDraft !== undefined ? st.linkDraft : f.design,
+        placeholder: 'https://claude.ai/design/p/…', autocomplete: 'off' });
+      link.addEventListener('input', () => { st.linkDraft = link.value; });
+      const linkSave = el('button', { type: 'button', className: 'ck-btn' }, [f.design ? 'Update link' : 'Link design']);
+      const unlink = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet', hidden: f.design ? null : 'hidden' }, ['Unlink']);
+      det.appendChild(el('label', { for: linkId, className: 'ck-field-label' }, ['Claude Design link']));
+      det.appendChild(link);
+      det.appendChild(el('div', { className: 'ck-actions' }, [linkSave, unlink]));
+      det.appendChild(el('p', { className: 'ck-muted' }, [f.linkWaiting ? 'Link sent · waiting for the steward to record it.'
+        : 'The console never opens or fetches this link. The agent reads the design with your login.']));
+      // The design system's artifacts, as an agent listed them: pick up to 10 to reference in the next Generate.
+      det.appendChild(renderRefPicker(itemId, f, st, () => refsNote()));
+      if (cur) {
+        const on = uxScriptsOn(itemId, cur.id);
+        const swId = 'ck-ux-scripts';
+        const sw = el('input', { type: 'checkbox', id: swId, role: 'switch', checked: on ? '' : null });
+        sw.checked = on;
+        det.appendChild(el('div', { className: 'ck-ux-switch' }, [sw, el('label', { for: swId }, ['Scripts (this version)'])]));
+        const seen = (() => { try { return localStorage.getItem('ck-ux-scripts-seen') === '1'; } catch (_e) { return true; } })();
+        const note = el('p', { className: 'ck-muted ck-ux-scripts-note', hidden: st.scriptsNote ? null : 'hidden' }, [
+          'Scripts run in a sealed frame with no access to the console or its cookies. Turn on only for components you need to see working.']);
+        const confirm = el('button', { type: 'button', className: 'ck-btn', hidden: st.scriptsNote ? null : 'hidden' }, ['Turn scripts on']);
+        det.appendChild(note);
+        det.appendChild(confirm);
+        det.appendChild(el('p', { className: 'ck-muted' }, [on ? 'Recorded at the next save.'
+          : 'Needs a scripted source for this version; ask for one with Generate with notes.']));
+        const send = async want => {
+          err.hidden = true;
+          const r = await apiPost('/message', { item: itemId, intent: 'ux-scripts', visual_id: cur.id, scripts: want,
+            text: 'Scripts ' + (want ? 'on' : 'off') + ' for v' + (st.idx + 1) + ' of ' + (cur.title || itemId) }, 'ux-scripts-' + cur.id + '-' + want);
+          if (r.error) { sw.checked = !want; err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+          else announce('Scripts ' + (want ? 'on' : 'off') + '.');
+          if (!r.error) { st.settingsOpen = true; st.scriptsNote = false; paint(); }
+        };
+        // The first time, the warning is read BEFORE anything runs: the switch waits for a second click.
+        sw.addEventListener('change', () => {
+          if (sw.checked && !seen && !st.scriptsSeen) { sw.checked = false; st.scriptsNote = true; note.hidden = false; confirm.hidden = false; confirm.focus(); return; }
+          send(sw.checked);
+        });
+        confirm.addEventListener('click', () => {
+          st.scriptsSeen = true; try { localStorage.setItem('ck-ux-scripts-seen', '1'); } catch (_e) { /* ok */ }
+          send(true);
+        });
+      } else {
+        det.appendChild(el('p', { className: 'ck-muted' }, ['Scripts: no version to switch yet.']));
+      }
+      const sendLink = async url => {
+        err.hidden = true;
+        const r = await apiPost('/message', { item: itemId, intent: 'ux-link', url, text: url ? 'Link the Claude Design project' : 'Unlink the Claude Design project' }, 'ux-link-' + itemId);
+        if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; }
+        else { st.linkDraft = undefined; announce(url ? 'Design linked.' : 'Design unlinked.'); }
+      };
+      linkSave.addEventListener('click', () => sendLink(link.value.trim()));
+      unlink.addEventListener('click', () => sendLink(''));
+      if (st.settingsOpen) det.open = true;
+      det.addEventListener('toggle', () => { st.settingsOpen = det.open; });
+      side.appendChild(det);
+      // Footer
+      const asked = f.waiting;
+      genFace.disabled = st.busy || asked;
+      genFace.textContent = asked ? 'Requested' : 'Generate';
+      saveBtn.disabled = st.busy || !cur || !!(f.save && cur && f.save.visual_id === cur.id);
+      saveBtn.textContent = cur && st.idx < n - 1 ? 'Save v' + (st.idx + 1) + ' as component' : 'Save as component';
+      menu.textContent = '';
+      const entries = [
+        ['Generate with notes…', 'Describe what to change first', false, () => { st.notesOpen = true; notes.hidden = false; notes.focus(); }],
+        ['Generate from design', f.design ? 'Start from the linked Claude Design project' : 'Add a Design link first (Settings)', !f.design, () => generate(true)]
+      ];
+      for (const [label, hint, off, fn] of entries) {
+        const b = el('button', { type: 'button', role: 'menuitem', className: 'ck-more-item', disabled: off ? '' : null, title: hint }, [label,
+          el('span', { className: 'ck-muted ck-action-hint' }, [hint])]);
+        b.addEventListener('click', () => { closeMenu(); fn(); });
+        menu.appendChild(b);
+      }
+    }
+    function closeMenu() { menu.hidden = true; genMore.setAttribute('aria-expanded', 'false'); }
+    genMore.addEventListener('click', () => {
+      const open = menu.hidden;
+      menu.hidden = !open; genMore.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) { const first = menu.querySelector('button:not([disabled])'); if (first) first.focus(); }
+    });
+    menu.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); genMore.focus(); } });
+    async function generate(fromDesign) {
+      err.hidden = true;
+      const typed = notes.value.trim();
+      const text = typed || ('Draw the component for ' + itemId + (itemTitle ? ' (' + itemTitle + ')' : '') + '.');
+      const body = { item: itemId, intent: 'visual', purpose: 'ux', text };
+      if (fromDesign) body.from = 'design';
+      const picked = uxPickedRefs(itemId, st);
+      if (picked.length) body.refs = picked;
+      st.busy = true; paint();
+      const r = await apiPost('/message', body, 'ux-gen-' + itemId);
+      st.busy = false;
+      if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+      else { notes.value = ''; notes.hidden = true; announce('Asked an agent to draw it.'); }
+      paint();
+    }
+    genFace.addEventListener('click', () => generate(false));
+    saveBtn.addEventListener('click', async () => {
+      const f = uxFacts(itemId), cur = f.visuals[st.idx];
+      if (!cur) return;
+      err.hidden = true; st.busy = true; paint();
+      const r = await apiPost('/message', { item: itemId, intent: 'ux-save', visual_id: cur.id,
+        text: 'Save v' + (st.idx + 1) + ' of ' + (cur.title || itemId) + ' as components/' + itemId + '.md' }, 'ux-save-' + itemId + '-' + cur.id);
+      st.busy = false;
+      if (r.error) { err.textContent = 'Not sent: ' + r.error; err.hidden = false; announce('Error: ' + r.error); }
+      else announce('Saved v' + (st.idx + 1) + '. The steward will write the component.');
+      paint();
+    });
+    prev.addEventListener('click', () => { st.idx = Math.max(0, st.idx - 1); paint(); });
+    next.addEventListener('click', () => { st.idx += 1; paint(); });
+    st.repaint = paint;
+    const teardownA11y = (() => { document.body.appendChild(dlg); return attachDialogAccessibility(dlg, { returnTo: opener }); })();
+    st.close = () => {
+      if (st.ro) st.ro.disconnect();
+      closeMenu();
+      panelEl.inert = panelEl.getAttribute('data-open') !== 'true';
+      if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      teardownA11y();
+      uxState = null;
+    };
+    closeBtn.addEventListener('click', st.close);
+    dlg.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); st.close(); }
+      else if ((e.key === '[' || e.key === ']') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { (e.key === '[' ? prev : next).click(); }
+    });
+    dlg.addEventListener('click', e => { if (e.target === dlg) st.close(); });
+    panelEl.inert = true;                                         // the console behind the modal is not reachable
+    paint();
+    requestAnimationFrame(() => closeBtn.focus());
+  }
+  // The live loop re-renders the panel; keep an open modal current with what the view now says.
+  function refreshUxView() { if (uxState && uxState.repaint && document.getElementById('ck-ux-view')) uxState.repaint(); }
+
   function renderItemTools(itemId) {
     const wrap = el('div', { className: 'ck-tools' });
     const answersBtn = el('button', { className: 'ck-btn', type: 'button' }, ['Answers']);
     answersBtn.addEventListener('click', () => showSheet(itemId, null));
     const [forkBtn, slot] = disclosure('⑂ Deliberate (full round)', 'fork-' + itemId,
       () => renderForkForm(itemId, null));
-    const [visBtn, visSlot] = disclosure('◫ Request a visual…', 'vis-' + itemId, () => renderVisualForm(itemId));
+    let [visBtn, visSlot] = disclosure('◫ Request a visual…', 'vis-' + itemId, () => renderVisualForm(itemId));
     visBtn.setAttribute('aria-label', 'Request a visual of ' + itemId);
+    if (isUxItem(itemId)) {
+      // UX View (1.33): on a UX item the modal covers requesting and generating.
+      visBtn = el('button', { className: 'ck-btn', type: 'button', 'aria-keyshortcuts': 'u',
+        'aria-label': 'Open UX View for ' + itemId + ': preview, versions, save' }, ['\u25eb UX View']);
+      visBtn.addEventListener('click', () => openUxView(itemId));
+      visSlot = el('div');
+    }
     // Launch Idea — the headline. Opens a right-rail panel that walks the operator
     // through framing + grilling + ticket spawning. Entry-point for the "starting a thing"
     // flow; the strategist's framing — ideation as entry, rulings and code as exit.
@@ -7017,7 +7449,7 @@
 
   const FEED_LABEL = { question: 'Question asked', answer: 'Answered', lock: 'Locked', reanchor: 'Re-anchored',
     fork: 'Deliberation requested', process: 'Answers are in', chat: 'Chat', reply: 'Agent replied', note: 'Your note',
-    transcript: 'Roar transcript', visual: 'Visual' };
+    transcript: 'Roar transcript', visual: 'Visual', asset: 'Screenshots' };
   const feedState = { kind: '', item: '', events: null, next: null, error: null, seq: -1, key: '' };
 
   function feedWords(ev) {
@@ -7038,6 +7470,12 @@
 
   async function loadFeed(listEl, append) {
     const key = feedState.kind + '|' + feedState.item;
+    // 1.32: screenshots live in view.assets (not the store), so the Screenshots filter needs no fetch.
+    if (feedState.kind === 'asset') {
+      Object.assign(feedState, { events: [], next: null, seq: view ? view.seq : -1, key: key, error: null });
+      if (document.contains(listEl)) fillFeedList(listEl);
+      return;
+    }
     let url = config.api + '/feed?limit=50';
     if (feedState.kind) url += '&kind=' + encodeURIComponent(feedState.kind);
     if (feedState.item) url += '&item=' + encodeURIComponent(feedState.item);
@@ -7071,6 +7509,9 @@
     const chatOpt = el('option', { value: CHAT_ITEM }, ['The chat']);
     if (feedState.item === CHAT_ITEM) chatOpt.selected = true;
     itemSel.appendChild(chatOpt);
+    const prsOpt = el('option', { value: PRS_ITEM }, ['Merge requests']);
+    if (feedState.item === PRS_ITEM) prsOpt.selected = true;
+    itemSel.appendChild(prsOpt);
     for (const id of treeOrder()) {
       const o = el('option', { value: id }, [id + (items[id].title ? ' · ' + truncateText(items[id].title, 40) : '')]);
       if (feedState.item === id) o.selected = true;
@@ -7357,17 +7798,228 @@
     return d.getTime();
   }
 
+  // ---- Assets in the Feed (1.32, FEED-ASSETS.md) -------------------------------------------
+  // Screenshots and recordings agents post on an item. The rows come from view.assets (owner
+  // door only); the bytes from /api/asset, same origin, served by their magic bytes.
+  function assetRows(itemFilter) {
+    const a = (view && view.assets) || {};
+    const rows = itemFilter ? ((a.by_item || {})[itemFilter] || []) : (a.recent || []);
+    return rows.slice();
+  }
+  function assetUrl(row) { return config.api + '/asset?id=' + encodeURIComponent(row.id); }
+  const ASSET_KIND = { before: 'Before', after: 'After', screenshot: 'Screenshot', recording: 'Recording' };
+  // A GIF under reduced motion starts as a button, never auto-playing (WCAG 2.2.2 / 2.3.3).
+  function assetThumb(row, onOpen) {
+    const still = row.format === 'gif' && reducedMotion && reducedMotion.matches;
+    const btn = el('button', { type: 'button', className: 'ck-asset-thumb', dataKind: row.kind,
+      'aria-label': 'View ' + (ASSET_KIND[row.kind] || 'screenshot').toLowerCase() + ': ' + row.caption });
+    if (still) {
+      btn.appendChild(el('span', { className: 'ck-asset-play' }, ['▶ Play recording']));
+    } else {
+      const img = el('img', { src: assetUrl(row), alt: row.caption, loading: 'lazy', decoding: 'async',
+        width: String(row.width), height: String(row.height) });
+      // Deleted or pruned since this was drawn: say so instead of a broken image.
+      img.addEventListener('error', () => img.replaceWith(el('span', { className: 'ck-asset-play ck-muted' }, ['No longer stored'])));
+      btn.appendChild(img);
+    }
+    btn.addEventListener('click', onOpen);
+    return btn;
+  }
+  function assetMeta(row) {
+    const bits = [el('span', { className: 'ck-asset-kind', dataKind: row.kind }, [ASSET_KIND[row.kind] || row.kind])];
+    if (row.qid) bits.push(el('span', { className: 'ck-inbox-item-id' }, [row.qid]));
+    if (row.pr) bits.push(el('span', { className: 'ck-asset-link' }, ['PR #' + row.pr]));
+    if (row.ticket) bits.push(el('span', { className: 'ck-asset-link' }, [row.ticket]));
+    bits.push(el('span', { className: 'ck-muted' }, [row.width + '×' + row.height]));
+    return el('div', { className: 'ck-asset-meta' }, bits);
+  }
+  // A "before" posted within 30 minutes ahead of an "after" on the same item is shown beside it.
+  function pairAssets(rows) {
+    const out = [];
+    const used = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (used.has(r.id)) continue;
+      if (r.kind === 'after') {
+        const t = Date.parse(r.at);
+        const before = rows.find(b => !used.has(b.id) && b.id !== r.id && b.kind === 'before' && b.item === r.item
+          && t - Date.parse(b.at) >= 0 && t - Date.parse(b.at) <= 30 * 60 * 1000);
+        if (before) { used.add(before.id); used.add(r.id); out.push([before, r]); continue; }
+      }
+      used.add(r.id);
+      out.push([r]);
+    }
+    return out;
+  }
+  function renderAssetCard(group, all) {
+    const main = group[group.length - 1];
+    const card = el('div', { className: 'ck-asset-card' + (group.length > 1 ? ' ck-asset-pair' : '') });
+    const figs = el('div', { className: 'ck-asset-figs' });
+    for (const row of group) {
+      figs.appendChild(el('figure', { className: 'ck-asset-fig' }, [
+        assetThumb(row, () => openAssetViewer(all, all.indexOf(row))),
+        el('figcaption', {}, [group.length > 1 ? (ASSET_KIND[row.kind] || '') : row.caption])
+      ]));
+    }
+    card.appendChild(figs);
+    if (group.length > 1) card.appendChild(el('p', { className: 'ck-asset-caption' }, [main.caption]));
+    card.appendChild(assetMeta(main));
+    const actions = el('div', { className: 'ck-asset-actions' });
+    // One star per card: a pair is starred by its "after", the one worth keeping.
+    actions.appendChild(renderStarButton('asset:' + main.id, group.length > 1 ? 'this before and after'
+      : 'this ' + (ASSET_KIND[main.kind] || 'screenshot').toLowerCase()));
+    actions.appendChild(assetDeleteButton(group));
+    card.appendChild(actions);
+    return card;
+  }
+  // Two-step delete, inline: the first press asks, the second (within 5 s) deletes.
+  function assetDeleteButton(group) {
+    const btn = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-asset-delete' },
+      [group.length > 1 ? 'Delete both' : 'Delete']);
+    let armed = null;
+    btn.addEventListener('click', async () => {
+      if (!armed) {
+        btn.textContent = 'Delete? Press again';
+        btn.setAttribute('data-armed', 'true');
+        armed = setTimeout(() => { armed = null; btn.removeAttribute('data-armed');
+          btn.textContent = group.length > 1 ? 'Delete both' : 'Delete'; }, 5000);
+        return;
+      }
+      clearTimeout(armed); armed = null;
+      btn.disabled = true;
+      for (const row of group) {
+        const r = await apiPost('/asset-delete', { id: row.id }, 'asset-del-' + row.id);
+        if (r && r.error) { announce('Could not delete: ' + r.error); btn.disabled = false; return; }
+      }
+      announce(group.length > 1 ? 'Deleted both screenshots' : 'Deleted the screenshot');
+    });
+    return btn;
+  }
+  let assetViewerTeardown = null;
+  function closeAssetViewer() {
+    const dlg = document.getElementById('ck-asset-view');
+    if (dlg) dlg.remove();
+    if (assetViewerTeardown) { assetViewerTeardown(); assetViewerTeardown = null; }
+  }
+  // A lightbox: the full image, its caption, ◂ ▸ through the list it came from, Escape to close.
+  function openAssetViewer(rows, index) {
+    closeAssetViewer();
+    let i = Math.max(0, Math.min(rows.length - 1, index));
+    const dlg = el('div', { id: 'ck-asset-view', className: 'ck-asset-view', role: 'dialog', 'aria-modal': 'true',
+      'aria-labelledby': 'ck-asset-view-title' });
+    const box = el('div', { className: 'ck-asset-view-box' });
+    const title = el('h2', { id: 'ck-asset-view-title' });
+    const counter = el('span', { className: 'ck-muted', 'aria-live': 'polite' });
+    const img = el('img', { className: 'ck-asset-view-img', alt: '' });
+    const meta = el('div');
+    const prev = el('button', { type: 'button', className: 'ck-btn', 'aria-label': 'Previous screenshot' }, ['◂']);
+    const next = el('button', { type: 'button', className: 'ck-btn', 'aria-label': 'Next screenshot' }, ['▸']);
+    const close = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Close']);
+    const open = el('button', { type: 'button', className: 'ck-btn' }, ['Open item']);
+    const paint = () => {
+      const r = rows[i];
+      title.textContent = r.caption;
+      img.src = assetUrl(r);
+      img.alt = r.caption;
+      counter.textContent = (i + 1) + ' of ' + rows.length + ' · ' + r.item + ' · ' + (r.agent ? 'by ' + r.agent + ' · ' : '')
+        + relTime(r.at);
+      meta.textContent = '';
+      meta.appendChild(assetMeta(r));
+      prev.disabled = i === 0;
+      next.disabled = i === rows.length - 1;
+    };
+    prev.addEventListener('click', () => { if (i > 0) { i--; paint(); } });
+    next.addEventListener('click', () => { if (i < rows.length - 1) { i++; paint(); } });
+    close.addEventListener('click', closeAssetViewer);
+    open.addEventListener('click', () => { const it = rows[i].item; closeAssetViewer(); openFromInbox(it); });
+    dlg.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeAssetViewer(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); prev.click(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); next.click(); }
+    });
+    dlg.addEventListener('click', e => { if (e.target === dlg) closeAssetViewer(); });
+    box.appendChild(el('div', { className: 'ck-asset-view-head' }, [title, counter]));
+    box.appendChild(el('div', { className: 'ck-asset-view-stage' }, [img]));
+    box.appendChild(meta);
+    box.appendChild(el('div', { className: 'ck-asset-view-actions' }, [prev, next, open, close]));
+    dlg.appendChild(box);
+    document.body.appendChild(dlg);
+    assetViewerTeardown = attachDialogAccessibility(dlg);
+    paint();
+    close.focus();
+  }
+  // F2: send the owner's own image for an item. Checked here for a clear message; the server checks again.
+  async function attachImage(itemId, file) {
+    if (!file || !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) return { error: 'only a PNG, JPEG, WebP or GIF' };
+    const limit = file.type === 'image/gif' ? 8 << 20 : 2 << 20;
+    if (file.size > limit) return { error: 'that file is ' + Math.ceil(file.size / 1024) + ' KiB; the limit is ' + (limit >> 20) + ' MiB' };
+    const b64 = await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(',')[1] || '');
+      fr.onerror = () => res('');
+      fr.readAsDataURL(file);
+    });
+    if (!b64) return { error: 'the file could not be read' };
+    const caption = (String(file.name || '').replace(/\.[A-Za-z0-9]+$/, '').replace(/[\r\n]+/g, ' ').trim() || 'Image from you').slice(0, 200);
+    return apiPost('/asset-upload', { item: itemId, content_b64: b64, caption }, 'asset-' + itemId + '-' + b64.length);
+  }
+  // The item's own gallery, under its questions; shown only when the item has assets.
+  function renderAssetsFold(itemId) {
+    const rows = assetRows(itemId);
+    if (!rows.length) return null;
+    const det = el('details', { className: 'ck-assets-fold', open: true });
+    const total = ((view.assets && view.assets.counts) || {})[itemId] || rows.length;
+    det.appendChild(el('summary', {}, [icon('image'), ' Screenshots ',
+      el('span', { className: 'ck-muted' }, [total > rows.length ? rows.length + ' newest of ' + total : String(total)])]));
+    const grid = el('div', { className: 'ck-asset-grid' });
+    for (const g of pairAssets(rows)) grid.appendChild(renderAssetCard(g, rows));
+    det.appendChild(grid);
+    return det;
+  }
+
   function fillFeedList(list) {
     list.textContent = '';
     if (feedState.error) {
       list.appendChild(el('li', { className: 'ck-error-msg' }, ['Could not load the feed: ' + feedState.error]));
       return;
     }
-    const evs = feedState.events || [];
+    // 1.32: screenshots join the stream by time (Every kind) or stand alone (Screenshots). On a
+    // paged stream they stop at the oldest event loaded, so "Older" brings both forward together.
+    let evs = (feedState.events || []).slice();
+    if ((feedState.kind === '' || feedState.kind === 'asset') && feedState.item !== CHAT_ITEM) {
+      const rows = assetRows(feedState.item);
+      const oldest = feedState.next && evs.length ? evs[evs.length - 1].ts : null;
+      const groups = pairAssets(rows).filter(g => !oldest || g[g.length - 1].at >= oldest);
+      evs = evs.concat(groups.map(g => ({ kind: 'asset', ts: g[g.length - 1].at, item: g[0].item,
+        agent: g[g.length - 1].by === 'owner' ? 'you' : g[g.length - 1].agent, group: g, all: rows })));
+      const pruned = ((view && view.assets && view.assets.pruned) || [])
+        .filter(n => !feedState.item || n.item === feedState.item);
+      evs = evs.concat(pruned.map(n => ({ kind: 'asset', ts: n.at, item: n.item, pruned: n })));
+      evs.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    }
     if (!evs.length) list.appendChild(el('li', { className: 'ck-muted' }, ['Nothing here yet.']));
     for (const ev of evs) {
+      if (ev.kind === 'asset') {
+        const row = el('li', { className: 'ck-feed-row ck-feed-asset', dataKind: 'asset' });
+        const words = ev.pruned ? 'Screenshot removed to make room'
+          : (ev.group.length > 1 ? 'Before and after' : (ASSET_KIND[ev.group[0].kind] || 'Screenshot') + ' posted');
+        const head = el('div', { className: 'ck-feed-head' }, [
+          el('span', { className: 'ck-feed-kind', dataKind: 'asset' }, [icon('image'), ' ', words]),
+          el('span', { className: 'ck-inbox-item-id' }, [ev.item]),
+          el('span', { className: 'ck-feed-time', title: new Date(ev.ts).toLocaleString() }, [relTime(ev.ts)])]);
+        if (ev.agent) head.appendChild(el('span', { className: 'ck-feed-agent' }, ['by ' + ev.agent]));
+        row.appendChild(head);
+        if (ev.pruned) {
+          row.appendChild(el('div', { className: 'ck-feed-text ck-muted' }, ['"' + ev.pruned.caption + '": ' + ev.pruned.why
+            + '. Star a screenshot, or link it to a PR, to keep it.']));
+        } else {
+          row.appendChild(renderAssetCard(ev.group, ev.all));
+        }
+        list.appendChild(row);
+        continue;
+      }
       const isNew = ev.seq > seenAtOpen && ev.by === 'agent';
-      const where = ev.item === CHAT_ITEM ? 'chat' : (ev.qid || ev.item || '');
+      const where = ev.item === CHAT_ITEM ? 'chat' : ev.item === PRS_ITEM ? 'merge requests' : (ev.qid || ev.item || '');
       const row = el('li', { className: 'ck-feed-row' + (isNew ? ' ck-feed-new' : ''), dataKind: ev.kind, dataSeq: String(ev.seq) });
       const head = el('div', { className: 'ck-feed-head' }, [
         el('span', { className: 'ck-feed-kind', dataKind: ev.kind }, [feedWords(ev)]),
@@ -7382,12 +8034,12 @@
         t.textContent = ev.text;
         row.appendChild(t);
       }
-      const target = ev.item === CHAT_ITEM ? 'chat' : (items[ev.item] ? ev.item : null);
+      const target = ev.item === CHAT_ITEM ? 'chat' : ev.item === PRS_ITEM ? 'prs' : (items[ev.item] ? ev.item : null);
       if (target) {
         const open = el('button', { className: 'ck-btn ck-btn-quiet', type: 'button',
-          'aria-label': 'Open ' + (target === 'chat' ? 'the chat' : target) }, ['Open']);
+          'aria-label': 'Open ' + (target === 'chat' ? 'the chat' : target === 'prs' ? 'the pull requests' : target) }, ['Open']);
         open.addEventListener('click', () => {
-          if (target === 'chat') return selectTab('chat');
+          if (target === 'chat' || target === 'prs') return selectTab(target);
           openFromInbox(target);
         });
         row.appendChild(open);
@@ -7738,6 +8390,99 @@
     const data = items && items[id];
     return (data && typeof data.ref === 'string') ? data.ref : '';
   }
+  // ---- Lane colours (D10, owner 2026-10-11) ----------------------------------------------------
+  // A lane is the `lane-…` segment of an item's section (inherited from the nearest parent that has
+  // one). Its colour comes from `.overture.json` lanes[lane].color, or else a stable pick from the
+  // palette by the lane's name, so the same lane is always the same colour with no setup.
+  const LANE_COLORS = ['blue', 'teal', 'green', 'amber', 'orange', 'red', 'purple', 'pink'];
+  function itemSection(id) {
+    const seen = new Set();
+    let node = id;
+    while (node && items && items[node] && !seen.has(node)) {
+      seen.add(node);
+      if (items[node].section) return String(items[node].section);
+      node = items[node].parent;
+    }
+    return '';
+  }
+  function laneOf(id) {
+    const segs = itemSection(id).split('/');
+    for (let i = segs.length - 1; i >= 0; i--) if (segs[i].indexOf('lane-') === 0) return segs[i];
+    return '';
+  }
+  function laneConfig(lane) {
+    const cfg = view && view.config && view.config.lanes;
+    return (cfg && cfg[lane]) || {};
+  }
+  function laneHash(lane) {
+    let h = 0;
+    for (let i = 0; i < lane.length; i++) h = (h * 31 + lane.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  // One colour per lane, the same rule as chart.py `lane_colors`: configured colours first, then each
+  // other lane in name order takes its hash's colour or the next free one. Cached per items/config.
+  let laneCache = { items: null, cfg: null, map: {} };
+  function laneColors() {
+    const cfg = (view && view.config && view.config.lanes) || {};
+    if (laneCache.items === items && laneCache.cfg === cfg) return laneCache.map;
+    const all = new Set(Object.keys(cfg));
+    for (const id of Object.keys(items || {})) { const l = laneOf(id); if (l) all.add(l); }
+    const lanes = Array.from(all).sort();
+    const map = {};
+    const used = new Set();
+    for (const l of lanes) {
+      const c = (cfg[l] || {}).color;
+      if (LANE_COLORS.indexOf(c) >= 0) { map[l] = c; used.add(c); }
+    }
+    for (const l of lanes) {
+      if (map[l]) continue;
+      const start = laneHash(l) % LANE_COLORS.length;
+      let pick = LANE_COLORS[start];
+      for (let k = 0; k < LANE_COLORS.length; k++) {
+        const cand = LANE_COLORS[(start + k) % LANE_COLORS.length];
+        if (!used.has(cand)) { pick = cand; break; }
+      }
+      map[l] = pick;
+      used.add(pick);
+    }
+    laneCache = { items: items, cfg: cfg, map: map };
+    return map;
+  }
+  function laneColor(lane) {
+    return laneColors()[lane] || LANE_COLORS[laneHash(lane) % LANE_COLORS.length];
+  }
+  function segWords(seg) {
+    const m = /^(wave|phase|lane)-(.+)$/.exec(seg);
+    if (!m) return seg;
+    if (m[1] === 'lane') {
+      const label = laneConfig(seg).label;
+      if (label) return label;
+      const w = m[2].replace(/[-_]+/g, ' ');
+      return w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1);
+    }
+    return m[1].charAt(0).toUpperCase() + m[1].slice(1) + ' ' + m[2];
+  }
+  // A small chip naming the lane, coloured by it; null when the item has no lane.
+  function renderLaneChip(id) {
+    const lane = laneOf(id);
+    if (!lane) return null;
+    return el('span', { className: 'ck-lane-chip', dataLane: lane, dataLaneColor: laneColor(lane),
+      title: itemSection(id).split('/').map(segWords).join(' › ') }, [segWords(lane)]);
+  }
+  // The item's whole section as a trail, e.g. "Wave 2 › Phase 2.2 › API", at the top of its panel.
+  function renderLaneTrail(id) {
+    const section = itemSection(id);
+    if (!section) return null;
+    const lane = laneOf(id);
+    const trail = el('nav', { className: 'ck-lane-trail', 'aria-label': 'Where this item sits',
+      dataLaneColor: lane ? laneColor(lane) : null });
+    section.split('/').forEach((seg, i) => {
+      if (i) trail.appendChild(el('span', { className: 'ck-lane-sep', 'aria-hidden': 'true' }, [' › ']));
+      trail.appendChild(seg === lane ? renderLaneChip(id) : el('span', {}, [segWords(seg)]));
+    });
+    return trail;
+  }
+
   function renderItemRefTag(id) {
     const r = itemRef(id);
     if (!r) return null;
@@ -7939,6 +8684,7 @@
         el('span', { className: 'ck-priority-dot', dataHealth: health }, []),
         el('span', { className: 'ck-priority-project' }, [r.project]),
         el('span', { className: 'ck-priority-qid' }, [' · ' + r.qid]),
+        r.isSelf !== false ? renderLaneChip(r.item || qidItem(r.qid)) : null,
         r.text ? el('span', { className: 'ck-priority-text' }, [' · ' + r.text]) : null,
         el('span', { className: 'ck-priority-when ck-muted' }, [' · ' + relTime(r.ts)]),
         renderSnoozeMenu(r.project, r.qid)
@@ -8016,7 +8762,7 @@
       const itemData = items && items[id];
       const header = el('div', { className: 'ck-inbox-item ck-favorite-item', tabindex: '0' }, [
         el('span', { className: 'ck-star ck-star-on', 'aria-label': 'Starred item' }, ['★']),
-        renderItemRefTag(id),
+        renderItemRefTag(id), renderLaneChip(id),
         el('span', { className: 'ck-inbox-item-id' }, [id]),
         el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : ''])
       ]);
@@ -8122,6 +8868,66 @@
     return ['opened ', pr.created_at];
   }
 
+  // Merge from the PR tab (1.33, D7). The server merges nothing: Merge sends an owner message on @prs and the
+  // steward's session merges with its own gh, or says why not. Shown only for an open, ready, passing PR whose
+  // head commit the steward pushed; the owner confirms inline, and the request names that commit.
+  const prMergeAsking = new Set();      // PR numbers whose inline confirmation is open
+  function prMergeFacts(pr) {
+    const msgs = ((view && view.threads) || {})['@prs'] || [];
+    const reqs = msgs.filter(m => m.by === 'owner' && m.intent === 'pr-merge' && m.pr === pr.number)
+      .sort((x, y) => y.seq - x.seq);
+    const last = reqs[0] || null;
+    const reply = last ? msgs.filter(m => m.by === 'agent' && m.reply_to === last.id).sort((x, y) => y.seq - x.seq)[0] : null;
+    return { last, reply };
+  }
+  function refillPRs() { const box = panelEl && panelEl.querySelector('.ck-prs'); if (box) fillPRs(box); }
+  function renderPRMerge(pr) {
+    if (pr.state !== 'open') return null;
+    const f = prMergeFacts(pr);
+    const wrap = el('div', { className: 'ck-pr-merge' });
+    const status = el('span', { className: 'ck-muted ck-pr-merge-status', role: 'status', 'aria-live': 'polite' });
+    if (f.last && !f.reply) {
+      status.textContent = 'Merge requested ' + relTime(f.last.ts) + ' \u00b7 waiting for a session';
+      wrap.appendChild(status);
+      return wrap;
+    }
+    if (f.reply && f.last) {
+      status.textContent = String(f.reply.text || '').slice(0, 200);
+      wrap.appendChild(status);
+    }
+    if (pr.draft) return wrap.childNodes.length ? wrap : null;
+    if (pr.checks !== 'success' || !pr.head_sha) {
+      wrap.appendChild(el('span', { className: 'ck-muted' }, [pr.head_sha ? 'Merge when checks pass' : 'Merge needs the steward to push this PR again (agent.py prs-push)']));
+      return wrap;
+    }
+    if (!prMergeAsking.has(pr.number)) {
+      const btn = el('button', { type: 'button', className: 'ck-btn ck-pr-merge-btn',
+        'aria-label': 'Merge pull request ' + pr.number + ' into ' + pr.base }, [icon('git-branch') || '', 'Merge']);
+      btn.addEventListener('click', () => { prMergeAsking.add(pr.number); refillPRs(); });
+      wrap.appendChild(btn);
+      return wrap;
+    }
+    const q = el('div', { className: 'ck-pr-merge-confirm', role: 'group', 'aria-label': 'Confirm merge of ' + pr.number });
+    const href = prHref(pr.url);
+    q.appendChild(el('span', {}, ['Merge #' + pr.number + ' into ' + pr.base + '? The steward session merges it with its own GitHub access. ']));
+    if (href) q.appendChild(el('a', { href: href + '/files', target: '_blank', rel: 'noopener noreferrer' }, ['See the diff']));
+    const go = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Merge']);
+    const no = el('button', { type: 'button', className: 'ck-btn' }, ['Cancel']);
+    const err = el('p', { className: 'ck-error-msg', role: 'alert', hidden: 'hidden' });
+    no.addEventListener('click', () => { prMergeAsking.delete(pr.number); refillPRs(); });
+    go.addEventListener('click', async () => {
+      go.disabled = true; err.hidden = true;
+      const r = await apiPost('/message', { item: '@prs', intent: 'pr-merge', pr: pr.number, expected_head_sha: pr.head_sha, base: pr.base,
+        text: 'Merge #' + pr.number + ' into ' + pr.base }, 'pr-merge-' + pr.number + '-' + pr.head_sha);
+      if (r.error) { go.disabled = false; err.textContent = 'Not sent: ' + r.error + ' Nothing was merged.'; err.hidden = false; announce('Error: ' + r.error); return; }
+      prMergeAsking.delete(pr.number); announce('Merge requested.'); refillPRs();
+    });
+    q.appendChild(el('div', { className: 'ck-actions' }, [go, no]));
+    q.appendChild(err);
+    wrap.appendChild(q);
+    return wrap;
+  }
+
   function renderPRRow(pr) {
     const row = el('li', { className: 'ck-feed-row ck-pr-row', dataState: pr.state, dataNumber: String(pr.number),
       dataDraft: pr.draft ? 'true' : 'false', dataChecks: pr.checks || 'none' });
@@ -8143,6 +8949,8 @@
       el('span', { className: 'ck-feed-time', title: ts ? new Date(ts).toLocaleString() : '' }, [verb + relTime(ts)])
     ]);
     row.appendChild(meta);
+    const mergeBox = renderPRMerge(pr);
+    if (mergeBox) row.appendChild(mergeBox);
     const links = prLinks(pr);
     if (links.length) {
       const bar = el('div', { className: 'ck-pr-items' });

@@ -338,9 +338,47 @@ class Demo:
              "author": "agent-bot", "created_at": ts(c), "updated_at": ts(m if m else 1),
              "merged_at": ts(m) if st == "merged" else None, "closed_at": ts(m) if st == "merged" else None,
              "url": f"https://github.com/{repo}/pull/{n}",
-             "merge_commit": (secrets.token_hex(20) if st == "merged" else None), "checks": ck}
+             "merge_commit": (secrets.token_hex(20) if st == "merged" else None), "checks": ck,
+             "head_sha": secrets.token_hex(20)}
             for n, t, st, d, ck, c, m in prs]}
         self.agent("/prs", body, "steward")
+
+        # 1.32: screenshots agents posted on items (FEED-ASSETS.md). Real ones: the tab bar before and
+        # after the icons PR, and a UX component rendered by tools/ux_check.py.
+        shots = HERE / "assets"
+        def asset(item, name, caption, kind, who, **extra):
+            data = base64.b64encode((shots / name).read_bytes()).decode()
+            self.agent("/asset", {"item": item, "content_b64": data, "caption": caption, "kind": kind, **extra}, who)
+        asset("UI-3", "plan-picker-375.png", "Plan picker at 375px, dark, scripts off", "screenshot", "agent-4")
+        asset("UI-1", "tabs-before.png", "Tab bar before icons", "before", "agent-4")
+        asset("UI-1", "tabs-after.png", "Tab bar with icons: five tabs fit one line at 515px", "after", "agent-4",
+              pr=214)
+
+        # 1.33: a UX item with two drawn versions of a component, for the UX View modal.
+        comp = (REPO / "plugin/skills/console-ux/references/example-plan-picker.html").read_text()
+        ureq = self.owner("/api/message", {"item": "UI-3", "text": "Draw the plan picker", "intent": "visual",
+                                           "purpose": "ux"})["record"]
+        self.agent("/visual", {"request": ureq["id"], "format": "html", "title": "Plan picker",
+                               "content": comp.replace("Pro", "Team", 1), "text": "First pass: three plans."}, "agent-4")
+        ureq2 = self.owner("/api/message", {"item": "UI-3", "text": "Make the price clearer", "intent": "visual",
+                                            "purpose": "ux"})["record"]
+        self.agent("/visual", {"request": ureq2["id"], "format": "html", "title": "Plan picker", "content": comp,
+                               "text": "Second pass: clearer price and a recommended plan."}, "agent-4")
+
+        # 1.33: UI-3 is linked to a Claude Design whose artifacts an agent listed (the UX View picker), and the
+        # owner has attached a picture of their own to it.
+        design = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
+        self.owner("/api/message", {"item": "UI-3", "intent": "ux-link", "url": design, "text": "Link the design"})
+        self.agent("/design-inventory", {"url": design, "nonce": "di1", "artifacts": [
+            {"path": "components/plan-card.html", "title": "Plan card"},
+            {"path": "components/checkout-form.html", "title": "Checkout form"},
+            {"path": "buttons/primary.html", "title": "Primary button"},
+            {"path": "buttons/secondary.html", "title": "Secondary button"},
+            {"path": "tokens/colors.html", "title": "Colour tokens"},
+            {"path": "tokens/type.html", "title": "Type scale"},
+            {"path": "layout/two-column.html", "title": "Two-column layout"}]}, "agent-4")
+        sketch = base64.b64encode((shots / "tabs-before.png").read_bytes()).decode()
+        self.owner("/api/asset-upload", {"item": "UI-3", "content_b64": sketch, "caption": "My sketch: keep the plans in one row"})
 
         # The steward is watching and synced a minute ago.
         self.agent("/cursor", {"last_synced_at": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
@@ -506,6 +544,58 @@ def capture(demo: Demo) -> list[str]:
                 pg.wait_for_timeout(300)
             panel(pg, "feature-stale")
         shot("feature-stale", stale)
+
+        def feed_assets(pg):
+            pg.locator("#ck-tab-feed").click()
+            pg.wait_for_timeout(900)
+            pg.select_option("#ck-feed-kind", "asset")
+            pg.wait_for_timeout(1200)
+            panel(pg, "feature-assets")
+        shot("feature-assets", feed_assets)
+
+        def ux_view(pg):
+            item(pg, "UI-3")
+            pg.get_by_role("button", name="Open UX View for UI-3").click()
+            pg.wait_for_selector("#ck-ux-view")
+            pg.wait_for_timeout(1200)
+            pg.screenshot(path=str(OUT / "feature-ux-view.png"))
+        shot("feature-ux-view", ux_view)
+
+        def ux_picker(pg):
+            item(pg, "UI-3")
+            pg.get_by_role("button", name="Open UX View for UI-3").click()
+            pg.wait_for_selector("#ck-ux-view")
+            pg.locator(".ck-ux-settings summary").click()
+            boxes = pg.locator(".ck-ux-ref input[type=checkbox]")
+            boxes.nth(0).check()
+            boxes.nth(2).check()
+            pg.locator(".ck-ux-refmode").nth(2).select_option("swap")
+            pg.wait_for_timeout(1200)
+            pg.screenshot(path=str(OUT / "feature-ux-picker.png"))
+        shot("feature-ux-picker", ux_picker)
+
+        def pr_merge(pg):
+            pg.locator("#ck-tab-prs").click()
+            pg.wait_for_timeout(900)
+            pg.get_by_role("button", name="Merge pull request 214 into main").click()
+            pg.wait_for_timeout(500)
+            panel(pg, "feature-pr-merge")
+        shot("feature-pr-merge", pr_merge)
+
+        def attach(pg):
+            item(pg, "UI-3")
+            pg.locator(".ck-attach-row").scroll_into_view_if_needed()
+            pg.evaluate("document.querySelector('.ck-attach-row').scrollIntoView({block: 'center'})")
+            pg.wait_for_timeout(500)
+            panel(pg, "feature-attach")
+        shot("feature-attach", attach)
+
+        def asset_viewer(pg):
+            item(pg, "UI-1")
+            pg.locator(".ck-assets-fold .ck-asset-thumb").last.click()
+            pg.wait_for_timeout(900)
+            pg.screenshot(path=str(OUT / "feature-asset-viewer.png"))
+        shot("feature-asset-viewer", asset_viewer)
 
         def tickets_tab(pg):
             pg.locator("#ck-tab-tickets").click()

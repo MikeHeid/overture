@@ -50,7 +50,7 @@ import tempfile
 import time
 from pathlib import Path
 
-WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan")     # overture/doorbell.py
+WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link", "pr-merge")     # overture/doorbell.py
 CURSOR_FILE = "agent-cursor.json"      # overture/doorbell.py
 MAX_DOORBELL = 64 << 20                # overture/doorbell.py
 MAX_CURSOR = 4096                      # overture/doorbell.py
@@ -355,6 +355,31 @@ def _entry(project: Path) -> dict | None:
     return None if e is None else checked(e)
 
 
+ROLE_ENV = "CLAUDE_PLUGIN_OPTION_ROLE"     # the plugin's Machine role setting; overture/registry.py (D11)
+
+
+def machine_role() -> str | None:
+    """This machine's role: "worker" if the registry or the plugin setting says so, else "steward", else None.
+    A worker wins. Never raises: an unreadable registry is no role here (the hook has its own note for that)."""
+    found = []
+    try:
+        raw = _read_regular(_registry_path(), MAX_REGISTRY)
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else {}
+        found.append(doc.get("role") if isinstance(doc, dict) else None)
+    except (Unsafe, OSError, UnicodeDecodeError, ValueError):
+        pass
+    found.append((os.environ.get(ROLE_ENV) or "").strip().lower() or None)
+    found = [v for v in found if v in ("steward", "worker")]
+    return "worker" if "worker" in found else ("steward" if found else None)
+
+
+def worker_note(name: str) -> str:
+    return (f"Owner console steward: this machine's role is `worker`, so no session here is the steward, even one "
+            f"named {name}; the steward runs on another machine. Post questions to the console with the console-ask "
+            f"skill, and never run `watch`, `synced` or the fold: they are refused here. AskUserQuestion is blocked "
+            f"in this session.")
+
+
 def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None, bool]:
     """The steward note for this session (0.8.3), and whether this session is the steward.
 
@@ -366,6 +391,8 @@ def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None
         return None, True
     if me is None:
         me = os.environ.get(AGENT_ENV, "")
+    if is_name(me) and me == name and machine_role() == "worker":
+        return worker_note(name), False
     if is_name(me) and me == name:
         return (f"Owner console steward: this session is the steward, {name}. It alone runs `watch`, `synced` "
                 f"and the fold for this console. It may ask the owner live (AskUserQuestion), but mirrors each "
@@ -504,6 +531,23 @@ def _upgrade_note(agent: str, state: Path, kit: Path, running: str, last: str | 
     )
 
 
+def _server_down(state: Path, kit: Path) -> str | None:
+    """One line when this project is served by the one server (`server.py --all`, server.json) and its agent
+    socket is not there. Read only: it names the command that says why, and starts nothing (D1)."""
+    sf = _registry_path().parent / "server.json"
+    try:
+        raw = _read_regular(sf, 1 << 20)
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (Unsafe, OSError, UnicodeDecodeError, ValueError):
+        return None
+    mine = isinstance(doc, dict) and isinstance(doc.get("projects"), dict) and any(
+        isinstance(p, dict) and p.get("state") == str(state) for p in doc["projects"].values())
+    if not mine or (sf.parent / "server.sock").exists():
+        return None
+    return (f"Owner console: the console server is not running, so the owner cannot reach it. "
+            f"`python3 {kit / 'server.py'} status` says why; `daemon start` or `service install --start` runs it.")
+
+
 def context(project: Path, sid: str | None = None) -> str | None:
     """The note for this session, or None when there is nothing to say."""
     try:
@@ -532,6 +576,9 @@ def context(project: Path, sid: str | None = None) -> str | None:
     steward, mine = steward_line(e, agent, whoami(state, sid))
     if steward:
         ask += "\n\n" + steward
+    down = _server_down(state, kit)
+    if down:
+        ask += "\n\n" + down
     prefix = (upgrade + "\n\n") if upgrade else ""
     if not wake:
         return prefix + ask
@@ -545,20 +592,26 @@ def context(project: Path, sid: str | None = None) -> str | None:
         if r["intent"] == "chat":  # the chat is not a register item (0.7.0)
             lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): answer the owner's chat message")
             continue
+        if r["intent"] == "pr-merge":  # 1.33: on the @prs thread, which is no register item
+            lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): the owner asked to merge a pull request: "
+                         f"`{agent} pr-merge --project WORKTREE --request ID` (id in `todo.merge`)")
+            continue
         if r["intent"] == "scan":  # CONSOLE-kit/Q40: stale rulings to answer; numbered by `rx`, not by the store
             n = r.get("qids")
             lines.append(f"- rx {_rx(r)} ({_shown(r.get('ts'), TS)}): answer the owner's scan for a resolve"
                          + (f" ({n} stale ruling{'' if n == 1 else 's'})" if isinstance(n, int) and
                             not isinstance(n, bool) else ""))
             continue
-        what = {"process": "process the answers", "visual": "draw the visual the owner asked for"}.get(
+        what = {"process": "process the answers", "visual": "draw the visual the owner asked for",
+                "ux-save": "land the component the owner saved", "ux-link": "note the owner's Claude Design link"}.get(
             r["intent"], "run a deliberation round")
         lines.append(f"- seq {r['seq']} ({_shown(r.get('ts'), TS)}): {what} on `{_shown(r.get('item'), ITEM_ID)}`")
     if len(wake) > MAX_LISTED:
         lines.append(f"- … and {len(wake) - MAX_LISTED} more (`{agent} inbox`)")
     lines += ["",
-              "Use the console-process skill for `process`, `chat` and `scan`, the console-fork skill for "
-              "`fork`, and the console-visual skill for `visual`. "
+              "Use the console-process skill for `process`, `chat`, `scan` and `pr-merge`, the console-fork skill for "
+              "`fork`, the console-visual skill for `visual` (console-ux on a UX item), and the console-ux "
+              "skill for `ux-save` and `ux-link`. "
               f"`{agent} inbox` lists them; after handling one, `{agent} synced --through SEQ` "
               "(a scan: `--rx-through RX`) records it so it is not offered again.", "", ask]
     return "\n".join(lines)

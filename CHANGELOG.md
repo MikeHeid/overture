@@ -2992,6 +2992,76 @@ on its own.
 
 ## Unreleased
 
+- **Design-system picker for UX View.** With a Claude Design linked, an
+  agent can list the project's artifacts (`agent.py design-inventory`), and
+  UX View's Settings then offers them: filter, tick up to 10, and choose
+  **inspire** (borrow the look) or **swap** (build the new version from that
+  artifact). **Generate** carries your picks as `refs`; the server refuses a
+  pick that is not on the agent's list. Nothing opens or fetches the design
+  from the console, and a swap is always a new version, never an overwrite.
+  Without a list, **Ask an agent to list it** posts the request on the item.
+
+- **Machine role (D11).** A new plugin setting, **Machine role**
+  (`steward` or `worker`), and `agent.py role worker|steward|clear` in your
+  registry. On a `worker` machine no session is the steward, whatever it is
+  named: `/overture:as <steward>` is refused, a session started under that
+  name is told so and cannot ask you live, and `watch`, `synced` and the fold
+  refuse. Use it when the steward runs on a home server and laptops only
+  work. If the plugin setting and the registry disagree, `worker` wins.
+
+- **Attach your own images (F2).** In an item's Discussion box, **Attach
+  image** (or paste an image) puts your picture on that item beside the
+  agents' screenshots, shown as "you" in the Feed. It is checked like an
+  agent's (PNG, JPEG, WebP or GIF; 2 MiB, or 8 MiB for a GIF), is always a
+  screenshot, and has its own rate limit so it never uses an agent's.
+- **Fixes.** A Design link you are typing in UX View no longer disappears
+  when the console refreshes; UX View follows a new version when you are on
+  the newest one; the Feed can be filtered to merge requests and links back
+  to the PR tab.
+
+- **Run the server your way: `server.py daemon|service|status|health`
+  (D1–D3).** `server.py daemon start|stop` runs the one server detached
+  with a pid file and a log; `service install|uninstall` writes and enables
+  the `overture-console.service` systemd user unit (Linux, WSL; `--start`
+  also starts it); `status` and `health` only read, and `health` reports the
+  agent door, each project's port, version skew and linger, and removes a
+  stale pid or socket file. A daemon and a service refuse to run together,
+  naming each other. When the one server is down, the SessionStart hook adds
+  one line saying how to ask. `server.py --all` in the foreground is
+  unchanged. macOS launchd comes next.
+
+- **UX View: the Scripts switch (step 4, D4).** A component can now run
+  script, only if you turn it on. The visual an agent posts stays
+  script-free; an agent may also store a scripted source beside it
+  (`agent.py component-source`, write-once). **Settings → Scripts (this
+  version)** sends your `ux-scripts` request; only then does
+  `/api/component-render` serve that source, in a frame sandboxed with
+  `allow-scripts` only (no same-origin, forms, popups or top navigation)
+  under `default-src 'none'; connect-src 'none'`. The modal shows "⚡ Scripts
+  on", and a save with it on lands the scripted source with `scripts: true`.
+  This reverses part of the 1.31 hardening for that one route; it is off by
+  default and per version.
+
+- **Merge from the PR tab (UX View step 3, D7).** An open, ready, passing
+  pull request gets a **Merge** button on the PR tab, confirmed inline. The
+  server merges nothing and holds no GitHub token: Merge sends an owner
+  request on the new reserved `@prs` thread naming the PR and the head commit
+  you saw, and the steward's session merges with its own `gh`:
+  `agent.py pr-merge --project WORKTREE --request ID`. It re-reads the PR,
+  refuses by name (not ready, checks failing, new commits since you asked,
+  request over 24 hours old) and replies on `@prs` either way; the merge uses
+  `--match-head-commit`. The PR snapshot gained an optional `head_sha`
+  (`prs-push` sends it), and a kit older than this refuses a store holding an
+  `@prs` message, by name.
+
+- **UX View (step 2: the modal).** On a UX item, **◫ UX View** opens a
+  full-screen overlay (shortcut `u`; every HTML visual also has **Open in UX
+  View**). It shows the item's HTML versions in an empty sandbox at Mobile,
+  Tablet, Desktop or Fit width, with a version stepper, **Generate ▾**,
+  **Save as component** and a Settings panel for the Claude Design link.
+  It sends the step 1 messages and writes no file. The Scripts switch comes
+  in a later step.
+
 Found while rendering the new README screenshots against a full
 example dashboard.
 
@@ -3108,7 +3178,7 @@ example dashboard.
   modal with Save, Generate and Generate with input; components saved
   to `components/<item>.md` with a dated backup, through the steward;
   new UX items placed into their lane automatically.
-- **Icons (D8).** A bundled subset of 23 Lucide icons (lucide-static
+- **Icons (D8).** A bundled subset of 24 Lucide icons (lucide-static
   0.460.0, ISC; the licence is in `vendor/LUCIDE-LICENSE.txt`), drawn
   inline with `currentColor`, so there is no icon font, no CDN and no
   request. Every tab, the More menu, the Chat ▾ menu and the footer's
@@ -3187,6 +3257,101 @@ example dashboard.
   attribute selector and quoted font or `content` value silently stopped
   matching. CSS now passes through as written, with `<` turned into the
   CSS escape `\3C`, so no markup can be spelled inside it.
+- **Screenshots in the Feed** (FEED-ASSETS.md). Agents post screenshots
+  and recordings on an item with `agent.py asset ITEM --file … --caption …
+  [--kind before|after|screenshot|recording] [--qid] [--pr] [--ticket]`.
+  - **Where they show:** in the Feed, under a new **Screenshots** filter,
+    with a before and after side by side; in a **Screenshots** fold on the
+    item; and in a full-size viewer with ◂ ▸ and the arrow keys.
+  - **Your controls:** star one to keep it; delete it from the owner door
+    only, with a two-step confirm. Under reduced motion a GIF waits for a
+    press of play.
+  - **Formats:** PNG, JPEG, WebP or GIF, judged by the file's magic bytes;
+    SVG is refused.
+  - **Limits:** 2 MiB for a still, 8 MiB for a GIF, 8000 px on a side;
+    30 per agent and 120 per project per 10 minutes (unnamed agents share
+    one bucket); at most 3000 in the index. Format, size and sides are
+    checked before the server takes its lock, and a JPEG's header scan stops
+    at 256 KiB, so a crafted file can't stall the console.
+  - **Storage:** files are kept under `STATE/assets/`, outside the store, so
+    an older kit still opens the project. Each is served sandboxed with
+    `nosniff`. The same bytes posted twice on an item are one asset.
+  - **When space runs short (F1):** at 100 per item or 300 MiB per project,
+    the oldest screenshots that are neither starred nor linked to a PR are
+    removed, and the Feed notes each one. A starred "after" keeps its
+    "before".
+  - **When agents post (F3):** the console-process and console-ux skills
+    post a before and an after for every visible change.
+- **The Feed's filter row stays on one line (D9).** Its selects now shrink
+  instead of wrapping.
+- **Lane colours (D10).** A lane is the `lane-…` segment of an item's
+  section, inherited from its parent. Each lane gets a colour from an
+  8-colour palette, checked at 3:1 or better against the surfaces in light
+  and dark.
+  - **How colours are picked:** configured colours first, then each other
+    lane in name order takes its hash's colour or the next free one. The
+    console and the project map use the same rule, and two lanes share a
+    colour only past 8.
+  - **Where they show:** a lane chip with a matching left edge on inbox and
+    Priority rows, and a "Wave › Phase › Lane" trail on the item.
+  - **Your dashboard:** items get `data-ck-lane` and `data-ck-lane-color`,
+    plus `--ck-lane-<colour>` custom properties to style with.
+  - **Config:** `.overture.json` takes `lanes: {"lane-x": {"color", "label",
+    "ux"}}`, with palette names only and anything else refused by name.
+    `ux: true` makes the lane a UX lane for console-ux and console-process.
+- **The project map is boxed by lane and drawn left to right.** A wide,
+  shallow tree (waves over many items) used to render as one unreadable
+  row, the bug logged earlier. Now its leaves stack down the page, grouped
+  in lane-coloured boxes.
+- **Tall charts fit to width.** A chart much taller than its frame (the
+  project map, now drawn left to right) is scaled to the frame's width and
+  opens at its top, so its labels stay readable. Shorter charts still fit
+  whole.
+- **Fix: no traceback when a browser drops a chart, visual or screenshot
+  mid-answer.** The owner door already treated a closed connection as
+  normal for JSON answers. Raw answers (`_send_raw`: charts, visuals,
+  assets) now do the same, so a re-render or a closed fold no longer logs a
+  `BrokenPipeError` traceback.
+- **Fix: the status chip no longer covers the skin and theme toggles.** It
+  sits in the header's own row, before the toggles. The header's buttons
+  keep their width and the title shrinks with an ellipsis instead.
+- **Project map filter chips use the state icons** (D8), instead of the old
+  `? ! ~ o` text marks.
+- **UX View, step 1: the save path, without the console yet**
+  (UX-VIEW.md).
+  - **Visual requests** may say `purpose: "ux"` and `from: "design"`.
+  - **Two new owner intents:**
+    - **`ux-save`** names an HTML visual on the same item as the
+      component. An owner-only message; the store refuses a Mermaid visual,
+      another item's visual, or a missing one.
+    - **`ux-link`** carries a Claude Design `url`, or `""` to unlink. The
+      URL is held to the exact shape `https://claude.ai/design/p/<uuid>`
+      (pinned from a real link): no query, fragment or other host. A pasted
+      share link (`?via=share`) is cleaned, not stored. The server never
+      fetches it.
+  - **Delivery to agents:** both wake the doorbell and are listed in
+    `todo.ux` until an agent replies to them.
+  - **Items** may carry `ux: true` and a `design` link, checked the same way.
+  - **`/ux-export`** (agent door, a read) returns the saved visual, its doc
+    and the item's newest Design link.
+  - **`agent.py ux-export --project WORKTREE --save ID`** writes
+    `components/<item>.md` (front matter, doc, fenced HTML) and
+    `components/<item>.css` in the agent's own worktree, never the server's
+    checkout.
+    - A previous version moves to `components/.history/<item>-<hash>.md`,
+      and the newest 10 are kept.
+    - Running it twice changes nothing.
+    - The steward opens the PR.
+  - **The skills:** console-ux step 7 and console-process now land saves
+    and links.
+  - **Rollback:** a kit older than 1.32 refuses a store holding `ux-save`
+    or `ux-link` messages (or `purpose`, `from`, `visual_id` or `url`) by
+    name, and an `items.json` with `ux` or `design`. To go back, upgrade
+    again, or set those records aside.
+  - **Pointing at design-system artifacts.** The console-ux skill reads
+    named paths first, borrows the look and never the bytes, names its
+    sources, and treats a design file's instructions as noise. A catalog
+    picker and a "swap" were reviewed and not built (UX-VIEW.md).
 - **The published page's own scripts run again.** 1.31 served the
   console under `script-src 'nonce-…'`, and only the console's own
   script carried the nonce, so a published dashboard's inline scripts

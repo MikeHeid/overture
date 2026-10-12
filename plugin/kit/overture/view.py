@@ -256,6 +256,30 @@ def waiting_visuals(threads: Mapping[str, list[dict]], visuals: Mapping[str, lis
     return [{"id": m["id"], "item": m["item"]} for m in sorted(reqs, key=lambda m: m["seq"])]
 
 
+UX_INTENTS = ("ux-save", "ux-link")
+
+
+def waiting_merges(threads: Mapping[str, list[dict]]) -> list[dict]:
+    """1.33 (D7): the owner's pr-merge requests on @prs that no agent reply answers yet, oldest first, as
+    {id, ts, pr, expected_head_sha}. The steward merges each with its own gh, or refuses by name, and replies."""
+    msgs = threads.get(S.PRS_ITEM, [])
+    answered = {m.get("reply_to") for m in msgs if m["by"] == "agent"}
+    return [{"id": m["id"], "ts": m["ts"], "pr": m["pr"], "expected_head_sha": m["expected_head_sha"]}
+            for m in sorted(msgs, key=lambda m: m["seq"])
+            if m["by"] == "owner" and m.get("intent") == "pr-merge" and m["id"] not in answered]
+
+
+def waiting_ux(threads: Mapping[str, list[dict]]) -> list[dict]:
+    """1.32 (UX-VIEW.md): the owner's ux-save and ux-link messages no agent message answers yet (its
+    `reply_to`), oldest first, as {id, item, intent, visual_id | url}. The steward lands each and replies."""
+    answered = {m.get("reply_to") for msgs in threads.values() for m in msgs if m["by"] == "agent"}
+    reqs = [m for msgs in threads.values() for m in msgs
+            if m["by"] == "owner" and m.get("intent") in UX_INTENTS and m["id"] not in answered]
+    return [{"id": m["id"], "item": m["item"], "intent": m["intent"],
+             **{k: m[k] for k in ("visual_id", "url") if k in m}}
+            for m in sorted(reqs, key=lambda m: m["seq"])]
+
+
 # What the slim reads need from a server's view. A field added in K1 (waiting_visuals)
 # is not listed: a server older than K1 does not send it, and it is derived from these.
 NEEDED = ("items", "questions", "threads", "forks", "inbox", "awaiting_agent", "orphaned", "chat",
@@ -301,6 +325,8 @@ def todo(view: dict) -> dict:
     awaiting_agent  the items whose thread waits on the agent
     chat            whether the chat waits, and the owner message to reply to
     visuals         the visual requests nothing answers yet (id, item)
+    ux              the owner's ux-save and ux-link messages no agent reply answers yet (1.32)
+    merge           the owner's pr-merge requests no agent reply answers yet (1.33)
     scans           every scan for a resolve that is not done, oldest first: its id, when, and the rulings
                     still waiting on the steward (CONSOLE-kit/Q40); an older server's view has none
     inbox           the qids in the owner's inbox
@@ -315,6 +341,8 @@ def todo(view: dict) -> dict:
         "chat": {"awaiting_agent": chat["awaiting_agent"],
                  "reply_to": owner_chat[-1]["id"] if chat["awaiting_agent"] and owner_chat else None},
         "visuals": [dict(w) for w in _waiting(view)],
+        "ux": waiting_ux(view["threads"]),
+        "merge": waiting_merges(view["threads"]),
         "scans": [{"id": sc["id"], "ts": sc["ts"], "waiting": [q for q, v in sc["rulings"].items() if not v]}
                   for sc in sorted(view.get("scans", {}).values(), key=lambda sc: sc["seq"]) if not sc["done"]],
         "inbox": list(view["inbox"]),
@@ -385,13 +413,13 @@ def item_view(payload: dict, item: str) -> dict:
     `view` reads this the same way; `view.scope` names the item.
     """
     view, items = payload["view"], payload["items"]
-    if item == S.CHAT_ITEM:
+    if item in (S.CHAT_ITEM, S.PRS_ITEM):
         scope: set[str] = set()
     elif item in items:
         scope = subtree(items, item)
     else:
         raise KeyError(f"no item {item!r} in the project's item list")
-    keep = scope | ({S.CHAT_ITEM} if item == S.CHAT_ITEM else set())
+    keep = scope | ({item} if item in (S.CHAT_ITEM, S.PRS_ITEM) else set())
     questions = {q: v for q, v in view["questions"].items() if v["question"]["item"] in keep}
     forks = {f: v for f, v in view["forks"].items() if v["message"]["item"] in keep}
     out = {**view,

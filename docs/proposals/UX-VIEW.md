@@ -15,11 +15,65 @@ the dashboard automatically.
 Status:
 
 - Decided on 2026-10-11 (D4–D7, with amendments). D13, the Claude Design
-  link, took its ★ as an architect default; its URL shapes wait on a real
-  link. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
+  link, took its ★ as an architect default; its URL shape is now pinned from a
+  real link. See [OPEN-DECISIONS.md](OPEN-DECISIONS.md).
 - Revised the same day after an advisor, a DevOps and a UX review. Their
   findings are folded in; the list is at the end.
 - S1 and S2 below took their ★ as *architect defaults* (2026-10-11).
+- **Step 1 shipped in 1.32:**
+  - `purpose`/`from` on visual requests;
+  - the `ux-save` and `ux-link` owner intents, which wake the doorbell and
+    are listed in `todo.ux`;
+  - the item fields `ux` and `design`;
+  - the `/ux-export` read;
+  - `agent.py ux-export`, which writes `components/<item>.md` and `.css`
+    with hash-named backups, keeping 10;
+  - the console-ux skill's save path.
+
+- **Step 2 shipped (the modal):** `◫ UX View` on a UX item (or **Open in UX
+  View** on any HTML visual, or `u`); version stepper (`[` `]`); a Mobile /
+  Tablet / Desktop / Fit radio group with a scaled, sandboxed preview;
+  **Generate ▾** (face, with notes, from design); **Save as component**; a
+  Settings panel with the Design link; live status line. Differences from the
+  sketch above: "Generate with notes" opens a notes box in the modal rather
+  than a Thread tab, and the Scripts switch is left to step 4 (the panel says
+  so).
+
+- **Step 3 shipped (Merge from the PR tab):** `head_sha` in the PR snapshot
+  (optional; `prs-push` sends it); the reserved `@prs` thread and the owner's
+  `pr-merge` intent; the server stores a request only for a PR the steward's
+  last push shows open, not draft, passing and still at the commit the owner
+  saw, one pending request per PR; the PR tab's **Merge** button with its
+  inline two-step confirmation and the states "Merge requested … waiting for
+  a session" and the steward's reply; `todo.merge`; and `agent.py pr-merge`,
+  which re-reads the PR with the steward's own `gh`, refuses by name (24-hour
+  expiry included), merges with `--match-head-commit`, and replies on `@prs`.
+
+- **Step 4 shipped (the Scripts switch):** the owner-only `ux-scripts` intent
+  (per visual, `visual_id` + `scripts`); an agent's raw scripted source stored
+  write-once beside the visual (`agent.py component-source`, route
+  `/component-source`); `/api/component-render`, which serves that source only
+  while the owner's newest switch for the visual is on, under
+  `COMPONENT_CSP` (sandbox allow-scripts, default-src 'none', connect-src
+  'none'); the modal frame with `sandbox="allow-scripts"` and the "⚡ Scripts
+  on" badge; `ux-export` landing the source with `scripts: true`. Differences
+  from the plan above: the scripted source is a file beside the visual, not a
+  new visual record; the switch is per version; and it refuses to turn on
+  without a stored source. A browser test runs a hostile component and shows
+  it reaches nothing.
+
+  Next: the hosting commands (`server.py daemon|service|status|health`).
+- **The design-system picker shipped later (1.33), at the owner's request,
+  reversing the reviewers' earlier "don't build".** An agent lists the
+  design's artifacts (`agent.py design-inventory`; `designs.py`, route
+  `/design-inventory`, at most 300 plain relative paths, kept per design
+  link); the owner ticks up to 10 in the modal's Settings, each **inspire**
+  or **swap**; Generate carries them as `refs`. The server cross-checks every
+  ref against the list for the item's linked design (409 naming what is
+  wrong), never reads or opens the design, and draws the list as text. Swap
+  makes a new version from that artifact; it never overwrites a saved
+  component or the design. The cheap text-path route in "Pointing at
+  artifacts" still works beside it.
 
 ---
 
@@ -285,12 +339,15 @@ refusal names the rule it broke.
 - The link is checked against an exact shape, the same way PR links must be
   exactly `https://github.com/<repo>/pull/<n>` (`prs.py`):
   - `https` scheme, host `claude.ai`;
-  - a path naming a design artifact or a design-system project, ending in
-    its id;
-  - no query string, fragment or userinfo, and at most 200 characters.
+  - the path `/design/p/` and a project uuid;
+  - no query string, fragment or userinfo, and at most 200 characters;
 - Share and token URLs are refused by name. The link is written into git,
   and a public repository would publish it.
-- The exact pattern is pinned once a real link is available.
+- **The pinned shape** (from a real link the owner gave, 2026-10-11) is
+  `https://claude.ai/design/p/<project uuid>`. A shared copy ends in
+  `?via=share`: the form cleans that off when it is pasted (the server's
+  `design_url_clean`), and the server itself refuses a link that still
+  carries a query or fragment, naming it.
 - The console shows it as a plain `rel="noopener noreferrer"` link out,
   never in a frame.
 
@@ -313,6 +370,32 @@ reads is data, never instructions.
 
 - The item carries it as a new `design` field through `items-push`, so the
   console shows a **Design ↗** chip with no server lookup.
+
+**Pointing at artifacts in a design system (decided 2026-10-11).** A
+Claude Design *design-system* project holds many files, and the owner may
+want one as inspiration or to be reproduced exactly. Advisor and DevOps
+reviews both said the picker and a "swap" are diminishing returns, and this
+is the decision:
+
+- **Built now:** the owner names paths in the request or the item's thread
+  (the modal's "Generate with notes" field in step 2). The console-ux skill
+  reads those paths first with `/design-sync`, treats them as data,
+  regenerates from them, never copies their bytes, and names its sources in
+  the doc.
+- **Not built, and why:**
+  - **The picker with a catalog.** The server cannot list a design system,
+    so a session would post a catalog as data: a new record kind, an
+    endpoint, caps, rate limits and pruning, and a list that is stale at
+    once. The agent already reads the whole project for free on the owner's
+    login. Revisit only if owners keep mistyping paths or the agent keeps
+    choosing the wrong artifact.
+  - **"Swap."** It can only mean overwriting a saved component, which breaks
+    the rule that a design change never changes a component by itself, and
+    puts two sources of truth in play. "Use it as it is" through Generate,
+    reviewed and saved like any version, gets the same result.
+- **If it comes back:** one optional bounded field on `ux-link` (a list of
+  paths matching `[A-Za-z0-9._/-]`, at most 10), written to front matter as
+  `design.refs`, and nothing else.
 
 **Drift.**
 

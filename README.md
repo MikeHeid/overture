@@ -188,6 +188,21 @@ banner naming the new version and the commands most useful at that moment
 | [docs/DEPLOY.md](plugin/kit/docs/DEPLOY.md) | Installing, upgrading and rolling back the systemd services. |
 | [docs/RUNBOOK.md](plugin/kit/docs/RUNBOOK.md) | Symptoms, checks and fixes, starting with the loopback `/health` check. |
 
+## Keep the server running
+
+One server, `server.py --all`, hosts every project. Run it however suits the
+machine:
+
+    <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log
+    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
+    <py> <kit>/server.py status                    # which mode, pid, each project's port
+    <py> <kit>/server.py health                    # agent door, version skew, linger; clears stale files
+
+`status` and `health` only read; a daemon and a service refuse to run
+together. A plugin setting, **Machine role**, or `agent.py role worker` marks
+a machine where no session may be the steward (for laptops that only work
+while the steward runs on a home server). See [docs/JOIN.md](docs/JOIN.md).
+
 ## Name the session, bootstrap the dashboard
 
 **Set the agent id for a Claude session** — type this in Claude Code:
@@ -341,10 +356,32 @@ anything from the repository. See the module docstrings for the trust model.
   <img src="docs/screenshots/anim-flowchart.gif" alt="Expanding an item's status flowchart, zooming in, and fitting it back to the frame" width="400">
 
 - **Project map** at the top of the Inbox: a tree of every item, parent to
-  child, each node coloured by its own questions' roll-up (open > stale >
-  answered-but-unlocked > locked) with a short tally. Click an item to open
-  it. A chip row narrows the map to one state; ancestors stay drawn muted so
-  the tree is still a tree. Lazy, like the per-item chart.
+  child, drawn left to right.
+  - Each node is coloured by its own questions' roll-up (open > stale >
+    answered-but-unlocked > locked), with a short tally.
+  - Items are grouped in one box per **lane**, its border in the lane's
+    colour.
+  - Click an item to open it.
+  - A chip row narrows the map to one state; ancestors stay drawn muted, so
+    the tree is still a tree.
+  - It loads lazily, like the per-item chart.
+- **Lane colours.** A lane is the `lane-…` part of an item's section, for
+  example `wave-2/phase-2.2/lane-api`. An item without one inherits its
+  parent's.
+  - **Where it shows:** a chip coloured by the lane, on inbox and Priority
+    rows (with a matching left edge) and as a "Wave 2 › Phase 2.2 › API"
+    trail at the top of the item.
+  - **Colours are automatic.** They are drawn from 8 colours that read at
+    3:1 or better in light and dark, and two lanes share one only past 8.
+  - **To pin a colour or a label,** add it to `.overture.json`:
+    `"lanes": {"lane-api": {"color": "blue", "label": "API"}}`. Only
+    palette names are accepted: blue, teal, green, amber, orange, red,
+    purple or pink. `"ux": true` marks a lane's items as UX components for
+    the console-ux skill.
+  - **On your dashboard,** each item's `<details>` and each `data-ck-item`
+    block gets `data-ck-lane` and `data-ck-lane-color`, and console.css
+    publishes `--ck-lane-<colour>`, so your page can colour its own lane
+    blocks to match.
 - **Save SVG** on every chart and Mermaid visual. The rendered SVG is sent
   back to the parent and downloaded as a plain file; nothing goes back to
   the server.
@@ -404,6 +441,68 @@ deleted: each act is recorded in a file beside the store, and the fold records t
 outcome in your project. New questions are refused a whole-file hash where an
 excerpt fits, which is what made most rulings go stale.
 
+### See what agents changed, as screenshots
+
+When an agent changes something you can see, it posts a **before** and an
+**after** screenshot on the item:
+
+    agent.py asset UI-1 --file after.png --caption "Tabs with icons" --kind after --pr 214
+
+They show up in the **Feed**, where a before and after appear side by side
+and the **Screenshots** filter shows only them, and in a **Screenshots** fold
+on the item. Click one to open a full-size viewer, and step through the
+others with ◂ ▸ or the arrow keys.
+
+<img src="docs/screenshots/feature-assets.png" alt="The Feed's Screenshots filter: a UX component at 375px, and the tab bar before and after icons, side by side" width="400">
+
+You can add your own too. In an item's Discussion box, **Attach image** (or
+paste an image) puts your picture on that item, shown as "you", beside the
+agents' screenshots.
+
+<img src="docs/screenshots/feature-attach.png" alt="An item's Screenshots fold with an agent's plan picker and the owner's own sketch, and the Discussion box with Send and Attach image" width="400">
+
+- **Formats:** PNG, JPEG, WebP or GIF. The format is decided from the
+  file's own bytes, never its name, and SVG is refused because it can carry
+  script.
+- **Size limits:** 2 MiB for a still image, 8 MiB for a GIF, and 8000 px on
+  a side.
+- **Storage:** files are kept in the server's state directory, never in your
+  project.
+- **When space runs short** (100 per item, 3000 or 300 MiB per project), the oldest
+  screenshots that aren't starred or linked to a PR are removed. The Feed
+  says so.
+- **Your controls:** star a screenshot to keep it, or delete it (press
+  twice).
+- **Reduced motion:** with reduced motion turned on, a GIF waits for you to
+  press play.
+
+### Design UI components in UX View
+
+On a UI or UX item, **◫ UX View** (or `u`) opens a full-screen workspace
+over the item's HTML mock-ups. You see each version in a sandbox at
+Mobile, Tablet, Desktop or Fit width, step through versions with ◂ ▸ (or `[`
+and `]`), and press **Generate** for another. **Save as component** asks the
+steward to land the version as `components/<item>.md` by pull request; a
+replaced component is kept in `components/.history/`.
+
+<img src="docs/screenshots/feature-ux-view.png" alt="UX View: a plan-picker component in a sandbox at desktop width, a version stepper, size buttons, Generate and Save as component" width="720">
+
+Settings, in the same window, hold the rest:
+
+- **Claude Design link.** Link the item to its Claude Design project
+  (`https://claude.ai/design/p/<id>`). The console never opens or fetches it;
+  the agent reads the design with your login.
+- **Design system artifacts.** An agent lists the design's artifacts
+  (`agent.py design-inventory`). You filter, tick up to 10, and mark each
+  **inspire** (borrow the look) or **swap** (build the new version from that
+  artifact); **Generate** carries your picks. A swap is always a new version,
+  never an overwrite.
+- **Scripts (this version).** Off by default. An agent may store a scripted
+  source beside the script-free version; only your switch lets it run, in a
+  sealed frame with no access to the console, its cookies or the network.
+
+<img src="docs/screenshots/feature-ux-picker.png" alt="UX View with Settings open: the Claude Design link, a list of design artifacts with two ticked, one marked swap, and the Scripts switch" width="720">
+
 ### Track work as tickets
 
 Tickets are small units of work that belong to an item: a **task**, a **bug**,
@@ -461,6 +560,15 @@ server cannot check it.
   (`agent.py prs-push`), and the tab says when it last did.
 
   <img src="docs/screenshots/feature-prs.png" alt="The PRs tab: two open pull requests and three merged, each with checks and an Open button for its item" width="400">
+
+  An open, ready, passing pull request has a **Merge** button. It asks
+  first ("Merge #214 into main?", with a link to the diff), and then sends
+  your request to the steward, whose own session merges it, pinned to the
+  commit you saw. The console never merges anything and holds no GitHub
+  token. If the pull request changed since you looked, or the request is over
+  24 hours old, nothing is merged and the steward says why.
+
+  <img src="docs/screenshots/feature-pr-merge.png" alt="The PRs tab with Merge #214 into main? open: the diff link, Merge and Cancel" width="400">
 
 - The **Favorite** tab lists everything you starred, grouped by item.
 - **Cross-project priority ribbon.** The Inbox opens with up to six of the

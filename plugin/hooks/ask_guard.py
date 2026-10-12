@@ -64,6 +64,9 @@ def reason(payload: object) -> str | None:
         return None
     steward = e[SS.STEWARD]
     me = SS.whoami(Path(e["state"]), payload.get("session_id"))
+    if me == steward and SS.machine_role() == "worker":
+        return SS.worker_note(steward) + (" Post the question with the console-ask skill: "
+                                          f"`python3 {Path(e['kit']) / 'agent.py'} --state {e['state']} --as {me} ask QUESTION.json`.")
     if me == steward:
         return None
     you = f"--as {me}" if me else "--as YOUR-NAME"

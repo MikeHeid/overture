@@ -48,6 +48,13 @@ SKILL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,79}\Z")
 # chars. Not resolved by the server; passed to the console script to turn into deep links.
 SECTION = re.compile(r"^#[A-Za-z0-9][A-Za-z0-9._/:\-]{0,127}\Z")
 MAX_SECTIONS_PER_ITEM = 16
+# D10 (owner, 2026-10-11): lane colours. A lane is a `lane-…` segment of an item's section. Colours are
+# chosen automatically; `lanes` may name one per lane from this palette only (never raw CSS, so a
+# repository's config cannot inject styles), a short label, and `ux: true` to mark a UX lane (UX-VIEW.md).
+LANE_COLORS = ("blue", "teal", "green", "amber", "orange", "red", "purple", "pink")
+LANE = re.compile(r"^lane-[a-z0-9][a-z0-9._-]{0,58}\Z")
+MAX_LANES = 64
+MAX_LANE_LABEL = 40
 
 
 class ConfigError(ValueError):
@@ -69,6 +76,8 @@ class ProjectConfig:
     #   (so an existing project upgrading does not refuse its first push).
     items_auto_ref: bool = True
     items_require_parent: bool = False
+    # D10: {lane: {"color"?: palette name, "label"?: str, "ux"?: bool}}
+    lanes: dict = field(default_factory=dict)
 
 
 def _dir(root: Path, v: object, key: str) -> str:
@@ -127,7 +136,39 @@ def load(root: Path) -> ProjectConfig:
             raise ConfigError(f"{FILE}: items.{k} must be true or false")
     return ProjectConfig(specs_dir=specs, visuals_dir=visuals, next_step=dict(steps), sections=sections,
                          items_auto_ref=items_opts.get("auto_ref", True),
-                         items_require_parent=items_opts.get("require_parent", False))
+                         items_require_parent=items_opts.get("require_parent", False),
+                         lanes=_lanes(doc.get("lanes")))
+
+
+def _lanes(v: object) -> dict:
+    """Parse an optional `lanes` map (D10); refused by name on any bad entry. {} when absent."""
+    if v is None:
+        return {}
+    if not isinstance(v, dict) or len(v) > MAX_LANES:
+        raise ConfigError(f"{FILE}: lanes must be an object of at most {MAX_LANES} lanes, "
+                          '{"lane-api": {"color": "blue", "label": "API", "ux": false}}')
+    out: dict[str, dict] = {}
+    for lane, opts in v.items():
+        if not isinstance(lane, str) or not LANE.match(lane):
+            raise ConfigError(f"{FILE}: lanes key {lane!r} must be a lane segment like 'lane-api'")
+        if not isinstance(opts, dict) or set(opts) - {"color", "label", "ux"}:
+            raise ConfigError(f"{FILE}: lanes[{lane!r}] takes only color, label and ux")
+        o: dict = {}
+        if "color" in opts:
+            if opts["color"] not in LANE_COLORS:
+                raise ConfigError(f"{FILE}: lanes[{lane!r}].color must be one of {', '.join(LANE_COLORS)}")
+            o["color"] = opts["color"]
+        if "label" in opts:
+            lab = opts["label"]
+            if not isinstance(lab, str) or not lab.strip() or len(lab) > MAX_LANE_LABEL or "\n" in lab:
+                raise ConfigError(f"{FILE}: lanes[{lane!r}].label must be one line of 1 to {MAX_LANE_LABEL} characters")
+            o["label"] = lab.strip()
+        if "ux" in opts:
+            if not isinstance(opts["ux"], bool):
+                raise ConfigError(f"{FILE}: lanes[{lane!r}].ux must be true or false")
+            o["ux"] = opts["ux"]
+        out[lane] = o
+    return out
 
 
 def _sections(v: object) -> dict:

@@ -31,6 +31,7 @@ SET_ASIDE = ".favorites.json.set-aside."
 # a record id is lowercase hex (store.jsonl); an item id is schema.ITEM_ID.
 _VISUAL = re.compile(r"^visual:[0-9a-f]{8,64}$")
 _ITEM = re.compile(r"^item:(.+)$")
+_ASSET = re.compile(r"^asset:a[0-9a-f]{16}$")   # 1.32: a starred asset is never pruned (FEED-ASSETS.md F1)
 
 
 def problem(key: object) -> str | None:
@@ -42,13 +43,13 @@ def problem(key: object) -> str | None:
     """
     if not isinstance(key, str) or len(key) > 256:
         return "a favorite is a string of at most 256 characters"
-    if _VISUAL.match(key):
+    if _VISUAL.match(key) or _ASSET.match(key):
         return None
     m = _ITEM.match(key)
     if m and len(m.group(1)) <= 128 and S.ITEM_ID.match(m.group(1)):
         return None
     return (f"{key[:60]!r} is not a favorite target: expected visual:<record id> "
-            "or item:<item id>")
+            "or item:<item id> or asset:<asset id>")
 
 
 class Favorites:
