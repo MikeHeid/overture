@@ -786,9 +786,9 @@
    marks <html> with .ck-dock (and .ck-dock-open while the column is open);
    the host page gets its room as a right margin on <body>, so no host CSS is
    needed. Below 1024px none of this applies and the overlay is unchanged.
-   Open, the column takes HALF the screen (owner, 2026-09-29: "on big monitors
-   can you make it 50% of the screen until closed"). It docks only at 1024px
-   and wider, so that is never under 512px. --ck-col is the one width: the
+   Open, the column is --ck-col wide (480px by default since 1.24.0; it was
+   50vw before, see below). It docks only at 1024px and wider. --ck-col is the
+   one width: the
    column, the page's margin and the stale bar's inset all read it, so they
    cannot disagree. */
 .ck-dock-strip { display: none; }
