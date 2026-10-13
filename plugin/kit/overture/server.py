@@ -92,6 +92,7 @@ from . import triggers as TR
 from . import designs as DG
 from . import prs as PR
 from . import issues as IS
+from . import lessons as LN   # owner's withdraw/untrack reasons become lessons future sessions read
 from . import tickets as TK
 from . import assets as AS
 from . import names as N
@@ -1218,6 +1219,14 @@ class Console:
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"console grill_qids: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "grill_qids": []}
+        # lessons — count + newest_ts of withdraw/untrack reasons the owner has given.
+        # Full list travels via `agent.py lessons`; here we just surface the summary so the
+        # status drawer can show "N lessons". Owner-door only.
+        try:
+            out["view"] = {**out["view"], "lessons": LN.as_view(LN.load(self.cfg.state))}
+        except (LN.LessonError, OSError) as e:
+            sys.stderr.write(f"console lessons: load failed: {type(e).__name__}: {e}\n")
+            out["view"] = {**out["view"], "lessons": {"count": 0, "newest_ts": None}}
         return out
 
     def _compute_grill_qids(self, view: dict) -> set[str]:
@@ -2683,6 +2692,24 @@ class Console:
             if action == "confirm":
                 self._confirm_check(body, q, lk, conds, tree)
             rec = self._rx_append(rec)
+            # record a lesson on withdraw/untrack. The owner's reason is the signal
+            # future sessions read; confirm is a re-anchor (same decision, moved evidence),
+            # so it doesn't become a lesson. A record failure never faults the refactor —
+            # the ruling act lands, the lesson is a best-effort secondary.
+            if action in ("withdraw", "untrack"):
+                try:
+                    LN.record(
+                        self.cfg.state,
+                        qid=body["qid"],
+                        item=q["item"],
+                        kind=action,
+                        text=q.get("text", "") or "",
+                        reason=body.get("reason") or (
+                            "(no reason given)" if action == "untrack" else ""),
+                        now_iso=_iso_now(),
+                    )
+                except (LN.LessonError, OSError) as e:
+                    sys.stderr.write(f"console lessons: record failed: {type(e).__name__}: {e}\n")
         # No doorbell line: the doorbell's seq is the store's, and nothing here asks the agent to act.
         return {"record": rec}
 
