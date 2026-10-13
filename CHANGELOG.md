@@ -2990,6 +2990,39 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Lessons hardening (1.34.3)
+
+No new features. A review of the 1.33–1.34 lessons code found two
+contract breaks and two smaller gaps. Each is reachable only through a
+hand-edited `STATE/lessons.jsonl` (0600 under 0700).
+
+- **A malformed row can no longer fail the page.** `load()` caught only
+  `JSONDecodeError`, but an over-long integer literal raises a plain
+  `ValueError` and a deeply nested line raises `RecursionError`. Either
+  escaped `/api/view`'s catch, so the console failed on every poll until
+  the file was fixed; `agent.py lessons` / `lesson-match` and the next
+  record failed too. Such a line is now skipped like any other bad row.
+- **A lone `\r` in a reason can no longer spell Markdown.**
+  `to_markdown()` indented the reason line by line, splitting on `\n`
+  only; CommonMark also ends a line at `\r`, so `a\r## H` put a heading
+  at column 0 of the folded file. It now splits on `\r\n`, `\r` and `\n`.
+- **The ruling text is collapsed to one line in `to_markdown()` too,**
+  not only on record, so a hand-edited row cannot inject a heading there.
+- **The size tripwire in `record()` can fire.** It checked the encoded
+  size after `_fit()`, which had already pruned an oversized new row and
+  every older one, so the write would have emptied the file. It now
+  refuses when the new row did not survive `_fit()`, and the file is left
+  as it was. Unreachable while the 20 000-character reason cap holds.
+- **README:** the related-rulings card shows the ruling's id, not its
+  text; `lesson-match` also exits 2 when the lessons file cannot be read.
+
+### Tests
+
+- 4 new `LessonTests`, one per fix above; each fails on 1.34.2.
+- `SanitizerTests.test_anchor_nesting_and_refused_hrefs_stay_balanced`:
+  nested, unclosed and refused `<a>` and an entity-encoded `javascript:`
+  href give balanced output. The 1.33.1 sanitizer already did; this pins it.
+
 ## Upkeep (1.34.2)
 
 No new features. Checking the 1.34.1 handoff turned up a test that
