@@ -7,6 +7,17 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **Lane 3 merged** (PR #160, `8ef2571`, test only, no release): `LiveConsoleTests.test_a_related_ruling_reaches_the_card_
+  from_the_real_server_under_its_csp`, the 1.34.4 probe made permanent. Fails on three mutants (`related_lessons`
+  renamed; CSP loosened; an inline script). Browser 91. ⚠ One unidentified ERROR in 1 of 3 full browser runs; not
+  reproduced in two more full runs or 10 loops of the new tests. If it recurs, save the log and name it.
+- **v1.34.7 released** (PR #159, `8925dde`): `renderPanel()` looked `#ck-launch-pane` up after clearing the panel, so
+  since 1.30.1 every Refresh / live update threw an open Launch Idea or Branch Out pane away. Fixed, plus Launch
+  Idea's spawn and Branch Out's two buttons reading pane state after an await (close mid-request threw and dropped
+  the rest of the tickets). Three browser tests, each RED on 1.34.6.
+- **pip-audit**: shipped pins (`plugin/kit/requirements.txt`) clean. The dev `.venv` had setuptools 65.5.0 (4 PYSEC
+  advisories, never shipped); upgraded in place. Remote URL updated to `https://github.com/MikeHeid/overture.git`.
+
 - **v1.34.6 released** (PR #158, `301a0b7`): Launch Idea's spawn now opens the Tickets fold it spawned into, so the
   comment at ~`console.js:2917` is true. The `openForms` half of the LOW below needs nothing: a peer console opens
   in its own tab (`window.open(..., '_blank')`, ~`console.js:1951`), so a page holds one project's keys. Browser 87.
@@ -66,7 +77,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.34.6, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.34.7 + PR #160 (test only), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
