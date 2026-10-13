@@ -12,9 +12,11 @@ Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
   inside a Claude Code session: the inherited `CLAUDE_PROJECT_DIR` beat `run_hook`'s `setdefault`. Fixed in 1.34.2.
 - **`test_build.py` (item 2).** Green on Claude CLI 2.1.296, so the manifest is fine; the 1.34.1 failures were the
   2.1.71 CLI. The Windows-side WSL may still carry 2.1.71.
-- **PR #154, `release-1.34.2`, open and not merged.** The test fix, README setup path (`plugin/kit/requirements.txt`;
-  there is no root `requirements.txt`), PyJWT 2.15.1, cryptography 50.0.2. After merge: tag, `build_zip.py`, release.
-- **Review of items 3, 5 and 7.** Findings, each still to fix (suggested 1.34.3):
+- **v1.34.2 released** (PR #154, `74b59e2`): the test fix, README setup path (`plugin/kit/requirements.txt`;
+  there is no root `requirements.txt`), PyJWT 2.15.1, cryptography 50.0.2.
+- **v1.34.3 released** (PR #155, `bd6deb6`): every finding below is fixed, each with a test that fails on 1.34.2,
+  plus a sanitizer test for the anchor cases. Tests: kit 391, server 334, onboard 37, vendor 11, build 15.
+- **Review of items 3, 5 and 7.** Findings (all fixed in 1.34.3):
   - MEDIUM `lessons.py` `load()` (~l.155) catches only `JSONDecodeError`/`LessonError`. A >4300-digit integer
     raises `ValueError`, and a deeply nested line raises `RecursionError` (both reproduced). Either escapes
     `server.py`'s `(LessonError, OSError)` catch (~l.1262), so `/api/view` fails until the file is fixed. Same in
@@ -33,7 +35,7 @@ Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
 
 ## State
 
-- `main` = v1.34.1, tagged and released. No open PRs.
+- `main` = v1.34.3, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
@@ -62,6 +64,10 @@ Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
 
 - **`flock` on `lessons.record()`.** No live race with one server per STATE; defense-in-depth for a future feature release.
 - **WSL Claude CLI update** (item 2 above).
+- **Items 4 and 6** need a browser (Playwright or the owner): the 📎 lesson chip, and the live console's CSP.
+- **LOW, from the 1.34.3 review:** `_check()` ignores extra keys, so a hand-edited row with a ~900-deep extra key
+  could pass `load()` and make `json.dumps` in `_fit()` raise `RecursionError` out of `record()` (uncaught at
+  `server.py` ~l.2744). Speculative; fix by keeping only known fields in `load()`, or catching it in `record()`.
 
 ## Rules of the house
 
