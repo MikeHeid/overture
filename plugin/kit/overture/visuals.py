@@ -126,8 +126,12 @@ _ALLOWED_TAGS: dict[str, frozenset[str]] = {
     "dl":      frozenset({"class"}),
     "dt":      frozenset({"class"}),
     "dd":      frozenset({"class"}),
-    # anchors + images
-    "a":       frozenset({"class", "href", "target", "rel", "aria-label"}),
+    # anchors + images. `rel` is NOT in the allowlist: the sanitizer appends its own
+    # `rel="noopener noreferrer"` after any author attrs (see `_emit_start`), and
+    # browsers take the FIRST occurrence of a duplicate attribute, so an author `rel`
+    # would silently win over the forced one. Omitting it leaves the forced one in sole
+    # possession of the slot.
+    "a":       frozenset({"class", "href", "target", "aria-label"}),
     "img":     frozenset({"class", "src", "alt", "width", "height", "loading"}),
     # tables
     "table":   frozenset({"class"}),
@@ -262,7 +266,9 @@ class _SanitizingParser(HTMLParser):
         self.dropped_content_tags = frozenset({"script", "svg", "math", "noscript", "template"})
         self.tag_stack: list[str] = []
 
-    def _emit_start(self, tag: str, attrs, self_closing: bool) -> None:
+    def _emit_start(self, tag: str, attrs, self_closing: bool) -> bool:
+        """Emit the opener; return True iff an opener was written (so the caller can decide
+        whether to also push the tag onto `tag_stack`)."""
         parts = [tag]
         for a, v in attrs:
             a = a.lower()
@@ -276,10 +282,11 @@ class _SanitizingParser(HTMLParser):
             # If href is absent, don't emit a link.
             has_href = any(a.lower() == "href" for a, _ in attrs if _attr_ok(tag, a.lower(), _ or ""))
             if not has_href:
-                return
+                return False
             parts.append('rel="noopener noreferrer"')
         slash = " /" if self_closing or tag in _VOID else ""
         self.out.append("<" + " ".join(parts) + slash + ">")
+        return True
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -290,10 +297,11 @@ class _SanitizingParser(HTMLParser):
         if tag not in _ALLOWED_TAGS:
             self.stripped += 1
             return
-        # Void elements never go on the stack; they emit as `<tag ... />` with no close.
-        if tag not in _VOID:
+        emitted = self._emit_start(tag, attrs, False)
+        # Only push non-void tags that actually produced an opener, so a later `</a>` on a
+        # refused-link opener does not emit a stray close.
+        if emitted and tag not in _VOID:
             self.tag_stack.append(tag)
-        self._emit_start(tag, attrs, False)
 
     def handle_startendtag(self, tag, attrs):
         tag = tag.lower()
@@ -302,9 +310,10 @@ class _SanitizingParser(HTMLParser):
             return
         if tag not in _VOID:
             # Browsers ignore the `/` on a non-void tag: `<style/>` would open rawtext and swallow the
-            # rest of the visual as CSS. Write it as an empty element instead.
-            self._emit_start(tag, attrs, False)
-            self.out.append(f"</{tag}>")
+            # rest of the visual as CSS. Write it as an empty element instead. Only emit the close
+            # if the opener was emitted (an `<a/>` with no href is refused, so no stray `</a>`).
+            if self._emit_start(tag, attrs, False):
+                self.out.append(f"</{tag}>")
             return
         self._emit_start(tag, attrs, True)
 
@@ -354,8 +363,13 @@ class _SanitizingParser(HTMLParser):
         pass
 
     def handle_decl(self, decl):
-        # `<!DOCTYPE html>` and similar — safe to keep.
-        self.out.append(f"<!{decl}>")
+        # Emit a fixed `<!DOCTYPE html>` for anything that looks like a doctype declaration;
+        # drop everything else. Writing `<!{decl}>` raw let the declaration text carry
+        # `<`/`>` or spelling like `</textarea>` into the output, unbalancing the parse tree.
+        if decl.lstrip().lower().startswith("doctype"):
+            self.out.append("<!DOCTYPE html>")
+        else:
+            self.stripped += 1
 
     def handle_pi(self, data):
         # Processing instructions aren't HTML; drop.

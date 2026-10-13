@@ -1,4 +1,4 @@
-"""The artifacts of a Claude Design project, as an agent lists them, for the UX View picker (1.33).
+"""The artifacts of a Claude Design project, as an agent lists them, for the UX View picker.
 
 The server never reads a Claude Design project and never fetches its link. An agent that can open the design
 (with the owner's own login) posts what is in it: `agent.py design-inventory --url LINK --file LIST`. The server

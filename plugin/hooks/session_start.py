@@ -549,27 +549,26 @@ def _server_down(state: Path, kit: Path) -> str | None:
 
 
 def _lessons_line(state: Path, agent: str) -> str | None:
-    """one line naming the lessons file when the owner has recorded any.
+    """One line naming the lessons file when the owner has recorded any.
 
     Reads STATE/lessons.jsonl with the same safety guards as the doorbell: a plain file only,
-    size-capped, never followed through a link. Counts non-empty lines; malformed lines are
-    counted anyway (the agent will read them with `agent.py lessons`, which validates and
-    skips). Returns None for a missing or empty file so the hook stays silent by default.
+    size-capped, never followed through a link (nofollow=True). Counts non-empty lines split
+    on "\\n" (not splitlines(), which would split on U+2028 et al. and inflate the count).
+    Malformed lines are included in the count — `agent.py lessons` validates and skips, so
+    the count is an upper bound; the message says so. Returns None for a missing or empty
+    file so the hook stays silent by default.
     """
     try:
-        raw = _read_regular(state / "lessons.jsonl", 2 << 20)
+        raw = _read_regular(state / "lessons.jsonl", 2 << 20, nofollow=True)
     except (Unsafe, OSError):
         return None
     if raw is None:
         return None
-    try:
-        text = raw.decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001 — a decode error must not fault the hook
-        return None
-    count = sum(1 for line in text.splitlines() if line.strip())
+    text = raw.decode("utf-8", "replace")
+    count = sum(1 for line in text.split("\n") if line.strip())
     if count == 0:
         return None
-    return (f"Owner console: {count} lesson{'' if count == 1 else 's'} from past rulings "
+    return (f"Owner console: up to {count} lesson{'' if count == 1 else 's'} from past rulings "
             f"(withdrawn or kept unchecked). Read them with `{agent} lessons`, so this "
             "session does not re-litigate what the owner has already settled.")
 

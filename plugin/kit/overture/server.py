@@ -3546,10 +3546,15 @@ class OwnerHandler(_Handler):
             for k, v in SECURITY_HEADERS:
                 if k != "Content-Security-Policy":
                     self.send_header(k, v)
-            # Overriding CSP: adds script-src nonce-… alongside the shared defaults.
+            # Overriding CSP: adds `script-src 'nonce-…'` alongside the shared defaults and names
+            # `img-src` and `connect-src` explicitly (the shared policy's set is REPLACED, not
+            # merged, by this one; omitting them left both directives open to any origin — today
+            # COEP `require-corp` incidentally blocks cross-origin images and fetches, but relying
+            # on COEP for subresource restriction mixes concerns, so the directives are stated).
             self.send_header(
                 "Content-Security-Policy",
-                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; frame-src 'self'; "
+                "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; "
+                "frame-src 'self'; img-src 'self' data:; connect-src 'self'; "
                 f"script-src 'nonce-{nonce}'" + "".join(" " + h for h in hashes),
             )
             self.end_headers()
@@ -3853,7 +3858,13 @@ class OwnerHandler(_Handler):
         # attacker who could issue many POSTs. Both sides are known-length base64url, so no need to
         # equalize length first; hmac.compare_digest is still safe when they differ.
         presented = self.headers.get("X-Overture-CSRF") or ""
-        if not hmac.compare_digest(presented, self.console._csrf):
+        # hmac.compare_digest raises TypeError when either side has a non-ASCII code point;
+        # compare on bytes with a one-byte encode to short-circuit non-ASCII without raising.
+        try:
+            ok = hmac.compare_digest(presented.encode("ascii"), self.console._csrf.encode("ascii"))
+        except UnicodeEncodeError:
+            ok = False
+        if not ok:
             return self._send(403, {"error": "missing or stale CSRF token; reload the console"})
         try:
             if self.path == "/api/relock":
