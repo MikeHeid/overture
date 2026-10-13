@@ -1276,16 +1276,19 @@ def _issues_push(a) -> int:
 
 
 def _lessons(a) -> int:
-    """print or fold the lessons recorded by withdraw/untrack rulings.
+    """Print or fold the lessons recorded by withdraw/untrack rulings.
 
     `agent.py --state STATE lessons`                 → prints the Markdown to stdout
     `agent.py --state STATE lessons --fold PATH`     → writes PATH atomically from the stored jsonl
 
     No network, no store writes. Reads STATE/lessons.jsonl via the same atfile pattern the server
     writes it with. Owner-only in spirit; the agent socket is 0600 under a 0700 dir, so the OS
-    user is the trust boundary. `--fold` lets a session land the lessons file into the project
-    tree so the SessionStart hook of every machine can read it from the commit.
+    user is the trust boundary. `--fold` writes the Markdown through atfile.write_at on an open
+    descriptor on PATH's parent directory, so the write is O_EXCL + fsync + rename and refuses
+    a symlink in PATH's place (a peer who plants `~/foo -> ~/.bashrc` would otherwise coax a
+    session into overwriting it).
     """
+    from overture import atfile as AF
     from overture import lessons as LN
 
     state = Path(os.path.realpath(a.state))
@@ -1294,20 +1297,34 @@ def _lessons(a) -> int:
     except (LN.LessonError, OSError) as e:
         print(f"lessons: cannot read {state}/{LN.FILE}: {e}", file=sys.stderr)
         return 1
-    md = LN.to_markdown(rows)
+    md = LN.to_markdown(rows).encode("utf-8")
     if getattr(a, "fold", None):
-        target = Path(a.fold).resolve()
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(target.suffix + ".tmp")
-            tmp.write_text(md, encoding="utf-8")
-            os.replace(tmp, target)
-        except OSError as e:
-            print(f"lessons: cannot write {target}: {e}", file=sys.stderr)
+        # Resolve PATH's PARENT (not PATH itself: PATH may not exist yet, and if it does, we
+        # must refuse a symlink there, not follow it). Then open the parent as a dir fd and
+        # let atfile.write_at do the O_EXCL temp + fsync + rename, which refuses any symlink
+        # or non-regular file at the target name via O_NOFOLLOW.
+        target = Path(a.fold)
+        parent = target.parent.resolve()
+        name = target.name
+        if not name or name in (".", ".."):
+            print(f"lessons: --fold PATH must name a file; got {a.fold!r}", file=sys.stderr)
             return 1
-        print(f"wrote {len(rows)} lesson(s) to {target}")
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            dfd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_CLOEXEC)
+        except OSError as e:
+            print(f"lessons: cannot open parent {parent}: {e}", file=sys.stderr)
+            return 1
+        try:
+            AF.write_at(dfd, name, md)
+        except OSError as e:
+            print(f"lessons: cannot write {parent / name}: {e}", file=sys.stderr)
+            return 1
+        finally:
+            os.close(dfd)
+        print(f"wrote {len(rows)} lesson(s) to {parent / name}")
         return 0
-    sys.stdout.write(md)
+    sys.stdout.write(md.decode("utf-8"))
     return 0
 
 
