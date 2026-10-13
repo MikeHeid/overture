@@ -35,7 +35,7 @@ Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
 
 ## State
 
-- `main` = v1.34.3, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.34.4, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
@@ -62,12 +62,8 @@ Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
 
 ## Open items
 
-- **`flock` on `lessons.record()`.** No live race with one server per STATE; defense-in-depth for a future feature release.
-- **WSL Claude CLI update** (item 2 above).
-- **Items 4 and 6** need a browser (Playwright or the owner): the 📎 lesson chip, and the live console's CSP.
-- **LOW, from the 1.34.3 review:** `_check()` ignores extra keys, so a hand-edited row with a ~900-deep extra key
-  could pass `load()` and make `json.dumps` in `_fit()` raise `RecursionError` out of `record()` (uncaught at
-  `server.py` ~l.2744). Speculative; fix by keeping only known fields in `load()`, or catching it in `record()`.
+- **WSL Claude CLI update** on the Windows side (item 2 above). Owner's call.
+- Nothing else open. (Closed 2026-10-13: items 4 and 6, the `flock`, the nested-key LOW; see the top.)
 
 ## Rules of the house
 
