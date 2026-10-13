@@ -3197,6 +3197,13 @@
         panel.appendChild(el('div', { className: 'ck-q-lesson' }, [hdr, pre]));
       }
       const details = el('details', { className: 'ck-q-lessons' }, [summary, panel]);
+      // Every repaint (Refresh, any live update) builds this anew: without the key, a ruling the
+      // owner opened to read snaps shut the moment an agent posts anything.
+      const lessonsKey = 'lessons-' + qData.qid;
+      if (openForms.has(lessonsKey)) details.open = true;
+      details.addEventListener('toggle', () => {
+        if (details.open) openForms.add(lessonsKey); else openForms.delete(lessonsKey);
+      });
       textCol.appendChild(details);
     }
     const chips = tagChips(questionTags(qData.qid));

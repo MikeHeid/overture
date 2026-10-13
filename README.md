@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.3-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.4-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-773-2da44e">
@@ -905,7 +905,8 @@ Highlights of the 1.x arc:
   `agent.py lesson-match`. **1.34.1** brings this README up to date and
   caches lessons between page polls. **1.34.2**: upkeep (dependency
   pins, a test that failed inside Claude Code). **1.34.3**: lessons
-  hardening from the 1.34 review.
+  hardening from the 1.34 review. **1.34.4**: an opened 📎 chip stays
+  open when the page refreshes.
 - **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
   SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
   fixes (lesson size caps, sanitizer, CSP, CSRF).
