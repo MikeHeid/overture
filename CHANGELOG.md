@@ -2990,6 +2990,31 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Lesson chip in a browser (1.34.4)
+
+No new features. The last two open items from the 1.34.1 handoff,
+checked in Chromium against the real owner server.
+
+- **An opened 📎 related-rulings chip stays open across a repaint.**
+  Every Refresh and every live update rebuilt the question card, so a
+  past ruling the owner had opened to read snapped shut the moment an
+  agent posted anything. The chip's open state is now kept the way the
+  console's other disclosures keep theirs (`openForms`, per question).
+  `test_browser.py` gains a test for the chip: shown on the right
+  question, reason line breaks kept, open and closed both survive a
+  Refresh.
+- **Checked, no change:** the owner page's CSP from 1.33.1
+  (`img-src 'self' data:`, `connect-src 'self'`). The console loads,
+  `data:` images load, the `/api/wait` live poll picks up a new
+  question, and the browser console shows no CSP violation; an
+  off-origin image or `fetch` is refused, as intended.
+- **Checked, no change:** the 1.34.3 review's note that a hand-edited
+  lessons row with a deeply nested extra key could make `record()`
+  raise `RecursionError`. It does not reproduce: `load()` decodes the
+  row at the same stack depth `record()` later encodes it, and a row
+  too deep to encode is already too deep to decode, so `load()` drops
+  it first. Tried at 100–20 000 levels and 50–900 caller frames.
+
 ## Lessons hardening (1.34.3)
 
 No new features. A review of the 1.33–1.34 lessons code found two

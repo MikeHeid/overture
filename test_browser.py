@@ -107,6 +107,7 @@ class _Handler(BaseHTTPRequestHandler):
     view_designs = False  # ...and it links a Claude Design whose artifact list an agent posted (1.33)
     view_scripts = False  # ...and its newest version has the owner's Scripts switch on (1.33)
     view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
+    view_lessons = False  # LANE.1/Q2 carries one related past ruling, as server.page_payload attaches it (1.34)
     posts: list = []    # the JSON bodies POSTed to /api/message
     board: object = None   # what /api/board answers; None is 404, as a project with no board()
     board_status = 200
@@ -140,6 +141,12 @@ class _Handler(BaseHTTPRequestHandler):
                           "type": "message", "intent": "ux-scripts", "visual_id": "v2", "scripts": True, "text": "on"}
                     thr = payload["view"].get("threads", {})
                     payload["view"] = {**payload["view"], "threads": {**thr, "LANE.1": [*thr.get("LANE.1", []), sw]}}
+            if _Handler.view_lessons:
+                qs = payload["view"]["questions"]
+                lesson = {"ts": "2026-10-01T00:00:00Z", "qid": "LANE.1/Q0", "kind": "withdraw", "score": 0.4,
+                          "reason_preview": "obsolete: the upload API was replaced\nby the batch endpoint"}
+                payload["view"] = {**payload["view"], "questions": {
+                    **qs, "LANE.1/Q2": {**qs["LANE.1/Q2"], "related_lessons": [lesson]}}}
             if _Handler.view_working:  # an agent has marked this item id as in hand
                 payload["cursor"] = {"working": {_Handler.view_working: "2026-09-29T10:00:00Z"}}
             if _Handler.view_listening is not None:  # the watch heartbeat, as the server judged it
@@ -302,7 +309,7 @@ class DockTests(unittest.TestCase):
     def setUp(self):
         _Handler.view_ux, _Handler.view_scripts, _Handler.view_designs, _Handler.posts = False, False, False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
-        _Handler.view_listening, _Handler.view_multiline = None, False
+        _Handler.view_listening, _Handler.view_multiline, _Handler.view_lessons = None, False, False
 
     def _page(self, kind: str, width: int, loaded: bool = True, fresh_session: bool = False):
         browser = getattr(self.pw, kind).launch()
@@ -429,6 +436,38 @@ class DockTests(unittest.TestCase):
                 s = self._state(page)
                 self.assertEqual((s["panel"], s["modal"], s["backdrop"]), ([1400 - DOCK_COL, 1400], None, False), s)
                 self.assertEqual(page.get_attribute(".ck-panel", "aria-label"), "Console: LANE.1")
+
+    LESSONS = """() => Array.from(document.querySelectorAll('details.ck-q-lessons')).map(d => ({
+      open: d.open, chip: d.querySelector('summary').textContent,
+      panel: getComputedStyle(d.querySelector('.ck-q-lessons-panel')).display !== 'none' ? d.querySelector('.ck-q-lesson').innerText : null }))"""
+
+    def test_a_related_ruling_chip_opens_and_stays_open_across_a_refresh(self):
+        # 1.34 put a 📎 chip on a question whose item has a similar withdrawn ruling; it had never been
+        # seen in a browser. Catches: the chip missing or on the wrong question, a reason that loses its
+        # line break, and (1.34.4) every repaint -- Refresh, or any live update while the owner reads --
+        # building the <details> anew, so the ruling they opened snaps shut under them.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                _Handler.view_lessons = True
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                page.wait_for_selector("details.ck-q-lessons")
+                got = page.evaluate(self.LESSONS)
+                self.assertEqual([(g["open"], g["chip"]) for g in got],
+                                 [(False, "📎 1 related past ruling — read before answering")], got)
+                page.click("summary.ck-q-lessons-chip")
+                got = page.evaluate(self.LESSONS)[0]
+                self.assertTrue(got["open"], got)
+                self.assertIn("2026-10-01 — LANE.1/Q0", got["panel"])
+                self.assertIn("WITHDRAWN", got["panel"].upper())
+                self.assertIn("replaced\nby the batch", got["panel"])
+                page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+                page.wait_for_timeout(500)
+                self.assertTrue(page.evaluate(self.LESSONS)[0]["open"], "a repaint closed the chip")
+                page.click("summary.ck-q-lessons-chip")     # closing it is remembered too
+                page.evaluate("document.querySelector('.ck-refresh-btn').click()")
+                page.wait_for_timeout(500)
+                self.assertFalse(page.evaluate(self.LESSONS)[0]["open"])
 
     # 0.8.4, owner: messages and agent replies lost their line breaks. The text goes in by
     # textContent (never HTML), so only CSS keeps its newlines: without `white-space: pre-wrap`
