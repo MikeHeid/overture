@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.1-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.2-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-768-2da44e">
@@ -856,7 +856,7 @@ finding is closed; the current state:
 
 ## Development
 
-    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+    python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
     .venv/bin/python test_build.py
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py   # needs playwright + browsers
@@ -901,7 +901,8 @@ Highlights of the 1.x arc:
 
 - **1.34 — Lesson match**: related past rulings on the question card,
   `agent.py lesson-match`. **1.34.1** brings this README up to date and
-  caches lessons between page polls.
+  caches lessons between page polls. **1.34.2**: upkeep (dependency
+  pins, a test that failed inside Claude Code).
 - **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
   SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
   fixes (lesson size caps, sanitizer, CSP, CSRF).

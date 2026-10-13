@@ -4323,7 +4323,9 @@ class SessionNameTests(_Steward):
 
     def env(self, agent=None, **extra):
         e = super().env(agent, **extra)
-        for k in ("OVERTURE_SESSION", "CLAUDE_ENV_FILE"):
+        # CLAUDE_PROJECT_DIR too: run from inside a Claude Code session it names the real repo, and
+        # run_hook's setdefault would then point every hook at an unregistered project.
+        for k in ("OVERTURE_SESSION", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR"):
             if k not in extra:
                 e.pop(k, None)
         return e
