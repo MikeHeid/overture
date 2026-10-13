@@ -3,6 +3,34 @@
 For the next session. This branch (`handoff/2026-10-13`) is `main` at **v1.34.1** plus this file only.
 The previous session's job ended with 1.34.1 shipped; your first job is to **check its work**.
 
+## Check results, 2026-10-13 (agent-8)
+
+Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
+
+- **Tests (item 1).** On WSL Linux, Python 3.11.8: kit 386, server 334, onboard 37, vendor 11, build 15, all
+  green on `release-1.34.2`. On `main` (1.34.1), `SessionNameTests` had 4 failures and 1 error when run from
+  inside a Claude Code session: the inherited `CLAUDE_PROJECT_DIR` beat `run_hook`'s `setdefault`. Fixed in 1.34.2.
+- **`test_build.py` (item 2).** Green on Claude CLI 2.1.296, so the manifest is fine; the 1.34.1 failures were the
+  2.1.71 CLI. The Windows-side WSL may still carry 2.1.71.
+- **PR #154, `release-1.34.2`, open and not merged.** The test fix, README setup path (`plugin/kit/requirements.txt`;
+  there is no root `requirements.txt`), PyJWT 2.15.1, cryptography 50.0.2. After merge: tag, `build_zip.py`, release.
+- **Review of items 3, 5 and 7.** Findings, each still to fix (suggested 1.34.3):
+  - MEDIUM `lessons.py` `load()` (~l.155) catches only `JSONDecodeError`/`LessonError`. A >4300-digit integer
+    raises `ValueError`, and a deeply nested line raises `RecursionError` (both reproduced). Either escapes
+    `server.py`'s `(LessonError, OSError)` catch (~l.1262), so `/api/view` fails until the file is fixed. Same in
+    `agent.py lessons`/`lesson-match` and `record()`. Fix: also catch `(ValueError, RecursionError)`.
+  - MEDIUM `to_markdown()` (~l.328) splits the reason on `\n` only; a lone `\r` lets `## H` land at column 0 in
+    the folded file (CommonMark treats CR as a line end). Fix: split on `\r\n|\r|\n`.
+  - LOW `to_markdown()` trusts `row["text"]` to be one line; only `record()` collapses it. Collapse it here too.
+  - LOW `record()`'s byte-cap tripwire (~l.214) cannot fire: a single oversized row would be pruned to empty and
+    the file silently emptied. Unreachable today (reason capped at 20k).
+  - Sanitizer (item 5): clean. Untested: nested/unclosed `<a href>`, a refused `<a>` inside an open one,
+    `javascript:` href followed by `</a>`.
+  - README (item 7): the Lessons section says the card shows "the ruling"; it shows date, ruling id, kind and a
+    reason preview. `lesson-match` also exits 2 when the file is unreadable. Everything else checked out, CSP
+    bullet included.
+  All of these are reachable only through a hand-edited STATE (0600 under 0700).
+
 ## State
 
 - `main` = v1.34.1, tagged and released. No open PRs.
