@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.4-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.5-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-773-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-774-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -861,7 +861,8 @@ finding is closed; the current state:
     python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
     .venv/bin/python test_build.py
-    OVERTURE_BROWSER=1 .venv/bin/python test_browser.py   # needs playwright + browsers
+    .venv/bin/pip install playwright && .venv/bin/playwright install chromium
+    OVERTURE_BROWSER=1 .venv/bin/python test_browser.py
 
 Three `test_kit.py` compatibility tests start older released kits, so
 they need the `v0.8.7` and `v0.8.8` tags; in a shallow or tag-less clone
@@ -906,7 +907,8 @@ Highlights of the 1.x arc:
   caches lessons between page polls. **1.34.2**: upkeep (dependency
   pins, a test that failed inside Claude Code). **1.34.3**: lessons
   hardening from the 1.34 review. **1.34.4**: an opened 📎 chip stays
-  open when the page refreshes.
+  open when the page refreshes. **1.34.5**: so do the console's other
+  folds; `lesson-match` output hardened like the folded file.
 - **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
   SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
   fixes (lesson size caps, sanitizer, CSP, CSRF).
