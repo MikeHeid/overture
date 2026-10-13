@@ -152,7 +152,9 @@ def load(state: Path) -> list[dict]:
         try:
             obj = json.loads(line)
             _check(obj)
-        except (json.JSONDecodeError, LessonError):
+        # ValueError, not just JSONDecodeError: an over-long integer literal raises a plain one.
+        # RecursionError: a deeply nested line fits easily under MAX_FILE.
+        except (ValueError, RecursionError, LessonError):
             dropped += 1
             continue
         rows.append(obj)
@@ -210,11 +212,11 @@ def record(state: Path, qid: str, item: str, kind: str, text: str, reason: str,
         "replaced_by": replaced_by,
     }
     _check(row)
-    _, data = _fit([*load(state), row])
-    if len(data) > MAX_FILE:
-        # Can only happen if a single row is itself larger than MAX_FILE, which _check already refuses
-        # at MAX_REASON (20 000 chars, ~20 KB) — so this is a tripwire for a future field growing.
-        raise LessonError(f"lessons file would be {len(data)} bytes; limit is {MAX_FILE}")
+    kept, data = _fit([*load(state), row])
+    if not kept or kept[-1] is not row:
+        # _fit prunes oldest-first, so the new row only goes when it alone exceeds MAX_FILE; writing
+        # then would empty the file. Unreachable while MAX_REASON holds; a tripwire for a future field.
+        raise LessonError(f"a lesson row cannot be larger than {MAX_FILE} bytes")
     with _state_fd(state) as sfd:
         AF.write_at(sfd, FILE, data)
     return row
@@ -321,11 +323,13 @@ def to_markdown(rows: list[dict]) -> str:
         klabel = kind_label.get(row["kind"], row["kind"])
         out.append(f"## {date} — {row['qid']} ({klabel})")
         out.append("")
-        out.append(f"**Ruling:** {row['text']}")
+        # Collapsed again here: record() collapses it, but a hand-edited row passes _check with newlines.
+        out.append(f"**Ruling:** {_trim_oneline(row['text'], MAX_TEXT)}")
         out.append("")
         out.append(f"**Why {klabel}:**")
         out.append("")
-        for line in row["reason"].split("\n") or [""]:
+        # CommonMark's three line endings: a lone \r would otherwise start an unindented line.
+        for line in re.split(r"\r\n|\r|\n", row["reason"]):
             out.append("    " + line)
         out.append("")
         if row.get("replaced_by"):

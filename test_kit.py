@@ -171,6 +171,25 @@ class SanitizerTests(unittest.TestCase):
         self.assertEqual(self.clean("<a>text</a>"), "text")
         self.assertEqual(self.clean("<a/>text"), "text")
 
+    def test_anchor_nesting_and_refused_hrefs_stay_balanced(self):
+        # Catches: a tag-stack change that lets a refused `<a>` or a stray `</a>` unbalance the
+        # output: a closer for an anchor never opened, an anchor left open, or an encoded
+        # `javascript:` href surviving as a live link.
+        cases = {
+            '<a href="https://x.example"><a href="https://y.example">in</a>after</a>tail': 2,
+            '<a href="https://x.example">open': 1,
+            '<a href="https://x.example"><a>refused</a>still</a>tail': 1,
+            '<a href="javascript:alert(1)">bad</a></a>tail': 0,
+            '<a href="&#106;avascript:alert(1)">bad</a>tail': 0,
+            '<b><a href="https://x.example">x</b></a>tail': 1,
+        }
+        for html, anchors in cases.items():
+            with self.subTest(html=html):
+                out = self.clean(html)
+                self.assertEqual((out.count("<a "), out.count("</a>")), (anchors, anchors), out)
+                self.assertNotIn("javascript", out)
+                self.assertTrue(out.endswith("tail") or out.endswith("</a>"), out)
+
     def test_author_rel_cannot_override_the_forced_one(self):
         # Catches: browsers take the FIRST duplicate attribute, so an author rel that comes
         # before the appended `rel="noopener noreferrer"` wins. `rel` is dropped from the
@@ -6185,6 +6204,50 @@ class LessonTests(unittest.TestCase):
         rows = LN.load(self.state)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["reason"], "line1 line2")
+
+    def _hand_append(self, *lines):
+        with open(self.state / LN.FILE, "a", encoding="utf-8") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+
+    def test_a_line_json_refuses_with_a_plain_valueerror_is_skipped(self):
+        # Catches: load() catching only JSONDecodeError. An over-long integer literal raises a plain
+        # ValueError and a deeply nested line raises RecursionError; either escaped server.py's
+        # (LessonError, OSError) catch and failed /api/view on every poll until hand-fixed.
+        LN.record(self.state, now_iso=self.NOW, **self._row())
+        self._hand_append('{"a": ' + "9" * 5000 + "}", "[" * 100_000)
+        self.assertEqual([r["qid"] for r in LN.load(self.state)], ["A/Q1"])
+        LN.record(self.state, now_iso=self.LATER, **self._row(qid="A/Q2"))   # record() reads through load()
+        self.assertEqual(len(LN.load(self.state)), 2)
+
+    def test_a_lone_cr_in_a_reason_cannot_start_a_markdown_line(self):
+        # Catches: to_markdown() splitting the reason on "\n" only. CommonMark ends a line at a lone
+        # "\r" too, so "a\r## H" put a heading at column 0 of the folded file.
+        LN.record(self.state, now_iso=self.NOW, **self._row(reason="a\r## H\rb\r\n## I"))
+        md = LN.to_markdown(LN.load(self.state))
+        lines = re.split(r"\r\n|\r|\n", md)
+        self.assertFalse([x for x in lines if x.startswith("## H") or x.startswith("## I")], md)
+        self.assertIn("    ## H", lines)
+
+    def test_hand_edited_multiline_ruling_text_is_collapsed_in_markdown(self):
+        # Catches: to_markdown() trusting row["text"] to be one line. Only record() collapses it,
+        # and _check() accepts a hand-edited row whose text spells a heading on its own line.
+        row = {"ts": self.NOW, "qid": "A/Q1", "item": "A", "kind": "withdraw",
+               "text": "Which?\n## Injected", "reason": "r", "replaced_by": None}
+        self._hand_append(json.dumps(row))
+        md = LN.to_markdown(LN.load(self.state))
+        self.assertIn("**Ruling:** Which? ## Injected", md)
+        self.assertNotIn("\n## Injected", md)
+
+    def test_a_row_larger_than_the_file_cap_is_refused_and_the_file_kept(self):
+        # Catches: the old tripwire checked len(data) after _fit, which had already pruned the new
+        # oversized row (and every older one), so it never fired and the write emptied the file.
+        from unittest import mock
+        LN.record(self.state, now_iso=self.NOW, **self._row())
+        before = (self.state / LN.FILE).read_bytes()
+        with mock.patch.object(LN, "MAX_FILE", 400):
+            with self.assertRaises(LN.LessonError):
+                LN.record(self.state, now_iso=self.LATER, **self._row(qid="A/Q2", reason="x" * 500))
+        self.assertEqual((self.state / LN.FILE).read_bytes(), before)
 
 
 class LessonMatchTests(unittest.TestCase):

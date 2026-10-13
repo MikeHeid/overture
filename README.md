@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.2-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.3-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-768-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-773-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -401,11 +401,13 @@ something was dropped, so the next agent doesn't bring it back.
 - **Related past rulings on the question card.** When an agent asks
   something that looks like a ruling you already withdrew or stopped
   checking *on the same item*, the card shows **📎 N related past rulings —
-  read before answering**. Open it to see the date, the ruling and your
+  read before answering**. Open it to see the date, the ruling's id,
+  whether you withdrew it or stopped checking, and the start of your
   reason. Questions you have already settled never show it.
 - **Agents can check before they ask.** `agent.py lesson-match "TEXT"
-  --item ITEM` prints the matching lessons and exits 0 (matches) or 1
-  (none), so a session can rephrase, or cite your reason, before it posts.
+  --item ITEM` prints the matching lessons and exits 0 (matches), 1
+  (none) or 2 (the lessons file cannot be read), so a session can
+  rephrase, or cite your reason, before it posts.
 - **Read or commit them.** `agent.py lessons` prints every lesson as
   Markdown, newest first; `--fold PATH` writes the file atomically into
   your project so it travels with the code.
@@ -902,7 +904,8 @@ Highlights of the 1.x arc:
 - **1.34 — Lesson match**: related past rulings on the question card,
   `agent.py lesson-match`. **1.34.1** brings this README up to date and
   caches lessons between page polls. **1.34.2**: upkeep (dependency
-  pins, a test that failed inside Claude Code).
+  pins, a test that failed inside Claude Code). **1.34.3**: lessons
+  hardening from the 1.34 review.
 - **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
   SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
   fixes (lesson size caps, sanitizer, CSP, CSRF).
