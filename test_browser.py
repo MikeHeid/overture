@@ -1790,12 +1790,14 @@ class LiveConsoleTests(unittest.TestCase):
         p = self.cfg.inbox
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
-    def page(self, kind, width, url, reduced=False, block_live=False):
+    def page(self, kind, width, url, reduced=False, block_live=False, init=None):
         browser = getattr(self.pw, kind).launch()
         self.addCleanup(browser.close)
         ctx = browser.new_context(viewport={"width": width, "height": 900},
                                   reduced_motion="reduce" if reduced else "no-preference")
         ctx.add_init_script(INBOX_CLOSED_THIS_SESSION)
+        if init:
+            ctx.add_init_script(init)
         page = ctx.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -2126,6 +2128,45 @@ class LiveConsoleTests(unittest.TestCase):
                     page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q3'].ck-arrived", timeout=10000)
                     self.assertFalse(page.evaluate(OVERFLOW))
                     self.assert_not_reloaded(page)
+
+    # Every CSP violation the page raises, recorded before any of its own script runs.
+    CSP_WATCH = ("window.__csp = []; document.addEventListener('securitypolicyviolation',"
+                 " e => window.__csp.push(e.effectiveDirective + ' ' + e.blockedURI));")
+    IMG = "src => new Promise(r => { const i = new Image(); i.onload = () => r('loaded'); i.onerror = () => r('blocked'); i.src = src; })"
+    PIXEL = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAAS"
+             "UVORK5CYII=")
+
+    def test_a_related_ruling_reaches_the_card_from_the_real_server_under_its_csp(self):
+        # 1.34.7, the one-off 1.34.4 check made permanent. The DockTests chip test feeds the page a
+        # stub's copy of what server.page_payload attaches; this one goes through the real server.
+        # Catches: page_payload no longer attaching `related_lessons` (or the page reading another
+        # name), so the 📎 chip never shows; a console change that trips its own nonce-only CSP
+        # (an inline handler, a style attribute, an eval) where only a console message would say so;
+        # and a CSP loosened to let the page load or send to another origin.
+        from overture import lessons as LN
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                LN.record(self.cfg.state, "LANE.1/Q0", "LANE.1", "withdraw",
+                          "Which retry policy applies to the upload API?",
+                          "obsolete: the upload API was replaced by the batch endpoint", "2026-10-01T00:00:00Z")
+                self.ask(7, text="Which retry policy applies to the upload API now?")
+                page = self.page(kind, 1400, url, init=self.CSP_WATCH)
+                self.open_inbox(page, 1400)
+                page.click(".ck-inbox-item[data-qid='LANE.1/Q7']")
+                line = page.locator(".ck-q-line[data-qid='LANE.1/Q7'][aria-expanded='false']")
+                if line.count():                  # a long card opens rolled up to its line
+                    line.first.click()
+                page.wait_for_selector("summary.ck-q-lessons-chip")
+                page.click("summary.ck-q-lessons-chip")
+                self.assertIn("replaced by the batch endpoint", page.locator(".ck-q-lesson").first.inner_text())
+                self.assertEqual(page.evaluate("window.__csp"), [], "the console tripped its own CSP")
+                self.assertEqual(page.evaluate(self.IMG, self.PIXEL), "loaded")
+                self.assertEqual(page.evaluate(self.IMG, "https://example.com/x.png"), "blocked")
+                self.assertEqual(page.evaluate("() => fetch('https://example.com/').then(() => 'reached', () => 'blocked')"),
+                                 "blocked")
+                _wait_for(page, "() => window.__csp.some(v => v.startsWith('img-src'))"
+                                " && window.__csp.some(v => v.startsWith('connect-src'))")
 
     def test_the_feed_shows_events_as_they_happen_and_filters_them(self):
         # Catches: a Feed fetched once and never again, one that loses its filter on a live
