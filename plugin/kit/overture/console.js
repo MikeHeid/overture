@@ -2112,6 +2112,9 @@
   // Render panel content
   function renderPanel() {
     dropLocksNotOnShow();
+    // Taken BEFORE the clear: once detached, getElementById no longer finds it, and from 1.30.1 to
+    // 1.34.6 the lookup came after, so every repaint threw an open wizard away mid-sentence.
+    const auxPaneEl = document.getElementById('ck-launch-pane');
     panelEl.textContent = '';
     pendingLive = false;
     // persistent chrome (status chip, dock handle, aux pane) was being wiped on every
@@ -2137,7 +2140,6 @@
     // mode-specific render so a Launch Idea in-flight survives a live tick without the user
     // noticing. closeAuxPane() is called from openPanel() when currentItem changes, and from
     // closePanel() when the whole panel is dismissed.
-    const auxPaneEl = document.getElementById('ck-launch-pane');
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
     placeStatusChip();
   }
@@ -5081,14 +5083,17 @@
     back.addEventListener('click', () => { launchIdeaState.step = 2; renderLaunchIdea(); });
     const spawn = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Spawn selected']);
     spawn.addEventListener('click', async () => {
-      const picks = launchIdeaState.tickets.filter(t => t.selected && t.title.trim());
+      // Taken once, before the first await: the owner may close the pane, or reopen it on another
+      // item, while a ticket is in flight, and the rest must still go to the item they were drafted for.
+      const run = launchIdeaState, itemId = run.itemId;
+      const picks = run.tickets.filter(t => t.selected && t.title.trim());
       if (!picks.length) { announce('Pick at least one ticket with a title', { tone: 'error' }); return; }
       spawn.disabled = true;
       let ok = 0, errs = 0;
       for (const t of picks) {
         const r = await apiPost('/ticket-create',
-          { parent_item: launchIdeaState.itemId, kind: t.kind, title: t.title.trim(), body: t.body },
-          'launch-idea-' + launchIdeaState.itemId + '-' + t.kind + '-' + Date.now());
+          { parent_item: itemId, kind: t.kind, title: t.title.trim(), body: t.body },
+          'launch-idea-' + itemId + '-' + t.kind + '-' + Date.now());
         if (r && r.error) { errs += 1; }
         else { ok += 1; }
       }
@@ -5096,10 +5101,10 @@
       if (ok) announce(ok + ' ticket' + (ok === 1 ? '' : 's') + ' spawned.', { tone: 'ok' });
       if (errs) announce(errs + ' ticket' + (errs === 1 ? '' : 's') + ' failed; see each row.', { tone: 'error', sticky: true });
       // Clear the saved draft now that work has shipped.
-      setDraft(LAUNCH_IDEA_DRAFT_KEY(launchIdeaState.itemId), '');
+      setDraft(LAUNCH_IDEA_DRAFT_KEY(itemId), '');
       // Open the fold they went into: redrawn shut, it would show a "Tickets" line and none of them.
-      if (ok) openForms.add('tickets-' + launchIdeaState.itemId);
-      closeLaunchIdea();
+      if (ok) openForms.add('tickets-' + itemId);
+      if (launchIdeaState === run) closeLaunchIdea();   // not a pane the owner has opened since
       // redraw so the spawned tickets show in the fold immediately.
       if (panelEl.getAttribute('data-open') === 'true') renderPanel();
     });
@@ -5298,20 +5303,24 @@
     });
     const ticketBtn = el('button', { type: 'button', className: 'ck-btn' }, ['Create research ticket']);
     ticketBtn.addEventListener('click', async () => {
+      // Taken before the await, as in Launch Idea's spawn: the pane may be closed or reopened on
+      // another item by the time the answer lands.
+      const run = branchOutState, itemId = run.itemId;
       ticketBtn.disabled = true;
       const r = await apiPost('/ticket-create', {
-        parent_item: branchOutState.itemId,
+        parent_item: itemId,
         kind: 'research',
-        title: branchOutState.title.trim() || 'Branch out',
-        body: branchOutState.brief
-      }, 'branch-out-ticket-' + branchOutState.itemId + '-' + Date.now());
+        title: run.title.trim() || 'Branch out',
+        body: run.brief
+      }, 'branch-out-ticket-' + itemId + '-' + Date.now());
       ticketBtn.disabled = false;
       if (r && r.error) {
         announce('Not created: ' + r.error, { tone: 'error', sticky: true });
       } else {
         announce('Research ticket created.', { tone: 'ok' });
-        setDraft(BRANCH_OUT_DRAFT_KEY(branchOutState.itemId), '');
-        closeBranchOut();
+        setDraft(BRANCH_OUT_DRAFT_KEY(itemId), '');
+        openForms.add('tickets-' + itemId);   // the fold it went into, open, as a Launch Idea spawn leaves it
+        if (branchOutState === run) closeBranchOut();
         // redraw so the new research ticket appears in the item's fold immediately.
         if (panelEl.getAttribute('data-open') === 'true') renderPanel();
       }
@@ -5320,21 +5329,22 @@
     // steward's console-fork skill picks it up and runs a round against the brief.
     const roundBtn = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Spawn deliberate round']);
     roundBtn.addEventListener('click', async () => {
+      const run = branchOutState, itemId = run.itemId;   // before the await, as above
       roundBtn.disabled = true;
       const r = await apiPost('/message', {
-        item: branchOutState.itemId,
-        text: branchOutState.brief,
+        item: itemId,
+        text: run.brief,
         intent: 'fork',
         mode: 'deliberate',
         focus: 'topic'
-      }, 'branch-out-fork-' + branchOutState.itemId + '-' + Date.now());
+      }, 'branch-out-fork-' + itemId + '-' + Date.now());
       roundBtn.disabled = false;
       if (r && r.error) {
         announce('Not sent: ' + r.error, { tone: 'error', sticky: true });
       } else {
         announce('Deliberate round queued.', { tone: 'ok' });
-        setDraft(BRANCH_OUT_DRAFT_KEY(branchOutState.itemId), '');
-        closeBranchOut();
+        setDraft(BRANCH_OUT_DRAFT_KEY(itemId), '');
+        if (branchOutState === run) closeBranchOut();
       }
     });
     const back = el('button', { type: 'button', className: 'ck-btn' }, ['← Edit answers']);
