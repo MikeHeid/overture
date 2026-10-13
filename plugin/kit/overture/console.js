@@ -5097,6 +5097,8 @@
       if (errs) announce(errs + ' ticket' + (errs === 1 ? '' : 's') + ' failed; see each row.', { tone: 'error', sticky: true });
       // Clear the saved draft now that work has shipped.
       setDraft(LAUNCH_IDEA_DRAFT_KEY(launchIdeaState.itemId), '');
+      // Open the fold they went into: redrawn shut, it would show a "Tickets" line and none of them.
+      if (ok) openForms.add('tickets-' + launchIdeaState.itemId);
       closeLaunchIdea();
       // redraw so the spawned tickets show in the fold immediately.
       if (panelEl.getAttribute('data-open') === 'true') renderPanel();
