@@ -183,6 +183,16 @@
   const draftModes = {};  // form key -> the mode radio picked: kept across a re-render
   let currentFork = null; // the answers sheet's fork filter (spec §7.6), or the round the form walks
   const openForms = new Set(); // disclosure keys the owner left open
+  // Every repaint (Refresh, any live update) builds the panel anew, so a <details> the owner opened
+  // would snap shut the moment an agent posts anything. A fold that should stay as the owner left
+  // it goes through here with a key unique to what it shows.
+  function keepOpen(details, key) {
+    if (openForms.has(key)) details.open = true;
+    details.addEventListener('toggle', () => {
+      if (details.open) openForms.add(key); else openForms.delete(key);
+    });
+    return details;
+  }
   let lockingAll = null;        // 0.8.5: the item whose answers are being locked in turn, or null
   const lockAllError = {};      // 0.8.5: item -> why its last 'Lock all' stopped
   // CONSOLE-kit/Q33: one tap locks one answer, at once (0.9.12 removed the countdown and Undo). Nothing
@@ -2632,7 +2642,7 @@
       const bar = k.indexOf('#');
       return { key: k, project: k.slice(0, bar), qid: k.slice(bar + 1), until: m[k].until, note: m[k].note || '' };
     }).sort((a, b) => a.until - b.until);
-    const wrap = el('details', { className: 'ck-snoozed-section' });
+    const wrap = keepOpen(el('details', { className: 'ck-snoozed-section' }), 'snoozed');
     wrap.appendChild(el('summary', { className: 'ck-snoozed-summary' },
       ['Snoozed', el('span', { className: 'ck-muted' }, [' · ' + rows.length])]));
     const ul = el('ul', { className: 'ck-snoozed-list' });
@@ -2697,7 +2707,7 @@
   // on this item; clicking it opens the item and scrolls to that question. Shows direction without leaving.
   function renderAnsweredFooter(itemId, locked) {
     const n = locked.length;
-    const wrap = el('details', { className: 'ck-answered-footer', dataItem: itemId });
+    const wrap = keepOpen(el('details', { className: 'ck-answered-footer', dataItem: itemId }), 'answered-' + itemId);
     const sum = el('summary', { className: 'ck-answered-summary' }, [
       n + ' answered on ' + itemId
     ]);
@@ -3196,15 +3206,8 @@
         pre.textContent = m.reason_preview || '';
         panel.appendChild(el('div', { className: 'ck-q-lesson' }, [hdr, pre]));
       }
-      const details = el('details', { className: 'ck-q-lessons' }, [summary, panel]);
-      // Every repaint (Refresh, any live update) builds this anew: without the key, a ruling the
-      // owner opened to read snaps shut the moment an agent posts anything.
-      const lessonsKey = 'lessons-' + qData.qid;
-      if (openForms.has(lessonsKey)) details.open = true;
-      details.addEventListener('toggle', () => {
-        if (details.open) openForms.add(lessonsKey); else openForms.delete(lessonsKey);
-      });
-      textCol.appendChild(details);
+      textCol.appendChild(keepOpen(el('details', { className: 'ck-q-lessons' }, [summary, panel]),
+        'lessons-' + qData.qid));
     }
     const chips = tagChips(questionTags(qData.qid));
     if (chips) textCol.appendChild(chips);
@@ -3484,9 +3487,9 @@
     const t = view && view.transcripts ? view.transcripts[forkId] : null;
     if (!t) return null;
     const kb = Math.max(1, Math.round(t.bytes / 1024));
-    const det = el('details', { className: 'ck-transcript' }, [
+    const det = keepOpen(el('details', { className: 'ck-transcript' }, [
       el('summary', {}, ['Roar transcript · three rounds · ' + kb + ' KB · ' + relTime(t.ts) +
-        (t.agent ? ' · by ' + t.agent : '')])]);
+        (t.agent ? ' · by ' + t.agent : '')])]), 'transcript-' + forkId);
     const pre = el('pre', { className: 'ck-transcript-text' });
     pre.textContent = t.text;
     det.appendChild(pre);
@@ -5376,7 +5379,7 @@
   }
 
   function renderTicketsFold(itemId) {
-    const details = el('details', { className: 'ck-tickets-fold' });
+    const details = keepOpen(el('details', { className: 'ck-tickets-fold' }), 'tickets-' + itemId);
     const summary = el('summary', { className: 'ck-tickets-summary' });
     const list = (view && view.tickets && view.tickets.by_item && view.tickets.by_item[itemId]) || [];
     const counts = (view && view.tickets && view.tickets.counts && view.tickets.counts[itemId]) || {};
@@ -5398,7 +5401,7 @@
       for (const t of blocked) body.appendChild(renderTicketRow(t));
     }
     if (closed.length) {
-      const d = el('details', { className: 'ck-tickets-closed' });
+      const d = keepOpen(el('details', { className: 'ck-tickets-closed' }), 'tickets-closed-' + itemId);
       d.appendChild(el('summary', { className: 'ck-section-heading' },
         ['Closed · ' + closed.length]));
       for (const t of closed) d.appendChild(renderTicketRow(t));
@@ -5556,7 +5559,7 @@
     return row;
   }
   function renderNewTicketForm(itemId) {
-    const wrap = el('details', { className: 'ck-ticket-new' });
+    const wrap = keepOpen(el('details', { className: 'ck-ticket-new' }), 'ticket-new-' + itemId);
     wrap.appendChild(el('summary', { className: 'ck-ticket-new-summary' }, ['+ New ticket']));
     const form = el('div', { className: 'ck-ticket-new-body' });
     const kindSel = el('select', { className: 'ck-ticket-kind-sel', 'aria-label': 'Ticket kind' });
@@ -5909,7 +5912,7 @@
     const r = q.question;
     const labels = optionLabels(r);
     const head = q.answers.length ? q.answers[q.answers.length - 1] : null;
-    const row = el('details', { className: 'ck-sheet-row', dataState: q.state });
+    const row = keepOpen(el('details', { className: 'ck-sheet-row', dataState: q.state }), 'sheet-' + r.qid);
     const current = head ? (head.picks.map(p => labels[p] || p).join(', ') || 'own words') : 'no answer yet';
     row.appendChild(el('summary', {}, [
       el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' + STATE_WORDS[q.state]]),

@@ -4,7 +4,7 @@ The Access check runs for real: tokens are signed with a throwaway RSA key and
 verified by PyJWT through `access_verifier`. Only the key lookup is replaced,
 so no test reaches the network.
 
-    python3 tools/overture/test_server.py
+    python3 test_server.py
 """
 
 from __future__ import annotations

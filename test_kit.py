@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the owner-Overture (`schema`, `store`, `view`, `fold`, `publish`).
 
-    python3 tools/overture/test_kit.py
+    python3 test_kit.py
 
 Each test names the wrong implementation it exists to catch, per the project's
 rule: "what would pass this while missing the point?". Every write happens in
@@ -6209,7 +6209,7 @@ class LessonTests(unittest.TestCase):
         with open(self.state / LN.FILE, "a", encoding="utf-8") as fh:
             fh.write("".join(line + "\n" for line in lines))
 
-    def test_a_line_json_refuses_with_a_plain_valueerror_is_skipped(self):
+    def test_a_line_json_refuses_with_valueerror_or_recursionerror_is_skipped(self):
         # Catches: load() catching only JSONDecodeError. An over-long integer literal raises a plain
         # ValueError and a deeply nested line raises RecursionError; either escaped server.py's
         # (LessonError, OSError) catch and failed /api/view on every poll until hand-fixed.
@@ -6227,6 +6227,25 @@ class LessonTests(unittest.TestCase):
         lines = re.split(r"\r\n|\r|\n", md)
         self.assertFalse([x for x in lines if x.startswith("## H") or x.startswith("## I")], md)
         self.assertIn("    ## H", lines)
+
+    def test_lesson_match_cannot_start_a_markdown_line_from_a_reason_either(self):
+        # Catches: `agent.py lesson-match` splitting reason_preview on "\n" only, after 1.34.3 fixed the
+        # same split in to_markdown(). An agent reads this output as Markdown, so "a\r## H" printed a
+        # heading of the reason's choosing at column 0. Also pins lesson-match's exit codes (0 / 1).
+        import subprocess
+        LN.record(self.state, now_iso=self.NOW,
+                  **self._row(text="Which retry policy for uploads?", reason="a\r## H\rb\r\n## I"))
+
+        def match(text):
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.state),
+                                "lesson-match", text, "--item", "A"], capture_output=True, text=True, timeout=60)
+            return r.returncode, r.stdout, r.stderr
+        rc, out, err = match("Which retry policy for uploads now?")
+        self.assertEqual(rc, 0, err)
+        lines = re.split(r"\r\n|\r|\n", out)
+        self.assertIn("    ## H", lines)
+        self.assertFalse([x for x in lines if x.startswith("## H") or x.startswith("## I")], out)
+        self.assertEqual(match("Something unrelated entirely")[0], 1)
 
     def test_hand_edited_multiline_ruling_text_is_collapsed_in_markdown(self):
         # Catches: to_markdown() trusting row["text"] to be one line. Only record() collapses it,
