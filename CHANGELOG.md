@@ -2990,6 +2990,56 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Lessons (1.33.0)
+
+The audit trail turns generative. Pre-1.33 the owner's reasons for
+withdrawing or stopping-to-check a ruling lived only in the fold
+record; a new session saw the ruling was gone but not **why**, and
+would often re-litigate the same ground. 1.33 captures those reasons
+as **lessons** every new agent reads on session start.
+
+- **`STATE/lessons.jsonl`.** New append-only file written via the same
+  `atfile.write_at` pattern as `drafts.json` and `tickets.json`:
+  O_NOFOLLOW on the dir fd, O_EXCL on the temp, fsync, atomic rename.
+  Each row: `{ts, qid, item, kind, text, reason, replaced_by}`.
+  `kind` is `withdraw` or `untrack`. Caps: 2000 lessons (FIFO pruned),
+  10 000-char reason, 2 MiB on disk.
+- **Wired into `Console.refactor`.** When the owner acts on a stale
+  ruling via `/api/refactor` with action `withdraw` or `untrack`, the
+  server records a lesson after the regular refactor write lands.
+  Confirm (re-anchor) is NOT a lesson — it is the same decision with
+  moved evidence. A lesson record failure never faults the refactor:
+  the ruling act lands first; a stderr line reports the lesson error.
+- **`view.lessons: {count, newest_ts}`** on the owner door's
+  `/api/view` so the browser can show "N lessons" alongside drafts,
+  tickets and backlinks. Full list is served via the CLI below, so no
+  reason text travels through every live view.
+- **`agent.py lessons [--fold PATH]`.** Prints the stored lessons as
+  Markdown to stdout (one H2 per lesson, newest first). With `--fold
+  PATH`, writes atomically to the project tree — commit the file so
+  every machine's SessionStart hook reads it from the commit.
+- **SessionStart hook mentions the count.** Every registered-project
+  session now sees one line: *"N lesson(s) from past rulings. Read
+  them with `agent.py lessons`, so this session does not re-litigate
+  what the owner has already settled."* Silent when zero.
+
+### Trust
+
+- The lessons file is owner-write only. The refactor route that
+  triggers a record is already owner-door only; the agent socket has
+  no path to append a lesson.
+- Nothing in a lesson travels off the machine. Peers never see the
+  file; `/api/view` carries only the count and the newest timestamp.
+- The file is written whole on each record (full existing list + the
+  new row, FIFO-pruned, atomic rename). A crash mid-write leaves the
+  prior file unchanged, as with every other state file.
+- The SessionStart line is read-only. The hook opens the file with the
+  same `_read_regular` guards it uses for the doorbell: regular file,
+  size-capped, non-blocking, no symlink follow.
+- The owner's reason is required (uncapped above `MAX_REASON`) because
+  a truncated reason loses the signal lessons exist to carry. The
+  server refuses over-cap rather than silently cutting.
+
 ## View (1.32.0)
 
 UX View is the headline: a component modal on UX items with versions,

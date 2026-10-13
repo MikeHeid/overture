@@ -548,6 +548,32 @@ def _server_down(state: Path, kit: Path) -> str | None:
             f"`python3 {kit / 'server.py'} status` says why; `daemon start` or `service install --start` runs it.")
 
 
+def _lessons_line(state: Path, agent: str) -> str | None:
+    """one line naming the lessons file when the owner has recorded any.
+
+    Reads STATE/lessons.jsonl with the same safety guards as the doorbell: a plain file only,
+    size-capped, never followed through a link. Counts non-empty lines; malformed lines are
+    counted anyway (the agent will read them with `agent.py lessons`, which validates and
+    skips). Returns None for a missing or empty file so the hook stays silent by default.
+    """
+    try:
+        raw = _read_regular(state / "lessons.jsonl", 2 << 20)
+    except (Unsafe, OSError):
+        return None
+    if raw is None:
+        return None
+    try:
+        text = raw.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — a decode error must not fault the hook
+        return None
+    count = sum(1 for line in text.splitlines() if line.strip())
+    if count == 0:
+        return None
+    return (f"Owner console: {count} lesson{'' if count == 1 else 's'} from past rulings "
+            f"(withdrawn or kept unchecked). Read them with `{agent} lessons`, so this "
+            "session does not re-litigate what the owner has already settled.")
+
+
 def context(project: Path, sid: str | None = None) -> str | None:
     """The note for this session, or None when there is nothing to say."""
     try:
@@ -568,6 +594,10 @@ def context(project: Path, sid: str | None = None) -> str | None:
         upgrade = _upgrade_note(agent, state, kit, running_version, _last_seen(state))
         if upgrade is not None:
             _record_version(state, running_version)
+    # lessons line. If the owner has recorded withdrawn or kept-unchecked rulings in
+    # STATE/lessons.jsonl, mention the count so new sessions know to read `agent.py lessons` for
+    # the project's accumulated "we tried this, here's why we stopped" record. Silent when zero.
+    lessons = _lessons_line(state, agent)
     # Standing, in every session of a registered project: a question the owner
     # must decide is posted to the console, not left in a document (owner, 2026-09-29).
     ask = ("Owner console: this project is registered. Post every question the owner must decide "
@@ -579,6 +609,8 @@ def context(project: Path, sid: str | None = None) -> str | None:
     down = _server_down(state, kit)
     if down:
         ask += "\n\n" + down
+    if lessons:
+        ask += "\n\n" + lessons
     prefix = (upgrade + "\n\n") if upgrade else ""
     if not wake:
         return prefix + ask

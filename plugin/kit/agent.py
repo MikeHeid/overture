@@ -1275,6 +1275,42 @@ def _issues_push(a) -> int:
     return 0
 
 
+def _lessons(a) -> int:
+    """print or fold the lessons recorded by withdraw/untrack rulings.
+
+    `agent.py --state STATE lessons`                 → prints the Markdown to stdout
+    `agent.py --state STATE lessons --fold PATH`     → writes PATH atomically from the stored jsonl
+
+    No network, no store writes. Reads STATE/lessons.jsonl via the same atfile pattern the server
+    writes it with. Owner-only in spirit; the agent socket is 0600 under a 0700 dir, so the OS
+    user is the trust boundary. `--fold` lets a session land the lessons file into the project
+    tree so the SessionStart hook of every machine can read it from the commit.
+    """
+    from overture import lessons as LN
+
+    state = Path(os.path.realpath(a.state))
+    try:
+        rows = LN.load(state)
+    except (LN.LessonError, OSError) as e:
+        print(f"lessons: cannot read {state}/{LN.FILE}: {e}", file=sys.stderr)
+        return 1
+    md = LN.to_markdown(rows)
+    if getattr(a, "fold", None):
+        target = Path(a.fold).resolve()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(md, encoding="utf-8")
+            os.replace(tmp, target)
+        except OSError as e:
+            print(f"lessons: cannot write {target}: {e}", file=sys.stderr)
+            return 1
+        print(f"wrote {len(rows)} lesson(s) to {target}")
+        return 0
+    sys.stdout.write(md)
+    return 0
+
+
 def _refused_note(files: list, n: int, why: str | None, rc: int = 1) -> int:
     """A batch ask stopped at files[n]: say what was posted and what was not, so a re-run sends only the rest."""
     if why:
@@ -1370,7 +1406,7 @@ def main(argv=None) -> int:
     s.add_argument("--pr", type=int, help="the pull request it shows (an asset linked to a PR is never pruned)")
     s.add_argument("--ticket", help="the ticket it shows")
     s = sub.add_parser("design-inventory", description=(
-        "List the artifacts of the owner's Claude Design project for UX View's picker (1.33). Open the design the "
+        "List the artifacts of the owner's Claude Design project for UX View's picker . Open the design the "
         "way you read it for a component (the owner's login), then send what is in it: FILE is JSON "
         "([{\"path\": \"buttons/primary.html\", \"title\": \"Primary button\"}, ...]) or one path per line. "
         "At most 300 artifacts; a new list replaces the last one for that link. The owner picks from it; the "
@@ -1530,6 +1566,11 @@ def main(argv=None) -> int:
                    "(default: 30, at most 365)")
     s.add_argument("--limit", type=int, default=50, help="at most this many open issues, and as many closed "
                    "ones (default: 50, at most 100)")
+    s = sub.add_parser("lessons", description="Print the lessons recorded from withdrawn and kept-unchecked "
+                       "rulings as Markdown. --fold PATH writes PATH atomically; the SessionStart hook of every "
+                       "machine then reads the file from the commit .")
+    s.add_argument("--fold", metavar="PATH", help="write to PATH instead of stdout (atomic). Commit the file so "
+                   "every machine's agents read it on session start.")
     s = sub.add_parser("server", description="Host this console on the one console server (K3): `add NAME` "
                        "writes the project to server.json beside your registry. You run this, never a session.")
     ss = s.add_subparsers(dest="server_cmd", required=True)
@@ -1684,6 +1725,8 @@ def _run(a, bell: Path) -> int:
         return _prs_push(a)
     if a.cmd == "issues-push":
         return _issues_push(a)
+    if a.cmd == "lessons":
+        return _lessons(a)
     if a.cmd == "page-snapshot":
         return _page_snapshot(a)
     if a.cmd == "server" and a.server_cmd == "token":
