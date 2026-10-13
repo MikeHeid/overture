@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -214,6 +215,73 @@ def as_view(rows: list[dict]) -> dict:
     if not rows:
         return {"count": 0, "newest_ts": None}
     return {"count": len(rows), "newest_ts": rows[-1]["ts"]}
+
+
+def _trigrams(text: str) -> frozenset[str]:
+    """Lower + strip combining marks + collapse whitespace, then 3-grams padded with spaces at
+    ends. Returning a frozenset keeps the matcher's inner loop O(min(a, b)) via set intersection.
+
+    NFKD + combining-filter folds "é" and "e" together so an owner who writes "retried" matches a
+    future question titled "Retrie¹d" (unlikely but harmless). An empty or very short text returns
+    an empty set, which Jaccard treats as score 0.
+    """
+    folded = unicodedata.normalize("NFKD", (text or "").casefold())
+    stripped = "".join(c for c in folded if not unicodedata.combining(c))
+    norm = " " + " ".join(stripped.split()) + " "
+    if len(norm) < 3:
+        return frozenset()
+    return frozenset(norm[i:i + 3] for i in range(len(norm) - 2))
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+MATCH_TOP_K = 3
+# Jaccard thresholds on trigrams decay fast as texts get specific; 0.15 catches "retry 5 times
+# on upload" vs "5 retries with exponential backoff" (score ≈ 0.18, same topic, worth reading)
+# while still skipping coincidence between unrelated short questions. Tune via the CLI.
+MATCH_THRESHOLD = 0.15
+MATCH_PREVIEW = 400
+
+
+def match(text: str, item: str, rows: list[dict],
+          top_k: int = MATCH_TOP_K, threshold: float = MATCH_THRESHOLD) -> list[dict]:
+    """Rank lessons by Jaccard trigram similarity to `text`, filtered to the same `item`.
+
+    The item filter is deliberate: a lesson about retry policy on `API` is not a hint for a
+    question about retry policy on `UI`. Picks the top `top_k` matches above `threshold` (0.25
+    is tight enough to skip coincidence but loose enough to catch paraphrases). On score ties
+    the newest ts wins so the owner reads the most recent reasoning first.
+
+    Shape: a list of {qid, kind, ts, score, reason_preview} dicts (reason trimmed to
+    `MATCH_PREVIEW` chars; the full reason lives in `agent.py lessons`). Returns an empty list
+    when the question has no text, the lessons file is empty, or nothing exceeds the threshold.
+    """
+    if not rows or not text or not item:
+        return []
+    want = _trigrams(text)
+    if not want:
+        return []
+    scored: list[tuple[float, dict]] = []
+    for r in rows:
+        if r.get("item") != item:
+            continue
+        s = _jaccard(want, _trigrams(r["text"]))
+        if s >= threshold:
+            scored.append((s, r))
+    scored.sort(key=lambda t: (t[0], t[1]["ts"]), reverse=True)
+    out: list[dict] = []
+    for s, r in scored[:top_k]:
+        reason = r["reason"]
+        preview = reason if len(reason) <= MATCH_PREVIEW else reason[: MATCH_PREVIEW - 1] + "…"
+        out.append({"qid": r["qid"], "kind": r["kind"], "ts": r["ts"],
+                    "score": round(s, 3), "reason_preview": preview})
+    return out
 
 
 def to_markdown(rows: list[dict]) -> str:

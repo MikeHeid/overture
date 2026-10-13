@@ -1275,6 +1275,45 @@ def _issues_push(a) -> int:
     return 0
 
 
+def _lesson_match(a) -> int:
+    """Check a question draft against the owner's recorded lessons (ask-side mirror of the
+    chip the console surfaces to the owner).
+
+    Reads STATE/lessons.jsonl, calls `lessons.match()` with the same algorithm the server uses
+    for the owner card, and prints the top matches as Markdown so the posting agent can decide:
+    rephrase, cite them in the ask, or go ahead. Exit 0 on any match, 1 when none — a script
+    can gate on this (`agent.py lesson-match "..." --item X && echo clear`).
+    """
+    from overture import lessons as LN
+
+    state = Path(os.path.realpath(a.state))
+    try:
+        rows = LN.load(state)
+    except (LN.LessonError, OSError) as e:
+        print(f"lesson-match: cannot read {state}/{LN.FILE}: {e}", file=sys.stderr)
+        return 2
+    matches = LN.match(a.text, a.item, rows, top_k=a.top, threshold=a.threshold)
+    if not matches:
+        print(f"No lessons match (checked {len(rows)} on item {a.item!r}; threshold {a.threshold}).")
+        return 1
+    print(f"# {len(matches)} related ruling(s) on item {a.item}")
+    print()
+    print("The owner has recorded a reason for the ruling(s) below. Read them before posting;")
+    print("rephrase, cite, or let the owner decide. The console surfaces the same list on the")
+    print("owner's card, so skipping this step does not hide them.")
+    print()
+    label = {"withdraw": "withdrawn", "untrack": "kept unchecked"}
+    for m in matches:
+        date = m["ts"][:10]
+        klabel = label.get(m["kind"], m["kind"])
+        print(f"## {date} — {m['qid']} ({klabel}, score {m['score']})")
+        print()
+        for line in m["reason_preview"].split("\n") or [""]:
+            print("    " + line)
+        print()
+    return 0
+
+
 def _lessons(a) -> int:
     """Print or fold the lessons recorded by withdraw/untrack rulings.
 
@@ -1585,9 +1624,20 @@ def main(argv=None) -> int:
                    "ones (default: 50, at most 100)")
     s = sub.add_parser("lessons", description="Print the lessons recorded from withdrawn and kept-unchecked "
                        "rulings as Markdown. --fold PATH writes PATH atomically; the SessionStart hook of every "
-                       "machine then reads the file from the commit .")
+                       "machine then reads the file from the commit.")
     s.add_argument("--fold", metavar="PATH", help="write to PATH instead of stdout (atomic). Commit the file so "
                    "every machine's agents read it on session start.")
+    s = sub.add_parser("lesson-match", description="Check a question draft against the owner's recorded lessons "
+                       "BEFORE posting it. Prints any past withdrawn/untracked rulings on the same item whose "
+                       "text looks similar (trigram Jaccard; 1.34), so an agent can rephrase or cite them in "
+                       "the ask rather than invite the owner to re-litigate the same ground. Exit 0 when matches "
+                       "exist, 1 when none; the console always surfaces the same matches on the owner's card, "
+                       "so skipping this step still gives the owner the chip — this is the ASK-side mirror.")
+    s.add_argument("text", metavar="TEXT", help="the question text to check (one line is fine; wrap in quotes)")
+    s.add_argument("--item", metavar="ITEM", required=True, help="the item the question belongs to")
+    s.add_argument("--top", type=int, default=5, help="print at most this many matches (default: 5)")
+    s.add_argument("--threshold", type=float, default=0.15, help="refuse matches below this Jaccard score "
+                   "(default: 0.15; raise to tighten, lower to see more)")
     s = sub.add_parser("server", description="Host this console on the one console server (K3): `add NAME` "
                        "writes the project to server.json beside your registry. You run this, never a session.")
     ss = s.add_subparsers(dest="server_cmd", required=True)
@@ -1744,6 +1794,8 @@ def _run(a, bell: Path) -> int:
         return _issues_push(a)
     if a.cmd == "lessons":
         return _lessons(a)
+    if a.cmd == "lesson-match":
+        return _lesson_match(a)
     if a.cmd == "page-snapshot":
         return _page_snapshot(a)
     if a.cmd == "server" and a.server_cmd == "token":
