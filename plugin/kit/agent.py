@@ -1338,10 +1338,7 @@ def _lessons(a) -> int:
         return 1
     md = LN.to_markdown(rows).encode("utf-8")
     if getattr(a, "fold", None):
-        # Resolve PATH's PARENT (not PATH itself: PATH may not exist yet, and if it does, we
-        # must refuse a symlink there, not follow it). Then open the parent as a dir fd and
-        # let atfile.write_at do the O_EXCL temp + fsync + rename, which refuses any symlink
-        # or non-regular file at the target name via O_NOFOLLOW.
+        # Resolve only the parent: a symlink AT PATH must be replaced, never followed.
         target = Path(a.fold)
         parent = target.parent.resolve()
         name = target.name

@@ -593,9 +593,6 @@ def context(project: Path, sid: str | None = None) -> str | None:
         upgrade = _upgrade_note(agent, state, kit, running_version, _last_seen(state))
         if upgrade is not None:
             _record_version(state, running_version)
-    # lessons line. If the owner has recorded withdrawn or kept-unchecked rulings in
-    # STATE/lessons.jsonl, mention the count so new sessions know to read `agent.py lessons` for
-    # the project's accumulated "we tried this, here's why we stopped" record. Silent when zero.
     lessons = _lessons_line(state, agent)
     # Standing, in every session of a registered project: a question the owner
     # must decide is posted to the console, not left in a document (owner, 2026-09-29).

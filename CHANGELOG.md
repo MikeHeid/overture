@@ -2990,6 +2990,37 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Housekeeping (1.34.1)
+
+No new features. The README catches up with 1.33 and 1.34, and the
+leftovers from the 1.33 review are cleared.
+
+- **README.** Lessons and Lesson Match get their own section, a row in
+  the feature map, a glossary entry, Trust bullets and changelog
+  highlights. The owner-door CSP bullet shows the 1.33.1 directives.
+  Version and test-count badges are current.
+- **Lessons are cached between page polls.** `/api/view` re-read and
+  re-parsed `STATE/lessons.jsonl` (up to 2 MiB) on every poll, and 1.34
+  added the matcher on top. The server now keeps the parsed rows keyed
+  on the file's (inode, size, mtime_ns); `record()` replaces the file by
+  rename, so the next poll reloads. The matcher's trigram sets are
+  memoised too.
+- **One CSP nonce generator.** The owner page used
+  `secrets.token_urlsafe(16)` and the chart routes `token_hex(16)`; all
+  now call `_csp_nonce()`.
+- **Narrower catch around grill provenance.** `except Exception` became
+  `(TypeError, ValueError, AttributeError)`, so a real bug in that path
+  is no longer swallowed as a log line.
+- **Comments.** Three comments that described what the code does were
+  cut to the reason it does it.
+
+### Tests
+
+- `LessonTests.test_stamp_moves_on_every_record` and
+  `RefactorTests.test_the_lessons_cache_reloads_after_a_withdraw`: the
+  cache key moves on every record, and a withdraw shows up on the next
+  poll.
+
 ## Lesson match (1.34.0)
 
 Lessons stop being passive. 1.33 wrote the owner's reasons into

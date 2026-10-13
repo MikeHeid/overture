@@ -34,6 +34,7 @@ rewrite — the stderr line names the count so the owner knows the file was touc
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -119,6 +120,16 @@ def _check(row: object) -> None:
     rb = row.get("replaced_by")
     if rb is not None and (not isinstance(rb, str) or not QID_RE.match(rb)):
         raise LessonError(f"replaced_by must be null or a qid; got {rb!r}")
+
+
+def stamp(state: Path) -> tuple[int, int, int] | None:
+    """(inode, size, mtime_ns) of STATE/lessons.jsonl, or None when absent. A cache key, not a
+    trust decision: load() still does the guarded read."""
+    try:
+        st = os.stat(Path(state) / FILE, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
 def load(state: Path) -> list[dict]:
@@ -217,13 +228,14 @@ def as_view(rows: list[dict]) -> dict:
     return {"count": len(rows), "newest_ts": rows[-1]["ts"]}
 
 
+@functools.lru_cache(maxsize=4096)
 def _trigrams(text: str) -> frozenset[str]:
     """Lower + strip combining marks + collapse whitespace, then 3-grams padded with spaces at
     ends. Returning a frozenset keeps the matcher's inner loop O(min(a, b)) via set intersection.
 
-    NFKD + combining-filter folds "é" and "e" together so an owner who writes "retried" matches a
-    future question titled "Retrie¹d" (unlikely but harmless). An empty or very short text returns
-    an empty set, which Jaccard treats as score 0.
+    NFKD + combining-filter folds "é" and "e" together, so "Café" matches "cafe". An empty text
+    returns an empty set, which Jaccard treats as score 0. Cached: lesson texts repeat on every
+    /api/view poll.
     """
     folded = unicodedata.normalize("NFKD", (text or "").casefold())
     stripped = "".join(c for c in folded if not unicodedata.combining(c))

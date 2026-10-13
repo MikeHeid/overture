@@ -7310,6 +7310,19 @@ class RefactorTests(_Live, unittest.TestCase):
         # And the withdrawn question itself (now settled) gets no chip — nagging would be noise.
         self.assertNotIn("related_lessons", view["questions"][self.QID])
 
+    def test_the_lessons_cache_reloads_after_a_withdraw(self):
+        # Catches: the 1.34.1 per-poll cache serving a stale lesson count after record() replaced
+        # the file (a cache keyed on something that does not move on rename).
+        self.go_stale()
+        view, _ = self.view_q()
+        self.assertEqual(view["lessons"]["count"], 0)
+        view, _ = self.view_q()                       # served from the cache
+        self.assertEqual(view["lessons"]["count"], 0)
+        code, _ = self.act(REFACTOR_ACTIONS["withdraw"](self))
+        self.assertEqual(code, 200)
+        view, _ = self.view_q()
+        self.assertEqual(view["lessons"]["count"], 1)
+
     def test_keep_unchecked_takes_an_optional_reason_and_the_ruling_stands(self):
         # Catches: keep needing a reason (agent-5's ruling: optional), a kept ruling read as withdrawn, and one
         # still checked against the files.
