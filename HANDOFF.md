@@ -7,6 +7,16 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.34.5 released** (PR #157, `b9b1234`), from a code and security review of 1.34.1–1.34.4 (security: green,
+  JWT pins RS256/aud/iss and fails closed; lessons strings reach the page by textContent only).
+  - The 1.34.4 chip bug was in seven more `<details>`: tickets list, Closed group, new-ticket form, sheet rows, roar
+    transcript, answered footer, Snoozed. All eight now go through `keepOpen(details, key)` in `console.js`.
+  - `agent.py lesson-match` split reasons on `\n` only (security LOW); it and `to_markdown()` now share
+    `lessons.reason_lines()`. `lesson-match` had no test; it has one.
+  - Tests: kit 392, server 334, onboard 37, vendor 11, build 15, browser 86. Badge 774.
+  - Not done (LOW, reviewer): `openForms` keys are never pruned and carry no project; the "Opened by Launch Idea"
+    comment above `renderTicketsFold`'s call (~`console.js:2917`) describes code that does not exist.
+
 - **Items 4 and 6, v1.34.4 released** (PR #156, `f7f4509`). Checked in Chromium (Playwright 1.63, in `.venv`)
   against the real owner server, `ServerTests`-style setup, a JWT header and a seeded lesson:
   - Item 4: the 📎 chip shows on the right open question, with date, ruling id, "withdrawn" and the reason with
@@ -51,7 +61,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.34.4, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.34.5, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
