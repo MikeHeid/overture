@@ -2990,6 +2990,32 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Folds that stay open (1.34.5)
+
+No new features. A code and security review of 1.34.1–1.34.4 found the
+1.34.4 bug in more places, and one renderer the 1.34.3 fix missed.
+
+- **Every fold the owner opens stays open across a repaint.** 1.34.4
+  fixed the 📎 chip; seven more `<details>` were rebuilt on every
+  Refresh or live update and snapped shut: the tickets list, its
+  Closed group, the new-ticket form, each answers-sheet row, the roar
+  transcript, the answered footer and the Snoozed section. They now go
+  through one helper, `keepOpen(details, key)` in `console.js`, with a
+  key per item, question or fork; the chip uses it too.
+- **`agent.py lesson-match` splits a reason on `\r\n`, `\r` and `\n`.**
+  1.34.3 fixed this in `to_markdown()` but not in the CLI, so a
+  hand-edited reason holding `a\r## H` printed a heading at column 0 of
+  output an agent reads as Markdown. Both now call
+  `lessons.reason_lines()`. `lesson-match` had no test; it has one now,
+  which also pins exit codes 0 and 1.
+- **Tests:** a browser test for the tickets folds and a sheet row (fails
+  on 1.34.4); the 1.34.4 chip test now waits until Refresh has replaced
+  the card, so it cannot pass without a repaint; a `LessonTests` name
+  says it covers `RecursionError` as well as `ValueError`.
+- **Development:** the README says how to install Playwright for
+  `test_browser.py`; the test files' usage lines name the repository
+  root, not `tools/overture/`; `.venv/` is ignored.
+
 ## Lesson chip in a browser (1.34.4)
 
 No new features. The last two open items from the 1.34.1 handoff,

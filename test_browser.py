@@ -5,8 +5,8 @@ into a minimal host page, against a stub /view.
 CI has no browser, so this file skips unless OVERTURE_BROWSER=1 is set; with it
 set, a missing Playwright or browser is a failure, never a skip. Run locally:
 
-    OVERTURE_BROWSER=1 python3 tools/overture/test_browser.py
-    OVERTURE_BROWSERS=chromium,firefox OVERTURE_BROWSER=1 python3 tools/overture/test_browser.py
+    OVERTURE_BROWSER=1 python3 test_browser.py
+    OVERTURE_BROWSERS=chromium,firefox OVERTURE_BROWSER=1 python3 test_browser.py
 """
 from __future__ import annotations
 
@@ -461,13 +461,49 @@ class DockTests(unittest.TestCase):
                 self.assertIn("2026-10-01 — LANE.1/Q0", got["panel"])
                 self.assertIn("WITHDRAWN", got["panel"].upper())
                 self.assertIn("replaced\nby the batch", got["panel"])
-                page.evaluate("document.querySelector('.ck-refresh-btn').click()")
-                page.wait_for_timeout(500)
+                self._repaint(page, "details.ck-q-lessons")
                 self.assertTrue(page.evaluate(self.LESSONS)[0]["open"], "a repaint closed the chip")
                 page.click("summary.ck-q-lessons-chip")     # closing it is remembered too
-                page.evaluate("document.querySelector('.ck-refresh-btn').click()")
-                page.wait_for_timeout(500)
+                self._repaint(page, "details.ck-q-lessons")
                 self.assertFalse(page.evaluate(self.LESSONS)[0]["open"])
+
+    def _repaint(self, page, *sels) -> None:
+        """Press Refresh and wait until every node `sels` matched is gone, so an assertion after it is
+        about a rebuilt node: a Refresh that repainted nothing would otherwise pass any open-state test."""
+        page.evaluate("sels => { window.__ckOld = sels.flatMap(s => [...document.querySelectorAll(s)]);"
+                      " document.querySelector('.ck-refresh-btn').click(); }", list(sels))
+        _wait_for(page, "() => window.__ckOld.length > 0 && window.__ckOld.every(e => !e.isConnected)")
+
+    OPEN = "sels => sels.map(s => [...document.querySelectorAll(s)].map(d => d.open))"
+
+    def test_folds_the_owner_opened_stay_open_across_a_repaint(self):
+        # 1.34.5, from the 1.34.4 review: the lessons chip was not the only <details> the panel rebuilt
+        # on every Refresh or live update. Catches: a fold built without `keepOpen`, so the tickets
+        # list, the new-ticket form or an answers-sheet row the owner opened snaps shut when an agent
+        # posts anything; and a key shared between two folds, so opening one opens the other.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                folds = ["details.ck-tickets-fold", "details.ck-ticket-new"]
+                for sel in folds:                    # the form sits inside the list: open it second
+                    page.wait_for_selector(sel + " > summary")
+                    page.click(sel + " > summary")
+                self.assertEqual(page.evaluate(self.OPEN, folds), [[True], [True]])
+                self._repaint(page, *folds)
+                self.assertEqual(page.evaluate(self.OPEN, folds), [[True], [True]], "a repaint closed a fold")
+                page.click("details.ck-ticket-new > summary")
+                self._repaint(page, *folds)
+                self.assertEqual(page.evaluate(self.OPEN, folds), [[True], [False]])
+                page.click(".ck-sheet-toggle")       # All answers: one <details> row per question
+                page.wait_for_selector("details.ck-sheet-row > summary")
+                page.locator("details.ck-sheet-row > summary").first.click()
+                rows = ["details.ck-sheet-row"]
+                # The first row open and only it, however many questions the stub view carries.
+                first_only = lambda got: (got[0][0], any(got[0][1:]))   # noqa: E731
+                self.assertEqual(first_only(page.evaluate(self.OPEN, rows)), (True, False))
+                self._repaint(page, *rows)
+                self.assertEqual(first_only(page.evaluate(self.OPEN, rows)), (True, False), "a repaint closed a sheet row")
 
     # 0.8.4, owner: messages and agent replies lost their line breaks. The text goes in by
     # textContent (never HTML), so only CSS keeps its newlines: without `white-space: pre-wrap`

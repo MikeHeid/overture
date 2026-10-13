@@ -298,6 +298,15 @@ def match(text: str, item: str, rows: list[dict],
     return out
 
 
+def reason_lines(reason: str) -> list[str]:
+    """A reason split on all three CommonMark line endings, for a caller that indents each line.
+
+    A lone "\\r" ends a line in CommonMark, so splitting on "\\n" only lets "a\\r## H" start a heading
+    of the reason's choosing at column 0. One helper, so to_markdown() and `agent.py lesson-match`
+    cannot drift apart again (1.34.3 fixed the first and missed the second)."""
+    return re.split(r"\r\n|\r|\n", reason)
+
+
 def to_markdown(rows: list[dict]) -> str:
     """Render the full list as a Markdown document — what `agent.py lessons [--fold PATH]`
     writes to disk or stdout. Newest first (reading order), one H2 per lesson.
@@ -328,8 +337,7 @@ def to_markdown(rows: list[dict]) -> str:
         out.append("")
         out.append(f"**Why {klabel}:**")
         out.append("")
-        # CommonMark's three line endings: a lone \r would otherwise start an unindented line.
-        for line in re.split(r"\r\n|\r|\n", row["reason"]):
+        for line in reason_lines(row["reason"]):
             out.append("    " + line)
         out.append("")
         if row.get("replaced_by"):

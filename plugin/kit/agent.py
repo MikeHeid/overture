@@ -1308,7 +1308,7 @@ def _lesson_match(a) -> int:
         klabel = label.get(m["kind"], m["kind"])
         print(f"## {date} — {m['qid']} ({klabel}, score {m['score']})")
         print()
-        for line in m["reason_preview"].split("\n") or [""]:
+        for line in LN.reason_lines(m["reason_preview"]):
             print("    " + line)
         print()
     return 0
