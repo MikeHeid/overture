@@ -6176,5 +6176,77 @@ class LessonTests(unittest.TestCase):
         self.assertEqual(rows[0]["reason"], "line1 line2")
 
 
+class LessonMatchTests(unittest.TestCase):
+    """overture/lessons.py match() — trigram ranker that surfaces past rulings so a new
+    question on the same item does not re-litigate what the owner has already settled (1.34)."""
+
+    def _rows(self, *specs):
+        """specs = [(qid, item, text, kind='withdraw', reason='r')] → row dicts."""
+        rows = []
+        for i, spec in enumerate(specs):
+            qid, item, text = spec[0], spec[1], spec[2]
+            kind = spec[3] if len(spec) > 3 else "withdraw"
+            reason = spec[4] if len(spec) > 4 else "A reason the owner gave."
+            rows.append({"ts": f"2026-10-{i + 1:02d}T00:00:00Z", "qid": qid, "item": item,
+                         "kind": kind, "text": text, "reason": reason, "replaced_by": None})
+        return rows
+
+    def test_match_prefers_higher_trigram_similarity(self):
+        rows = self._rows(
+            ("API/Q1", "API", "Should we use 5 retries with exponential backoff?"),
+            ("API/Q2", "API", "Should we switch the DB to Postgres?"),
+        )
+        matches = LN.match("Should we use 5 retries with exponential backoff on the uploader?", "API", rows)
+        self.assertGreaterEqual(len(matches), 1)
+        self.assertEqual(matches[0]["qid"], "API/Q1")
+        self.assertGreater(matches[0]["score"], 0.25)
+
+    def test_match_filters_by_item(self):
+        # Catches: a lesson from UI leaking into API matches. The item filter must be strict —
+        # retry policy on UI is not the same decision as retry policy on API.
+        rows = self._rows(
+            ("UI/Q1", "UI", "Should we use 5 retries with exponential backoff?"),
+            ("API/Q1", "API", "Should we use 5 retries with exponential backoff?"),
+        )
+        matches = LN.match("Should we use 5 retries with exponential backoff?", "API", rows)
+        self.assertEqual([m["qid"] for m in matches], ["API/Q1"])
+
+    def test_match_honours_threshold(self):
+        # A completely unrelated question returns nothing on the same item.
+        rows = self._rows(("API/Q1", "API", "Should we use 5 retries with exponential backoff?"))
+        matches = LN.match("Which colour is the dashboard header?", "API", rows)
+        self.assertEqual(matches, [])
+
+    def test_match_caps_at_top_k_newest_first_on_tie(self):
+        # Three identical lessons; the top_k=2 must return the TWO NEWEST (ts descending on tie).
+        rows = self._rows(
+            ("API/Q1", "API", "Should we retry?"),
+            ("API/Q2", "API", "Should we retry?"),
+            ("API/Q3", "API", "Should we retry?"),
+        )
+        matches = LN.match("Should we retry?", "API", rows, top_k=2)
+        self.assertEqual([m["qid"] for m in matches], ["API/Q3", "API/Q2"])
+
+    def test_match_truncates_reason_to_preview(self):
+        rows = self._rows(("API/Q1", "API", "Retry policy?", "withdraw", "x" * 1000))
+        matches = LN.match("Retry policy?", "API", rows)
+        self.assertEqual(len(matches), 1)
+        self.assertLessEqual(len(matches[0]["reason_preview"]), LN.MATCH_PREVIEW)
+        self.assertTrue(matches[0]["reason_preview"].endswith("…"))
+
+    def test_match_returns_empty_on_empty_or_missing_inputs(self):
+        self.assertEqual(LN.match("", "API", self._rows(("API/Q1", "API", "t"))), [])
+        self.assertEqual(LN.match("text", "", self._rows(("API/Q1", "API", "t"))), [])
+        self.assertEqual(LN.match("text", "API", []), [])
+        # Below the trigram threshold (none to compare), the match is empty.
+        self.assertEqual(LN.match("", "API", self._rows(("API/Q1", "API", "x" * 50))), [])
+
+    def test_match_folds_case_and_combining_marks(self):
+        # Catches: an owner who wrote "Café" lost the match for a later "cafe" question.
+        rows = self._rows(("API/Q1", "API", "Should we deploy to the Café region?"))
+        matches = LN.match("Should we deploy to the cafe region?", "API", rows)
+        self.assertEqual(len(matches), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -7276,6 +7276,40 @@ class RefactorTests(_Live, unittest.TestCase):
         self.assertEqual(code, 409, out)
         self.assertIn("already withdrawn", out["error"])
 
+    def test_a_withdrawn_rulings_reason_surfaces_as_related_lessons_on_a_new_question(self):
+        # 1.34: after a withdraw lands a lesson, a NEW question on the same item whose text
+        # looks similar carries `related_lessons` on the view, so the owner's card can show
+        # "N related past rulings" without the owner going to the CLI. Catches: lessons
+        # recorded but never read; item filter missing (lesson from a sibling item leaking in);
+        # settled questions getting the chip anyway.
+        self.go_stale()
+        code, _ = self.act(REFACTOR_ACTIONS["withdraw"](self))
+        self.assertEqual(code, 200)
+        # A fresh question on the same item, close in text to the withdrawn one.
+        new_qid = "LANE.1/Q3"
+        q = {"qid": new_qid, "item": "LANE.1", "text": "Is RULE-ALPHA still what applies?", "kind": "single",
+             "options": [{"id": "a", "label": "Yes"}, {"id": "b", "label": "No"}], "star": "a",
+             "valid_if": [], "source": "rules.md:3", "nonce": "rxask2new1"}
+        code, _ = self.agent_post("/question", q)
+        self.assertEqual(code, 200)
+        view, _ = self.view_q(qid=self.QID)   # view round-trip
+        matches = view["questions"][new_qid].get("related_lessons") or []
+        self.assertTrue(matches, "expected related_lessons on the new question's view entry")
+        self.assertEqual(matches[0]["qid"], self.QID)
+        self.assertEqual(matches[0]["kind"], "withdraw")
+        self.assertIn("obsolete", matches[0]["reason_preview"])
+        # A sibling-item question gets no match (item filter is strict).
+        other_qid = "LANE/Q9"
+        q2 = {"qid": other_qid, "item": "LANE", "text": "Is RULE-ALPHA still the rule?", "kind": "single",
+              "options": [{"id": "a", "label": "Yes"}, {"id": "b", "label": "No"}], "star": "a",
+              "valid_if": [], "source": "rules.md:3", "nonce": "rxask9new1"}
+        code, _ = self.agent_post("/question", q2)
+        self.assertEqual(code, 200)
+        view, _ = self.view_q(qid=self.QID)
+        self.assertNotIn("related_lessons", view["questions"][other_qid])
+        # And the withdrawn question itself (now settled) gets no chip — nagging would be noise.
+        self.assertNotIn("related_lessons", view["questions"][self.QID])
+
     def test_keep_unchecked_takes_an_optional_reason_and_the_ruling_stands(self):
         # Catches: keep needing a reason (agent-5's ruling: optional), a kept ruling read as withdrawn, and one
         # still checked against the files.

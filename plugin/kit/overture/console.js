@@ -3173,6 +3173,32 @@
         'aria-label': 'This question came from a grill-with-agent request' },
         [el('span', { 'aria-hidden': 'true' }, ['⚡']), ' grill-origin']));
     }
+    // 1.34: related lessons — if the server attached matches from past withdrawn/untracked
+    // rulings on this item, show a details element the owner can expand to see each match's
+    // date, qid, kind and reason preview. Collapsed by default so the card stays scannable.
+    if (Array.isArray(q.related_lessons) && q.related_lessons.length > 0) {
+      const matches = q.related_lessons;
+      const n = matches.length;
+      const title = (n === 1 ? '1 related past ruling' : n + ' related past rulings')
+        + ' — read before answering';
+      const summary = el('summary', { className: 'ck-q-lessons-chip' }, [
+        el('span', { 'aria-hidden': 'true' }, ['📎']), ' ' + title
+      ]);
+      const panel = el('div', { className: 'ck-q-lessons-panel' });
+      for (const m of matches) {
+        const label = m.kind === 'withdraw' ? 'withdrawn' : 'kept unchecked';
+        const date = m.ts ? m.ts.slice(0, 10) : '?';
+        const hdr = el('div', { className: 'ck-q-lesson-hdr' }, [
+          el('strong', {}, [date + ' — ' + m.qid]),
+          el('span', { className: 'ck-q-lesson-kind' }, [label])
+        ]);
+        const pre = el('pre', { className: 'ck-q-lesson-reason' });
+        pre.textContent = m.reason_preview || '';
+        panel.appendChild(el('div', { className: 'ck-q-lesson' }, [hdr, pre]));
+      }
+      const details = el('details', { className: 'ck-q-lessons' }, [summary, panel]);
+      textCol.appendChild(details);
+    }
     const chips = tagChips(questionTags(qData.qid));
     if (chips) textCol.appendChild(chips);
     const direction = renderDirectionStrip(q);
