@@ -2990,6 +2990,28 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Upkeep (1.34.2)
+
+No new features. Checking the 1.34.1 handoff turned up a test that
+only passed outside Claude Code, a stale README path, and two patch
+releases of the pinned dependencies.
+
+- **`SessionNameTests` pass when run from a Claude Code session.**
+  Claude Code exports `CLAUDE_PROJECT_DIR`, and `run_hook` only
+  `setdefault`s it, so the hooks looked at the real, unregistered repo
+  and wrote no `export OVERTURE_SESSION=…` line: 4 failures and 1 error.
+  The class's `env()` now drops an inherited `CLAUDE_PROJECT_DIR` the
+  same way it drops `OVERTURE_SESSION` and `CLAUDE_ENV_FILE`; a test
+  that passes its own still gets it.
+- **README Development setup** installs from
+  `plugin/kit/requirements.txt`. There is no `requirements.txt` at the
+  repository root.
+- **Pins:** PyJWT 2.15.0 → 2.15.1, cryptography 50.0.1 → 50.0.2.
+- **`test_build.py` is green on Claude CLI 2.1.296.** The three
+  failures noted at 1.34.1 came from WSL's 2.1.71 CLI, which rejects
+  the manifest's `userConfig` key and `--strict`; the manifest was
+  right.
+
 ## Housekeeping (1.34.1)
 
 No new features. The README catches up with 1.33 and 1.34, and the
