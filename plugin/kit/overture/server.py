@@ -669,6 +669,12 @@ REFACTOR_BODIES = {"withdraw": {"action", "qid", "lock", "reason", "nonce"},
                    # meant EVERY stale ruling, so one that went stale since the page loaded is refused, not missed.
                    "scan": {"action", "qids", "locks", "all", "nonce"}}
 REFACTOR_OPTIONAL = frozenset({"reason", "all"})
+
+def _csp_nonce() -> str:
+    """A fresh per-response CSP nonce; one generator for the owner page and every chart route."""
+    return secrets.token_urlsafe(16)
+
+
 SECURITY_HEADERS = (
     ("Cache-Control", "no-store"),
     ("X-Content-Type-Options", "nosniff"),
@@ -996,6 +1002,20 @@ class Console:
         # page's token, which the live-loop already surfaces as a boot change. Belt-and-
         # braces with the existing Origin check on every write.
         self._csrf = secrets.token_urlsafe(32)
+        self._lessons_cache: tuple[tuple[int, int, int] | None, list[dict]] | None = None
+
+    def _lessons_rows(self) -> list[dict]:
+        """The lessons, re-read only when the file's (inode, size, mtime_ns) stamp moved.
+
+        Every /api/view poll needs them; a record() replaces the file by rename, so the inode
+        changes and the next poll reloads. Callers must not mutate the returned list."""
+        key = LN.stamp(self.cfg.state)
+        cached = self._lessons_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        rows = LN.load(self.cfg.state)
+        self._lessons_cache = (key, rows)
+        return rows
 
     # -- live updates (0.7.0) --------------------------------------------------
 
@@ -1216,7 +1236,7 @@ class Console:
         # ones.
         try:
             out["view"] = {**out["view"], "grill_qids": sorted(self._compute_grill_qids(out["view"]))}
-        except Exception as e:  # noqa: BLE001
+        except (TypeError, ValueError, AttributeError) as e:
             sys.stderr.write(f"console grill_qids: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "grill_qids": []}
         # lessons — count + newest_ts of withdraw/untrack reasons the owner has given, plus
@@ -1224,7 +1244,7 @@ class Console:
         # they re-litigate ground they already settled (1.34). Full reason text travels via
         # `agent.py lessons`; here we only surface the summary and preview. Owner-door only.
         try:
-            rows = LN.load(self.cfg.state)
+            rows = self._lessons_rows()
             out["view"] = {**out["view"], "lessons": LN.as_view(rows)}
             if rows:
                 # Match only against questions the owner might still ponder (awaiting_you,
@@ -2555,7 +2575,7 @@ class Console:
         `hashes` are the published page's own inline scripts (Q28: they run once the owner publishes
         the page), each allowed by its exact body; the page's bytes are not edited to carry the nonce.
         """
-        nonce = secrets.token_urlsafe(16)
+        nonce = _csp_nonce()
         # `version` is the running kit's, the value /health reports: the footer shows it (owner, 2026-10-01).
         # carry the CSRF token so the browser can send it on every POST as X-Overture-CSRF.
         block = P.console_block(
@@ -2707,10 +2727,8 @@ class Console:
             if action == "confirm":
                 self._confirm_check(body, q, lk, conds, tree)
             rec = self._rx_append(rec)
-            # record a lesson on withdraw/untrack. The owner's reason is the signal
-            # future sessions read; confirm is a re-anchor (same decision, moved evidence),
-            # so it doesn't become a lesson. A record failure never faults the refactor —
-            # the ruling act lands, the lesson is a best-effort secondary.
+            # Confirm is not a lesson (same decision, moved evidence). The ruling act has already
+            # landed, so a lesson failure is logged, never raised.
             if action in ("withdraw", "untrack"):
                 try:
                     LN.record(
@@ -3758,7 +3776,7 @@ class OwnerHandler(_Handler):
         rid = query.get("id")
         if not isinstance(rid, str) or not S.RECORD_ID.match(rid):
             raise RequestError(400, "id must be a visual's record id (24 lowercase hex)")
-        nonce = secrets.token_hex(16)
+        nonce = _csp_nonce()
         data, ctype, csp = self.console.visual_render(rid, nonce)
         self._send_raw(200, data, ctype, csp)
 
@@ -3768,7 +3786,7 @@ class OwnerHandler(_Handler):
         item = query.get("item")
         if not isinstance(item, str) or len(item) > 128 or not S.ITEM_ID.match(item):
             raise RequestError(400, "item must be an item id")
-        nonce = secrets.token_hex(16)
+        nonce = _csp_nonce()
         data, ctype, csp = self.console.item_chart(item, nonce)
         self._send_raw(200, data, ctype, csp)
 
@@ -3797,7 +3815,7 @@ class OwnerHandler(_Handler):
         item = query.get("item")
         if not isinstance(item, str) or len(item) > 128 or not S.ITEM_ID.match(item):
             raise RequestError(400, "item must be an item id")
-        nonce = secrets.token_hex(16)
+        nonce = _csp_nonce()
         data, ctype, csp = self.console.item_impact(item, nonce)
         self._send_raw(200, data, ctype, csp)
 
@@ -3807,7 +3825,7 @@ class OwnerHandler(_Handler):
         item = query.get("item") or None
         if item is not None and (len(item) > 128 or not S.ITEM_ID.match(item)):
             raise RequestError(400, "item must be an item id")
-        nonce = secrets.token_hex(16)
+        nonce = _csp_nonce()
         data, ctype, csp = self.console.ticket_chart(nonce, item)
         self._send_raw(200, data, ctype, csp)
 
@@ -3817,7 +3835,7 @@ class OwnerHandler(_Handler):
         state = query.get("state") or None
         if state is not None and state not in CH.STATE_CLASS:
             raise RequestError(400, f"state must be one of {', '.join(sorted(CH.STATE_CLASS))}")
-        nonce = secrets.token_hex(16)
+        nonce = _csp_nonce()
         data, ctype, csp = self.console.project_chart(nonce, state)
         self._send_raw(200, data, ctype, csp)
 

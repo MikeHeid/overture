@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.32.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.1-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-744-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-768-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -82,6 +82,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|
 | **The loop** | Inbox of agent questions · one-tap answer and lock · round forms with keyboard shortcuts · lock-all · live redraw |
 | **Rulings** | Locked answers stored in git · `valid_if` conditions · stale detection · **What changed?** diff · re-anchor / withdraw / keep / replace |
+| **Lessons** (1.33–1.34) | Your reason for withdrawing or un-tracking a ruling is kept · new sessions are told · a new question that looks like a settled one shows **📎 related past rulings** · `agent.py lessons` / `lesson-match` |
 | **UX View** (1.32 headline) | Full-screen component modal · versions and sizes · Generate · Save as component (opens a PR) · Claude Design link · design-system picker · Scripts switch |
 | **Tickets** | Per-item tasks / bugs / research / grilling · dependency graph · board across every item with blocking shown |
 | **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item |
@@ -102,6 +103,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 | **Lock** | "I'm sure." A locked answer becomes a lasting rule that every agent follows. |
 | **Ruling** | A locked answer. |
 | **Stale** | The code a ruling relied on has changed. Take another look. |
+| **Lesson** | The reason you gave when you withdrew a ruling or stopped checking it. Agents read it so they don't ask the same thing again. |
 | **Steward** | The one agent session that collects your answers and writes them into the project. |
 | **Round** | A batch of related questions you answer in one go. |
 | **Seats** | Optional advisor agents (security, UX, devil's advocate, …) that weigh in before you decide. They never decide for you. |
@@ -300,7 +302,7 @@ project they print nothing and exit 0.
 
 | Hook event | File | What it does |
 |---|---|---|
-| `SessionStart` (startup/resume/clear/compact/fork) | `plugin/hooks/session_start.py` | Reads the doorbell for this project's console and prints what the owner sent while no session was watching: questions, process requests, chat replies, scan requests, visual requests, each with its seq and the command to handle it. On first run after an install or an upgrade, prints a banner naming the running kit version and the commands most useful at that moment. |
+| `SessionStart` (startup/resume/clear/compact/fork) | `plugin/hooks/session_start.py` | Reads the doorbell for this project's console and prints what the owner sent while no session was watching: questions, process requests, chat replies, scan requests, visual requests, each with its seq and the command to handle it. Names how many lessons (1.33) the owner has recorded, when there are any. On first run after an install or an upgrade, prints a banner naming the running kit version and the commands most useful at that moment. |
 | `UserPromptSubmit` | `plugin/hooks/name_session.py` | Picks up `/overture:as NAME` and records the mapping `session_id → agent name` in `STATE/sessions.jsonl` (atomic rewrite). The next `agent.py` call reads the name from this file. |
 | `PreToolUse` (matcher: `AskUserQuestion`) | `plugin/hooks/ask_guard.py` | On a non-steward session in a project that names a steward, refuses `AskUserQuestion` so the question goes to the owner through the console instead of a transient prompt. |
 
@@ -386,6 +388,32 @@ Only the owner can do any of these, and only on a stale answer. Nothing is
 deleted: each act is recorded in a file beside the store, and the fold
 records the outcome in your project. New questions are refused a whole-file
 hash where an excerpt fits, which is what made most rulings go stale.
+
+### Lessons: what you settled stays settled (1.33–1.34)
+
+When you **Withdraw…** a ruling or **Keep, stop checking…** it, the reason
+you give becomes a **lesson**. Lessons are how the project remembers *why*
+something was dropped, so the next agent doesn't bring it back.
+
+- **Every new session is told.** The SessionStart hook adds one line when
+  lessons exist: how many, and the command to read them. It is silent when
+  there are none.
+- **Related past rulings on the question card.** When an agent asks
+  something that looks like a ruling you already withdrew or stopped
+  checking *on the same item*, the card shows **📎 N related past rulings —
+  read before answering**. Open it to see the date, the ruling and your
+  reason. Questions you have already settled never show it.
+- **Agents can check before they ask.** `agent.py lesson-match "TEXT"
+  --item ITEM` prints the matching lessons and exits 0 (matches) or 1
+  (none), so a session can rephrase, or cite your reason, before it posts.
+- **Read or commit them.** `agent.py lessons` prints every lesson as
+  Markdown, newest first; `--fold PATH` writes the file atomically into
+  your project so it travels with the code.
+
+Matching is local and simple (shared three-letter fragments, accents and
+case ignored), so it catches close rewordings, not every paraphrase. A
+lesson's text never leaves your machine: the page receives at most a
+400-character preview, and peers never see it.
 
 ### Design UI components in UX View (1.32)
 
@@ -777,9 +805,10 @@ session lives on either side. A few traps worth knowing:
 
 ## Trust
 
-The security model has been through five parallel review passes (code,
-security, python, typescript, adversarial) across the 1.22 → 1.32 arc.
-Every veto-adjacent finding is closed; the current state:
+The security model has been through parallel review passes (code,
+security, python, typescript, adversarial) across the 1.22 → 1.33 arc,
+most recently the three-reviewer pass that became 1.33.1. Every HIGH
+finding is closed; the current state:
 
 - **The plugin's hook runs in every project you open**, but acts only
   in projects listed in `~/.config/overture/projects.json`, which only
@@ -793,10 +822,12 @@ Every veto-adjacent finding is closed; the current state:
 - **Nothing onboarding writes is a secret.** The AUD tag and team
   domain are what tokens are *checked against*; no token can be made
   from them.
-- **Owner-door CSP** (1.31): `frame-ancestors 'none'; object-src 'none';
-  base-uri 'none'; script-src 'nonce-<per-request>'`. The inline
-  console script runs under a per-request nonce; a DOM-injected
-  `<script>` without the nonce is refused by the browser.
+- **Owner-door CSP** (1.31, tightened 1.33.1): `frame-ancestors 'none';
+  object-src 'none'; base-uri 'none'; frame-src 'self'; img-src 'self'
+  data:; connect-src 'self'; script-src 'nonce-<per-request>'`. The
+  inline console script runs under a per-request nonce; a DOM-injected
+  `<script>` without the nonce is refused by the browser. A CSRF header
+  that is not plain ASCII gets a 403, not a dropped connection.
 - **CSRF double-submit** (1.27): every POST under `/api/*` must echo the
   boot-scoped token in `X-Overture-CSRF`. `POST /api/csrf-rotate` (1.31)
   invalidates all open pages without a restart.
@@ -814,6 +845,11 @@ Every veto-adjacent finding is closed; the current state:
 - **Ticket id entropy:** `secrets.token_urlsafe(8)` (≈64 bits).
 - **Agent-door `/playbook`** writes `by="agent"` (1.30.1): an
   agent-authored playbook cannot forge owner-only intents.
+- **Lessons** (1.33): written only by the owner's own Withdraw / Keep
+  acts, stored under STATE with the same atomic writes, capped by count
+  and size so they can never block a later lesson. The page gets a count
+  and short previews; the full text is only for `agent.py` on your
+  machine. `--fold` refuses to follow a symlink at its target.
 - **Grill provenance badge**: questions written in response to a
   `/message intent=grill` carry a ⚡ chip so you can tell them apart from
   questions an agent raised on its own.
@@ -863,6 +899,12 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.34 — Lesson match**: related past rulings on the question card,
+  `agent.py lesson-match`. **1.34.1** brings this README up to date and
+  caches lessons between page polls.
+- **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
+  SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
+  fixes (lesson size caps, sanitizer, CSP, CSRF).
 - **1.32 — View**: UX View modal, design-system picker, Scripts switch,
   Merge from PR tab, Machine role, lane colours, screenshots in Feed,
   owner-attached images, `server.py daemon|service|status|health`,

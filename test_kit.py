@@ -6156,6 +6156,15 @@ class LessonTests(unittest.TestCase):
         rows = LN.load(self.state)
         self.assertEqual(len(rows), 1)
 
+    def test_stamp_moves_on_every_record(self):
+        # Catches: a cache key that stays put across record(), so the server keeps serving old rows.
+        self.assertIsNone(LN.stamp(self.state))
+        LN.record(self.state, now_iso=self.NOW, **self._row(qid="A/Q1"))
+        first = LN.stamp(self.state)
+        self.assertIsNotNone(first)
+        LN.record(self.state, now_iso=self.LATER, **self._row(qid="A/Q2"))
+        self.assertNotEqual(LN.stamp(self.state), first)
+
     def test_absent_file_is_empty_and_as_view_is_zero(self):
         self.assertEqual(LN.load(self.state), [])
         self.assertEqual(LN.as_view([]), {"count": 0, "newest_ts": None})
