@@ -476,6 +476,28 @@ class DockTests(unittest.TestCase):
 
     OPEN = "sels => sels.map(s => [...document.querySelectorAll(s)].map(d => d.open))"
 
+    def test_spawning_tickets_from_launch_idea_opens_the_tickets_fold(self):
+        # 1.34.6: Launch Idea redraws the panel "so the spawned tickets show in the fold", but the fold
+        # was left shut, so the owner saw a closed "Tickets" line and no sign of what was made.
+        # Catches: a spawn that redraws without marking the fold open, or marks a key `keepOpen` does
+        # not read (the fold would stay shut just the same).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                page.wait_for_selector("details.ck-tickets-fold")
+                self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[False]])
+                page.click(".ck-launch-btn")
+                page.fill("input[aria-label='Idea title']", "Try a thing")
+                page.click("text=Grill it →")
+                page.click("text=Draft tickets →")
+                _Handler.posts.clear()
+                page.click("text=Spawn selected")
+                _wait_for(page, "() => !document.getElementById('ck-launch-pane')")
+                self.assertTrue(any("parent_item" in p for p in _Handler.posts), _Handler.posts)
+                self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[True]],
+                                 "the fold the tickets went into stayed shut")
+
     def test_folds_the_owner_opened_stay_open_across_a_repaint(self):
         # 1.34.5, from the 1.34.4 review: the lessons chip was not the only <details> the panel rebuilt
         # on every Refresh or live update. Catches: a fold built without `keepOpen`, so the tickets

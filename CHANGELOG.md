@@ -2990,6 +2990,21 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Spawned tickets in view (1.34.6)
+
+One fix, from the last LOW of the 1.34.5 review.
+
+- **Spawning tickets from Launch Idea opens the item's Tickets fold.**
+  The spawn redrew the panel "so the spawned tickets show in the fold",
+  but left the fold shut, so the owner saw a closed "Tickets" line and
+  none of what they had just made. A comment above the fold already
+  said Launch Idea opens it; now it does, through the key `keepOpen`
+  reads. A spawn where every ticket failed leaves the fold as it was.
+- The other half of that LOW, that the console's open-fold memory is
+  never pruned and carries no project, needs nothing: a peer console
+  opens in its own tab, so a page only ever holds one project's keys,
+  and the set grows only by what the owner opens.
+
 ## Folds that stay open (1.34.5)
 
 No new features. A code and security review of 1.34.1–1.34.4 found the
