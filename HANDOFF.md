@@ -5,7 +5,23 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 ## Check results, 2026-10-13 (agent-8)
 
-Items 1, 2, 3, 5 and 7 below are done; **4 and 6 still need a browser**.
+All seven items below are done.
+
+- **Items 4 and 6, v1.34.4 released** (PR #156, `f7f4509`). Checked in Chromium (Playwright 1.63, in `.venv`)
+  against the real owner server, `ServerTests`-style setup, a JWT header and a seeded lesson:
+  - Item 4: the 📎 chip shows on the right open question, with date, ruling id, "withdrawn" and the reason with
+    its line break. **Bug found and fixed:** every repaint (Refresh, any live update) rebuilt the card and shut
+    an opened chip. Its open state now lives in `openForms` (`'lessons-' + qid`). New browser test
+    `DockTests.test_a_related_ruling_chip_opens_and_stays_open_across_a_refresh` fails on 1.34.3.
+  - Item 6: no CSP violation; `data:` images load; the `/api/wait` live poll picks up a new question. An
+    off-origin image and `fetch` are refused, as intended. No change.
+  - Tests: kit 391, server 334, onboard 37, vendor 11, build 15, browser 85 (`OVERTURE_BROWSER=1`, 1 skip:
+    LiveBoard, no `scripts/register` here).
+- **The 1.34.3 review's nested-key `RecursionError` LOW does not reproduce** (100–20 000 levels, 50–900 caller
+  frames): `load()` decodes at the same stack depth `record()` encodes, so a row too deep to encode is dropped
+  by `load()` first. Closed, no change.
+- **`flock` on `record()`: not needed.** `server.py` is the only caller and holds `Console._lock`; one server per
+  STATE. Closed.
 
 - **Tests (item 1).** On WSL Linux, Python 3.11.8: kit 386, server 334, onboard 37, vendor 11, build 15, all
   green on `release-1.34.2`. On `main` (1.34.1), `SessionNameTests` had 4 failures and 1 error when run from
