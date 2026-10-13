@@ -7,6 +7,11 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.34.6 released** (PR #158, `301a0b7`): Launch Idea's spawn now opens the Tickets fold it spawned into, so the
+  comment at ~`console.js:2917` is true. The `openForms` half of the LOW below needs nothing: a peer console opens
+  in its own tab (`window.open(..., '_blank')`, ~`console.js:1951`), so a page holds one project's keys. Browser 87.
+  `pip-audit` not run: the lean-ctx shell allowlist refuses it (`lean-ctx allow pip-audit` to enable).
+
 - **v1.34.5 released** (PR #157, `b9b1234`), from a code and security review of 1.34.1–1.34.4 (security: green,
   JWT pins RS256/aud/iss and fails closed; lessons strings reach the page by textContent only).
   - The 1.34.4 chip bug was in seven more `<details>`: tickets list, Closed group, new-ticket form, sheet rows, roar
@@ -61,7 +66,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.34.5, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.34.6, tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
