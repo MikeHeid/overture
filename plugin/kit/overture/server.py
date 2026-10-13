@@ -1219,11 +1219,26 @@ class Console:
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"console grill_qids: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "grill_qids": []}
-        # lessons — count + newest_ts of withdraw/untrack reasons the owner has given.
-        # Full list travels via `agent.py lessons`; here we just surface the summary so the
-        # status drawer can show "N lessons". Owner-door only.
+        # lessons — count + newest_ts of withdraw/untrack reasons the owner has given, plus
+        # per-question matches so the owner's card can show "N related rulings" chips before
+        # they re-litigate ground they already settled (1.34). Full reason text travels via
+        # `agent.py lessons`; here we only surface the summary and preview. Owner-door only.
         try:
-            out["view"] = {**out["view"], "lessons": LN.as_view(LN.load(self.cfg.state))}
+            rows = LN.load(self.cfg.state)
+            out["view"] = {**out["view"], "lessons": LN.as_view(rows)}
+            if rows:
+                # Match only against questions the owner might still ponder (awaiting_you,
+                # unlocked, stale). A locked/withdrawn question is already settled; nagging
+                # the owner about it with lessons would be noise.
+                questions = out["view"].get("questions") or {}
+                live = ("awaiting_you", "unlocked", "stale")
+                for qid, q in list(questions.items()):
+                    if q.get("state") not in live:
+                        continue
+                    qr = q.get("question") or {}
+                    matches = LN.match(qr.get("text") or "", qr.get("item") or "", rows)
+                    if matches:
+                        questions[qid] = {**q, "related_lessons": matches}
         except (LN.LessonError, OSError) as e:
             sys.stderr.write(f"console lessons: load failed: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "lessons": {"count": 0, "newest_ts": None}}

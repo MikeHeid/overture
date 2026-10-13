@@ -2990,6 +2990,69 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Lesson match (1.34.0)
+
+Lessons stop being passive. 1.33 wrote the owner's reasons into
+`STATE/lessons.jsonl` and told agents to read them on session
+start; 1.34 surfaces them AT RULING TIME, so a new question that
+rhymes with a past withdrawn one carries a chip the owner can
+expand before they lift a finger — the "will I re-litigate this?"
+check is now a glance.
+
+- **`lessons.match(text, item, rows)`.** Trigram Jaccard with a
+  same-item filter and a newest-first tie-breaker (`unicodedata`
+  NFKD + combining-mark strip + casefold, so "Café" matches
+  "cafe"). Returns top-3 by default above a 0.15 threshold; the
+  tuned threshold catches "retry 5 times on upload" ↔ "5 retries
+  with exponential backoff" (same topic) and skips coincidence
+  between unrelated short questions.
+- **`view.questions[*].related_lessons`** on the owner door's
+  `/api/view`. The server reads lessons once per `page_payload`,
+  calls `match()` for each OPEN question (`awaiting_you`,
+  `unlocked`, `stale` — never for already-settled rulings so the
+  chip is never nagging), and attaches
+  `[{qid, kind, ts, score, reason_preview}]`. Reason preview is
+  capped at 400 chars; the full reason stays behind
+  `agent.py lessons`.
+- **Chip on the question card.** The owner page shows a 📎 chip
+  reading "*N related past rulings — read before answering*"
+  which, when clicked, expands a panel with each match's date,
+  qid, kind label (`withdrawn` / `kept unchecked`) and reason
+  preview in a monospace block. Styling in the warn-tone palette
+  so it sits distinct from the grill-origin chip.
+- **`agent.py lesson-match "<text>" --item ITEM`.** The ask-side
+  mirror. Reads `STATE/lessons.jsonl`, runs the same matcher the
+  server runs, prints the top matches as Markdown. Exit 0 on any
+  match, 1 when none, so a script can gate on it before posting.
+  `--top` and `--threshold` tune the search; the chip is not hidden
+  by skipping this step (the server surfaces the same list).
+
+### Trust
+
+- The matcher is pure stdlib (`unicodedata`, set intersection). No
+  network, no new state file.
+- The item filter is strict: a lesson on `UI` is not a hint for a
+  question on `API`, even if their texts rhyme.
+- Settled questions (`locked`, `withdrawn`, `superseded`) never
+  carry `related_lessons`; the owner is not nagged about rulings
+  they already decided.
+- Reason previews cap at 400 chars inside the view; a long reason
+  only travels whole via `agent.py lessons`, which still gates on
+  the STATE socket (0600 under 0700).
+- A false positive is a glance the owner wastes; a false negative
+  is a re-litigated ruling. The 0.15 threshold errs on recall; raise
+  with `--threshold` on the CLI if the chip gets noisy.
+
+### Tests
+
+- 7 new `LessonMatchTests` in `test_kit.py`: ranking by similarity,
+  item filter, threshold refuses noise, top-K newest-first tie,
+  preview truncation, empty-inputs, NFKD folds "Café" into "cafe".
+- 1 new integration test in `test_server.py::RefactorTests`: a
+  withdrawn ruling's reason surfaces on a new question's view entry
+  on the same item; a sibling-item question gets no match; the
+  withdrawn question itself gets no self-reference chip.
+
 ## Review fixes (1.33.1)
 
 Three parallel reviews — code, security and Python — crossed the 1.31–1.33
