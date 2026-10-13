@@ -2990,6 +2990,103 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Review fixes (1.33.1)
+
+Three parallel reviews — code, security and Python — crossed the 1.31–1.33
+arc after Lessons shipped. 1.33.1 lands every HIGH finding and the
+material MEDIUMs. No new features; `agent.py lessons`, `view.lessons`
+and the SessionStart line all behave the same way to the owner.
+
+### Lessons: durability and validation
+
+- **`load()` no longer faults `/api/view` on a hand-edited row.** The
+  shape validator (`_check`) now returns a `LessonError` for every
+  malformation, including a missing field or a non-string value that
+  was previously surfacing as `KeyError` or `TypeError` through the
+  regex matchers. The server's `(LessonError, OSError)` catch covers
+  both server call sites unchanged.
+- **Byte-based FIFO prune.** `MAX_LESSONS` (2000 rows) and `MAX_FILE`
+  (2 MiB) are now both respected on `record()`: whichever bites first
+  wins, so a wall of long reasons cannot wedge the feature by filling
+  the file. Pre-1.33.1 the count cap alone meant ~105 maximum-length
+  reasons could lock out every later lesson.
+- **`MAX_REASON` aligned with `schema.MAX_TEXT`.** The store accepts
+  reasons up to 20 000 characters; lessons now does too. A reason in
+  the 10 000–20 000 gap previously landed in the fold record but
+  silently vanished from the lesson log.
+- **Markdown injection closed.** The question `text` is collapsed to
+  one line on `record` so a `\n## …` can no longer spell a false
+  heading in the folded doc. The owner's `reason` is written as a
+  4-space-indented code block so no Markdown spelling inside it
+  (headings, lists, HTML) activates. Future agents read it as prose;
+  the format itself refuses to pretend any part of it is structure.
+- **`agent.py lessons --fold PATH` is now actually atomic.** The old
+  path used `write_text` + predictable `.tmp`, which followed a
+  pre-planted symlink. 1.33.1 writes via `atfile.write_at` on a dir fd
+  on PATH's parent, so the write is O_EXCL + fsync + rename and
+  refuses any symlink or non-regular file at the target name
+  (`O_NOFOLLOW`).
+- **Load splits on `"\n"` only.** `splitlines()` splits on U+2028,
+  U+0085 and `\x0b`/`\x0c` too, so a reason containing one of those
+  characters could spell a forged row or lose its own on parse. The
+  switch keeps control characters inside the reason.
+- **The hook flag matches its own docstring.** `_lessons_line` now
+  passes `nofollow=True` to `_read_regular` (the docstring already
+  claimed it did); the message says "up to N lesson(s)" so the hook
+  count and the view count — which validates and the hook does not —
+  agree.
+- **Windows import works.** `O_DIRECTORY` and `O_NOFOLLOW` fall back
+  to 0 on win32, so IDE tooling can import the module without raising
+  `AttributeError`. The actual security guarantees still ride on
+  `atfile.read_at`/`write_at`, which are POSIX-only and only run on
+  POSIX hosts.
+- **Tests.** 11 new tests in `test_kit.py::LessonTests`: record +
+  load, byte-FIFO prune at the cap, count-FIFO prune at `MAX_LESSONS`,
+  reason alignment with `schema.MAX_TEXT`, text collapsed on record,
+  reason wrapped as a code block in Markdown, malformed-row isolation
+  (`KeyError`/`TypeError` paths no longer fault load), U+2028 cannot
+  forge rows, empty state, newest-ts summary.
+
+### Sanitizer: visuals.py
+
+- **Stray `</a>` on refused-link closer.** An `<a>` with no `href` is
+  not emitted (correct), but was still pushed onto the tag stack, so
+  a later `</a>` emitted a close without an open. The push now
+  happens only after a successful emit.
+- **Author `rel` can no longer override the forced one.** Browsers
+  take the first occurrence of a duplicate attribute; the sanitizer
+  appends `rel="noopener noreferrer"` AFTER author attributes, so an
+  author `rel` won. `rel` is now dropped from the `<a>` allowlist,
+  leaving the forced one in sole possession.
+- **`handle_decl` emits a fixed doctype.** A declaration carrying
+  `</textarea>` or `</title>` in its text could unbalance the parse
+  tree. 1.33.1 emits `<!DOCTYPE html>` for anything that looks like a
+  doctype and drops everything else.
+
+### Server: owner-page CSP and CSRF
+
+- **CSP names `img-src` and `connect-src` explicitly.** The owner
+  page's response-level policy replaces the shared default (not
+  merges), so leaving the directives unstated let both default to any
+  origin — COEP `require-corp` incidentally blocked cross-origin
+  images, but relying on COEP for subresource restriction mixed
+  concerns. The policy now says `img-src 'self' data:` and
+  `connect-src 'self'`.
+- **`hmac.compare_digest` no longer drops the connection on a
+  non-ASCII CSRF header.** A header with any code point above U+007F
+  raised `TypeError` outside the response handler, which the server
+  turned into a connection drop rather than a 403. 1.33.1 encodes
+  both sides to ASCII bytes under a `UnicodeEncodeError` guard; a
+  non-ASCII header fails closed with a proper 403.
+
+### Housekeeping
+
+- Three leftover cosmetic edits from the 1.33.0 version-literal
+  scrub are reverted — dangling periods and colons in `designs.py`,
+  `registry.py`, `view.py`.
+- `MEMORY.md` and `AGENTS.md` unchanged. No new dependency, no new
+  state file, no API shape change on the owner door.
+
 ## Lessons (1.33.0)
 
 The audit trail turns generative. Pre-1.33 the owner's reasons for

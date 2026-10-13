@@ -43,7 +43,7 @@ from . import names as N
 FILE = "projects.json"
 REQUIRED = frozenset({"state", "kit"})
 STEWARD = "steward"
-# D11 (1.33): what THIS machine is for. "worker" means no session here is ever the steward, whatever it is named;
+# D11: what THIS machine is for. "worker" means no session here is ever the steward, whatever it is named;
 # "steward" says the steward runs here (nothing extra is enforced); unset is today's behaviour.
 ROLES = ("steward", "worker")
 ROLE_ENV = "CLAUDE_PLUGIN_OPTION_ROLE"     # the plugin's `role` setting, as Claude Code exports it to hooks

@@ -326,7 +326,7 @@ def todo(view: dict) -> dict:
     chat            whether the chat waits, and the owner message to reply to
     visuals         the visual requests nothing answers yet (id, item)
     ux              the owner's ux-save and ux-link messages no agent reply answers yet (1.32)
-    merge           the owner's pr-merge requests no agent reply answers yet (1.33)
+    merge           the owner's pr-merge requests no agent reply answers yet
     scans           every scan for a resolve that is not done, oldest first: its id, when, and the rulings
                     still waiting on the steward (CONSOLE-kit/Q40); an older server's view has none
     inbox           the qids in the owner's inbox

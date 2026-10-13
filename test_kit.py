@@ -164,6 +164,29 @@ class SanitizerTests(unittest.TestCase):
             self.assertNotIn(bad, out)
         self.assertIn('<button type="submit">Go</button>', out)
 
+    def test_a_href_less_anchor_does_not_leave_a_stray_closer(self):
+        # Catches: `<a>` with no href was pushed onto tag_stack but the opener was refused;
+        # a later `</a>` then emitted a close for an element never opened. Also the <a/>
+        # self-closed variant with no href is likewise refused.
+        self.assertEqual(self.clean("<a>text</a>"), "text")
+        self.assertEqual(self.clean("<a/>text"), "text")
+
+    def test_author_rel_cannot_override_the_forced_one(self):
+        # Catches: browsers take the FIRST duplicate attribute, so an author rel that comes
+        # before the appended `rel="noopener noreferrer"` wins. `rel` is dropped from the
+        # <a> allowlist, so the forced one is in sole possession of the slot.
+        out = self.clean('<a href="https://x.example" rel="noreferrer">link</a>')
+        # The output has exactly one rel attribute, and it's the forced one.
+        self.assertEqual(out.count("rel="), 1)
+        self.assertIn('rel="noopener noreferrer"', out)
+        self.assertNotIn('rel="noreferrer"', out.replace('rel="noopener noreferrer"', ""))
+
+    def test_handle_decl_emits_a_fixed_doctype(self):
+        # Catches: `<!decl>` wrote raw declaration text; a `</textarea>` or `</title>` inside
+        # it could unbalance the parse tree downstream.
+        self.assertEqual(self.clean("<!DOCTYPE html><p>x</p>"), "<!DOCTYPE html><p>x</p>")
+        self.assertNotIn("</textarea>", self.clean("<!doctype html SYSTEM '</textarea>'><p>x</p>"))
+
 
 class ConsoleUxSkillTests(unittest.TestCase):
     """The console-ux skill (1.32): its worked example passes the gate it teaches, and it is wired in."""
@@ -6032,6 +6055,125 @@ class TicketTests(unittest.TestCase):
         self.assertNotIn("T-futurekind1", [t["id"] for t in view["by_item"]["API-2"]])
         self.assertEqual(view["counts"]["API-2"], {"open": 2, "blocked": 0, "closed": 0})
         self.assertIn(a["id"], [t["id"] for t in view["by_item"]["API-2"]])
+
+
+from overture import lessons as LN  # noqa: E402
+
+
+class LessonTests(unittest.TestCase):
+    """overture/lessons.py: a withdraw/untrack reason recorded as a lesson (1.33, hardened 1.33.1)."""
+
+    NOW = "2026-10-11T00:00:00Z"
+    LATER = "2026-10-12T00:00:00Z"
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.state = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _row(self, **kw):
+        base = {"qid": "A/Q1", "item": "A", "kind": "withdraw",
+                "text": "Which retry policy?", "reason": "Load testing showed it cascades."}
+        base.update(kw)
+        return base
+
+    def test_record_writes_and_load_reads_back(self):
+        row = LN.record(self.state, now_iso=self.NOW, **self._row())
+        self.assertEqual(row["ts"], self.NOW)
+        self.assertEqual(LN.load(self.state)[0]["reason"], "Load testing showed it cascades.")
+
+    def test_record_refuses_unknown_kind_and_malformed_qid(self):
+        with self.assertRaisesRegex(LN.LessonError, "kind"):
+            LN.record(self.state, now_iso=self.NOW, **self._row(kind="confirm"))
+        with self.assertRaisesRegex(LN.LessonError, "qid"):
+            LN.record(self.state, now_iso=self.NOW, **self._row(qid="not-a-qid"))
+
+    def test_reason_cap_aligns_with_schema_max_text(self):
+        # Catches: an owner reason between 10 000 and 20 000 chars lands in the refactor record
+        # but silently vanishes from lessons. Lessons MUST accept up to schema.MAX_TEXT.
+        from overture import schema as S  # noqa: PLC0415
+        self.assertEqual(LN.MAX_REASON, S.MAX_TEXT)
+        long_reason = "x" * S.MAX_TEXT
+        LN.record(self.state, now_iso=self.NOW, **self._row(reason=long_reason))
+        self.assertEqual(LN.load(self.state)[0]["reason"], long_reason)
+        with self.assertRaisesRegex(LN.LessonError, "reason is"):
+            LN.record(self.state, now_iso=self.NOW, **self._row(reason="x" * (S.MAX_TEXT + 1)))
+
+    def test_text_is_collapsed_to_one_line_on_record(self):
+        # Catches: a question text containing "\n## X — Y (withdrawn)\n..." could inject a fake
+        # heading into the folded Markdown. The sanitizer at record time keeps it one-line.
+        LN.record(self.state, now_iso=self.NOW, **self._row(
+            text="Line1\n## Fake heading\nLine3"))
+        self.assertEqual(LN.load(self.state)[0]["text"], "Line1 ## Fake heading Line3")
+
+    def test_to_markdown_indents_reason_as_a_code_block(self):
+        # Catches: a reason containing a Markdown heading or list activating in the folded doc.
+        LN.record(self.state, now_iso=self.NOW, **self._row(reason="## Not a heading\n- not a list"))
+        md = LN.to_markdown(LN.load(self.state))
+        # The reason lines are indented by four spaces so markdown treats them as literal code.
+        self.assertIn("    ## Not a heading", md)
+        self.assertIn("    - not a list", md)
+
+    def test_byte_prune_drops_oldest_when_file_would_exceed_cap(self):
+        # Catches: count-only prune lets a wall of long reasons wedge the feature (pre-1.33.1,
+        # record() raised LessonError forever once the file hit MAX_FILE). The byte prune drops
+        # the oldest rows until BOTH caps hold.
+        chunk = "a" * (LN.MAX_REASON - 100)   # just under per-row cap
+        # 2 MiB / ~20 KB per row = ~105 rows before the byte cap bites — write 150 to force prune.
+        for i in range(150):
+            LN.record(self.state, now_iso=f"2026-10-11T00:{i // 60:02d}:{i % 60:02d}Z",
+                      **self._row(qid=f"A/Q{i + 1}", reason=chunk))
+        rows = LN.load(self.state)
+        self.assertGreater(len(rows), 0)
+        self.assertLessEqual(len(rows), 150)
+        # The latest row is still there (FIFO drops the oldest).
+        self.assertEqual(rows[-1]["qid"], "A/Q150")
+
+    def test_count_prune_at_max_lessons(self):
+        # A short reason never trips the byte cap, so the count cap bites first.
+        for i in range(LN.MAX_LESSONS + 10):
+            LN.record(self.state, now_iso=f"2026-10-11T{i // 3600:02d}:{(i // 60) % 60:02d}:{i % 60:02d}Z",
+                      **self._row(qid=f"A/Q{i + 1}", reason="short"))
+        rows = LN.load(self.state)
+        self.assertEqual(len(rows), LN.MAX_LESSONS)
+        self.assertEqual(rows[-1]["qid"], f"A/Q{LN.MAX_LESSONS + 10}")
+
+    def test_malformed_row_does_not_fault_load(self):
+        # Catches: a row with a missing field or non-string ts raised KeyError/TypeError, which
+        # load() did not catch, so /api/view faulted on a hand-edited file.
+        LN.record(self.state, now_iso=self.NOW, **self._row())
+        # Hand-corrupt the file: append a non-object, a bad-key row, and a non-string ts.
+        with (self.state / LN.FILE).open("a", encoding="utf-8") as fh:
+            fh.write('42\n')
+            fh.write('{"ts": "bad", "qid": "A/Q1", "item": "A", "kind": "withdraw", '
+                     '"text": "t", "reason": "r"}\n')
+            fh.write('{"ts": 123, "qid": "A/Q1", "item": "A", "kind": "withdraw", '
+                     '"text": "t", "reason": "r"}\n')
+            fh.write('{"kind": "withdraw"}\n')   # missing required fields
+        # Load does not raise; it drops the four bad lines and returns the one valid row.
+        rows = LN.load(self.state)
+        self.assertEqual(len(rows), 1)
+
+    def test_absent_file_is_empty_and_as_view_is_zero(self):
+        self.assertEqual(LN.load(self.state), [])
+        self.assertEqual(LN.as_view([]), {"count": 0, "newest_ts": None})
+
+    def test_as_view_names_the_newest_ts(self):
+        LN.record(self.state, now_iso=self.NOW, **self._row(qid="A/Q1"))
+        LN.record(self.state, now_iso=self.LATER, **self._row(qid="A/Q2"))
+        v = LN.as_view(LN.load(self.state))
+        self.assertEqual((v["count"], v["newest_ts"]), (2, self.LATER))
+
+    def test_splitlines_tricks_cannot_forge_rows(self):
+        # Catches: splitlines() splits on U+2028 and U+0085, so a reason containing one of those
+        # could spell a second JSON row. Load must split on "\n" only. The reason also survives
+        # a round trip (U+2028 preserved under ensure_ascii=False).
+        LN.record(self.state, now_iso=self.NOW, **self._row(reason="line1 line2"))
+        rows = LN.load(self.state)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason"], "line1 line2")
 
 
 if __name__ == "__main__":

@@ -2537,7 +2537,7 @@ class EvidenceReadLimitTests(_Live, unittest.TestCase):
 # 1.29.0: visual sanitizer strips <script>; the old MOCK's script would fail the round-trip
 # assertion. The prototype use-case is "a static mock an agent drew for the operator to
 # look at" — scripts were never going to run inside the sandbox anyway (no allow-scripts).
-MOCK = ("<!doctype html><html><head><style>h1{color:#123}</style></head><body><h1>Grid mock</h1>"
+MOCK = ("<!DOCTYPE html><html><head><style>h1{color:#123}</style></head><body><h1>Grid mock</h1>"
         '<p data-feature="mock">Draft layout, no interactivity.</p></body></html>')
 
 
