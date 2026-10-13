@@ -2990,6 +2990,26 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Wizards that stay put (1.34.7)
+
+No new features. Found while fixing a LOW from the 1.34.6 review.
+
+- **An open Launch Idea or Branch Out pane survives a repaint.**
+  `renderPanel()` looked the pane up by id only after clearing the
+  panel, when it was no longer in the document, so from 1.30.1 on every
+  Refresh or live update threw an open wizard away with whatever the
+  owner had typed, and left its gutter behind. It now takes the pane
+  before the clear and puts it back after.
+- **Closing Launch Idea while tickets are being made no longer loses
+  the rest.** The spawn read the pane's live state between requests, so
+  closing it with a ticket in flight threw on the next one; reopening it
+  on another item would have filed the rest there. It now takes the
+  item once, before the first request, and closes only the pane it
+  started from.
+- **Branch Out's research ticket and deliberate round** had the same
+  read-after-await; fixed the same way. The research ticket now opens
+  the item's Tickets fold, as a Launch Idea spawn does since 1.34.6.
+
 ## Spawned tickets in view (1.34.6)
 
 One fix, from the last LOW of the 1.34.5 review.

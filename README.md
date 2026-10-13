@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.6-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.34.7-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-774-2da44e">
@@ -910,6 +910,8 @@ Highlights of the 1.x arc:
   open when the page refreshes. **1.34.5**: so do the console's other
   folds; `lesson-match` output hardened like the folded file.
   **1.34.6**: tickets spawned from Launch Idea open their fold.
+  **1.34.7**: Launch Idea and Branch Out survive a repaint and a
+  close mid-request.
 - **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
   SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
   fixes (lesson size caps, sanitizer, CSP, CSRF).

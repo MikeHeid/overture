@@ -108,6 +108,7 @@ class _Handler(BaseHTTPRequestHandler):
     view_scripts = False  # ...and its newest version has the owner's Scripts switch on (1.33)
     view_ux = False     # LANE.1 is a UX item with two HTML visuals (UX View, 1.33)
     view_lessons = False  # LANE.1/Q2 carries one related past ruling, as server.page_payload attaches it (1.34)
+    post_delay = 0.0   # seconds before a POST answers, so the page can act while one is in flight (1.34.7)
     posts: list = []    # the JSON bodies POSTed to /api/message
     board: object = None   # what /api/board answers; None is 404, as a project with no board()
     board_status = 200
@@ -189,6 +190,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         _Handler.posts.append(json.loads(raw or b"{}"))
+        time.sleep(_Handler.post_delay)
         data = b'{"record": {}}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -310,6 +312,7 @@ class DockTests(unittest.TestCase):
         _Handler.view_ux, _Handler.view_scripts, _Handler.view_designs, _Handler.posts = False, False, False, []
         _Handler.view_delay, _Handler.view_fails, _Handler.view_agent, _Handler.view_working = 0.0, False, False, False
         _Handler.view_listening, _Handler.view_multiline, _Handler.view_lessons = None, False, False
+        _Handler.post_delay = 0.0
 
     def _page(self, kind: str, width: int, loaded: bool = True, fresh_session: bool = False):
         browser = getattr(self.pw, kind).launch()
@@ -487,7 +490,7 @@ class DockTests(unittest.TestCase):
                 page.click(".ck-item-btn")
                 page.wait_for_selector("details.ck-tickets-fold")
                 self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[False]])
-                page.click(".ck-launch-btn")
+                page.click("button[aria-label^='Launch an idea']")
                 page.fill("input[aria-label='Idea title']", "Try a thing")
                 page.click("text=Grill it →")
                 page.click("text=Draft tickets →")
@@ -497,6 +500,90 @@ class DockTests(unittest.TestCase):
                 self.assertTrue(any("parent_item" in p for p in _Handler.posts), _Handler.posts)
                 self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[True]],
                                  "the fold the tickets went into stayed shut")
+
+    # Has announce() shown this message? Read from the toast host, not the body: the body's text
+    # includes the console's own inline script, which holds every message it could ever show.
+    TOASTED = "m => { const h = document.getElementById('ck-toasts'); return !!h && h.textContent.includes(m); }"
+
+    @staticmethod
+    def _until(page, cond, secs: float = 10) -> None:
+        """Poll a Python-side condition (what the stub server saw) while the page keeps running."""
+        deadline = time.time() + secs
+        while not cond() and time.time() < deadline:
+            page.wait_for_timeout(20)
+
+    def test_closing_launch_idea_mid_spawn_still_files_every_ticket_under_its_item(self):
+        # 1.34.7, from the 1.34.6 review: the spawn loop read the pane's live state between requests,
+        # so closing the pane while a ticket was in flight threw on the next one. Catches: reading
+        # `launchIdeaState` after an await, which drops every ticket after the first (the page error
+        # the cleanup asserts on is that throw).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                page.click("button[aria-label^='Launch an idea']")
+                page.fill("input[aria-label='Idea title']", "Try a thing")
+                page.click("text=Grill it →")
+                page.click("text=Draft tickets →")
+                picks = page.locator(".ck-launch-ticket input[type=checkbox]:checked").count()
+                self.assertGreater(picks, 1, "needs a ticket after the one in flight")
+                _Handler.posts.clear()
+                _Handler.post_delay = 0.4
+                page.click("text=Spawn selected")
+                self._until(page, lambda: _Handler.posts)
+                page.click("button[aria-label='Close Launch Idea']")   # the first ticket is in flight
+                _wait_for(page, self.TOASTED, f"{picks} tickets spawned.")   # the last answer landed
+                made = [p.get("parent_item") for p in _Handler.posts if "parent_item" in p]
+                self.assertEqual(len(made), picks, _Handler.posts)
+                self.assertEqual(len(set(made)), 1, made)
+                self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[True]])
+
+    def test_an_open_wizard_pane_survives_a_repaint(self):
+        # 1.34.7: renderPanel() looked the aux pane up by id only after clearing the panel, when it
+        # was no longer in the document, so a Refresh or any live update threw an open Launch Idea
+        # or Branch Out away mid-wizard and left its gutter behind. Catches: finding the pane after
+        # the clear (or by id at all once it is detached); and a re-attach that rebuilds the pane,
+        # losing what the owner typed.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                for opener, field in (("button[aria-label^='Launch an idea']", "input[aria-label='Idea title']"),
+                                      ("button[aria-label^='Branch out on a topic']", "input[aria-label='Topic title']")):
+                    page.click(opener)
+                    page.fill(field, "Half-typed")
+                    self._repaint(page, "details.ck-tickets-fold")
+                    self.assertEqual(page.evaluate("f => { const e = document.querySelector(f);"
+                                                   " return e && e.isConnected ? e.value : null; }", field),
+                                     "Half-typed", opener + ": a repaint threw the pane away")
+
+    def test_a_branch_out_pane_reopened_mid_request_is_left_open(self):
+        # 1.34.7: Branch Out's research ticket and deliberate round read `branchOutState` after their
+        # await. Catches: an ending that closes whatever pane is open by then, so the owner's freshly
+        # reopened pane vanishes when the old request answers (and, had they closed it instead, a
+        # throw); and a research ticket that leaves the fold it went into shut.
+        opener = "button[aria-label^='Branch out on a topic']"
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self._page(kind, 1400)
+                page.click(".ck-item-btn")
+                for button, done in (("Create research ticket", "Research ticket created."),
+                                     ("Spawn deliberate round", "Deliberate round queued.")):
+                    page.click(opener)
+                    page.fill("input[aria-label='Topic title']", "Dig here")
+                    page.fill("textarea[aria-label='Topic description']", "A topic long enough to dig into.")
+                    page.click("text=Dig in →")
+                    page.click("text=Compile →")
+                    _Handler.posts.clear()
+                    _Handler.post_delay = 0.5
+                    page.click("text=" + button)
+                    self._until(page, lambda: _Handler.posts)
+                    page.click("button[aria-label='Close Branch out']")    # the request is in flight
+                    page.click(opener)                                       # and the owner starts again
+                    _wait_for(page, self.TOASTED, done)
+                    self.assertTrue(page.evaluate("!!document.querySelector(\"[aria-label='Branch out']\")"),
+                                    button + ": the old request's answer closed the pane opened since")
+                self.assertEqual(page.evaluate(self.OPEN, ["details.ck-tickets-fold"]), [[True]])
 
     def test_folds_the_owner_opened_stay_open_across_a_repaint(self):
         # 1.34.5, from the 1.34.4 review: the lessons chip was not the only <details> the panel rebuilt
