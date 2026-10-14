@@ -379,11 +379,18 @@ in branch protection, or a pull request can also edit the workflow.
 
 An `item_status` condition is checked only with the `adapter` input.
 Without it, such a ruling is listed as unchecked and passes; set
-`strict: true` to fail it instead (1.37). Your adapter is code from the
-pull request's checkout, so it is opt-in and handled apart (1.37): the
-check runs in a step that holds no token, no comment is posted after it
-(the job summary has the report), and the Action warns unless
-`actions/checkout` ran with `persist-credentials: false`.
+`strict: true` to fail it instead, and to fail a run that found no
+ruling files (1.37). A re-ruling never fails strict: it is yours to
+make, and the comment shows it to the reviewer.
+
+Your adapter is code from the pull request's checkout, so it is opt-in
+and kept apart (1.37). The token is not handed to the step that runs
+it, no comment is posted after it (the job summary has the report), and
+the check refuses to run when `actions/checkout` left its token header
+in `.git/config` (use `persist-credentials: false`). The adapter still runs as the runner's
+user, which on GitHub's runners can use sudo, so treat every later
+step in that job as untrusted, or give the adapter run a job of its
+own.
 
 Anywhere else, run it yourself: `python3 <kit>/rulecheck.py --base
 origin/main` (add `--format markdown` or `--format json`, and

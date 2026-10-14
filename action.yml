@@ -25,11 +25,15 @@ inputs:
     description: >-
       The project's adapter, imported to check item-status conditions. It is code from the pull
       request's checkout, so it runs (and reports item statuses) as the pull request wrote it. Opt in,
-      with actions/checkout persist-credentials: false; no comment is posted when it is set.
+      with actions/checkout persist-credentials: false (the check refuses to run when checkout's token
+      header is in .git/config); no comment
+      is posted when it is set, and later steps of the job should not trust what ran before them.
     required: false
     default: ""
   strict:
-    description: Fail when a ruling could not be checked (an item-status condition with no adapter).
+    description: >-
+      true to fail when a ruling could not be checked (an item-status condition with no adapter) or
+      no ruling files were found. Any other value than true or false stops the check.
     required: false
     default: "false"
   comment:
@@ -51,8 +55,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Three steps, so the token is never in the environment of the step that runs the check: with
-    # `adapter`, that step runs the pull request's own code (1.37.0, Sourcery on PR #162). Every value
+    # Three steps, so the token is not handed to the step that runs the check: with `adapter`, that
+    # step runs the pull request's own code (1.37.0, Sourcery on PR #162). That code still runs as the
+    # runner's user (on GitHub's runners, with sudo), so it is opt-in and taints the rest of the job. Every value
     # reaches a script through the environment, never pasted into it: a branch name or input is data,
     # not shell (test_rulecheck.py checks this file for `${{` inside any run block).
     - id: check
@@ -66,9 +71,21 @@ runs:
       run: |
         set -u
         args=(--root "$GITHUB_WORKSPACE" --format markdown)
+        report="$RUNNER_TEMP/overture-rulecheck.md"
+        errors="$RUNNER_TEMP/overture-rulecheck.err"
+        : >"$errors"
+        rc=0
+        # A gate that a typo switches off fails open, so anything but true or false is refused.
+        case "$(printf %s "$STRICT" | tr '[:upper:]' '[:lower:]')" in   # tr, not ${,,}: bash 3.2 on macOS
+          true) args+=(--strict) ;;
+          false|"") ;;
+          *) echo "strict must be true or false, not '$STRICT'" >"$errors"; rc=2 ;;
+        esac
+        # The adapter is the pull request's code: never run it where checkout left the job's token on disk.
         if [ -n "$ADAPTER" ] && git -C "$GITHUB_WORKSPACE" config --get-regexp '^http\..*\.extraheader$' >/dev/null; then
-          echo "::warning::the adapter is the pull request's code, and actions/checkout left this job's token in" \
-               ".git/config; use persist-credentials: false with adapter"
+          echo "adapter is set, and actions/checkout left this job's token in .git/config, where the adapter" \
+               "could read it; use actions/checkout with persist-credentials: false" >"$errors"
+          rc=2
         fi
         if [ -n "$BASE" ]; then
           git -C "$GITHUB_WORKSPACE" cat-file -e "$BASE^{commit}" 2>/dev/null \
@@ -78,11 +95,9 @@ runs:
         fi
         [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
         [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
-        [ "$STRICT" = true ] && args+=(--strict)
-        report="$RUNNER_TEMP/overture-rulecheck.md"
-        errors="$RUNNER_TEMP/overture-rulecheck.err"
-        rc=0
-        python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+        fi
         cat "$errors" >&2
         case $rc in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
         { echo "result=$result"; echo "rc=$rc"; echo "report=$report"; } >>"$GITHUB_OUTPUT"

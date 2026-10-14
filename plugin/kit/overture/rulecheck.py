@@ -197,7 +197,10 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
     # What a reviewer must see on the pull request itself, not only in the job summary.
     rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or any(rep["files"].values()))
     rep["strict"] = strict
-    rep["exit"] = 1 if rep["broken"] or (strict and rep["unchecked"]) else 0
+    rep["notable"] = rep["notable"] or (strict and rep["empty"])   # a strict failure shows on the pull request
+    # Under --strict, "nothing could be checked" fails as well as "this one could not": a re-ruling does
+    # not, since the reviewer sees it on the pull request and it is the owner's to make.
+    rep["exit"] = 1 if rep["broken"] or (strict and (rep["unchecked"] or rep["empty"])) else 0
     return rep
 
 
@@ -229,6 +232,8 @@ def _verdict(rep: dict) -> str:
     n = _count(rep)
     if rep["broken"]:
         return f"{len(rep['broken'])} of {n} ruling(s) broken by this change."
+    if rep["strict"] and rep["empty"]:
+        return "No ruling files were found, which --strict fails."
     if rep["strict"] and rep["unchecked"]:
         return f"{len(rep['unchecked'])} of {n} ruling(s) could not be checked, which --strict fails."
     return f"All {n} checked ruling(s) hold."

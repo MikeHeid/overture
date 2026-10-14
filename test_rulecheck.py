@@ -270,6 +270,16 @@ class PullRequest(Repo):
         rc, rep = self.report("--base", self.base)
         self.assertEqual((rc, rep["files"]["edited"], rep["notable"]), (0, [RULING], True))
 
+    def test_strict_fails_when_no_ruling_files_were_found(self):
+        # Catches: --strict passing a run that checked nothing (a wrong folder), the same "could not be
+        # checked" it exists to fail (1.37.0 review). Text and json say it too.
+        rc, out, _ = self.check("--base", self.base, "--locked", "elsewhere", "--strict")
+        self.assertEqual(rc, 1)
+        self.assertIn("No ruling files were found, which --strict fails.", out)
+        rc, rep = self.report("--base", self.base, "--locked", "elsewhere", "--strict")
+        # Notable too: a strict failure reaches the pull request, not only the job summary.
+        self.assertEqual((rc, rep["exit"], rep["strict"], rep["notable"]), (1, 1, True, True))
+
     def test_a_clean_pr_is_not_notable(self):
         # Catches: "notable" set on every run, so the Action comments on every clean pull request.
         (self.root / "README").write_text("still unrelated\n")
@@ -350,7 +360,31 @@ class Action(Repo):
         st = self.steps()
         self.assertNotIn("GH_TOKEN", st["check"]["env"])
         self.assertIn("GH_TOKEN", st["comment"]["env"])
-        self.assertIn("inputs.adapter == ''", st["comment"]["if"])
+        # Exactly, since the harness below stands in for the runner's evaluation of it.
+        self.assertEqual(st["comment"]["if"],
+                         "inputs.comment == 'true' && inputs.adapter == '' && github.event.pull_request.number")
+
+    def test_strict_takes_any_case_and_refuses_anything_else(self):
+        # Catches: a case-sensitive `= true`, where `strict: "True"` quietly turned the gate off, and a
+        # value like "yes" read as false (1.37.0 review, HIGH).
+        e = json.loads(self.ruling().read_text())
+        e["valid_if"] = [EXCERPT, {"kind": "item_status", "item": "LANE.1.a", "status": "proposed"}]
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("base with an item status")
+        self.assertEqual(self.step("", strict="True")[:2], (1, "fail"))
+        rc, result, summary, _ = self.step("", strict="yes")
+        self.assertEqual((rc, result), (2, "error"))
+        self.assertIn("strict must be true or false", summary)
+
+    def test_an_adapter_refuses_to_run_beside_a_persisted_token(self):
+        # Catches: the adapter (the PR's code) run where actions/checkout left the job's token in
+        # .git/config, which it could simply read; a warning alone let it run (1.37.0 review, HIGH).
+        (self.root / "adapter.py").write_text("raise SystemExit('the adapter ran')\n")
+        git(self.root, "config", "http.https://github.com/.extraheader", "AUTHORIZATION: basic x")
+        rc, result, summary, _ = self.step("7", adapter="adapter.py")
+        self.assertEqual((rc, result), (2, "error"))
+        self.assertIn("persist-credentials: false", summary)
+        self.assertNotIn("the adapter ran", summary)
 
     def step(self, pr: str, existing: str = "", adapter: str = "", strict: str = "false"
              ) -> tuple[int, str, str, list[str]]:

@@ -2993,16 +2993,20 @@ on its own.
 ## Strict, and no token beside the adapter (1.37.0)
 
 - **`--strict`** (`strict: true` in the Action): a ruling that could not
-  be checked, an `item_status` condition with no adapter, fails the run
-  instead of passing as unchecked. The verdict says so.
-- **The adapter never runs beside the token.** Sourcery's review of PR
+  be checked (an `item_status` condition with no adapter), or a run that
+  found no ruling files, fails instead of passing. The verdict says so.
+  A re-ruling never fails strict. The Action takes `true` or `false` in
+  any case and refuses anything else, so a typo cannot switch it off.
+- **The token is not handed to the adapter.** Sourcery's review of PR
   #162 pointed out that with `adapter` the pull request's own code ran
   in the step that held the comment token. The Action is now three
-  steps: the check (no token), the comment (the token; skipped whenever
-  an adapter ran, since that code could have written the job's later
-  steps' environment), and one that ends with the check's exit code.
-  It warns when `actions/checkout` left the token in `.git/config` and
-  an adapter is set.
+  steps: the check (no token in its environment), the comment (the
+  token; skipped whenever an adapter is set, since that code could have
+  written the job's later steps' environment), and one that ends with
+  the check's exit code. With an adapter, the check refuses to run when
+  `actions/checkout` left the token in `.git/config`. The adapter still
+  runs as the runner's user (with sudo on GitHub's runners), so the
+  README says to treat the rest of that job as untrusted.
 - **Tried on a real pull request.** v1.36.0 ran on a private scratch
   repository: a pull request that changed the cited line failed with
   the comment and diff, and the push that put it back turned the same
