@@ -2990,6 +2990,17 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Locked by, on the card (1.38.1)
+
+- **A locked question's card says who locked it**: "Locked by
+  alice@example.com" under "Your answer", from the login 1.38.0 keeps.
+  It travels on the owner door's view only (`view.locked_by`, answer id
+  to email), like drafts; the agent socket's view never carries it. A
+  lock with no kept login (a scheduled trigger, a lock taken before
+  1.38) shows no line.
+- The browser suite was run after 1.38.0's Feed change: 91 tests, all
+  green, plus one new test for this line.
+
 ## Who decided (1.38.0)
 
 Every owner write was stored `by: "owner"`, so with several people
