@@ -82,10 +82,16 @@ runs:
           *) echo "strict must be true or false, not '$STRICT'" >"$errors"; rc=2 ;;
         esac
         # The adapter is the pull request's code: never run it where checkout left the job's token on disk.
-        if [ -n "$ADAPTER" ] && git -C "$GITHUB_WORKSPACE" config --get-regexp '^http\..*\.extraheader$' >/dev/null; then
-          echo "adapter is set, and actions/checkout left this job's token in .git/config, where the adapter" \
-               "could read it; use actions/checkout with persist-credentials: false" >"$errors"
-          rc=2
+        # Only git's own "no such key" (exit 1) lets it run: a header found (0), or a config git could not
+        # read (any other code), refuses, since an unread config may still hold the token.
+        if [ -n "$ADAPTER" ]; then
+          found=0
+          git -C "$GITHUB_WORKSPACE" config --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1 || found=$?
+          if [ "$found" -ne 1 ]; then
+            echo "adapter is set, and .git/config holds checkout's token header, where the adapter could read" \
+                 "it (git exit $found); use actions/checkout with persist-credentials: false" >"$errors"
+            rc=2
+          fi
         fi
         if [ -n "$BASE" ]; then
           git -C "$GITHUB_WORKSPACE" cat-file -e "$BASE^{commit}" 2>/dev/null \
@@ -96,7 +102,10 @@ runs:
         [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
         [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
         if [ "$rc" -eq 0 ]; then
-          python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+          # A clean environment: the caller's job may hold secrets in its env, and with `adapter` this runs
+          # the pull request's code. Only what Python and git need are passed (Sourcery on PR #163).
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
+            python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
         fi
         cat "$errors" >&2
         case $rc in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac

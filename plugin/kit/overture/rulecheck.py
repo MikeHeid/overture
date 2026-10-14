@@ -345,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     except (CheckError, F.FoldError) as e:
         print(f"rulecheck: {e}", file=sys.stderr)
         return 2
-    except Exception as e:  # noqa: BLE001 - an adapter that fails, or git gone odd: named, never a pass
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - an adapter that fails or exits, or git gone odd:
+        # named, never a pass. SystemExit too: an adapter's sys.exit(0) would otherwise end the run as "holds".
         print(f"rulecheck: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
     sys.stdout.write(json.dumps(rep, indent=2, ensure_ascii=False) + "\n" if a.format == "json" else

@@ -151,6 +151,16 @@ class Standalone(Repo):
             self.assertEqual(rc, 2, flag)
             self.assertIn("inside the project", err)
 
+    def test_an_adapter_that_exits_cannot_end_the_run_as_a_pass(self):
+        # Catches: SystemExit from the adapter left uncaught, so its sys.exit(0) ends rulecheck with
+        # exit 0, "every ruling holds", with nothing checked.
+        (self.root / "adapter.py").write_text("import sys\ndef items():\n    sys.exit(0)\n"
+                                              "def record(e, d):\n    return []\ndef seed_questions():\n    return []\n")
+        self.break_code()
+        rc, out, err = self.check("--adapter", "adapter.py")
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("SystemExit", err)
+
     def test_an_item_status_is_unchecked_without_the_register_and_checked_with_it(self):
         # Catches: an item_status read as holding when nothing could check it (a quiet pass), and an
         # adapter whose register is never consulted.
@@ -376,6 +386,30 @@ class Action(Repo):
         self.assertEqual((rc, result), (2, "error"))
         self.assertIn("strict must be true or false", summary)
 
+    def test_the_adapter_sees_none_of_the_callers_environment(self):
+        # Catches: rulecheck started with the step's whole environment, so the PR's adapter reads any
+        # secret the calling job exported (here a token and a secret the harness puts in every step).
+        (self.root / "adapter.py").write_text(
+            "import os\n"
+            "def items():\n"
+            "    raise SystemExit('env:%s:%s' % (os.environ.get('GH_TOKEN'), os.environ.get('CALLER_SECRET')))\n"
+            "def record(e, d):\n    return []\ndef seed_questions():\n    return []\n")
+        rc, result, summary, _ = self.step("7", adapter="adapter.py")
+        self.assertEqual((rc, result), (2, "error"))
+        self.assertIn("env:None:None", summary)
+        self.assertNotIn("sentinel", summary)
+
+    def test_an_unreadable_git_config_refuses_the_adapter(self):
+        # Catches: any non-zero `git config` read as "no token header" (Sourcery on PR #163): a config git
+        # cannot parse may still hold the token, so only git's "no such key" lets the adapter run.
+        (self.root / "adapter.py").write_text("raise SystemExit('the adapter ran')\n")
+        with open(self.root / ".git/config", "a") as fh:
+            fh.write("[broken\n")
+        rc, result, summary, _ = self.step("7", adapter="adapter.py")
+        self.assertEqual((rc, result), (2, "error"))
+        self.assertIn("persist-credentials: false", summary)
+        self.assertNotIn("the adapter ran", summary)
+
     def test_an_adapter_refuses_to_run_beside_a_persisted_token(self):
         # Catches: the adapter (the PR's code) run where actions/checkout left the job's token in
         # .git/config, which it could simply read; a warning alone let it run (1.37.0 review, HIGH).
@@ -403,7 +437,9 @@ class Action(Repo):
         env = {**os.environ, "PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "GITHUB_WORKSPACE": str(self.root),
                "RUNNER_TEMP": str(tmp), "GITHUB_OUTPUT": str(tmp / "out"), "GITHUB_STEP_SUMMARY": str(tmp / "summary"),
                "GH_LOG": str(tmp / "gh.log"), "GH_EXISTING": existing}
-        env.pop("GH_TOKEN", None)
+        # As a caller's job may: secrets in the job's own environment, which every step inherits. The check
+        # must not pass them on to rulecheck and its adapter (Sourcery on PR #163).
+        env.update(GH_TOKEN="sentinel-gh-token", CALLER_SECRET="sentinel-caller-secret")
 
         def bash(run: str, extra: dict) -> int:
             # As the runner starts `shell: bash`: errexit and pipefail on, so a failing line ends the step.
