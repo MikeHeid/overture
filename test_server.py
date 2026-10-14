@@ -8580,6 +8580,82 @@ class OperatorTests(_Live, unittest.TestCase):
         with self.assertRaises(OP.OperatorsError):
             ops.add("b2" * 12, "not an email")
 
+    def test_a_kept_alive_connection_does_not_lend_its_email_to_the_next_request(self):
+        # Catches: the per-thread email set once and never cleared, so a second request on the same
+        # connection (same handler thread) with a token that names no one is filed under the first login.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        h = {"Origin": f"https://{HOSTNAME}", "X-Overture-CSRF": self.console._csrf, "Content-Type": "application/json"}
+        ids = []
+        for email, nonce in (("erin@example.com", "opkeep00001"), (None, "opkeep00002")):
+            body = json.dumps({"item": "LANE.1", "text": nonce, "nonce": nonce}).encode()
+            conn.request("POST", "/api/message", body=body, headers={**h, "Cf-Access-Jwt-Assertion": token(email=email)})
+            r = conn.getresponse()
+            out = json.loads(r.read())
+            self.assertEqual(r.status, 200, out)
+            ids.append(out["record"]["id"])
+        conn.close()
+        ops = self.operators()
+        self.assertEqual((ops.get(ids[0]), ops.get(ids[1])), ("erin@example.com", None))
+
+    def test_one_login_in_either_case_is_one_name(self):
+        # Catches: emails kept and matched as sent, so `Alice@` from Access misses a name set for `alice@`
+        # and that lock is exported unnamed, silently (1.38 review).
+        from overture import fold as F
+        from overture import operators as OP
+        _, lk = self.lock_as("Alice@Example.com", "opcase00001")
+        self.assertEqual(self.operators()[lk["id"]], "alice@example.com")
+        self.assertIn(b'"alice@example.com"', (Path(self.cfg.state) / OP.FILE).read_bytes())   # stored folded too
+        OP.set_name(self.cfg.state, "ALICE@example.COM", "alice")
+        self.assertEqual(F.lock_names_beside(self.cfg.store)[lk["id"]], "alice")
+        (Path(self.cfg.state) / OP.NAMES_FILE).write_text('{"names": {"Alice@Example.COM": "al"}}')   # by hand
+        self.assertEqual(OP.load_names(self.cfg.state), {"alice@example.com": "al"})
+
+    def test_a_failed_write_leaves_no_half_line_and_a_reader_skips_one_in_flight(self):
+        # Catches: a write cut short (a full disk) left as a half line, which refuses the next start;
+        # and `fold.py export`, another process, refusing to run while the console is mid-append.
+        from overture import operators as OP
+        ops = OP.Operators(self.cfg.state)
+        self.assertTrue(ops.add("c3" * 12, "ok@example.com"))
+        before = (Path(self.cfg.state) / OP.FILE).read_bytes()
+        real = OP.os.write
+
+        def half(fd, data):
+            real(fd, data[:7])
+            raise OSError(28, "No space left on device")
+        OP.os.write = half
+        try:
+            with self.assertRaises(OSError):
+                ops.add("d4" * 12, "late@example.com")
+        finally:
+            OP.os.write = real
+        self.assertEqual((Path(self.cfg.state) / OP.FILE).read_bytes(), before)
+        OP.Operators(self.cfg.state)   # starts: nothing half-written
+        with open(Path(self.cfg.state) / OP.FILE, "ab") as fh:
+            fh.write(b'{"email":"mid@example.com","id":"e5')   # an append still in flight
+        self.assertEqual(OP.load_beside(self.cfg.store).get("c3" * 12), "ok@example.com")
+        with self.assertRaises(OP.OperatorsError):
+            OP.Operators(self.cfg.state)   # the console itself still refuses a half line, by name
+
+    def test_operator_name_is_set_listed_and_cleared_from_the_command_line(self):
+        # Catches: the owner command wired to nothing, a bad name written, or names files left readable
+        # by others (the state dir's 0700 is the only other guard).
+        from overture import operators as OP
+
+        def cli(*args):
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state),
+                                "operator-name", *args], capture_output=True, text=True, timeout=30)
+            return r.returncode, r.stdout + r.stderr
+        self.assertEqual(cli("frank@example.com", "frank")[0], 0)
+        self.assertEqual(OP.load_names(self.cfg.state), {"frank@example.com": "frank"})
+        self.assertEqual(os.stat(Path(self.cfg.state) / OP.NAMES_FILE).st_mode & 0o077, 0)
+        self.assertIn("frank@example.com frank", cli()[1])
+        rc, out = cli("frank@example.com", "Not A Name")
+        self.assertEqual(rc, 2)
+        self.assertEqual(OP.load_names(self.cfg.state), {"frank@example.com": "frank"})
+        self.assertEqual(cli("frank@example.com", "--clear")[0], 0)
+        self.assertEqual(OP.load_names(self.cfg.state), {})
+        self.assertEqual(list(Path(self.cfg.state).glob(".operator-names.json.*")), [])
+
     def test_a_bad_operators_file_refuses_the_start_by_name(self):
         # Catches: a corrupt sidecar skipped (decisions silently lose who made them) or a crash with a
         # traceback instead of the file and line.

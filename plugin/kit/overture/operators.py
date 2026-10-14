@@ -67,17 +67,21 @@ def name_problem(v: object) -> str | None:
 class Operators:
     """The operators sidecar of one state directory: record id -> the email of whoever wrote it."""
 
-    def __init__(self, state: Path) -> None:
+    def __init__(self, state: Path, *, reader: bool = False) -> None:
+        """`reader`: another process reading while the console may be appending (`fold.py export`)."""
         self.path = Path(state) / FILE
         self._lock = threading.Lock()
         self._by_id: dict[str, str] = {}
-        self._load()
+        self._load(reader)
 
-    def _load(self) -> None:
+    def _load(self, reader: bool) -> None:
         if not self.path.exists():
             return
         lines = self.path.read_text(encoding="utf-8").split("\n")
         if lines and lines[-1] == "":
+            lines.pop()
+        elif lines and reader:
+            # The console may be mid-append: its last line is not written yet, so it is not read yet.
             lines.pop()
         elif lines:
             raise OperatorsError(f"{self.path}: line {len(lines)} has no newline, so a write was cut short. Move "
@@ -94,7 +98,7 @@ class Operators:
             why = email_problem(rec["email"])
             if why:
                 raise OperatorsError(f"{self.path}:{n}: {why}")
-            self._by_id.setdefault(rec["id"], rec["email"])
+            self._by_id.setdefault(rec["id"], rec["email"].lower())
 
     def mapping(self) -> dict[str, str]:
         """A copy of record id -> email."""
@@ -108,26 +112,33 @@ class Operators:
             raise OperatorsError(why)
         if not isinstance(rid, str) or not S.RECORD_ID.match(rid):
             raise OperatorsError(f"{rid!r} is not a record id")
+        email = email.lower()   # Access may send either case; one login is one key, here and in the names
         with self._lock:
             if rid in self._by_id:
                 return False
-            line = json.dumps({"email": email, "id": rid}, sort_keys=True, separators=(",", ":")) + "\n"
+            data = (json.dumps({"email": email, "id": rid}, sort_keys=True, separators=(",", ":")) + "\n").encode()
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX)
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                end = os.lseek(fd, 0, os.SEEK_END)
                 try:
-                    fh.write(line)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                finally:
-                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    if os.write(fd, data) != len(data):
+                        raise OSError("short write")
+                    os.fsync(fd)
+                except OSError:
+                    # Cut back to the last whole line: a half-written one would stop the next start (1.38 review).
+                    os.ftruncate(fd, end)
+                    raise
+            finally:
+                os.close(fd)   # closing releases the lock
             self._by_id[rid] = email
             return True
 
 
 def load_beside(store_path: Path) -> dict[str, str]:
     """Record id -> email from the operators file beside a store file; {} when there is none."""
-    return Operators(Path(store_path).parent).mapping()
+    return Operators(Path(store_path).parent, reader=True).mapping()
 
 
 def load_names(state: Path) -> dict[str, str]:
@@ -146,7 +157,7 @@ def load_names(state: Path) -> dict[str, str]:
         why = email_problem(email) or name_problem(name)
         if why:
             raise OperatorsError(f"{p}: {why}")
-    return dict(got)
+    return {e.lower(): n for e, n in got.items()}
 
 
 def set_name(state: Path, email: str, name: str | None) -> dict[str, str]:
@@ -154,13 +165,24 @@ def set_name(state: Path, email: str, name: str | None) -> dict[str, str]:
     why = email_problem(email) or (name_problem(name) if name is not None else None)
     if why:
         raise OperatorsError(why)
+    email = email.lower()
     got = load_names(state)
     if name is None:
         got.pop(email, None)
     else:
         got[email] = name
+    data = (json.dumps({"names": dict(sorted(got.items()))}, indent=2) + "\n").encode()
     p = Path(state) / NAMES_FILE
-    tmp = p.with_name(f".{NAMES_FILE}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"names": dict(sorted(got.items()))}, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)   # whole or not at all: a reader never sees half a file
+    # A fresh, unguessable temp file: never one a symlink already names, never readable by others.
+    tmp = p.with_name(f".{NAMES_FILE}.{os.urandom(8).hex()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, p)   # whole or not at all: a reader never sees half a file
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return got

@@ -3012,9 +3012,18 @@ behind one console's Access policy a lock could not say who took it.
   `locked_by_name` to each lock that login took. With no name, an
   exported file is byte for byte what 1.37 wrote. `fold` and
   `rulecheck.py` hold `locked_by_name` to the agent-name shape.
-- New `OperatorTests` in `test_server.py` (7 tests), through the real
-  owner gate with signed tokens: two logins on one console, agent and
-  unnamed writes, the export, the refactor log, a bad sidecar.
+- **Durable sidecars.** A write cut short (a full disk) is cut back to
+  the last whole line, so it cannot stop the next start; `fold.py
+  export`, another process, skips a line the console is still writing.
+  Both files are created 0600; the names file is replaced whole, through
+  a fresh unguessable temp file that never follows a symlink. Emails are
+  compared in lower case, so `Alice@` from Access meets a name set for
+  `alice@`. The Feed shows emails to everyone the Access policy admits;
+  agents never see them.
+- New `OperatorTests` in `test_server.py` (11 tests), through the real
+  owner gate with signed tokens: two logins on one console, a kept-alive
+  connection, agent and unnamed writes, letter case, the export, the
+  refactor log, a write cut short, the command, a bad sidecar.
 
 ## Strict, and no token beside the adapter (1.37.0)
 

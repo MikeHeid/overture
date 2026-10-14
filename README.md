@@ -503,8 +503,10 @@ Several people can sit behind one console's Access policy. Each owner
 decision now keeps the Access login that made it: the console reads the
 email from the token it already verifies on every request, and keeps it
 beside the store (`operators.jsonl`). The **Feed** shows it on each
-answer, lock and message: "by alice@example.com". Agent writes,
+answer, lock and message: "by alice@example.com", to everyone your
+Access policy lets into the console (agents never see it). Agent writes,
 scheduled triggers and service tokens (which carry no email) keep none.
+Emails are compared in lower case.
 
 The email never leaves the console. The ruling files committed to your
 repository carry a short name only when you set one, so nothing personal
