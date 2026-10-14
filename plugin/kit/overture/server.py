@@ -1229,6 +1229,11 @@ class Console:
         except (TK.TicketError, OSError) as e:
             sys.stderr.write(f"console tickets: {type(e).__name__}: {e}\n")
             out["view"] = {**out["view"], "tickets": {"by_item": {}, "counts": {}}}
+        # 1.38.1: answer id -> the Access login that LOCKED it, for the card's "Locked by". Owner door
+        # only, like drafts: the agent socket's /view never carries an email (operators.py).
+        ops = self.operators.mapping()
+        out["view"] = {**out["view"], "locked_by": {r["answer"]: ops[r["id"]] for r in self.store.records()
+                                                    if r["type"] == "lock" and r["id"] in ops}}
         # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
         out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
         # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
