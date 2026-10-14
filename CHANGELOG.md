@@ -2990,6 +2990,38 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Rulings that block a merge (1.36.0)
+
+A broken ruling can now fail a pull request, with no console server.
+
+- **`plugin/kit/rulecheck.py`.** It reads the ruling files `fold.py
+  export` commits (`.overture.json` `fold.locked`, `.overture/locked`
+  by default) and the checkout, and nothing else: no store, no server,
+  no network. Each ruling is checked the way the console checks it
+  (its anchors, else its `valid_if`), with the same plain-words reason
+  and diff. Exit 0 every ruling holds, 1 one is broken, 2 it could not
+  run.
+- **A pull request cannot clear its own failure.** With `--base REF`
+  the rulings checked are the ones committed at the base, so editing a
+  ruling's anchors or deleting its file in the same pull request still
+  fails. A ruling the pull request re-locks (a newer lock whose
+  conditions hold) or settles is listed as re-ruled for the reviewer,
+  and passes. A ruling the pull request adds must hold too.
+- **Every ruling file is held to `fold`'s rules** before anything is
+  checked, so a hand-edited file (a pick the owner never made) stops
+  the run by name. A symlinked ruling file is refused. An
+  `item_status` condition needs the register: it is checked with
+  `--adapter` and otherwise listed as unchecked, never as holding.
+- **`action.yml`: a GitHub Action.** `uses: MikeHeid/overture@v1.36.0`
+  after `actions/checkout` with `fetch-depth: 0`. It writes the report
+  to the job summary and, when a ruling breaks, posts one comment on
+  the pull request and keeps it updated. Text from ruling files is
+  escaped in the comment (no markup, no HTML, no @mention). Inputs
+  reach the shell through the environment only.
+- New `test_rulecheck.py` (30 tests): real git repositories, a ruling
+  exported by `fold.export`, and the changes a pull request would make.
+  The Action's shell step runs against a stand-in `gh`.
+
 ## Any agent can ask (1.35.0)
 
 Overture's first door for agents other than Claude Code: an MCP server.
