@@ -28,6 +28,7 @@
     'layout-grid': [["rect",{"width":"7","height":"7","x":"3","y":"3","rx":"1"}],["rect",{"width":"7","height":"7","x":"14","y":"3","rx":"1"}],["rect",{"width":"7","height":"7","x":"14","y":"14","rx":"1"}],["rect",{"width":"7","height":"7","x":"3","y":"14","rx":"1"}]],
     'star': [["path",{"d":"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"}]],
     'message-square': [["path",{"d":"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"}]],
+    'users': [["path",{"d":"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"}],["circle",{"cx":"9","cy":"7","r":"4"}],["path",{"d":"M22 21v-2a4 4 0 0 0-3-3.87"}],["path",{"d":"M16 3.13a4 4 0 0 1 0 7.75"}]],
     'chevron-down': [["path",{"d":"m6 9 6 6 6-6"}]],
     'circle-dot': [["circle",{"cx":"12","cy":"12","r":"10"}],["circle",{"cx":"12","cy":"12","r":"1"}]],
     'bot': [["path",{"d":"M12 8V4H8"}],["rect",{"width":"16","height":"12","x":"4","y":"8","rx":"2"}],["path",{"d":"M2 14h2"}],["path",{"d":"M20 14h2"}],["path",{"d":"M15 13v2"}],["path",{"d":"M9 13v2"}]],
@@ -2193,6 +2194,8 @@
       renderPortfolio(body);
     } else if (currentTab === 'chat') {
       renderChat(body);
+    } else if (currentTab === 'people') {
+      renderPeopleTab(body);
     } else {
       renderInboxList(body);
     }
@@ -2214,11 +2217,16 @@
     ['triggers', 'Triggers'],
     ['portfolio', 'Portfolio'],
     ['favorite', 'Favorite'],
-    ['chat', 'Chat']
+    ['chat', 'Chat'],
+    ['people', 'People']   // 1.40: roles; shown to an owner's login only (visibleTabs)
   ];
+  // The tabs this login sees: People only when the server sent its list, which it does to an owner alone.
+  function visibleTabs() {
+    return TABS.filter(([id]) => id !== 'people' || !!(view && view.roles));
+  }
   // D8/D9 (owner, 2026-10-11): every tab shows its icon and its label.
   const TAB_ICON = { inbox: 'inbox', feed: 'rss', tickets: 'ticket', prs: 'git-pull-request', playbooks: 'book-open',
-    triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square' };
+    triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square', people: 'users' };
   // Which TABS are shown directly in the bar vs. folded behind "More ▾".
   // D9: five tabs with icon and label fit a ~530px column on one line; the rest sit behind More.
   const TABS_PRIMARY_IDS = ['inbox', 'feed', 'tickets', 'prs', 'portfolio'];
@@ -2255,12 +2263,13 @@
     if (id === 'chat' && note) b.setAttribute('aria-label', 'Chat, waiting on an agent');
     b.addEventListener('click', () => selectTab(id));
     b.addEventListener('keydown', e => {
-      const n = TABS.findIndex(t => t[0] === id);
+      const tabs = visibleTabs();
+      const n = tabs.findIndex(t => t[0] === id);
       let to = null;
-      if (e.key === 'ArrowRight') to = TABS[(n + 1) % TABS.length][0];
-      else if (e.key === 'ArrowLeft') to = TABS[(n + TABS.length - 1) % TABS.length][0];
-      else if (e.key === 'Home') to = TABS[0][0];
-      else if (e.key === 'End') to = TABS[TABS.length - 1][0];
+      if (e.key === 'ArrowRight') to = tabs[(n + 1) % tabs.length][0];
+      else if (e.key === 'ArrowLeft') to = tabs[(n + tabs.length - 1) % tabs.length][0];
+      else if (e.key === 'Home') to = tabs[0][0];
+      else if (e.key === 'End') to = tabs[tabs.length - 1][0];
       if (to) { e.preventDefault(); selectTab(to); }
     });
     return b;
@@ -2274,7 +2283,7 @@
     }
     // Overflow tabs land behind a "More ▾" dropdown so the bar stays sized for one row.
     // Current-tab-is-in-overflow raises the chip to show which view the operator is in.
-    const overflow = TABS.filter(([id]) => TABS_PRIMARY_IDS.indexOf(id) < 0);
+    const overflow = visibleTabs().filter(([id]) => TABS_PRIMARY_IDS.indexOf(id) < 0);
     if (overflow.length) {
       const activeOverflow = overflow.find(([id]) => id === currentTab);
       const label = activeOverflow ? activeOverflow[1] : 'More';
@@ -3879,6 +3888,116 @@
 
   // Triggers tab — list every configured trigger (webhook + cron) and the firing log.
   // Replay button for each row. Reads view.triggers + view.trigger_log (already shipped).
+  // 1.40: People — who may do what (roles.py). The server sends view.roles to an owner's login only and
+  // enforces every role itself; this tab only edits STATE/roles.json through POST /api/roles.
+  const ROLE_LABEL = { owner: 'Administrator', member: 'Member', viewer: 'Viewer' };
+  let peopleError = null;
+  function parseAreas(text) {
+    return String(text || '').split(/[\s,]+/).filter(Boolean);
+  }
+  async function postRole(email, role, areas) {
+    const r = await apiPost('/roles', { email, role, areas: role === 'member' ? areas : [] },
+      'roles-' + email + '-' + role + '-' + areas.join(','), { quiet: true });
+    peopleError = r && r.error ? r.error : null;
+    if (!peopleError) announce(role ? email + ' is now ' + ROLE_LABEL[role].toLowerCase() : email + ' removed');
+    renderPanel();
+  }
+  function roleSelect(value, id) {
+    const s = el('select', { className: 'ck-select ck-people-role', id });
+    for (const r of ['owner', 'member', 'viewer']) {
+      const o = el('option', { value: r }, [ROLE_LABEL[r]]);
+      if (r === value) o.selected = true;
+      s.appendChild(o);
+    }
+    return s;
+  }
+  function areasInput(value, id) {
+    return el('input', { type: 'text', className: 'ck-input ck-people-areas', id, value: value || '',
+      list: 'ck-people-items', placeholder: 'item ids, e.g. AUTH BILLING', autocomplete: 'off' });
+  }
+  function renderPeopleTab(body) {
+    const roles = view && view.roles;
+    body.appendChild(el('h2', { className: 'ck-section-heading' }, ['People']));
+    if (!roles) {   // a member or viewer opened #people: the server sent them no list
+      body.appendChild(el('p', { className: 'ck-muted' }, ['Only an administrator manages people.']));
+      return;
+    }
+    const ids = items ? Object.keys(items).sort() : [];
+    const dl = el('datalist', { id: 'ck-people-items' });
+    for (const id of ids) dl.appendChild(el('option', { value: id }));
+    body.appendChild(dl);
+    if (peopleError) body.appendChild(el('p', { className: 'ck-error-msg', role: 'alert' }, [peopleError]));
+    if (!roles.on) {
+      const box = el('div', { className: 'ck-firstrun ck-people-off' });
+      box.appendChild(el('div', { className: 'ck-firstrun-title' }, ['Roles are off']));
+      box.appendChild(el('p', { className: 'ck-firstrun-pitch' }, [
+        'Everyone your Access policy lets in can do everything here. Make yourself the administrator, ' +
+        'then give others a narrower role: a member answers and locks in their own areas, a viewer only reads.']));
+      box.appendChild(el('p', { className: 'ck-firstrun-pitch ck-people-warn' }, [
+        'From that moment everyone else only reads, until you add them here.']));
+      if (roles.me) {
+        const b = el('button', { className: 'ck-btn ck-btn-primary ck-people-claim', type: 'button' },
+          ['Make me the administrator']);
+        b.addEventListener('click', () => postRole(roles.me, 'owner', []));
+        box.appendChild(b);
+        box.appendChild(el('p', { className: 'ck-muted' }, ['Signed in as ' + roles.me + '.']));
+      } else {
+        box.appendChild(el('p', { className: 'ck-muted' }, [
+          'This sign-in carries no email (a service token), so it cannot be the administrator. ' +
+          'Open the console with your own Access login.']));
+      }
+      body.appendChild(box);
+      return;
+    }
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'An administrator can do everything. A member answers, locks and writes plain messages in their ' +
+      'areas (an item and everything under it). A viewer only reads. Anyone not listed only reads.']));
+    const list = el('ul', { className: 'ck-people-list' });
+    roles.people.forEach((p, i) => {
+      const row = el('li', { className: 'ck-people-row', dataEmail: p.email });
+      const you = p.email === roles.me;
+      row.appendChild(el('span', { className: 'ck-people-email' }, [p.email, you ? ' (you)' : '']));
+      const sel = roleSelect(p.role, 'ck-people-role-' + i);
+      sel.setAttribute('aria-label', 'Role for ' + p.email);
+      const areas = areasInput((p.areas || []).join(' '), 'ck-people-areas-' + i);
+      areas.setAttribute('aria-label', 'Areas for ' + p.email);
+      areas.hidden = p.role !== 'member';
+      sel.addEventListener('change', () => { areas.hidden = sel.value !== 'member'; });
+      const save = el('button', { className: 'ck-btn ck-people-save', type: 'button' }, ['Save']);
+      save.addEventListener('click', () => postRole(p.email, sel.value, parseAreas(areas.value)));
+      const remove = el('button', { className: 'ck-btn ck-btn-quiet ck-people-remove', type: 'button',
+        'aria-label': 'Remove ' + p.email }, ['Remove']);
+      remove.addEventListener('click', () => postRole(p.email, null, []));
+      row.appendChild(sel);
+      row.appendChild(areas);
+      row.appendChild(save);
+      row.appendChild(remove);
+      if (you) row.appendChild(el('span', { className: 'ck-muted ck-people-note' }, [
+        'Changing your own role takes effect on your next action.']));
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+    const add = el('form', { className: 'ck-people-add', 'aria-label': 'Add a person' });
+    const email = el('input', { type: 'email', className: 'ck-input ck-people-new-email', required: true,
+      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email', autocomplete: 'off' });
+    const sel = roleSelect('member', 'ck-people-new-role');
+    sel.setAttribute('aria-label', 'Role');
+    const areas = areasInput('', 'ck-people-new-areas');
+    areas.setAttribute('aria-label', 'Areas');
+    sel.addEventListener('change', () => { areas.hidden = sel.value !== 'member'; });
+    const go = el('button', { className: 'ck-btn ck-btn-primary', type: 'submit' }, ['Add']);
+    add.addEventListener('submit', e => {
+      e.preventDefault();
+      postRole(email.value.trim(), sel.value, parseAreas(areas.value));
+    });
+    add.appendChild(email);
+    add.appendChild(sel);
+    add.appendChild(areas);
+    add.appendChild(go);
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Add a person']));
+    body.appendChild(add);
+  }
+
   function renderTriggersTab(body) {
     const trgs = (view && Array.isArray(view.triggers)) ? view.triggers : [];
     const log = (view && Array.isArray(view.trigger_log)) ? view.trigger_log : [];

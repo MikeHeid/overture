@@ -3208,6 +3208,37 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(2500)   # past the page's 1.5 s autosave pause
                 self.assertEqual(drafts, [])
 
+    def test_the_people_tab_claims_the_administrator_then_adds_a_member(self):
+        # Catches (1.40.0): no way to turn roles on from the console (the claim button wired to nothing),
+        # the add form posting no areas, and the tab shown to a login the server sent no list.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.click(".ck-people-claim")
+                page.wait_for_selector(".ck-people-row[data-email='owner@example.com']")
+                self.assertEqual(RO.load(self.cfg.state), {"owner@example.com": {"role": "owner"}})
+                self.assertIn("(you)", page.locator(".ck-people-row[data-email='owner@example.com']").text_content())
+                page.fill(".ck-people-new-email", "bob@example.com")
+                page.fill("#ck-people-new-areas", "LANE, LANE.1")
+                page.click(".ck-people-add button[type='submit']")
+                page.wait_for_selector(".ck-people-row[data-email='bob@example.com']")
+                self.assertEqual(RO.load(self.cfg.state)["bob@example.com"],
+                                 {"role": "member", "areas": ["LANE", "LANE.1"]})
+                # The page's own login made a viewer by another administrator: no People tab for it.
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.wait_for_selector("text=Only an administrator manages people.")
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.click(".ck-tab-more")   # People lives behind More
+                page.wait_for_selector(".ck-more-menu")
+                self.assertGreater(page.locator(".ck-more-item").count(), 0)
+                self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
+
     def test_q37_a_stale_question_stays_whole(self):
         # Catches: rolling up every question with a lock, so a stale ruling (which needs the owner) hides.
         for kind in BROWSERS:

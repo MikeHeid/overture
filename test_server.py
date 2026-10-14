@@ -8884,5 +8884,92 @@ class RoleTests(_Live, unittest.TestCase):
         self.assertEqual(list(Path(self.cfg.state).glob(".roles.json.*")), [])
 
 
+class PeopleTests(_Live, unittest.TestCase):
+    """1.40.0: the People tab sets roles from the console; its first role makes the signed-in login the owner."""
+
+    OWNER = RoleTests.OWNER
+    roles = RoleTests.roles
+
+    def post(self, email, role, areas=(), as_=None):
+        body = {"email": email, "role": role, "areas": list(areas), "nonce": "peoplenonce1"}
+        return self.req("POST", "/api/roles", body, tok=token(email=as_ or self.OWNER))
+
+    def file(self):
+        from overture import roles as RO
+        return RO.load(self.cfg.state)
+
+    def test_with_roles_off_the_owner_page_offers_the_signed_in_login_as_administrator(self):
+        # Catches: the tab fed nothing until roles exist (so nobody could ever turn them on from the console),
+        # and `me` taken from anything but the verified login.
+        code, out = self.req("GET", "/api/view", tok=token(email="Olivia@Example.com"))
+        self.assertEqual(out["view"]["roles"], {"on": False, "me": "olivia@example.com", "people": []})
+
+    def test_the_first_role_must_make_the_signed_in_login_the_administrator(self):
+        # Catches: a first click on someone else (or on yourself as a member) turning roles on with the
+        # clicker locked out, or a service token (no email) claiming the console.
+        for email, role in (("bob@example.com", "owner"), (self.OWNER, "member")):
+            code, out = self.post(email, role, ["LANE"] if role == "member" else ())
+            self.assertEqual(code, 409, out)
+        code, out = self.req("POST", "/api/roles", {"email": self.OWNER, "role": "owner"}, tok=token(email=None))
+        self.assertEqual(code, 409, out)
+        self.assertIsNone(self.file())
+        code, out = self.post(self.OWNER, "owner")
+        self.assertEqual(code, 200, out)
+        self.assertEqual(self.file(), {self.OWNER: {"role": "owner"}})
+        self.assertEqual(out["roles"]["people"], [{"email": self.OWNER, "role": "owner"}])
+
+    def test_a_second_first_claim_that_lost_the_race_does_not_land(self):
+        # Catches (review, HIGH): the owner check made only by role_gate, before the lock. With roles off two
+        # logins both pass it; once the first has claimed, the second is a viewer and must not become an owner.
+        # Called past the gate, as the losing request is.
+        self.roles({self.OWNER: {"role": "owner"}})
+        self.console.act_as("bob@example.com")
+        try:
+            with self.assertRaises(SV.RequestError) as e:
+                self.console.set_role({"email": "bob@example.com", "role": "owner"})
+        finally:
+            self.console.act_as(None)
+        self.assertEqual(e.exception.code, 403)
+        self.assertEqual(self.file(), {self.OWNER: {"role": "owner"}})
+
+    def test_an_administrator_adds_changes_and_removes_people(self):
+        # Catches: the route wired to nothing, a bad area written, and the last administrator removed
+        # (nobody could then manage the console).
+        self.roles({self.OWNER: {"role": "owner"}})
+        self.assertEqual(self.post("bob@example.com", "member", ["LANE"])[0], 200)
+        self.assertEqual(self.file()["bob@example.com"], {"role": "member", "areas": ["LANE"]})
+        code, out = self.post("bob@example.com", "member", ["not an id!"])
+        self.assertEqual(code, 400, out)
+        self.assertEqual(self.file()["bob@example.com"]["areas"], ["LANE"])
+        self.assertEqual(self.post("bob@example.com", "viewer")[0], 200)
+        self.assertEqual(self.post("bob@example.com", None)[0], 200)
+        self.assertNotIn("bob@example.com", self.file())
+        code, out = self.post(self.OWNER, "viewer")
+        self.assertEqual(code, 400, out)
+        self.assertIn("no owner", out["error"])
+
+    def test_only_an_administrator_sees_or_sets_roles(self):
+        # Catches: the list of every login's email sent to members, viewers or agents, and a member able
+        # to raise themselves through the route.
+        self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
+        code, out = self.req("GET", "/api/view", tok=token(email="mo@example.com"))
+        self.assertNotIn("roles", out["view"])
+        code, out = self.post("mo@example.com", "owner", as_="mo@example.com")
+        self.assertEqual(code, 403, out)
+        self.assertEqual(self.file()["mo@example.com"]["role"], "member")
+        code, out = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertNotIn("roles", out["view"])
+        self.assertNotIn(self.OWNER, json.dumps(out))
+
+    def test_a_malformed_roles_request_is_refused_by_shape(self):
+        # Catches: an unknown role or field written through, or a missing role read as "remove".
+        self.roles({self.OWNER: {"role": "owner"}})
+        for body in ({"email": "b@example.com", "role": "admin"}, {"email": "b@example.com"},
+                     {"email": "b@example.com", "role": "viewer", "extra": 1}, {"email": 5, "role": "viewer"}):
+            code, out = self.req("POST", "/api/roles", body, tok=token(email=self.OWNER))
+            self.assertEqual(code, 400, (body, out))
+        self.assertEqual(self.file(), {self.OWNER: {"role": "owner"}})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

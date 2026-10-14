@@ -2990,6 +2990,34 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## People (1.40.0)
+
+Roles (1.39) could be set only from a terminal. Now the administrator
+manages them in the console, and onboarding says to claim that account.
+
+- **A People tab** (under More), shown only to an administrator (the
+  owner role). It lists every login with its role and areas; change a
+  role, edit a member's areas (item ids, with the project's items
+  suggested), remove someone, or add a person. Each change goes through
+  `POST /api/roles`, the same writer as `agent.py access`: it refuses
+  to remove the last administrator, writes the file whole (0600), and
+  takes effect on the next write.
+- **"Make me the administrator."** With roles off, the tab offers one
+  button. It makes the login you are signed in with the owner, so roles
+  start with you in charge. No email is typed, and none reaches a
+  session. With roles off, the first role set must be this one (409
+  otherwise), so a first click on someone else cannot lock everyone
+  out. A service token (no email) cannot claim it. The button says
+  what it does to everyone else: they only read until you add them.
+  The owner check is made again under the write lock, so of two logins
+  claiming at once only the first lands (the second is a viewer by then).
+- **Onboarding** prints a new step 6 to claim it, and the
+  `agent.py access YOU@EXAMPLE.COM owner` line for your own terminal.
+  The console-onboard skill hands this step over. It never asks for the
+  email and never runs `access` (operator emails never reach agents).
+- `view.roles` (`on`, `me`, `people`) travels to an administrator's
+  page only. Members, viewers and the agent socket never get it.
+
 ## Who may decide (1.39.0)
 
 Everyone behind a console's Access policy could answer, lock and run
