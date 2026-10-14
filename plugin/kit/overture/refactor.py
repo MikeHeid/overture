@@ -179,6 +179,8 @@ def cites_problem(cites: object) -> list[str]:
 class Log:
     """The refactor records beside one store: loaded at start, appended whole-file through `atfile`."""
 
+    on_append = None   # 1.38.0: as Store.on_append, called with each new record once it is written
+
     def __init__(self, folder: Path, clock) -> None:
         self.folder = Path(folder)
         self.clock = clock
@@ -275,7 +277,9 @@ class Log:
                 os.close(fd)
             self._raw = data
             self._index(rec)
-            return rec
+        if self.on_append is not None:   # as Store.on_append: the console keeps who wrote a new record
+            self.on_append(rec)
+        return rec
 
     # -- the rules that need the store ---------------------------------------------------
 

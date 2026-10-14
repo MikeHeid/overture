@@ -535,8 +535,12 @@ def feed_event(rec: dict, qitems: Mapping[str, str], relocks: set[str], agent: s
 
 
 def feed(store: Store, items: Mapping[str, dict], *, kinds: set[str] | None = None, item: str | None = None,
-         before: int | None = None, limit: int = FEED_DEFAULT, names: Mapping[str, str] | None = None) -> dict:
+         before: int | None = None, limit: int = FEED_DEFAULT, names: Mapping[str, str] | None = None,
+         operators: Mapping[str, str] | None = None) -> dict:
     """The newest `limit` events (optionally of `kinds`, on `item` and all under it, before seq `before`).
+
+    `operators` (1.38.0) maps record id -> the email of the owner request that
+    wrote it; an event for such a record gains `operator`, no other changes.
 
     `next_before` is the seq to pass as `before` for the page after this one,
     or None when there is nothing older.
@@ -554,6 +558,8 @@ def feed(store: Store, items: Mapping[str, dict], *, kinds: set[str] | None = No
         if before is not None and r["seq"] >= before:
             continue
         ev = feed_event(r, qitems, relocks, (names or {}).get(r["id"]))
+        if (operators or {}).get(r["id"]):
+            ev["operator"] = operators[r["id"]]
         if ev["kind"] == "transcript":
             fork = store.get(ev["fork"])
             ev["item"] = fork["item"] if fork is not None else None

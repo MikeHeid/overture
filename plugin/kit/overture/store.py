@@ -53,6 +53,10 @@ def utc_now() -> str:
 
 
 class Store:
+    # 1.38.0: called with each NEW record once it is written (never a retry, never a trial copy's);
+    # the console keeps who wrote it (operators.py). None: nothing is called.
+    on_append: Callable[[dict], None] | None = None
+
     def __init__(self, path: Path, *, known_items: Iterable[str] | Mapping[str, dict] | None = None,
                  clock: Callable[[], str] = utc_now) -> None:
         self.path = Path(path)
@@ -162,7 +166,9 @@ class Store:
             rec["ts"] = self.clock()
             self._write(rec)
             self._index(rec)
-            return rec
+        if self.on_append is not None:   # a new record only: a retry returned above, with the first one's
+            self.on_append(rec)
+        return rec
 
     def existing(self, rec: dict) -> dict | None:
         """The stored record `rec` would dedupe to (same fields, same nonce), or None."""

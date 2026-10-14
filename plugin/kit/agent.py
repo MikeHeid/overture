@@ -81,6 +81,9 @@
     agent.py --state DIR steward [NAME | --clear]
                                                 show, set or clear the console's steward in your registry (0.8.3;
                                                 you run this, never a session)
+    agent.py --state DIR operator-name [EMAIL [NAME | --clear]]
+                                                the short name a login's locks carry in exported ruling files;
+                                                the email itself never leaves the console (1.38; you run this)
 
 **Slim reads (K1).** JSON goes out compact when stdout is not a terminal.
 `todo`, `view` and `answers` refuse a read over 64 KiB unless given --full:
@@ -155,6 +158,7 @@ from overture import bundle as B  # noqa: E402
 from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
 from overture import names as N  # noqa: E402
+from overture import operators as OP  # noqa: E402
 from overture import registry as R  # noqa: E402
 from overture import sessions as SN  # noqa: E402
 from overture import view as V  # noqa: E402
@@ -1517,6 +1521,14 @@ def main(argv=None) -> int:
                        "runs here; `clear` removes it. Stored in your own registry; the plugin's Machine role setting "
                        "says the same thing to the hooks, and the stricter of the two holds.")
     s.add_argument("value", nargs="?", choices=("steward", "worker", "clear"))
+    s = sub.add_parser("operator-name", description="Show, set or clear the short name a login's locks carry in the "
+                       "committed ruling files (1.38). The console keeps each owner decision's Access email beside "
+                       "its store; the email never leaves it, and an export names the login only by a name set "
+                       "here. You run this, never a session.")
+    s.add_argument("email", nargs="?", help="the Access login, e.g. you@example.com (none: list every name)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("short", nargs="?", metavar="NAME", help="the short name, e.g. michael")
+    g.add_argument("--clear", action="store_true", help="remove this login's name: its locks are exported unnamed")
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1684,7 +1696,7 @@ def main(argv=None) -> int:
         _DOOR = None
 
 
-USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step")
+USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1712,12 +1724,47 @@ def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
             f"--as {name}, /overture:as {name} typed in the session, or {N.ENV}={name}.)")
 
 
+def _masked(email: str) -> str:
+    """`a…@example.com`: enough to tell logins apart in a list, not enough to write to one."""
+    local, _, domain = email.partition("@")
+    return f"{local[:1]}…@{domain}"
+
+
+def _operator_name(state: Path, email: str | None, short: str | None, clear: bool) -> int:
+    """`operator-name` (1.38): list, show, set or clear the export name of an Access login, in STATE."""
+    try:
+        if email is None:
+            if short is not None or clear:
+                print("agent.py: operator-name: name the login (EMAIL) first", file=sys.stderr)
+                return 2
+            got = OP.load_names(state)
+            # The agent socket never shows an owner's email, so neither does this listing inside a Claude
+            # Code session (CLAUDECODE is set there): a guardrail between the owner's own cooperating
+            # sessions, as ask_guard is (Sourcery on PR #164). The owner's own terminal sees them whole.
+            show = _masked if os.environ.get("CLAUDECODE") else str
+            print("\n".join(f"{show(e)} {n}" for e, n in sorted(got.items())) if got else
+                  "no operator names: locks are exported with no name")
+            return 0
+        if short is None and not clear:
+            got = OP.load_names(state)
+            print(f"{email} {got[email]}" if email in got else f"{email}: no name; its locks are exported unnamed")
+            return 0
+        OP.set_name(state, email, None if clear else short)
+    except (OSError, OP.OperatorsError) as e:
+        print(f"agent.py: operator-name: {e}; nothing was written", file=sys.stderr)
+        return 2
+    print(f"{email}: name cleared" if clear else f"{email} {short}: its locks carry this name in the next export")
+    return 0
+
+
 def _run(a, bell: Path) -> int:
     if a.cmd == "register":
         e = R.register(a.project, a.state, Path(__file__).resolve().parent, steward=a.steward)
         print(f"registered {Path(a.project).resolve()}: state {e['state']}, kit {e['kit']}"
               + (f", steward {e[R.STEWARD]}" if R.STEWARD in e else "") + f" in {R.location()}")
         return 0
+    if a.cmd == "operator-name":
+        return _operator_name(a.state, a.email, a.short, a.clear)
     if a.cmd == "role":
         if a.value is None:
             r = R.machine_role()
