@@ -184,6 +184,16 @@ class WriteTests(Base):
         self.assertIn("--config", route)
         self.assertIn("config-acme-console.yml", route)
 
+    def test_next_steps_make_the_user_the_administrator_without_an_email_from_the_session(self):
+        # Catches (1.40.0): onboarding that leaves every Access login an owner with no step to change it,
+        # and a step that has the session take the user's email (operator emails never reach agents).
+        steps = O.next_steps(self.project, O.check(GOOD))
+        self.assertIn(" 6. Make yourself the administrator.", steps)   # a step, not an optional aside
+        self.assertIn('"Make me the administrator"', steps)
+        line = next(s for s in steps.splitlines() if " access " in s)
+        self.assertIn("access YOU@EXAMPLE.COM owner", line)
+        self.assertIn(str(O.state_dir("acme")), line)
+
 
 class SymlinkTests(Base):
     """A cloned repository must not be able to steer a write outside itself (PR #1 security review, CRITICAL)."""

@@ -21,7 +21,8 @@ script run, and a short list of commands **the user runs themselves**.
   `.overture/adapter.py` as Python**. Registering tells every Claude
   session to trust this project's console. The tunnel and DNS make it
   reachable from the internet. They are the user's decisions, so you print
-  them and the user runs them.
+  them and the user runs them. The same goes for `agent.py access`, which
+  sets who may decide in the console.
 - **Never pass `--force`** unless the user has seen the file it would replace
   and said to. **Never delete or replace a symbolic link** that `onboard.py`
   refused; tell the user what it points at instead.
@@ -100,7 +101,16 @@ say plainly that each is theirs to run:
 4. create the tunnel, `onboard.py tunnel --id`, route DNS **with `--config`**,
    then start the tunnel unit;
 5. check it: 403 on loopback without a token, then an Access login at the
-   hostname.
+   hostname;
+6. make themselves the **administrator**: People (under More) → "Make me
+   the administrator", which takes the login they are signed in with. Until
+   then everyone the Access policy lets in can do everything. After it, they
+   add each other person there as a member of their areas, or a viewer.
+
+**Never ask for the administrator's email, and never run `agent.py access`.**
+Operator emails stay in the console (the owner's ruling of 2026-10-14): the
+console button needs none, and the `access` command the script prints is for
+the user's own terminal (it refuses inside a Claude session anyway).
 
 Point them at `KIT/docs/CLOUDFLARE.md` for the Cloudflare screens. Offer to
 explain any step. Offer, too, to replace the starter page and adapter with the

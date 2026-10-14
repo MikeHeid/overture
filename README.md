@@ -522,10 +522,17 @@ The next export then adds `"locked_by_name": "alice"` to each lock that
 login took. Without a name, the files are exactly what 1.37 wrote. The
 store itself is unchanged, so an older kit still starts on it.
 
-### Who may decide (1.39)
+### Who may decide (1.39–1.40)
 
 With no roles set, everyone your Access policy lets in is the owner.
-To share a console, give each login a role:
+To share a console, first make yourself the **administrator** (the
+owner role): open **People** (under More) and press **Make me the
+administrator**. It takes the login you are signed in with, so you type
+no email. Then add each person there with their role, and change or
+remove them later the same way. Only an administrator sees the People
+tab. It refuses to remove the last administrator.
+
+The same from your own terminal:
 
     agent.py --state STATE access you@example.com owner
     agent.py --state STATE access bob@example.com member auth billing
@@ -1059,6 +1066,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.40 — People**: a tab where the administrator manages roles, and
+  onboarding's step to claim the administrator account.
 - **1.39 — Who may decide**: owner, member (by area) and viewer roles
   per Access login, enforced by the console; none set, nothing changes.
 - **1.38 — Who decided**: each owner decision keeps the Access login

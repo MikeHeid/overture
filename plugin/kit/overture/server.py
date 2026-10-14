@@ -118,6 +118,7 @@ OWNER_ROUTES = {"/api/message": "message", "/api/answer": "answer", "/api/lock":
 # 1.39.0 (roles.py): all a member may post, and the fields of a member's message. Every other message field
 # (intent, move_to, pr, step, about_qid...) asks an agent for something or points elsewhere: the owner's.
 MEMBER_ROUTES = frozenset(OWNER_ROUTES)
+OWNER_ROLES = "/api/roles"   # 1.40.0: the People tab sets a login's role; an owner's alone, as every non-member route
 MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 # 0.8.19: starred visuals and items. A side-route (not a store kind): toggles are owner-only, idempotent, cheap.
 OWNER_FAVORITE = "/api/favorite"
@@ -1095,6 +1096,63 @@ class Console:
             raise RequestError(403, "you are signed in as a member: this action is the owner's")
         return entry
 
+    def roles_view(self) -> dict:
+        """The People tab's data: whether roles are on, who this login is, and every listed login's role.
+
+        The caller has checked this login is an owner. With roles off every login is one, so `me` is what
+        "Make me the administrator" names: the Access login itself, never an address anyone typed.
+        """
+        me = getattr(self._acting, "email", None)
+        try:
+            got = RO.load(self.cfg.state)
+        except RolesError:
+            got = None   # page_payload's `you` already says the file cannot be read; writes are refused
+        people = [{"email": e, **r} for e, r in sorted((got or {}).items())]
+        return {"on": got is not None, "me": me.lower() if isinstance(me, str) else None, "people": people}
+
+    def set_role(self, body: object) -> dict:
+        """POST /api/roles (1.40.0): set or clear one login's role, as `agent.py access` does (roles.py).
+
+        Only an owner reaches here (role_gate). With roles off, the first role set must make the signed-in
+        login itself the owner: otherwise the first click on someone else would lock everyone else out, or
+        be refused as leaving no owner. That first role is the console's administrator.
+        """
+        # `nonce` is accepted because the page sends one with every POST; setting a role is idempotent, so it
+        # is no retry key here.
+        if (not isinstance(body, dict) or set(body) - {"email", "role", "areas", "nonce"}
+                or not isinstance(body.get("email"), str) or "role" not in body
+                or (body["role"] is not None and body["role"] not in RO.ROLES)
+                or not isinstance(body.get("areas", []), list)):
+            raise RequestError(400, '/api/roles takes {"email", "role": "owner"|"member"|"viewer"|null, '
+                                    '"areas"?: [ITEM_ID, ...], "nonce"?}')
+        me = getattr(self._acting, "email", None)
+        with self._lock:
+            try:
+                current = RO.load(self.cfg.state)
+            except RolesError as e:
+                sys.stderr.write(f"console roles: {e}\n")
+                raise RequestError(503, "the roles file cannot be read; see the server log") from None
+            if current is None and (not isinstance(me, str) or body["email"].lower() != me.lower()
+                                    or body["role"] != "owner"):
+                raise RequestError(409, "roles are off: first make yourself the administrator (the owner role, "
+                                        "for the login you are signed in with)")
+            # Again under the lock: role_gate ran before it. Two logins can both pass it while roles are off;
+            # once the first has claimed the console the second is a viewer, and its claim must not land.
+            # The same holds for an owner demoted between the gate and here.
+            if current is not None and RO.role_of(current, me)["role"] != "owner":
+                raise RequestError(403, "you are no longer an administrator here; reload the console")
+            try:
+                RO.set_role(self.cfg.state, body["email"], body["role"], body.get("areas") or None)
+            except RolesError as e:
+                if str(self.cfg.state) in str(e):   # the file went bad since the load above: no path on the page
+                    sys.stderr.write(f"console roles: {e}\n")
+                    raise RequestError(503, "the roles file cannot be read; see the server log") from None
+                raise RequestError(400, str(e)) from None
+            except OSError as e:
+                sys.stderr.write(f"console roles: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not write the roles file; see the server log") from None
+        return {"roles": self.roles_view()}
+
     def area_gate(self, entry: dict, path: str, body: object) -> None:
         """A member's answer, lock or message lands inside their areas, or is refused.
 
@@ -1300,6 +1358,9 @@ class Console:
         # 1.39.0: this login's role, for the page's banner; absent when roles are off, so a solo page is unchanged.
         if (self.cfg.state / RO.FILE).exists():
             out["view"] = {**out["view"], "you": you}
+        # 1.40.0: the People tab's list, to an owner's login only (it names every login by email).
+        if you["role"] == "owner":
+            out["view"] = {**out["view"], "roles": self.roles_view()}
         # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
         out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
         # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
@@ -3980,7 +4041,8 @@ class OwnerHandler(_Handler):
                                               "/api/refactor", OWNER_FAVORITE, OWNER_PLAYBOOK,
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
-                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD):
+                                              OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD,
+                                              OWNER_ROLES):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -4028,6 +4090,8 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.item_move(body))
             if self.path == OWNER_DRAFT:            # 1.19.0: owner-draft autosave (per-key text)
                 return self._send(200, self.console.save_draft(body))
+            if self.path == OWNER_ROLES:         # 1.40.0: the People tab
+                return self._send(200, self.console.set_role(body))
             if self.path == OWNER_CSRF_ROTATE:   # rotate the CSRF token without a restart
                 return self._send(200, self.console.rotate_csrf())
             if self.path == OWNER_TICKET_CREATE:    # create a ticket under an item
