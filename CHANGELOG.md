@@ -2990,6 +2990,34 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Any agent can ask (1.35.0)
+
+Overture's first door for agents other than Claude Code: an MCP server.
+
+- **`plugin/kit/mcp_server.py`.** Any client that speaks the Model
+  Context Protocol (Cursor, Codex, Copilot, Claude and others) can
+  launch it over stdio and use the agent door as tools: `todo`, `view`,
+  `answers`, `check`, `lesson_match`, `health`, `ask`, `reply` and
+  `working`. The owner answers in the console as before; rulings,
+  stale checks and lessons work the same for these agents.
+- **One client, one set of checks.** Each tool runs `agent.py` in the
+  server's process with arguments built there, so the project the
+  server runs in picks the console and its token, the agent-name rules
+  hold, a `view`, `todo` or `answers` read over 64 KiB is refused
+  whole, and the console server validates every write. Text that
+  starts with a dash stays text. A malformed request, or a failure on
+  this machine, fails that one call; the server stays up.
+- **Only the agent door.** The steward's commands (`watch`, `synced`,
+  `inbox`), the owner's (`register`, `server`, `steward`, `role`) and
+  everything that writes into a checkout stay in `agent.py`.
+- **Both protocol eras.** The 2025 `initialize` handshake (2024-11-05
+  to 2025-11-25) and the stateless 2026-07-28 revision
+  (`server/discover`, the version in each request's `_meta`). stdout
+  carries nothing but protocol messages. Standard library only.
+- New `test_mcp.py` (12 tests): a question asked through a real stdio
+  pipe is ruled on by the owner, read back, and reported stale when
+  its cited line changes.
+
 ## Wizards that stay put (1.34.7)
 
 No new features. Found while fixing a LOW from the 1.34.6 review.
