@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.40.0 released — People** (PR #167, `050c4a1`): owner-only People tab over roles.json via `POST /api/roles`
+  (`Console.set_role`, owner re-checked under `_lock`); roles off → "Make me the administrator" (signed-in login only, 409
+  otherwise); `view.roles` to owner logins only. onboard.py next steps gain step 6 (claim administrator); the skill never
+  asks for the email. Deny list for build_zip: home path, /mnt/c and C:\\ user dirs, the owner domain (scratchpad deny.txt).
 - **v1.39.0 released — who may decide** (PR #166, `7e7dbb5`): `STATE/roles.json` (roles.py) owner / member(areas = item
   subtrees) / viewer; no file = all owner; unlisted/no-email = viewer; bad file = writes 503. `Console.role_gate` before
   the body, `area_gate` after (member: answer, lock, plain message {item,text,nonce,reply_to}). Drafts to owners only.
@@ -107,7 +111,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.39.0 (PR #166), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.40.0 (PR #167), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
