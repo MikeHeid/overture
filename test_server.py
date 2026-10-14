@@ -8510,6 +8510,13 @@ class OperatorTests(_Live, unittest.TestCase):
         ev = next(e for e in feed["events"] if e["id"] == lk["id"])
         self.assertEqual(ev["operator"], "alice@example.com")
 
+    def test_the_owner_page_names_who_locked_each_answer(self):
+        # Catches: the card's "Locked by" fed from nothing, or the map keyed by lock id (the card holds
+        # the answer), or built for the agent socket too (1.38.1).
+        a, _ = self.lock_as("heidi@example.com", "opcard00001")
+        self.assertEqual(self.console.page_payload()["view"]["locked_by"].get(a["id"]), "heidi@example.com")
+        self.assertNotIn("locked_by", self.console.payload()["view"])
+
     def test_agents_never_see_an_owner_email(self):
         # Catches: operators joined into the view the agent socket serves (`agent.py view`, `answers`,
         # bundles), which would hand every agent the logins of the people who decide.

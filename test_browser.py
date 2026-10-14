@@ -3156,6 +3156,31 @@ class InboxUXTests(unittest.TestCase):
                 page.click(".ck-q-line[data-qid='LANE.1/Q1']")
                 page.wait_for_selector(".ck-question-rolled[data-qid='LANE.1/Q1']")
 
+    def test_the_receipt_says_who_locked_it(self):
+        # Catches (1.38.1): the card never reading `view.locked_by`, so who decided shows in the Feed only;
+        # and a "Locked by" line on a lock the console kept no login for (cron, an older lock).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                self.ask(2)
+                self.answer("LANE.1/Q1", pick="record")
+                self.answer("LANE.1/Q2", pick="record")
+                self.console.act_as("ivan@example.com")   # as the owner gate does for a signed-in request
+                try:
+                    self.lock("LANE.1/Q1")
+                finally:
+                    self.console.act_as(None)
+                self.lock("LANE.1/Q2")
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                for qid in ("LANE.1/Q1", "LANE.1/Q2"):
+                    page.click(f".ck-q-line[data-qid='{qid}']")
+                    page.wait_for_selector(f".ck-question[data-qid='{qid}'] .ck-receipt")
+                by = page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-receipt-by")
+                self.assertEqual(by.text_content(), "Locked by ivan@example.com")
+                self.assertEqual(page.locator(".ck-question[data-qid='LANE.1/Q2'] .ck-receipt-by").count(), 0)
+
     def test_q37_a_stale_question_stays_whole(self):
         # Catches: rolling up every question with a lock, so a stale ruling (which needs the owner) hides.
         for kind in BROWSERS:

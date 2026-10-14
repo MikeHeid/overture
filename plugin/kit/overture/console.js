@@ -4513,6 +4513,9 @@
     const receipt = el('div', { className: 'ck-receipt' }, [
       el('div', { className: 'ck-receipt-heading' }, ['Your answer'])
     ]);
+    // Since 1.38: the Access login that locked it, when the console kept one; text only.
+    const lockedBy = answer && view && view.locked_by && view.locked_by[answer.id];
+    if (lockedBy) receipt.appendChild(el('div', { className: 'ck-receipt-by' }, ['Locked by ' + lockedBy]));
     if (qData.options && qData.options.length > 0) {
       const picked = answer && answer.picks ? answer.picks : [];
       for (const opt of qData.options) {
