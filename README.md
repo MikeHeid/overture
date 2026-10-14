@@ -118,7 +118,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~20% |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~10% |
-| **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | ⚪ ~5% |
+| **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
 them, is in [docs/STRATEGY.md](docs/STRATEGY.md). That document also covers
@@ -292,6 +292,54 @@ Icons are the vendored Lucide set, ISC-licensed. Then:
   on the dashboard. The console injects an `X 2 1 3 4` badge, each count
   behind its state's icon (awaiting you, unlocked, stale, locked),
   in-place, updated on every live wake; clicking it opens the panel on X.
+
+## Use it from any agent (MCP, 1.35)
+
+Agents other than Claude Code reach the console through an MCP server,
+`plugin/kit/mcp_server.py`. Any client that speaks the Model Context
+Protocol (Cursor, Codex, Copilot, Claude and others) launches it over
+stdio. Register the project first (`agent.py register`, as for Claude
+Code), then add it to the client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "overture": {
+      "command": "python3",
+      "args": ["<kit>/mcp_server.py", "--state", "<STATE>",
+               "--project", "<your checkout>", "--as", "cursor-1"]
+    }
+  }
+}
+```
+
+For Codex, the same in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.overture]
+command = "python3"
+args = ["<kit>/mcp_server.py", "--state", "<STATE>", "--project", "<your checkout>", "--as", "codex-1"]
+```
+
+| Tool | What it does |
+|---|---|
+| `todo` | What is waiting on this agent |
+| `view` | The console's view, narrowed by `item` and `since` |
+| `answers` | Every question in a scope and the answer it got |
+| `check` | Why each stale ruling is stale |
+| `lesson_match` | Past withdrawn rulings that look like a draft question |
+| `health` | Whether the console server is up, and its version |
+| `ask` | Post a question for the owner |
+| `reply` | Post a message on an item's thread |
+| `working` | Show the owner "agent active" on items |
+
+The server tells the client how to use these when it connects: read
+`answers` before asking, run `lesson_match` first, prefer an excerpt
+for `valid_if`. Every tool runs `agent.py` underneath, so the same
+checks apply: the project picks its console and token, `--as` (or
+`OVERTURE_AGENT`) names its writes, and the console server validates
+each one. A bad request fails alone; the server stays up. The steward's
+and the owner's commands are not offered. Standard library only.
 
 ## Hooks the plugin ships
 
@@ -860,6 +908,7 @@ finding is closed; the current state:
 
     python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
+    .venv/bin/python test_mcp.py
     .venv/bin/python test_build.py
     .venv/bin/pip install playwright && .venv/bin/playwright install chromium
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py
@@ -902,6 +951,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.35 — Any agent can ask**: an MCP server, so Cursor, Codex,
+  Copilot and other MCP clients use the console like Claude Code.
 - **1.34 — Lesson match**: related past rulings on the question card,
   `agent.py lesson-match`. **1.34.1** brings this README up to date and
   caches lessons between page polls. **1.34.2**: upkeep (dependency
