@@ -11,7 +11,7 @@ branding:
 #   steps:
 #     - uses: actions/checkout@v4
 #       with: {fetch-depth: 0}
-#     - uses: MikeHeid/overture@v1.36.0
+#     - uses: MikeHeid/overture@v1.37.0
 #
 # The rulings checked are the ones committed at the pull request's base, so the
 # pull request cannot pass by editing or deleting a ruling file (rulecheck.py).
@@ -24,11 +24,22 @@ inputs:
   adapter:
     description: >-
       The project's adapter, imported to check item-status conditions. It is code from the pull
-      request's checkout, so it runs (and reports item statuses) as the pull request wrote it. Opt in.
+      request's checkout, so it runs (and reports item statuses) as the pull request wrote it. Opt in,
+      with actions/checkout persist-credentials: false (the check refuses to run when checkout's token
+      header is in .git/config); no comment
+      is posted when it is set, and later steps of the job should not trust what ran before them.
     required: false
     default: ""
+  strict:
+    description: >-
+      true to fail when a ruling could not be checked (an item-status condition with no adapter) or
+      no ruling files were found. Any other value than true or false stops the check.
+    required: false
+    default: "false"
   comment:
-    description: Post one comment on the pull request when a ruling breaks, and keep it updated.
+    description: >-
+      Post one comment on the pull request when a ruling breaks, and keep it updated. Never with
+      adapter, whose run holds no token; the job summary still has the report.
     required: false
     default: "true"
   github-token:
@@ -44,22 +55,44 @@ outputs:
 runs:
   using: composite
   steps:
+    # Three steps, so the token is not handed to the step that runs the check: with `adapter`, that
+    # step runs the pull request's own code (1.37.0, Sourcery on PR #162). That code still runs as the
+    # runner's user (on GitHub's runners, with sudo), so it is opt-in and taints the rest of the job. Every value
+    # reaches a script through the environment, never pasted into it: a branch name or input is data,
+    # not shell (test_rulecheck.py checks this file for `${{` inside any run block).
     - id: check
       shell: bash
-      # Every value reaches the script through the environment, never pasted into it: a branch
-      # name or input is data, not shell (test_rulecheck.py checks this file for `${{` below run).
       env:
         KIT: ${{ github.action_path }}/plugin/kit
         BASE: ${{ github.event.pull_request.base.sha }}
-        PR: ${{ github.event.pull_request.number }}
-        REPO: ${{ github.repository }}
         LOCKED: ${{ inputs.locked }}
         ADAPTER: ${{ inputs.adapter }}
-        COMMENT: ${{ inputs.comment }}
-        GH_TOKEN: ${{ inputs.github-token }}
+        STRICT: ${{ inputs.strict }}
       run: |
         set -u
         args=(--root "$GITHUB_WORKSPACE" --format markdown)
+        report="$RUNNER_TEMP/overture-rulecheck.md"
+        errors="$RUNNER_TEMP/overture-rulecheck.err"
+        : >"$errors"
+        rc=0
+        # A gate that a typo switches off fails open, so anything but true or false is refused.
+        case "$(printf %s "$STRICT" | tr '[:upper:]' '[:lower:]')" in   # tr, not ${,,}: bash 3.2 on macOS
+          true) args+=(--strict) ;;
+          false|"") ;;
+          *) echo "strict must be true or false, not '$STRICT'" >"$errors"; rc=2 ;;
+        esac
+        # The adapter is the pull request's code: never run it where checkout left the job's token on disk.
+        # Only git's own "no such key" (exit 1) lets it run: a header found (0), or a config git could not
+        # read (any other code), refuses, since an unread config may still hold the token.
+        if [ -n "$ADAPTER" ]; then
+          found=0
+          git -C "$GITHUB_WORKSPACE" config --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1 || found=$?
+          if [ "$found" -ne 1 ]; then
+            echo "adapter is set, and .git/config holds checkout's token header, where the adapter could read" \
+                 "it (git exit $found); use actions/checkout with persist-credentials: false" >"$errors"
+            rc=2
+          fi
+        fi
         if [ -n "$BASE" ]; then
           git -C "$GITHUB_WORKSPACE" cat-file -e "$BASE^{commit}" 2>/dev/null \
             || git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$BASE" \
@@ -68,13 +101,25 @@ runs:
         fi
         [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
         [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
-        report="$RUNNER_TEMP/overture-rulecheck.md"
-        errors="$RUNNER_TEMP/overture-rulecheck.err"
-        rc=0
-        python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          # A clean environment, as hygiene and not isolation: the caller's job may hold secrets in its env,
+          # and with `adapter` this runs the pull request's code. They are not inherited, though code running
+          # as this user can still read them from the parent process; hence "its own job, no secrets" in the
+          # README. Only what Python and git need are passed (Sourcery on PR #163): SYSTEMROOT on Windows,
+          # LD_LIBRARY_PATH for a setup-python build that needs it.
+          clean=(PATH="$PATH" HOME="$HOME" LANG=C.UTF-8)
+          [ -n "${SYSTEMROOT:-}" ] && clean+=(SYSTEMROOT="$SYSTEMROOT")
+          [ -n "${LD_LIBRARY_PATH:-}" ] && clean+=(LD_LIBRARY_PATH="$LD_LIBRARY_PATH")
+          env -i "${clean[@]}" python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+          # A pass is a report that says so: a run cut short with exit 0 (an adapter's os._exit(0)) is not.
+          if [ "$rc" -eq 0 ] && ! grep -qF "<!-- overture-rulecheck -->" "$report"; then
+            echo "the check ended with exit 0 but wrote no report, so nothing is known to hold" >>"$errors"
+            rc=2
+          fi
+        fi
         cat "$errors" >&2
         case $rc in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
-        echo "result=$result" >>"$GITHUB_OUTPUT"
+        { echo "result=$result"; echo "rc=$rc"; echo "report=$report"; } >>"$GITHUB_OUTPUT"
         if [ "$rc" -gt 1 ]; then
           # It could not run: say so where the old report stood, so a red comment is never left stale.
           { echo "<!-- overture-rulecheck -->"; echo "**Overture: the ruling check could not run.**"
@@ -82,20 +127,38 @@ runs:
             echo; echo '````'; head -c 4000 "$errors" | tr '`' "'"; echo; echo '````'; } >"$report"
         fi
         cat "$report" >>"$GITHUB_STEP_SUMMARY"
-        if [ "$COMMENT" = true ] && [ -n "$PR" ]; then
-          # One comment per pull request, found by the marker on its first line. It is posted when a
-          # ruling breaks or a reviewer must look (a re-ruling, an edited ruling file, an unchecked one),
-          # then kept up to date, so a fix turns it green rather than adding another.
-          ids=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-                  --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- overture-rulecheck -->"))) | .id') || ids=""
-          id=${ids%%$'\n'*}
-          post=false
-          if [ "$rc" -eq 1 ] || grep -qF "<!-- overture-rulecheck: notable -->" "$report"; then post=true; fi
-          if [ -n "$id" ] && gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$report" >/dev/null; then
-            :
-          elif [ -n "$id" ] || [ "$post" = true ]; then
-            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$report" >/dev/null \
-              || echo "::warning::could not post the ruling comment (does the token have pull-requests: write?)"
-          fi
+        if [ -n "$ADAPTER" ]; then
+          echo "::notice::no pull request comment with adapter: that run holds no token (see the job summary)"
         fi
-        exit "$rc"
+    # One comment per pull request, found by the marker on its first line. It is posted when a ruling
+    # breaks or a reviewer must look (a re-ruling, an edited ruling file, an unchecked one), then kept
+    # up to date, so a fix turns it green rather than adding another. Never after an adapter ran: the
+    # pull request's code could have written into this job's later steps (GITHUB_ENV).
+    - id: comment
+      if: inputs.comment == 'true' && inputs.adapter == '' && github.event.pull_request.number
+      shell: bash
+      env:
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        RC: ${{ steps.check.outputs.rc }}
+        REPORT: ${{ steps.check.outputs.report }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -u
+        ids=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- overture-rulecheck -->"))) | .id') || ids=""
+        id=${ids%%$'\n'*}
+        post=false
+        if [ "$RC" -eq 1 ] || grep -qF "<!-- overture-rulecheck: notable -->" "$REPORT"; then post=true; fi
+        if [ -n "$id" ] && gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$REPORT" >/dev/null; then
+          :
+        elif [ -n "$id" ] || [ "$post" = true ]; then
+          gh api "repos/$REPO/issues/$PR/comments" -F "body=@$REPORT" >/dev/null \
+            || echo "::warning::could not post the ruling comment (does the token have pull-requests: write?)"
+        fi
+    - id: finish
+      shell: bash
+      env:
+        RC: ${{ steps.check.outputs.rc }}
+      run: |
+        exit "${RC:-2}"
