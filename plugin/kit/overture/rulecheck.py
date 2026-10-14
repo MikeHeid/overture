@@ -21,8 +21,9 @@ An `item_status` condition needs the project's register, which only its adapter
 can read; it is checked with `--adapter` and otherwise reported as unchecked,
 never as holding.
 
-Exit codes: 0 every checked ruling holds; 1 at least one is broken; 2 it could
-not run (bad arguments, a ruling file that is not valid, a REF git does not know).
+Exit codes: 0 every checked ruling holds; 1 at least one is broken (or, with
+`--strict`, could not be checked); 2 it could not run (bad arguments, a ruling
+file that is not valid, a REF git does not know).
 """
 
 from __future__ import annotations
@@ -163,7 +164,7 @@ def changed_paths(root: Path, base: str) -> set[str]:
     return {p.decode("utf-8", errors="replace") for p in out.split(b"\0") if p}
 
 
-def run(root: Path, locked: str, base: str | None, items: dict | None) -> dict:
+def run(root: Path, locked: str, base: str | None, items: dict | None, strict: bool = False) -> dict:
     """The whole report: what is broken, re-ruled, unchecked, touched and holds, and which ruling files changed."""
     root = Path(root).resolve()
     item_status = None if items is None else {k: v.get("status") for k, v in items.items()}
@@ -195,7 +196,8 @@ def run(root: Path, locked: str, base: str | None, items: dict | None) -> dict:
     rep["empty"] = not old and not head
     # What a reviewer must see on the pull request itself, not only in the job summary.
     rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or any(rep["files"].values()))
-    rep["exit"] = 1 if rep["broken"] else 0
+    rep["strict"] = strict
+    rep["exit"] = 1 if rep["broken"] or (strict and rep["unchecked"]) else 0
     return rep
 
 
@@ -222,11 +224,18 @@ def _count(rep: dict) -> int:
     return sum(len(rep[k]) for k in ("broken", "reruled", "unchecked", "touched", "holds"))
 
 
-def markdown(rep: dict) -> str:
+def _verdict(rep: dict) -> str:
+    """The one-line result, the same in every format; under --strict an unchecked ruling is a failure."""
     n = _count(rep)
-    head = (f"**Overture: {len(rep['broken'])} of {n} ruling(s) broken by this change.**" if rep["broken"] else
-            f"**Overture: all {n} checked ruling(s) hold.**")
-    out = [MARKER, NOTABLE if rep["notable"] else "", head, ""]
+    if rep["broken"]:
+        return f"{len(rep['broken'])} of {n} ruling(s) broken by this change."
+    if rep["strict"] and rep["unchecked"]:
+        return f"{len(rep['unchecked'])} of {n} ruling(s) could not be checked, which --strict fails."
+    return f"All {n} checked ruling(s) hold."
+
+
+def markdown(rep: dict) -> str:
+    out = [MARKER, NOTABLE if rep["notable"] else "", f"**Overture: {_verdict(rep)}**", ""]
     if rep["empty"]:
         out.append(f"No ruling files were found in {_md(rep['locked'])}. If this project has rulings, the "
                    f"folder is wrong: nothing was checked.\n")
@@ -278,8 +287,7 @@ def text(rep: dict) -> str:
     out += [f"ruling files {k}: {', '.join(v)}" for k, v in rep["files"].items() if v]
     if rep["empty"]:
         out.append(f"no ruling files in {rep['locked']}: if this project has rulings, the folder is wrong")
-    n = _count(rep)
-    out.append(f"{len(rep['broken'])} of {n} ruling(s) broken." if rep["broken"] else f"All {n} checked ruling(s) hold.")
+    out.append(_verdict(rep))
     return "\n".join(out) + "\n"
 
 
@@ -314,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--base", metavar="REF", help="check the rulings committed at REF (a pull request's base)")
     ap.add_argument("--adapter", help="the project's adapter, imported to read item statuses (it is code: opt in)")
     ap.add_argument("--format", choices=("text", "markdown", "json"), default="text")
+    ap.add_argument("--strict", action="store_true",
+                    help="fail (exit 1) when a ruling could not be checked, such as an item status with no --adapter")
     a = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(errors="replace")
@@ -326,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         locked = (a.locked if a.locked is not None else _locked_default(root, a.base)).rstrip("/")
         F.inside(root, locked, "--locked")   # the same boundary fold holds its paths to
         items = F.load_adapter(F.inside(root, a.adapter, "--adapter")).items() if a.adapter else None
-        rep = run(root, locked, a.base, items)
+        rep = run(root, locked, a.base, items, a.strict)
     except (CheckError, F.FoldError) as e:
         print(f"rulecheck: {e}", file=sys.stderr)
         return 2

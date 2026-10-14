@@ -2990,6 +2990,26 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Strict, and no token beside the adapter (1.37.0)
+
+- **`--strict`** (`strict: true` in the Action): a ruling that could not
+  be checked, an `item_status` condition with no adapter, fails the run
+  instead of passing as unchecked. The verdict says so.
+- **The adapter never runs beside the token.** Sourcery's review of PR
+  #162 pointed out that with `adapter` the pull request's own code ran
+  in the step that held the comment token. The Action is now three
+  steps: the check (no token), the comment (the token; skipped whenever
+  an adapter ran, since that code could have written the job's later
+  steps' environment), and one that ends with the check's exit code.
+  It warns when `actions/checkout` left the token in `.git/config` and
+  an adapter is set.
+- **Tried on a real pull request.** v1.36.0 ran on a private scratch
+  repository: a pull request that changed the cited line failed with
+  the comment and diff, and the push that put it back turned the same
+  comment green.
+- `test_rulecheck.py`: 33 tests. The Action's steps now run under
+  `bash -eo pipefail`, as the runner starts them.
+
 ## Rulings that block a merge (1.36.0)
 
 A broken ruling can now fail a pull request, with no console server.

@@ -321,28 +321,91 @@ FAKE_GH = "#!/bin/sh\necho \"$*\" >>\"$GH_LOG\"\ncase \"$*\" in *--paginate*) [ 
 
 
 class Action(Repo):
-    def test_the_action_never_interpolates_inputs_into_shell(self):
-        # Catches: `${{ inputs.x }}` or a PR field pasted into `run:`, a script injection from a PR.
-        run = ACTION.read_text().split("run: |", 1)[1]
-        self.assertNotIn("${{", run)
-        self.assertIn("rulecheck.py", run)
+    @staticmethod
+    def steps() -> dict[str, dict]:
+        """Each step of action.yml by id: its `if:`, its env keys and its run block (dedented)."""
+        out = {}
+        for chunk in ACTION.read_text().split("    - id: ")[1:]:
+            sid, body = chunk.split("\n", 1)
+            head, _, run = body.partition("      run: |\n")
+            out[sid] = {"if": next((ln.split("if:", 1)[1].strip() for ln in head.splitlines()
+                                    if ln.strip().startswith("if:")), None),
+                        "env": [ln.split(":")[0].strip() for ln in head.split("env:", 1)[-1].splitlines()
+                                if ln.startswith("        ") and ":" in ln],
+                        "run": "\n".join(ln[8:] for ln in run.splitlines() if ln.startswith("        ") or not ln)}
+        return out
 
-    def step(self, pr: str, existing: str = "") -> tuple[int, str, str, list[str]]:
-        """Run the Action's shell step as the runner would: (exit, result output, summary, gh calls)."""
-        run = "\n".join(ln[8:] for ln in ACTION.read_text().split("run: |", 1)[1].splitlines())
+    def test_the_action_never_interpolates_inputs_into_shell(self):
+        # Catches: `${{ inputs.x }}` or a PR field pasted into a `run:` block, a script injection from a PR.
+        st = self.steps()
+        self.assertEqual(list(st), ["check", "comment", "finish"])
+        for sid, s in st.items():
+            self.assertNotIn("${{", s["run"], sid)
+        self.assertIn("rulecheck.py", st["check"]["run"])
+
+    def test_the_check_never_holds_the_token_and_no_comment_follows_an_adapter(self):
+        # Catches: the token in the environment of the step that runs the adapter, the pull request's own
+        # code (Sourcery on PR #162), and a comment step that runs after it, where the adapter could have
+        # written GITHUB_ENV for the token-holding step.
+        st = self.steps()
+        self.assertNotIn("GH_TOKEN", st["check"]["env"])
+        self.assertIn("GH_TOKEN", st["comment"]["env"])
+        self.assertIn("inputs.adapter == ''", st["comment"]["if"])
+
+    def step(self, pr: str, existing: str = "", adapter: str = "", strict: str = "false"
+             ) -> tuple[int, str, str, list[str]]:
+        """Run the Action's steps as the runner would: (exit, `result` output, summary, gh calls).
+
+        The comment step runs when its `if:` holds (comment on, no adapter, a pull request), with the
+        check's outputs; the finish step's exit is the Action's.
+        """
+        st = self.steps()
         tmp = Path(self._td.name)
         (tmp / "bin").mkdir(exist_ok=True)
         (tmp / "bin/gh").write_text(FAKE_GH)
         (tmp / "bin/gh").chmod(0o755)
         for f in ("out", "summary", "gh.log"):
             (tmp / f).write_text("")
-        env = {**os.environ, "PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "KIT": str(KIT), "BASE": self.base,
-               "PR": pr, "REPO": "o/r", "LOCKED": "", "ADAPTER": "", "COMMENT": "true", "GH_TOKEN": "t",
-               "GITHUB_WORKSPACE": str(self.root), "RUNNER_TEMP": str(tmp), "GITHUB_OUTPUT": str(tmp / "out"),
-               "GITHUB_STEP_SUMMARY": str(tmp / "summary"), "GH_LOG": str(tmp / "gh.log"), "GH_EXISTING": existing}
-        r = subprocess.run(["bash", "-c", run], env=env, capture_output=True, text=True, timeout=60)
-        return (r.returncode, (tmp / "out").read_text(), (tmp / "summary").read_text(),
-                (tmp / "gh.log").read_text().splitlines())
+        env = {**os.environ, "PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "GITHUB_WORKSPACE": str(self.root),
+               "RUNNER_TEMP": str(tmp), "GITHUB_OUTPUT": str(tmp / "out"), "GITHUB_STEP_SUMMARY": str(tmp / "summary"),
+               "GH_LOG": str(tmp / "gh.log"), "GH_EXISTING": existing}
+        env.pop("GH_TOKEN", None)
+
+        def bash(run: str, extra: dict) -> int:
+            # As the runner starts `shell: bash`: errexit and pipefail on, so a failing line ends the step.
+            return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", run],
+                                  env={**env, **extra}, capture_output=True, text=True,
+                                  timeout=60).returncode
+
+        self.assertEqual(bash(st["check"]["run"], {"KIT": str(KIT), "BASE": self.base, "LOCKED": "",
+                                                   "ADAPTER": adapter, "STRICT": strict}), 0)
+        outs = dict(ln.split("=", 1) for ln in (tmp / "out").read_text().splitlines())
+        if pr and not adapter:
+            self.assertEqual(bash(st["comment"]["run"], {"PR": pr, "REPO": "o/r", "RC": outs["rc"],
+                                                         "REPORT": outs["report"], "GH_TOKEN": "t"}), 0)
+        rc = bash(st["finish"]["run"], {"RC": outs["rc"]})
+        return rc, outs["result"], (tmp / "summary").read_text(), (tmp / "gh.log").read_text().splitlines()
+
+    def test_strict_fails_an_unchecked_ruling_and_says_so(self):
+        # Catches: --strict wired to nothing (an item status nobody checked still passes), and a strict
+        # failure that reads "all hold" in the comment.
+        e = json.loads(self.ruling().read_text())
+        e["valid_if"] = [EXCERPT, {"kind": "item_status", "item": "LANE.1.a", "status": "proposed"}]
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("base with an item status")
+        self.assertEqual(self.step("7")[:2], (0, "pass"))
+        rc, result, summary, _ = self.step("7", strict="true")
+        self.assertEqual((rc, result), (1, "fail"))
+        self.assertIn("could not be checked, which --strict fails", summary)
+
+    def test_an_adapter_run_posts_no_comment(self):
+        # Catches: a comment posted after the pull request's adapter code ran in this job.
+        (self.root / "adapter.py").write_text("def items():\n    return {'LANE.1': {'status': 'open'}}\n"
+                                              "def record(e, d):\n    return []\ndef seed_questions():\n    return []\n")
+        self.break_code()
+        self.commit("pr")
+        rc, result, _, calls = self.step("7", adapter="adapter.py")
+        self.assertEqual((rc, result, calls), (1, "fail", []))
 
     def test_a_broken_ruling_fails_the_step_and_posts_one_comment(self):
         # Catches: a step that swallows rulecheck's exit (a green check over a broken ruling), and one
@@ -350,7 +413,7 @@ class Action(Repo):
         self.break_code()
         self.commit("pr")
         rc, out, summary, calls = self.step("7")
-        self.assertEqual((rc, out.strip()), (1, "result=fail"))
+        self.assertEqual((rc, out), (1, "fail"))
         self.assertIn(RC.MARKER, summary)
         self.assertEqual([c.split()[:2] for c in calls], [["api", "repos/o/r/issues/7/comments"]] * 2)
         rc, _, _, calls = self.step("7", existing="99")
@@ -365,7 +428,7 @@ class Action(Repo):
         self.export()
         self.commit("pr")
         rc, out, _, calls = self.step("7")
-        self.assertEqual((rc, out.strip(), len(calls)), (0, "result=pass", 2))
+        self.assertEqual((rc, out, len(calls)), (0, "pass", 2))
 
     def test_a_run_that_cannot_check_replaces_a_stale_comment(self):
         # Catches: an error run that leaves an earlier red (or green) comment standing as if current.
@@ -375,7 +438,7 @@ class Action(Repo):
         self.ruling().write_text(json.dumps(e))
         self.commit("pr")
         rc, out, summary, calls = self.step("7", existing="99")
-        self.assertEqual((rc, out.strip()), (2, "result=error"))
+        self.assertEqual((rc, out), (2, "error"))
         self.assertIn("could not run", summary)
         self.assertEqual(summary.count("````"), 2)
         self.assertEqual(calls[-1].split()[:4], ["api", "-X", "PATCH", "repos/o/r/issues/comments/99"])
@@ -383,7 +446,7 @@ class Action(Repo):
     def test_a_clean_pr_posts_nothing_new_and_passes(self):
         # Catches: a comment on every clean pull request, which teaches people to ignore it.
         rc, out, _, calls = self.step("7")
-        self.assertEqual((rc, out.strip()), (0, "result=pass"))
+        self.assertEqual((rc, out), (0, "pass"))
         self.assertEqual(len(calls), 1)   # only the lookup for an earlier comment
 
 
