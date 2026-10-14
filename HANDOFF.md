@@ -7,6 +7,13 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.36.0 released — rulings that block a merge** (PR #162, `acddc57`): `plugin/kit/rulecheck.py` checks the
+  committed ruling files (`fold.py export`) against the checkout with no server; `--base` reads rulings and
+  `.overture.json` at the PR base, so a PR cannot pass by editing/deleting a ruling; re-lock/settle in the PR is
+  "re-ruled" for the reviewer. Root `action.yml` (composite): job summary + one inert PR comment. `test_rulecheck.py`
+  30 tests, 23 mutants caught; independent review 3 rounds (HIGH: config read from the PR) then green. Sourcery was
+  still pending at merge. Not yet run on a real GitHub PR. Follow-ups: `--strict` (unchecked item_status fails),
+  run the Action on a scratch PR, then operator identity on locks.
 - **v1.35.0 released — MCP server** (PR #161, `d3096e5`): `plugin/kit/mcp_server.py`, stdlib-only stdio MCP server
   so non-Claude agents (Cursor, Codex, Copilot) use the agent door: todo, view, answers, check, lesson_match, health,
   ask, reply, working. Runs `agent.py` in-process (same door/token/name/cap checks); no steward/owner/checkout
