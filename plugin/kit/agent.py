@@ -84,6 +84,10 @@
     agent.py --state DIR operator-name [EMAIL [NAME | --clear]]
                                                 the short name a login's locks carry in exported ruling files;
                                                 the email itself never leaves the console (1.38; you run this)
+    agent.py --state DIR access [EMAIL [owner | member ITEM... | viewer | --clear]]
+                                                who may do what in the console: no roles file, every login is
+                                                the owner; with one, an unlisted login only reads (1.39; you
+                                                run this, never a session)
 
 **Slim reads (K1).** JSON goes out compact when stdout is not a terminal.
 `todo`, `view` and `answers` refuse a read over 64 KiB unless given --full:
@@ -159,6 +163,7 @@ from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
 from overture import names as N  # noqa: E402
 from overture import operators as OP  # noqa: E402
+from overture import roles as RO  # noqa: E402
 from overture import registry as R  # noqa: E402
 from overture import sessions as SN  # noqa: E402
 from overture import view as V  # noqa: E402
@@ -1529,6 +1534,16 @@ def main(argv=None) -> int:
     g = s.add_mutually_exclusive_group()
     g.add_argument("short", nargs="?", metavar="NAME", help="the short name, e.g. michael")
     g.add_argument("--clear", action="store_true", help="remove this login's name: its locks are exported unnamed")
+    s = sub.add_parser("access", description="Show, set or clear what an Access login may do in the console (1.39). "
+                       "With no roles set, every login that passes Access is the owner. Once one is set, an unlisted "
+                       "login only reads. owner: everything; member AREA...: answers, locks and plain messages on "
+                       "those items and everything under them; viewer: reads only. Kept in STATE/roles.json, never "
+                       "committed. You run this, never a session.")
+    s.add_argument("email", nargs="?", help="the Access login, e.g. you@example.com (none: list every role)")
+    s.add_argument("role", nargs="?", choices=RO.ROLES, help="the login's role")
+    s.add_argument("areas", nargs="*", metavar="ITEM", help="a member's areas: item ids")
+    s.add_argument("--clear", action="store_true", help="remove this login's role: it only reads, or, when it was "
+                   "the last one listed, roles are off again")
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1696,7 +1711,7 @@ def main(argv=None) -> int:
         _DOOR = None
 
 
-USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name")
+USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1757,6 +1772,51 @@ def _operator_name(state: Path, email: str | None, short: str | None, clear: boo
     return 0
 
 
+def _show_role(entry: dict) -> str:
+    return f"member of {', '.join(entry['areas'])}" if entry["role"] == "member" else entry["role"]
+
+
+def _access(state: Path, email: str | None, role: str | None, areas: list[str], clear: bool) -> int:
+    """`access` (1.39): list, show, set or clear an Access login's role in the console, in STATE (roles.py)."""
+    try:
+        if email is None or (role is None and not clear):
+            if areas:
+                print("agent.py: access: name the role before its areas", file=sys.stderr)
+                return 2
+            got = RO.load(state)
+            if got is None:
+                print("no roles: every login that passes Access is the owner" if email is None else
+                      f"{email}: owner (no roles are set: every login is the owner)")
+                return 0
+            if email is None:
+                show = _masked if os.environ.get("CLAUDECODE") else str   # as operator-name's listing
+                print("\n".join(f"{show(e)} {_show_role(r)}" for e, r in sorted(got.items())))
+                return 0
+            print(f"{email} {_show_role(RO.role_of(got, email))}" + ("" if email.lower() in got else " (not listed)"))
+            return 0
+        if role is not None and clear:
+            print("agent.py: access: give a role or --clear, not both", file=sys.stderr)
+            return 2
+        if os.environ.get("CLAUDECODE"):
+            # A session that could raise a login's role could raise its owner's colleague, or itself through a
+            # login it controls. Like ask_guard, a guardrail between the owner's own sessions: the same user can
+            # still edit the file, but nothing in a session's ordinary path does.
+            print("agent.py: access: refused inside a Claude Code session: roles are set by you, in your own "
+                  "terminal", file=sys.stderr)
+            return 2
+        got = RO.set_role(state, email, None if clear else role, areas)
+    except (OSError, RO.RolesError) as e:
+        print(f"agent.py: access: {e}; nothing was written", file=sys.stderr)
+        return 2
+    if not got:
+        print(f"{email}: cleared; no roles are left, so every login is the owner again")
+    elif clear:
+        print(f"{email}: cleared; it only reads now")
+    else:
+        print(f"{email} {_show_role(got[email.lower()])}: in effect on its next write, no restart needed")
+    return 0
+
+
 def _run(a, bell: Path) -> int:
     if a.cmd == "register":
         e = R.register(a.project, a.state, Path(__file__).resolve().parent, steward=a.steward)
@@ -1765,6 +1825,8 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "operator-name":
         return _operator_name(a.state, a.email, a.short, a.clear)
+    if a.cmd == "access":
+        return _access(a.state, a.email, a.role, a.areas, a.clear)
     if a.cmd == "role":
         if a.value is None:
             r = R.machine_role()

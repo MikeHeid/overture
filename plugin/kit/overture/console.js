@@ -117,7 +117,9 @@
     scheduleDraftSave(key, text);
   }
   function scheduleDraftSave(key, text) {
-    if (!key) return;
+    // Since 1.39 the synced drafts are the owner's: a member's or viewer's text stays in this tab, never
+    // posted to a route that refuses it (and so never shown "not saved" on every pause).
+    if (!key || (view && view.you && view.you.role !== 'owner')) return;
     if (draftSaveTimers[key]) clearTimeout(draftSaveTimers[key]);
     draftSaveTimers[key] = setTimeout(() => {
       delete draftSaveTimers[key];
@@ -2164,6 +2166,7 @@
     panelEl.appendChild(tabBar);
     fitDockToTabs(tabBar);
     panelEl.appendChild(renderStatusBar(null));
+    appendYourRole(panelEl);
     panelEl.appendChild(renderDelegateBar());   // Delegate ▾ — orchestrate from anywhere, not only on an item.
     const trgs = view && Array.isArray(view.triggers) ? view.triggers : [];
     const log = view && Array.isArray(view.trigger_log) ? view.trigger_log : [];
@@ -2433,6 +2436,19 @@
     ]));
     hero.appendChild(details);
     return hero;
+  }
+
+  // Since 1.39: what this login may do, when the owner has set roles (view.you is absent otherwise, so a
+  // solo console shows nothing). Under the status bar of every panel, Inbox or item: the server enforces
+  // the role; this line saves a member a refused click.
+  function appendYourRole(parent) {
+    const you = view && view.you;
+    if (!you || you.role === 'owner') return;
+    const text = you.role === 'member' && Array.isArray(you.areas)
+      ? 'You are a member here: you can answer, lock and message in ' + you.areas.join(', ') +
+        ' and everything under them. The rest you can read.'
+      : 'You are a viewer here: you can read everything, and change nothing.';
+    parent.appendChild(el('p', { className: 'ck-your-role', role: 'note' }, [text]));   // text node: no HTML
   }
 
   // The Inbox tab: rounds to answer as one form each, then loose questions, then what waits on an agent.
@@ -2878,6 +2894,7 @@
     // Status bar with item counts
     const statusBar = renderStatusBar(itemId);
     panelEl.appendChild(statusBar);
+    appendYourRole(panelEl);
 
     // Body
     const body = el('div', { className: 'ck-body' });
@@ -5864,6 +5881,7 @@
       renderPanel();
     }, itemId ? 'Back to ' + itemId : 'Back to inbox'));
     panelEl.appendChild(renderStatusBar(itemId));
+    appendYourRole(panelEl);
     const body = el('div', { className: 'ck-body' });
     panelEl.appendChild(body);
     if (!view) { body.appendChild(renderOffline()); return; }
@@ -6973,6 +6991,7 @@
         : first ? 'Together: ' + first.question.item + ' · from ' + (first.question.agent || 'an agent') : 'Round']);
     panelEl.appendChild(makeHeader([title], leaveRound, 'Back to inbox'));
     panelEl.appendChild(renderStatusBar(null));
+    appendYourRole(panelEl);
     const body = el('div', { className: 'ck-body ck-round' });
     panelEl.appendChild(body);
     if (!view) { body.appendChild(renderOffline()); return; }

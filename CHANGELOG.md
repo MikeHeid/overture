@@ -2990,6 +2990,42 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Who may decide (1.39.0)
+
+Everyone behind a console's Access policy could answer, lock and run
+everything. Now the owner can say who does what.
+
+- **Roles per Access login**, in `STATE/roles.json` (0600, never
+  committed: it names logins by email, which stay in the console):
+  - **owner**: everything, as before.
+  - **member** of one or more areas: answers, locks and plain messages
+    on questions and items in those areas. An area is an item and
+    everything under it, through `parent`. A member's message is plain:
+    `item`, `text`, `reply_to`; any field that asks an agent for
+    something (intent, move_to, step, pr...) is the owner's, as are
+    playbooks, tickets, lock-all, drafts and the rest.
+  - **viewer**: reads the console, writes nothing.
+- **No roles file, no change.** Every login is the owner, so a solo
+  console needs no setup. Once a file exists, a login it does not list
+  is a viewer, and so is a service token (no email).
+- **Fails closed.** A roles file the kit cannot read, or one with no
+  owner, refuses every owner write (503, named in the server log)
+  rather than reading as "no roles".
+- **Read on every write**, so a change takes effect without a restart.
+- **`agent.py --state STATE access`** lists, shows, sets and clears
+  roles: `access bob@example.com member auth billing`. It refuses a
+  change that leaves no owner, and refuses to write inside a Claude
+  Code session (`CLAUDECODE`), so a session cannot raise a login's role;
+  its listing masks emails there.
+- **The page says it**: a member or viewer sees one line above the
+  Inbox naming their role and areas (`view.you`, owner door only;
+  absent when roles are off).
+- **Drafts go to owners only.** The synced drafts (`view.drafts`) are
+  the owner's unsent text; a member's or viewer's page gets none.
+- A role is checked twice on each write: by route before the body is
+  read (a viewer cannot make the server take in an upload), then by
+  area on the body the route acts on, which is now read once.
+
 ## Locked by, on the card (1.38.1)
 
 - **A locked question's card says who locked it**: "Locked by
