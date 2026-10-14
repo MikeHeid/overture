@@ -3008,11 +3008,14 @@ on its own.
   runs as the runner's user (with sudo on GitHub's runners), so the
   README says to treat the rest of that job as untrusted.
 - **A clean environment for the check** (Sourcery on PR #163): rulecheck
-  starts with only `PATH`, `HOME` and `LANG`, so secrets the calling job
-  exports are not in the adapter's environment. Only git's own "no such
-  key" counts as no token header; a config git cannot read refuses. An
-  adapter that calls `sys.exit(0)` now ends the run with exit 2, not as
-  a pass.
+  starts with only `PATH`, `HOME` and `LANG` (and `SYSTEMROOT` or
+  `LD_LIBRARY_PATH` when set), so the calling job's secrets are not
+  handed to the adapter. That is hygiene, not isolation: the adapter can
+  still read them from the parent process, so the README says to give it
+  a job of its own with no secrets. Only git's own "no such key" counts
+  as no token header; a config git cannot read refuses. An adapter that
+  calls `sys.exit(0)` ends the run with exit 2, and a run that exits 0
+  without writing its report is an error, not a pass.
 - **Tried on a real pull request.** v1.36.0 ran on a private scratch
   repository: a pull request that changed the cited line failed with
   the comment and diff, and the push that put it back turned the same

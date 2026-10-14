@@ -387,11 +387,13 @@ Your adapter is code from the pull request's checkout, so it is opt-in
 and kept apart (1.37). The token is not handed to the step that runs
 it, no comment is posted after it (the job summary has the report), and
 the check refuses to run when `actions/checkout` left its token header
-in `.git/config` (use `persist-credentials: false`). The check starts
-with a clean environment, so secrets your job exports are not in the
-adapter's. The adapter still runs as the runner's user, which on
-GitHub's runners can use sudo, so give the adapter run a job of its own
-with no secrets, and treat every later step in that job as untrusted.
+in `.git/config` (use `persist-credentials: false`). **Give the adapter
+run a job of its own with no secrets**, and treat every later step in
+that job as untrusted: the adapter runs as the runner's user, which on
+GitHub's runners can use sudo and can read other processes'
+environments. (The check also starts with a clean environment, so the
+job's secrets are not handed to the adapter; that is hygiene, not
+isolation.)
 
 Anywhere else, run it yourself: `python3 <kit>/rulecheck.py --base
 origin/main` (add `--format markdown` or `--format json`, and

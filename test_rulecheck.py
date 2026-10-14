@@ -389,6 +389,8 @@ class Action(Repo):
     def test_the_adapter_sees_none_of_the_callers_environment(self):
         # Catches: rulecheck started with the step's whole environment, so the PR's adapter reads any
         # secret the calling job exported (here a token and a secret the harness puts in every step).
+        # It proves the secrets are not INHERITED, not that the adapter cannot reach them: as the same
+        # user it can read the parent's /proc/PID/environ. Isolation is the README's "own job, no secrets".
         (self.root / "adapter.py").write_text(
             "import os\n"
             "def items():\n"
@@ -398,6 +400,15 @@ class Action(Repo):
         self.assertEqual((rc, result), (2, "error"))
         self.assertIn("env:None:None", summary)
         self.assertNotIn("sentinel", summary)
+
+    def test_an_exit_0_with_no_report_is_an_error_not_a_pass(self):
+        # Catches: rc 0 trusted on its own, so an adapter's os._exit(0), which skips every handler,
+        # ends the run green with nothing checked.
+        (self.root / "adapter.py").write_text("import os\ndef items():\n    os._exit(0)\n"
+                                              "def record(e, d):\n    return []\ndef seed_questions():\n    return []\n")
+        rc, result, summary, _ = self.step("7", adapter="adapter.py")
+        self.assertEqual((rc, result), (2, "error"))
+        self.assertIn("wrote no report", summary)
 
     def test_an_unreadable_git_config_refuses_the_adapter(self):
         # Catches: any non-zero `git config` read as "no token header" (Sourcery on PR #163): a config git

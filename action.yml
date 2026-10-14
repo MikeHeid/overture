@@ -102,10 +102,20 @@ runs:
         [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
         [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
         if [ "$rc" -eq 0 ]; then
-          # A clean environment: the caller's job may hold secrets in its env, and with `adapter` this runs
-          # the pull request's code. Only what Python and git need are passed (Sourcery on PR #163).
-          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
-            python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+          # A clean environment, as hygiene and not isolation: the caller's job may hold secrets in its env,
+          # and with `adapter` this runs the pull request's code. They are not inherited, though code running
+          # as this user can still read them from the parent process; hence "its own job, no secrets" in the
+          # README. Only what Python and git need are passed (Sourcery on PR #163): SYSTEMROOT on Windows,
+          # LD_LIBRARY_PATH for a setup-python build that needs it.
+          clean=(PATH="$PATH" HOME="$HOME" LANG=C.UTF-8)
+          [ -n "${SYSTEMROOT:-}" ] && clean+=(SYSTEMROOT="$SYSTEMROOT")
+          [ -n "${LD_LIBRARY_PATH:-}" ] && clean+=(LD_LIBRARY_PATH="$LD_LIBRARY_PATH")
+          env -i "${clean[@]}" python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+          # A pass is a report that says so: a run cut short with exit 0 (an adapter's os._exit(0)) is not.
+          if [ "$rc" -eq 0 ] && ! grep -qF "<!-- overture-rulecheck -->" "$report"; then
+            echo "the check ended with exit 0 but wrote no report, so nothing is known to hold" >>"$errors"
+            rc=2
+          fi
         fi
         cat "$errors" >&2
         case $rc in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
