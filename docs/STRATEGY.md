@@ -338,6 +338,10 @@ Each wave below builds on the one before it.
     setting.
   - *Scope:* operator identity on every record, roles, routing, two-key locks,
     and Slack/Linear.
+  - *Order (owner, 2026-10-14; OPEN-DECISIONS.md W1–W6):* who decided (1.38),
+    roles (1.39), People (1.40), then routing with a director flag and
+    per-login drafts, then the role-change log, then two-key locks by area,
+    then notifications.
 - **Wave 4, Protocol.**
   - *Goal:* Overture becomes the reference implementation of a format that
     other tools emit.
