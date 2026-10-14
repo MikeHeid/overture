@@ -41,7 +41,7 @@ SECRET_NAMES = re.compile(r"(^|/)(cert\.pem|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
                           r"|\.env|console\.env)$")
 FIXED = (1980, 1, 1, 0, 0, 0)
 EXECUTABLE = {"onboard.py", "hosting.py", "agent.py", "fold.py", "publish.py", "server.py", "verify_vendor.py",
-              "mcp_server.py"}
+              "mcp_server.py", "rulecheck.py"}
 
 
 class BuildError(Exception):

@@ -116,7 +116,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~20% |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~10% |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
@@ -340,6 +340,49 @@ checks apply: the project picks its console and token, `--as` (or
 `OVERTURE_AGENT`) names its writes, and the console server validates
 each one. A bad request fails alone; the server stays up. The steward's
 and the owner's commands are not offered. Standard library only.
+
+## Block a merge that breaks a ruling (CI, 1.36)
+
+`plugin/kit/rulecheck.py` checks the rulings your project has
+committed (the files `fold.py export` writes, `.overture/locked` by
+default) against the checkout, with no console server. A ruling whose
+cited text a change edits or deletes fails the check, with the same
+reason and diff **What changed?** shows.
+
+In GitHub Actions:
+
+```yaml
+on: pull_request
+permissions: {contents: read, pull-requests: write}
+jobs:
+  rulings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: MikeHeid/overture@v1.36.0
+```
+
+The rulings checked, and the `.overture.json` that says where they live,
+are the ones committed at the pull request's base, so a pull request
+cannot pass by editing or deleting a ruling file. If you re-lock or
+settle a ruling and its export lands in the same pull request, it passes
+and is listed as re-ruled. The Action posts one comment on the pull
+request, and keeps it updated, when a ruling breaks or a reviewer must
+look: a re-ruling, an edited ruling file, or a ruling it could not
+check. If it finds no ruling files at all, the job summary says so.
+
+What it trusts: ruling files arrive by pull request, as they always
+have, so a re-ruling in the comment is a claim for the reviewer to
+confirm, not proof that you made it. Make the check a required status
+in branch protection, or a pull request can also edit the workflow. An
+`item_status` condition is checked only with the `adapter` input; your
+adapter is code from the pull request's checkout, so it is opt-in.
+
+Anywhere else, run it yourself: `python3 <kit>/rulecheck.py --base
+origin/main` (add `--format markdown` or `--format json`). It exits 0
+when every ruling holds, 1 when one is broken, and 2 when it could not
+run.
 
 ## Hooks the plugin ships
 
@@ -908,7 +951,7 @@ finding is closed; the current state:
 
     python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
-    .venv/bin/python test_mcp.py
+    .venv/bin/python test_mcp.py && .venv/bin/python test_rulecheck.py
     .venv/bin/python test_build.py
     .venv/bin/pip install playwright && .venv/bin/playwright install chromium
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py
@@ -951,6 +994,9 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.36 — Rulings that block a merge**: `rulecheck.py` and a GitHub
+  Action fail a pull request that breaks a locked ruling, no server
+  needed.
 - **1.35 — Any agent can ask**: an MCP server, so Cursor, Codex,
   Copilot and other MCP clients use the console like Claude Code.
 - **1.34 — Lesson match**: related past rulings on the question card,
