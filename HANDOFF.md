@@ -7,6 +7,16 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.38.0 released — who decided** (PR #164, `a095d68`): owner writes keep the Access JWT `email` per request
+  (thread-local set in `_gate`, `Store.on_append` / `refactor.Log.on_append` → `STATE/operators.jsonl`, 0600).
+  Feed shows "by EMAIL"; agent socket never does. Owner ruled 2026-10-14: no email in committed files, so
+  `agent.py operator-name EMAIL NAME` → export adds `locked_by_name` only. Review 3 rounds + Sourcery (session
+  listing masks emails). `OperatorTests` 12. Not done: show who locked on the question card (Feed only).
+- **v1.37.0 released — strict, no token beside the adapter** (PR #163, `4a68867`): `--strict`/`strict`; Action is
+  three steps (check: no token, `env -i`; comment: skipped with adapter; finish); adapter refuses a persisted
+  checkout token; exit 0 without a report = error. Verified on scratch repo `MikeHeid/overture-rulecheck-scratch`
+  (private; PRs #1 on v1.36.0, #2 on 1.37: fail + comment, fix turns it green). Owner may delete that repo.
+
 - **v1.36.0 released — rulings that block a merge** (PR #162, `acddc57`): `plugin/kit/rulecheck.py` checks the
   committed ruling files (`fold.py export`) against the checkout with no server; `--base` reads rulings and
   `.overture.json` at the PR base, so a PR cannot pass by editing/deleting a ruling; re-lock/settle in the PR is
