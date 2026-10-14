@@ -8482,5 +8482,113 @@ class OneServerPrsTests(_OneServer, unittest.TestCase):
         self.assertEqual(self.violations(), [])
 
 
+class OperatorTests(_Live, unittest.TestCase):
+    """1.38.0: each owner decision keeps the Access login that made it; only an owner-set name is exported."""
+
+    def lock_as(self, email, nonce, supersedes=None):
+        tok = token(email=email)
+        over = {"supersedes": supersedes, "reason": "a second login re-rules it"} if supersedes else {}
+        code, a = self.req("POST", "/api/answer", self.answer(nonce=nonce + "a", **over), tok=tok)
+        self.assertEqual(code, 200, a)
+        code, lk = self.req("POST", "/api/lock", {"qid": "LANE.1/Q1", "answer": a["record"]["id"],
+                                                  "nonce": nonce + "l"}, tok=tok)
+        self.assertEqual(code, 200, lk)
+        return a["record"], lk["record"]
+
+    def operators(self):
+        from overture import operators as OP
+        return OP.Operators(self.cfg.state).mapping()
+
+    def test_an_owner_lock_keeps_the_login_that_took_it_and_the_feed_shows_it(self):
+        # Catches: claims verified and thrown away (every lock reads "owner" whoever took it), and a
+        # sidecar the feed never joins, so the owner page cannot say who decided.
+        a, lk = self.lock_as("alice@example.com", "opalice0001")
+        self.assertEqual({k: v for k, v in self.operators().items() if k in (a["id"], lk["id"])},
+                         {a["id"]: "alice@example.com", lk["id"]: "alice@example.com"})
+        code, feed = self.req("GET", "/api/feed", tok=token())
+        self.assertEqual(code, 200)
+        ev = next(e for e in feed["events"] if e["id"] == lk["id"])
+        self.assertEqual(ev["operator"], "alice@example.com")
+
+    def test_two_logins_on_one_console_are_told_apart(self):
+        # Catches: one email kept per thread or per server, so a second person's lock is filed under the
+        # first (the kept-alive thread case), or the email of whoever started the server.
+        a1, lk1 = self.lock_as("alice@example.com", "optwo000001")
+        _, lk2 = self.lock_as("bob@example.com", "optwo000002", supersedes=a1["id"])
+        ops = self.operators()
+        self.assertEqual((ops[lk1["id"]], ops[lk2["id"]]), ("alice@example.com", "bob@example.com"))
+
+    def test_agent_writes_and_unnamed_logins_keep_no_email(self):
+        # Catches: an agent's record stamped with the last owner's email (a thread-local never cleared),
+        # and a service token (no email claim) or a malformed claim written into the sidecar.
+        self.lock_as("alice@example.com", "opagent0001")
+        code, out = self.agent_post("/message", {"item": "LANE.1", "text": "noted", "nonce": "opagentrep1"})
+        self.assertEqual(code, 200, out)
+        self.assertNotIn(out["record"]["id"], self.operators())
+        for i, email in enumerate((None, "not an email", "a@b@c")):
+            code, m = self.req("POST", "/api/message", {"item": "LANE.1", "text": f"note {i}",
+                                                        "nonce": f"opnomail00{i}"}, tok=token(email=email))
+            self.assertEqual(code, 200, m)
+            self.assertNotIn(m["record"]["id"], self.operators(), email)
+
+    def test_the_export_carries_only_a_name_the_owner_set_never_the_email(self):
+        # Catches: the email committed into a ruling file (a public repo would publish it; the owner
+        # ruled against that on 2026-10-14), and a name set but never joined into the export.
+        from overture import fold as F
+        from overture import operators as OP
+        _, lk = self.lock_as("alice@example.com", "opexport001")
+        from overture.store import Store
+        plain = F.export(Store(self.cfg.store), {}, F.lock_names_beside(self.cfg.store))
+        self.assertNotIn("alice@example.com", json.dumps(plain))
+        self.assertNotIn("locked_by_name", json.dumps(plain))
+        OP.set_name(self.cfg.state, "alice@example.com", "alice")
+        named = F.export(Store(self.cfg.store), {}, F.lock_names_beside(self.cfg.store))
+        e = named["LANE.1__Q1.json"]
+        self.assertEqual((e["locked"]["lock_id"], e["locked"]["locked_by_name"]), (lk["id"], "alice"))
+        self.assertNotIn("alice@example.com", json.dumps(named))
+        self.assertEqual(F.check_entry("LANE.1__Q1.json", e, ITEMS), [])
+        bad = json.loads(json.dumps(e))
+        bad["locked"]["locked_by_name"] = "alice@example.com"
+        self.assertTrue(any("locked_by_name" in m for m in F.check_entry("LANE.1__Q1.json", bad, ITEMS)))
+
+    def test_a_withdrawal_keeps_its_login_too(self):
+        # Catches: only the main store hooked, so an owner act kept beside it (withdraw, untrack,
+        # confirm: the refactor log) names no one.
+        self.assertIs(self.console.store.refactor.on_append, self.console.store.on_append)
+        self.console.act_as("carol@example.com")
+        try:
+            self.console.store.refactor.on_append({"type": "withdraw", "by": "owner", "id": "d" * 24})
+        finally:
+            self.console.act_as(None)
+        self.assertEqual(self.operators()["d" * 24], "carol@example.com")
+
+    def test_only_owner_records_are_stamped_and_a_record_keeps_its_first_login(self):
+        # Catches, each on its own (the paths that reach them guard them twice): an agent record written
+        # during an owner request stamped with the owner's email, and a second email for a record
+        # replacing the first, which would let a later request rewrite who decided.
+        from overture import operators as OP
+        self.console.act_as("dave@example.com")
+        try:
+            self.console._keep_operator({"type": "message", "by": "agent", "id": "f" * 24})
+        finally:
+            self.console.act_as(None)
+        self.assertNotIn("f" * 24, self.operators())
+        ops = OP.Operators(self.cfg.state)
+        self.assertTrue(ops.add("a1" * 12, "first@example.com"))
+        self.assertFalse(ops.add("a1" * 12, "second@example.com"))
+        self.assertEqual(OP.Operators(self.cfg.state).mapping()["a1" * 12], "first@example.com")
+        with self.assertRaises(OP.OperatorsError):
+            ops.add("b2" * 12, "not an email")
+
+    def test_a_bad_operators_file_refuses_the_start_by_name(self):
+        # Catches: a corrupt sidecar skipped (decisions silently lose who made them) or a crash with a
+        # traceback instead of the file and line.
+        from overture import operators as OP
+        p = Path(self.cfg.state) / OP.FILE
+        p.write_text('{"email": "x@y.z", "id": "' + "e" * 24 + '"}\n{"email": 5}\n')
+        with self.assertRaisesRegex(OP.OperatorsError, r"operators.jsonl:2"):
+            OP.Operators(self.cfg.state)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
