@@ -1,0 +1,101 @@
+name: Overture ruling check
+description: Fail a pull request that breaks a ruling the owner locked in Overture, and say which and why.
+author: overture
+branding:
+  icon: check-circle
+  color: blue
+
+# Use it on pull_request, after actions/checkout with fetch-depth: 0 (the base commit must be here):
+#
+#   permissions: {contents: read, pull-requests: write}
+#   steps:
+#     - uses: actions/checkout@v4
+#       with: {fetch-depth: 0}
+#     - uses: MikeHeid/overture@v1.36.0
+#
+# The rulings checked are the ones committed at the pull request's base, so the
+# pull request cannot pass by editing or deleting a ruling file (rulecheck.py).
+
+inputs:
+  locked:
+    description: Folder of committed ruling files. Default .overture.json fold.locked, else .overture/locked.
+    required: false
+    default: ""
+  adapter:
+    description: >-
+      The project's adapter, imported to check item-status conditions. It is code from the pull
+      request's checkout, so it runs (and reports item statuses) as the pull request wrote it. Opt in.
+    required: false
+    default: ""
+  comment:
+    description: Post one comment on the pull request when a ruling breaks, and keep it updated.
+    required: false
+    default: "true"
+  github-token:
+    description: Token for the comment. Needs pull-requests write.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: pass, fail or error
+    value: ${{ steps.check.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      # Every value reaches the script through the environment, never pasted into it: a branch
+      # name or input is data, not shell (test_rulecheck.py checks this file for `${{` below run).
+      env:
+        KIT: ${{ github.action_path }}/plugin/kit
+        BASE: ${{ github.event.pull_request.base.sha }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        LOCKED: ${{ inputs.locked }}
+        ADAPTER: ${{ inputs.adapter }}
+        COMMENT: ${{ inputs.comment }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -u
+        args=(--root "$GITHUB_WORKSPACE" --format markdown)
+        if [ -n "$BASE" ]; then
+          git -C "$GITHUB_WORKSPACE" cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$BASE" \
+            || echo "::warning::could not fetch the base commit; use actions/checkout with fetch-depth: 0"
+          args+=(--base "$BASE")
+        fi
+        [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
+        [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
+        report="$RUNNER_TEMP/overture-rulecheck.md"
+        errors="$RUNNER_TEMP/overture-rulecheck.err"
+        rc=0
+        python3 "$KIT/rulecheck.py" "${args[@]}" >"$report" 2>"$errors" || rc=$?
+        cat "$errors" >&2
+        case $rc in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
+        echo "result=$result" >>"$GITHUB_OUTPUT"
+        if [ "$rc" -gt 1 ]; then
+          # It could not run: say so where the old report stood, so a red comment is never left stale.
+          { echo "<!-- overture-rulecheck -->"; echo "**Overture: the ruling check could not run.**"
+            # The error can quote a ruling file's values; with no backtick left it cannot end the fence.
+            echo; echo '````'; head -c 4000 "$errors" | tr '`' "'"; echo; echo '````'; } >"$report"
+        fi
+        cat "$report" >>"$GITHUB_STEP_SUMMARY"
+        if [ "$COMMENT" = true ] && [ -n "$PR" ]; then
+          # One comment per pull request, found by the marker on its first line. It is posted when a
+          # ruling breaks or a reviewer must look (a re-ruling, an edited ruling file, an unchecked one),
+          # then kept up to date, so a fix turns it green rather than adding another.
+          ids=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                  --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- overture-rulecheck -->"))) | .id') || ids=""
+          id=${ids%%$'\n'*}
+          post=false
+          if [ "$rc" -eq 1 ] || grep -qF "<!-- overture-rulecheck: notable -->" "$report"; then post=true; fi
+          if [ -n "$id" ] && gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$report" >/dev/null; then
+            :
+          elif [ -n "$id" ] || [ "$post" = true ]; then
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$report" >/dev/null \
+              || echo "::warning::could not post the ruling comment (does the token have pull-requests: write?)"
+          fi
+        fi
+        exit "$rc"
