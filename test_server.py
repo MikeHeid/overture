@@ -8510,6 +8510,15 @@ class OperatorTests(_Live, unittest.TestCase):
         ev = next(e for e in feed["events"] if e["id"] == lk["id"])
         self.assertEqual(ev["operator"], "alice@example.com")
 
+    def test_agents_never_see_an_owner_email(self):
+        # Catches: operators joined into the view the agent socket serves (`agent.py view`, `answers`,
+        # bundles), which would hand every agent the logins of the people who decide.
+        self.lock_as("grace@example.com", "opagentv001")
+        for path in ("/view", "/check"):
+            code, out = SV.agent_request(self.cfg.socket, "GET", path, None)
+            self.assertEqual(code, 200, path)
+            self.assertNotIn("grace@example.com", json.dumps(out), path)
+
     def test_two_logins_on_one_console_are_told_apart(self):
         # Catches: one email kept per thread or per server, so a second person's lock is filed under the
         # first (the kept-alive thread case), or the email of whoever started the server.

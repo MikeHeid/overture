@@ -3020,10 +3020,11 @@ behind one console's Access policy a lock could not say who took it.
   compared in lower case, so `Alice@` from Access meets a name set for
   `alice@`. The Feed shows emails to everyone the Access policy admits;
   agents never see them.
-- New `OperatorTests` in `test_server.py` (11 tests), through the real
+- New `OperatorTests` in `test_server.py` (12 tests), through the real
   owner gate with signed tokens: two logins on one console, a kept-alive
   connection, agent and unnamed writes, letter case, the export, the
-  refactor log, a write cut short, the command, a bad sidecar.
+  refactor log, a write cut short, the command, a bad sidecar, and the
+  agent socket never showing an email.
 
 ## Strict, and no token beside the adapter (1.37.0)
 
