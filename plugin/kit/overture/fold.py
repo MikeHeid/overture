@@ -31,6 +31,7 @@ from typing import Protocol
 
 from . import anchors as A
 from . import names as N
+from . import operators as OP
 from . import refactor as RX
 from . import registry as R
 from . import schema as S
@@ -76,13 +77,29 @@ def names_beside(store_path: Path) -> dict[str, str]:
     return N.load_beside(store_path)
 
 
-def export(store: Store, names: dict[str, str] | None = None) -> dict[str, dict]:
+def lock_names_beside(store_path: Path) -> dict[str, str]:
+    """Lock id -> the owner-set short name of the login that took it (1.38.0), from the files beside a store.
+
+    The emails (operators.jsonl) meet the owner's names (operator-names.json)
+    here, and only the names leave: an email with no name gives no entry.
+    """
+    state = Path(store_path).parent
+    names = OP.load_names(state)
+    return {rid: names[email] for rid, email in OP.load_beside(store_path).items() if email in names}
+
+
+def export(store: Store, names: dict[str, str] | None = None,
+           locked_by: dict[str, str] | None = None) -> dict[str, dict]:
     """Return filename -> entry for every question whose CURRENT answer is locked.
 
     `names` (0.8.2) maps record id -> agent name: a question an agent asked
     under a name carries `asked_by_agent`, so a ruling can say which agent
     asked. A question with no name gets no such key, so its file is byte for
     byte what 0.8.1 exported.
+
+    `locked_by` (1.38.0) maps lock id -> the short name the owner set for the
+    login that took it (`operators.py`); such a lock carries `locked_by_name`.
+    Never the email: these files are committed. A lock with no name gets no key.
     """
     out: dict[str, dict] = {}
     for q in (r for r in store.records() if r["type"] == "question"):
@@ -91,7 +108,7 @@ def export(store: Store, names: dict[str, str] | None = None) -> dict[str, dict]
         locked = [(a, lk) for a, lk in locks if lk is not None]
         if not locked or locked[-1][0]["id"] != answers[-1]["id"]:
             continue
-        history = [_entry_answer(store, q, a, lk) for a, lk in locked]
+        history = [_entry_answer(store, q, a, lk, (locked_by or {}).get(lk["id"])) for a, lk in locked]
         # An answer changed before it was locked is still what the owner said.
         # Dropping it lost the owner's own words from the record (2026-09-28,
         # TC-lane/Q1), so every unlocked answer is carried as `earlier`.
@@ -146,7 +163,7 @@ def _entry_earlier(q: dict, a: dict) -> dict:
     return e
 
 
-def _entry_answer(store: Store, q: dict, a: dict, lk: dict) -> dict:
+def _entry_answer(store: Store, q: dict, a: dict, lk: dict, lock_name: str | None = None) -> dict:
     labels = {o["id"]: o["label"] for o in q["options"]}
     e = {
         "answer_id": a["id"],
@@ -165,6 +182,8 @@ def _entry_answer(store: Store, q: dict, a: dict, lk: dict) -> dict:
         e["supersedes"] = a["supersedes"]
         e["reason"] = a["reason"]
     e.update(_entry_anchors(store, q, lk))
+    if lock_name:   # 1.38.0: only when the owner named that login; never the email itself
+        e["locked_by_name"] = lock_name
     return e
 
 
@@ -415,6 +434,8 @@ def _check_locked_answer(name: str, a: object, option_ids: list, labels: dict, s
                 errs.append(f"{name}: {k} does not match the options and picks")
     if not a.get("lock_id") or a.get("locked_by") != "owner":
         errs.append(f"{name}: answer {a.get('answer_id')} is not locked by the owner")
+    if "locked_by_name" in a and OP.name_problem(a["locked_by_name"]):   # printed into the record: held to its shape
+        errs.append(f"{name}: answer {a.get('answer_id')}: locked_by_name: {OP.name_problem(a['locked_by_name'])}")
     errs += _check_anchor_fields(name, a)
     if a.get("by") != "owner":
         errs.append(f"{name}: answer {a.get('answer_id')} has by={a.get('by')!r}; only the owner answers")
@@ -618,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
                                              inside(a.root, a.ledger, "--ledger"),
                                              inside(a.root, a.adapter, "--adapter"))
         if a.cmd == "export":
-            for name in write_export(export(Store(a.store), names_beside(a.store)), a.out):
+            for name in write_export(export(Store(a.store), names_beside(a.store), lock_names_beside(a.store)), a.out):
                 print(f"wrote {a.out / name}")
             return 0
         written, skipped = fold(a.locked, a.ledger, load_adapter(a.adapter), dry_run=a.dry_run)

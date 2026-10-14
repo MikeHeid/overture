@@ -8074,6 +8074,8 @@
         el('span', { className: 'ck-feed-time', title: new Date(ev.ts).toLocaleString() }, [relTime(ev.ts)])
       ]);
       if (ev.agent) head.appendChild(el('span', { className: 'ck-feed-agent' }, ['by ' + ev.agent]));
+      // 1.38: the Access login that made an owner decision; text only, as every feed field is.
+      if (ev.operator) head.appendChild(el('span', { className: 'ck-feed-agent ck-feed-operator' }, ['by ' + ev.operator]));
       if (isNew) head.appendChild(el('span', { className: 'ck-feed-newtag' }, ['new']));
       row.appendChild(head);
       if (ev.text) {

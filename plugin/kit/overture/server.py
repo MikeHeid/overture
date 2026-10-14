@@ -96,6 +96,7 @@ from . import lessons as LN   # owner's withdraw/untrack reasons become lessons 
 from . import tickets as TK
 from . import assets as AS
 from . import names as N
+from . import operators as OP
 from . import peers as PE
 from . import projectcfg as PC
 from . import publish as P
@@ -979,6 +980,11 @@ class Console:
         self.project = PC.load(cfg.root)
         self.store = Store(cfg.store)
         self.names = N.Names(cfg.state)   # 0.8.2: record id -> agent name, beside the store
+        # 1.38.0: record id -> the Access email of the owner request that wrote it, beside the store.
+        # The request's email is per thread (one request per handler thread), set at the owner gate.
+        self.operators = OP.Operators(cfg.state)
+        self._acting = threading.local()
+        self.store.on_append = self.store.refactor.on_append = self._keep_operator
         self.favorites = FV.Favorites(cfg.state)   # 0.8.19: the owner's starred visuals and items
         self.triggers = TR.Store()                 # 0.12.0: external-webhook triggers → playbooks
         self.triggers.set_all(TR.load(cfg.root))   # malformed config refuses the start, by name
@@ -1050,7 +1056,26 @@ class Console:
 
     def feed(self, kinds: set[str] | None, item: str | None, before: int | None, limit: int) -> dict:
         return V.feed(self.store, self.items(), kinds=kinds, item=item, before=before, limit=limit,
-                      names=self.names.mapping())
+                      names=self.names.mapping(), operators=self.operators.mapping())
+
+    def act_as(self, email: str | None) -> None:
+        """Who this thread's owner request is (1.38.0): the verified Access email, or None."""
+        self._acting.email = email
+
+    def _keep_operator(self, rec: dict) -> None:
+        """Keep the email of the owner request that wrote `rec`, beside the store (operators.py).
+
+        Only an owner record written inside an owner request: cron, triggers and
+        the agent's door have no email on their thread. If the line cannot be
+        written, the record stays, and the failure is logged by name, as `_name` does.
+        """
+        email = getattr(self._acting, "email", None)
+        if email is None or rec.get("by") != "owner":
+            return
+        try:
+            self.operators.add(rec["id"], email)
+        except (OSError, OP.OperatorsError) as e:
+            sys.stderr.write(f"console operators: record {rec['id']} keeps no email: {type(e).__name__}: {e}\n")
 
     def evidence(self, qid: str) -> dict:
         """A question's evidence rows with the cited lines as they are now, read server-side (0.7.0)."""
@@ -3554,12 +3579,18 @@ class OwnerHandler(_Handler):
             self.close_connection = True
 
     def _gate(self) -> bool:
+        # Cleared first: a kept-alive connection reuses this thread, and a refused request names no one.
+        self.console.act_as(None)
         try:
-            self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))
-            return True
+            claims = self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))
         except AuthError as e:
             self._send(403, {"error": str(e)})
             return False
+        # 1.38.0: the verified login's email names the owner writes this request makes. A service
+        # token carries none, and a malformed one is not kept: either writes as before, unnamed.
+        email = claims.get("email") if isinstance(claims, dict) else None
+        self.console.act_as(email if OP.email_problem(email) is None else None)
+        return True
 
     def do_GET(self) -> None:
         if not self._gate():
@@ -4169,7 +4200,7 @@ def serve(cfg: Config, verify: Callable[[str | None], dict] | None = None) -> No
     try:
         console = Console(cfg, IT.SnapshotAdapter(cfg.state, tolerant=True))
         added = console.seed()
-    except (PC.ConfigError, N.NamesError, StoreError) as e:   # the register itself, or the project's config
+    except (PC.ConfigError, N.NamesError, OP.OperatorsError, StoreError) as e:   # register, config or a sidecar
         raise SystemExit(f"console: {e}") from None
     sys.stderr.write(f"console: {len(added)} seed question(s) added; store {cfg.store}\n")
     if cfg.page is not None:   # Q28: named, never opened, stat'ed or resolved, in a project root or out of one
