@@ -2990,6 +2990,39 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Strict, and no token beside the adapter (1.37.0)
+
+- **`--strict`** (`strict: true` in the Action): a ruling that could not
+  be checked (an `item_status` condition with no adapter), or a run that
+  found no ruling files, fails instead of passing. The verdict says so.
+  A re-ruling never fails strict. The Action takes `true` or `false` in
+  any case and refuses anything else, so a typo cannot switch it off.
+- **The token is not handed to the adapter.** Sourcery's review of PR
+  #162 pointed out that with `adapter` the pull request's own code ran
+  in the step that held the comment token. The Action is now three
+  steps: the check (no token in its environment), the comment (the
+  token; skipped whenever an adapter is set, since that code could have
+  written the job's later steps' environment), and one that ends with
+  the check's exit code. With an adapter, the check refuses to run when
+  `actions/checkout` left the token in `.git/config`. The adapter still
+  runs as the runner's user (with sudo on GitHub's runners), so the
+  README says to treat the rest of that job as untrusted.
+- **A clean environment for the check** (Sourcery on PR #163): rulecheck
+  starts with only `PATH`, `HOME` and `LANG` (and `SYSTEMROOT` or
+  `LD_LIBRARY_PATH` when set), so the calling job's secrets are not
+  handed to the adapter. That is hygiene, not isolation: the adapter can
+  still read them from the parent process, so the README says to give it
+  a job of its own with no secrets. Only git's own "no such key" counts
+  as no token header; a config git cannot read refuses. An adapter that
+  calls `sys.exit(0)` ends the run with exit 2, and a run that exits 0
+  without writing its report is an error, not a pass.
+- **Tried on a real pull request.** v1.36.0 ran on a private scratch
+  repository: a pull request that changed the cited line failed with
+  the comment and diff, and the push that put it back turned the same
+  comment green.
+- `test_rulecheck.py`: 33 tests. The Action's steps now run under
+  `bash -eo pipefail`, as the runner starts them.
+
 ## Rulings that block a merge (1.36.0)
 
 A broken ruling can now fail a pull request, with no console server.

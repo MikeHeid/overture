@@ -360,7 +360,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.36.0
+      - uses: MikeHeid/overture@v1.37.0
 ```
 
 The rulings checked, and the `.overture.json` that says where they live,
@@ -375,13 +375,30 @@ check. If it finds no ruling files at all, the job summary says so.
 What it trusts: ruling files arrive by pull request, as they always
 have, so a re-ruling in the comment is a claim for the reviewer to
 confirm, not proof that you made it. Make the check a required status
-in branch protection, or a pull request can also edit the workflow. An
-`item_status` condition is checked only with the `adapter` input; your
-adapter is code from the pull request's checkout, so it is opt-in.
+in branch protection, or a pull request can also edit the workflow.
+
+An `item_status` condition is checked only with the `adapter` input.
+Without it, such a ruling is listed as unchecked and passes; set
+`strict: true` to fail it instead, and to fail a run that found no
+ruling files (1.37). A re-ruling never fails strict: it is yours to
+make, and the comment shows it to the reviewer.
+
+Your adapter is code from the pull request's checkout, so it is opt-in
+and kept apart (1.37). The token is not handed to the step that runs
+it, no comment is posted after it (the job summary has the report), and
+the check refuses to run when `actions/checkout` left its token header
+in `.git/config` (use `persist-credentials: false`). **Give the adapter
+run a job of its own with no secrets**, and treat every later step in
+that job as untrusted: the adapter runs as the runner's user, which on
+GitHub's runners can use sudo and can read other processes'
+environments. (The check also starts with a clean environment, so the
+job's secrets are not handed to the adapter; that is hygiene, not
+isolation.)
 
 Anywhere else, run it yourself: `python3 <kit>/rulecheck.py --base
-origin/main` (add `--format markdown` or `--format json`). It exits 0
-when every ruling holds, 1 when one is broken, and 2 when it could not
+origin/main` (add `--format markdown` or `--format json`, and
+`--strict`). It exits 0 when every ruling holds, 1 when one is broken
+(or, with `--strict`, could not be checked), and 2 when it could not
 run.
 
 ## Hooks the plugin ships
@@ -994,6 +1011,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.37 — Strict**: `--strict` fails a ruling nobody could check, and
+  the Action keeps its token away from your adapter's code.
 - **1.36 — Rulings that block a merge**: `rulecheck.py` and a GitHub
   Action fail a pull request that breaks a locked ruling, no server
   needed.
