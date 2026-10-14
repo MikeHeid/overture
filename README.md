@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~10% |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~20%: who decided (1.38) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -496,6 +496,27 @@ Only the owner can do any of these, and only on a stale answer. Nothing is
 deleted: each act is recorded in a file beside the store, and the fold
 records the outcome in your project. New questions are refused a whole-file
 hash where an excerpt fits, which is what made most rulings go stale.
+
+### Who decided (1.38)
+
+Several people can sit behind one console's Access policy. Each owner
+decision now keeps the Access login that made it: the console reads the
+email from the token it already verifies on every request, and keeps it
+beside the store (`operators.jsonl`). The **Feed** shows it on each
+answer, lock and message: "by alice@example.com". Agent writes,
+scheduled triggers and service tokens (which carry no email) keep none.
+
+The email never leaves the console. The ruling files committed to your
+repository carry a short name only when you set one, so nothing personal
+lands in a repository that may be public:
+
+    agent.py --state STATE operator-name alice@example.com alice
+    agent.py --state STATE operator-name                    # list them
+    agent.py --state STATE operator-name alice@example.com --clear
+
+The next export then adds `"locked_by_name": "alice"` to each lock that
+login took. Without a name, the files are exactly what 1.37 wrote. The
+store itself is unchanged, so an older kit still starts on it.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1011,6 +1032,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.38 — Who decided**: each owner decision keeps the Access login
+  that made it, shown in the Feed; exports carry only a name you set.
 - **1.37 — Strict**: `--strict` fails a ruling nobody could check, and
   the Action keeps its token away from your adapter's code.
 - **1.36 — Rulings that block a merge**: `rulecheck.py` and a GitHub

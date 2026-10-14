@@ -2990,6 +2990,32 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Who decided (1.38.0)
+
+Every owner write was stored `by: "owner"`, so with several people
+behind one console's Access policy a lock could not say who took it.
+
+- **The login behind each owner decision.** The owner gate already
+  verifies an Access token on every request; its `email` claim is now
+  kept, per request, for each record that request writes: answers,
+  locks, messages, and the acts kept beside the store (withdraw, keep
+  unchecked, confirm). It lives in a sidecar, `STATE/operators.jsonl`
+  (`{"email", "id"}` per line, append-only, the first email a record got
+  is kept), never in a store record, so an older kit still starts on the
+  store. Agent writes, cron and triggers, and a token with no email (a
+  service token) or a malformed one keep none.
+- **The Feed shows it**: "by alice@example.com" on each owner event.
+- **The email stays in the console** (the owner's choice, 2026-10-14:
+  no email in a repository that may be public). `agent.py
+  operator-name EMAIL NAME` sets a short name in
+  `STATE/operator-names.json`, and `fold.py export` then adds
+  `locked_by_name` to each lock that login took. With no name, an
+  exported file is byte for byte what 1.37 wrote. `fold` and
+  `rulecheck.py` hold `locked_by_name` to the agent-name shape.
+- New `OperatorTests` in `test_server.py` (7 tests), through the real
+  owner gate with signed tokens: two logins on one console, agent and
+  unnamed writes, the export, the refactor log, a bad sidecar.
+
 ## Strict, and no token beside the adapter (1.37.0)
 
 - **`--strict`** (`strict: true` in the Action): a ruling that could not
