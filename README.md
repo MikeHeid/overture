@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~20%: who decided (1.38) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~35%: who decided (1.38), roles (1.39) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -521,6 +521,29 @@ lands in a repository that may be public:
 The next export then adds `"locked_by_name": "alice"` to each lock that
 login took. Without a name, the files are exactly what 1.37 wrote. The
 store itself is unchanged, so an older kit still starts on it.
+
+### Who may decide (1.39)
+
+With no roles set, everyone your Access policy lets in is the owner.
+To share a console, give each login a role:
+
+    agent.py --state STATE access you@example.com owner
+    agent.py --state STATE access bob@example.com member auth billing
+    agent.py --state STATE access carol@example.com viewer
+    agent.py --state STATE access                        # list them
+    agent.py --state STATE access bob@example.com --clear
+
+- **owner**: everything.
+- **member**: answers, locks and plain messages on the named items and
+  everything under them. Requests to agents (forks, merges, visuals),
+  playbooks, tickets, lock-all and the synced drafts stay the owner's.
+- **viewer**: reads only.
+
+Once any role is set, a login that is not listed only reads. Changes
+take effect on the next write, with no restart. The file
+(`STATE/roles.json`) stays on the console's machine. Run `access`
+yourself: it refuses inside a Claude Code session, and refuses to leave
+the console with no owner.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1036,6 +1059,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.39 — Who may decide**: owner, member (by area) and viewer roles
+  per Access login, enforced by the console; none set, nothing changes.
 - **1.38 — Who decided**: each owner decision keeps the Access login
   that made it, shown in the Feed; exports carry only a name you set.
 - **1.37 — Strict**: `--strict` fails a ruling nobody could check, and

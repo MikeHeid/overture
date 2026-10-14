@@ -97,6 +97,8 @@ from . import tickets as TK
 from . import assets as AS
 from . import names as N
 from . import operators as OP
+from . import roles as RO
+from .roles import RolesError
 from . import peers as PE
 from . import projectcfg as PC
 from . import publish as P
@@ -113,6 +115,10 @@ DRAIN_SECONDS = 2.0         # at most this long, in all, reading a body an early
 BODY_SECONDS = 30.0         # at most this long, in all, receiving one request body (the per-read timeout restarts)
 MAX_BODY = 64 * 1024        # far above any real answer (MAX_TEXT is 20 000 characters)
 OWNER_ROUTES = {"/api/message": "message", "/api/answer": "answer", "/api/lock": "lock"}
+# 1.39.0 (roles.py): all a member may post, and the fields of a member's message. Every other message field
+# (intent, move_to, pr, step, about_qid...) asks an agent for something or points elsewhere: the owner's.
+MEMBER_ROUTES = frozenset(OWNER_ROUTES)
+MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 # 0.8.19: starred visuals and items. A side-route (not a store kind): toggles are owner-only, idempotent, cheap.
 OWNER_FAVORITE = "/api/favorite"
 OWNER_PLAYBOOK = "/api/playbook"
@@ -1062,6 +1068,60 @@ class Console:
         """Who this thread's owner request is (1.38.0): the verified Access email, or None."""
         self._acting.email = email
 
+    def you(self) -> dict:
+        """This thread's login's role entry (roles.py, 1.39.0). An unreadable roles file is a viewer's."""
+        try:
+            return RO.role_of(RO.load(self.cfg.state), getattr(self._acting, "email", None))
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}\n")   # the path stays in the log, never on the page
+            return {"role": "viewer", "problem": "the roles file cannot be read; see the server log"}
+
+    def role_gate(self, path: str) -> dict:
+        """Refuse an owner write this login's role never allows, before its body is read (roles.py).
+
+        Read on every write, so `agent.py access` takes effect without a restart. Returns the role entry
+        for `area_gate`. Ahead of the body: a viewer cannot make the server read 12 MiB of an upload.
+        """
+        try:
+            entry = RO.role_of(RO.load(self.cfg.state), getattr(self._acting, "email", None))
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}\n")
+            raise RequestError(503, "the roles file cannot be read, so no write is let through; see the "
+                                    "server log") from None
+        if entry["role"] == "viewer":
+            raise RequestError(403, "you are signed in as a viewer: this console is read-only for you")
+        if entry["role"] == "member" and path not in MEMBER_ROUTES:
+            # Drafts too: drafts.json is one map shared by everyone, so a member would write over the owner's.
+            raise RequestError(403, "you are signed in as a member: this action is the owner's")
+        return entry
+
+    def area_gate(self, entry: dict, path: str, body: object) -> None:
+        """A member's answer, lock or message lands inside their areas, or is refused.
+
+        Judged by the item it lands on: a message names its item, an answer or lock its question's (the
+        store refuses an answer or lock that names another question's records). Checked outside the write
+        lock: only the steward's items push moves an item, and a move between here and the write lands
+        the write where the member could rule a moment before.
+        """
+        if entry["role"] != "member" or not isinstance(body, dict):
+            return   # write() names a shape problem
+        if path == "/api/message":
+            extra = sorted(set(body) - MEMBER_MESSAGE)
+            if extra:
+                raise RequestError(403, f"you are signed in as a member: a plain message is yours ("
+                                        f"{', '.join(sorted(MEMBER_MESSAGE))}); {', '.join(extra)} is the owner's")
+            item = body.get("item")
+            if not isinstance(item, str):
+                return   # write() names the missing item; "None is outside your areas" would mislead
+        else:
+            q = self.store.question(body.get("qid")) if isinstance(body.get("qid"), str) else None
+            if q is None:
+                return   # write() refuses an unknown question, by name
+            item = q["item"]
+        if not RO.within(item, entry["areas"], self.items()):
+            raise RequestError(403, f"you are signed in as a member for {', '.join(entry['areas'])}; "
+                                    f"{item} is outside them")
+
     def _keep_operator(self, rec: dict) -> None:
         """Keep the email of the owner request that wrote `rec`, beside the store (operators.py).
 
@@ -1215,10 +1275,13 @@ class Console:
         ver = self.version()
         out = {**self.payload(), "ver": ver}
         # 1.19.1: drafts are owner-only; they travel on the owner door's /api/view only.
+        # 1.39.0: and only to an owner's login: they are the owner's unsent text (roles.py).
+        you = self.you()
         try:
             from . import drafts as DR
             out.setdefault("view", {})
-            out["view"] = {**out["view"], "drafts": DR.as_view(DR.load(self.cfg.state)["keys"])}
+            keys = DR.load(self.cfg.state)["keys"] if you["role"] == "owner" else {}
+            out["view"] = {**out["view"], "drafts": DR.as_view(keys)}
         except (DR.DraftError, OSError):
             out["view"] = {**out["view"], "drafts": {}}
         # tickets — children-of-items; same owner-door-only exposure as drafts and
@@ -1234,6 +1297,9 @@ class Console:
         ops = self.operators.mapping()
         out["view"] = {**out["view"], "locked_by": {r["answer"]: ops[r["id"]] for r in self.store.records()
                                                     if r["type"] == "lock" and r["id"] in ops}}
+        # 1.39.0: this login's role, for the page's banner; absent when roles are off, so a solo page is unchanged.
+        if (self.cfg.state / RO.FILE).exists():
+            out["view"] = {**out["view"], "you": you}
         # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
         out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
         # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
@@ -3936,41 +4002,47 @@ class OwnerHandler(_Handler):
         if not ok:
             return self._send(403, {"error": "missing or stale CSRF token; reload the console"})
         try:
+            # 1.39.0: what this login's role allows (roles.py): by route before the body is read, by area
+            # after, before any route acts on it.
+            role = self.console.role_gate(self.path)
+            if self.path == OWNER_ASSET_UPLOAD:
+                self.max_body = ASSET_MAX_BODY
+            # csrf-rotate takes no body and never read one: a caller sending none stays served.
+            body = None if self.path == OWNER_CSRF_ROTATE else self._body()
+            self.console.area_gate(role, self.path, body)
             if self.path == "/api/relock":
-                return self._send(200, {"records": self.console.relock(self._body())})
+                return self._send(200, {"records": self.console.relock(body)})
             if self.path == "/api/refactor":   # Q30/Q31: withdraw, keep unchecked, confirm; the owner's alone
-                return self._send(200, self.console.refactor(self._body()))
+                return self._send(200, self.console.refactor(body))
             if self.path == "/api/lock-all":
-                return self._send(200, self.console.lock_all(self._body()))
+                return self._send(200, self.console.lock_all(body))
             if self.path == "/api/page-publish":   # Q29: the owner's "Use this page"; no agent route publishes
-                return self._send(200, self.console.publish_page(self._body()))
+                return self._send(200, self.console.publish_page(body))
             if self.path == OWNER_FAVORITE:   # 0.8.19: toggle a star on a visual or an item
-                return self._send(200, self.console.favorite_toggle(self._body()))
+                return self._send(200, self.console.favorite_toggle(body))
             if self.path == OWNER_PLAYBOOK:   # 0.11.0: fan out a named playbook's steps
-                return self._send(200, self.console.run_playbook(self._body()))
+                return self._send(200, self.console.run_playbook(body))
             if self.path == OWNER_TRIGGER_REPLAY:   # 0.27.0: re-fire a trigger from the Inbox log
-                return self._send(200, self.console.replay_trigger(self._body()))
+                return self._send(200, self.console.replay_trigger(body))
             if self.path == OWNER_ITEM_MOVE:        # 1.17.0: record a re-parent intent on an item's thread
-                return self._send(200, self.console.item_move(self._body()))
+                return self._send(200, self.console.item_move(body))
             if self.path == OWNER_DRAFT:            # 1.19.0: owner-draft autosave (per-key text)
-                return self._send(200, self.console.save_draft(self._body()))
+                return self._send(200, self.console.save_draft(body))
             if self.path == OWNER_CSRF_ROTATE:   # rotate the CSRF token without a restart
                 return self._send(200, self.console.rotate_csrf())
             if self.path == OWNER_TICKET_CREATE:    # create a ticket under an item
-                return self._send(200, self.console.ticket_create(self._body(), by="owner"))
+                return self._send(200, self.console.ticket_create(body, by="owner"))
             if self.path == OWNER_TICKET_UPDATE:    # patch a ticket's title/body/blocked_by
-                return self._send(200, self.console.ticket_update(self._body()))
+                return self._send(200, self.console.ticket_update(body))
             if self.path == OWNER_TICKET_CLOSE:     # close a ticket; dependents unblock as needed
-                return self._send(200, self.console.ticket_close(self._body()))
+                return self._send(200, self.console.ticket_close(body))
             if self.path == OWNER_ASSET_UPLOAD:     # F2: an image the owner attached or pasted
-                self.max_body = ASSET_MAX_BODY
-                body = self._body()
                 if not isinstance(body, dict) or set(body) - {"item", "content_b64", "caption", "nonce"}:
                     raise RequestError(400, '/api/asset-upload takes {"item", "content_b64", "caption", "nonce"?}')
                 return self._send(200, self.console.add_asset({**body, "kind": "screenshot"}, None, by="owner"))
             if self.path == OWNER_ASSET_DELETE:     # 1.32: the owner removes an agent's asset
-                return self._send(200, self.console.asset_delete(self._body()))
-            self._send(200, {"record": self.console.write(kind, self._body(), "owner")})
+                return self._send(200, self.console.asset_delete(body))
+            self._send(200, {"record": self.console.write(kind, body, "owner")})
         except RequestError as e:
             self._send(e.code, {**e.extra, "error": str(e)})
 

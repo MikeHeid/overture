@@ -8690,5 +8690,199 @@ class OperatorTests(_Live, unittest.TestCase):
             OP.Operators(self.cfg.state)
 
 
+class RoleTests(_Live, unittest.TestCase):
+    """1.39.0: roles.json says what each Access login may do; no file, every login is the owner."""
+
+    OWNER = "olivia@example.com"
+
+    def roles(self, entries):
+        from overture import roles as RO
+        (Path(self.cfg.state) / RO.FILE).write_text(json.dumps({"roles": entries}))
+
+    def answer_as(self, email, nonce):
+        return self.req("POST", "/api/answer", self.answer(nonce=nonce), tok=token(email=email))
+
+    def heads(self):
+        return [r for r in self.console.store.records() if r["type"] == "answer"]
+
+    def test_with_no_roles_file_every_login_still_decides(self):
+        # Catches: roles switched on for every console, so an upgraded solo console refuses its owner, and a
+        # banner shown on a page that has no roles to talk about.
+        code, out = self.answer_as("anyone@example.com", "rolenone001")
+        self.assertEqual(code, 200, out)
+        self.assertNotIn("you", self.console.page_payload()["view"])
+
+    def test_an_unlisted_login_and_a_service_token_only_read(self):
+        # Catches: an unlisted login treated as the owner (listing would then restrict nobody) and a
+        # nameless service token let through because there is no email to look up.
+        self.roles({self.OWNER: {"role": "owner"}})
+        for i, email in enumerate(("stranger@example.com", None)):
+            code, out = self.answer_as(email, f"roleview00{i}")
+            self.assertEqual(code, 403, out)
+            self.assertIn("viewer", out["error"])
+        self.assertEqual(self.heads(), [])
+        code, _ = self.req("GET", "/api/view", tok=token(email="stranger@example.com"))
+        self.assertEqual(code, 200)   # reading is unchanged
+        # Catches (review): the body read before the role check, so a viewer makes the server take in an
+        # upload's 12 MiB (here: a body it would refuse as 415 is never looked at).
+        code, out = self.req("POST", "/api/asset-upload", b"x" * 10, tok=token(email="stranger@example.com"),
+                             headers={"Content-Type": "text/plain"})
+        self.assertEqual(code, 403, out)
+
+    def test_only_an_owner_login_is_sent_the_owners_drafts(self):
+        # Catches (review): drafts.json, the owner's unsent text, handed to every member and viewer's page.
+        from overture import drafts as DR
+        DR.set_draft(self.cfg.state, "answer:LANE.1/Q1", "my unsent thought", "2026-10-14T00:00:00Z")
+        self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
+        code, out = self.req("GET", "/api/view", tok=token(email="mo@example.com"))
+        self.assertEqual(out["view"]["drafts"], {})
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertIn("my unsent thought", json.dumps(out["view"]["drafts"]))
+
+    def test_the_owner_is_matched_without_case(self):
+        # Catches: the login compared as typed, so Access sending "Olivia@Example.com" locks the owner out.
+        self.roles({self.OWNER: {"role": "owner"}})
+        code, out = self.answer_as("Olivia@Example.COM", "rolecase001")
+        self.assertEqual(code, 200, out)
+
+    def test_a_member_decides_inside_their_area_and_its_children_only(self):
+        # Catches: areas matched by exact item only (LANE.1 sits UNDER the area LANE), and a member's area
+        # never checked, so a member of one lane rules on another's question.
+        self.roles({self.OWNER: {"role": "owner"},
+                    "mo@example.com": {"role": "member", "areas": ["LANE"]},
+                    "nell@example.com": {"role": "member", "areas": ["ELSEWHERE"]}})
+        code, out = self.answer_as("nell@example.com", "rolememb001")
+        self.assertEqual(code, 403, out)
+        self.assertIn("LANE.1 is outside them", out["error"])
+        code, a = self.answer_as("mo@example.com", "rolememb002")
+        self.assertEqual(code, 200, a)
+        tok = token(email="mo@example.com")
+        code, lk = self.req("POST", "/api/lock", {"qid": "LANE.1/Q1", "answer": a["record"]["id"],
+                                                  "nonce": "rolememb003"}, tok=tok)
+        self.assertEqual(code, 200, lk)
+        code, out = self.req("POST", "/api/lock", {"qid": "LANE.1/Q1", "answer": a["record"]["id"],
+                                                   "nonce": "rolememb004"}, tok=token(email="nell@example.com"))
+        self.assertEqual(code, 403, out)
+
+    def test_a_member_writes_plain_messages_and_drafts_but_nothing_of_the_owners(self):
+        # Catches: every owner route open to a member once it passes Access (lock-all, playbooks, tickets,
+        # merges), or a message with an intent (a fork or a PR merge sent to agents) let through as "a message".
+        self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
+        tok = token(email="mo@example.com")
+        code, out = self.req("POST", "/api/message", {"item": "LANE.1", "text": "fine by me",
+                                                      "nonce": "rolemsg0001"}, tok=tok)
+        self.assertEqual(code, 200, out)
+        code, out = self.req("POST", "/api/message", {"item": "LANE.1", "text": "fork it", "intent": "fork",
+                                                      "focus": "code", "mode": "explore", "nonce": "rolemsg0002"},
+                             tok=tok)
+        self.assertEqual(code, 403, out)
+        # Catches (review): only `intent` refused, so a message carrying move_to, pr or step (fields agents
+        # act on) or about_qid (pointing at another area) passes as a plain one.
+        for extra in ({"move_to": "ELSEWHERE"}, {"step": "drill"}, {"about_qid": "LANE.1/Q1"}):
+            code, out = self.req("POST", "/api/message", {"item": "LANE.1", "text": "x", "nonce": "rolemsg0003",
+                                                          **extra}, tok=tok)
+            self.assertEqual(code, 403, (extra, out))
+        self.assertEqual([r["text"] for r in self.console.store.records() if r["type"] == "message"],
+                         ["fine by me"])
+        for path in ("/api/draft", "/api/lock-all", "/api/relock", "/api/playbook", "/api/ticket-create",
+                     "/api/csrf-rotate"):
+            code, out = self.req("POST", path, {}, tok=tok)
+            self.assertEqual(code, 403, (path, out))
+            self.assertIn("the owner's", out["error"])
+
+    def test_a_roles_file_the_kit_cannot_read_lets_no_write_through(self):
+        # Catches: a damaged file read as "no roles" (every login the owner again: the failure opens the door)
+        # and a file listing no owner accepted, which nobody could then change from the console.
+        from overture import roles as RO
+        for bad in ("{not json", json.dumps({"roles": {"x@example.com": {"role": "member", "areas": ["LANE"]}}}),
+                    json.dumps({"roles": {self.OWNER: {"role": "admin"}}})):
+            (Path(self.cfg.state) / RO.FILE).write_text(bad)
+            code, out = self.answer_as(self.OWNER, f"rolebad{len(bad):04d}")
+            self.assertEqual(code, 503, (bad, out))
+        self.assertEqual(self.heads(), [])
+        # Catches (review): the file's path, a server detail, written into the page's view.
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertEqual(out["view"]["you"]["role"], "viewer")
+        self.assertNotIn(str(self.cfg.state), json.dumps(out["view"]["you"]))
+
+    def test_the_page_says_this_logins_role_and_agents_never_see_it(self):
+        # Catches: the banner fed the first listed role whoever reads (a thread-local never set on GET), and
+        # the roles (emails) carried on the agent socket's view.
+        self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
+        code, out = self.req("GET", "/api/view", tok=token(email="mo@example.com"))
+        self.assertEqual(code, 200)
+        self.assertEqual(out["view"]["you"], {"role": "member", "areas": ["LANE"]})
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertEqual(out["view"]["you"], {"role": "owner"})
+        code, out = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertNotIn("mo@example.com", json.dumps(out))
+        self.assertNotIn("you", out["view"])
+
+    def test_a_role_change_takes_effect_without_a_restart(self):
+        # Catches: roles read once at start, so revoking a member leaves them deciding until the next restart.
+        self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
+        self.assertEqual(self.answer_as("mo@example.com", "rolelive001")[0], 200)
+        self.roles({self.OWNER: {"role": "owner"}})
+        self.assertEqual(self.answer_as("mo@example.com", "rolelive002")[0], 403)
+
+    def test_the_owner_still_rotates_csrf_with_no_body(self):
+        # Catches: the role check reading a body on every route, so csrf-rotate (which never took one) answers
+        # 415 to a caller that sends none.
+        code, out = self.req("POST", "/api/csrf-rotate", tok=token())
+        self.assertEqual(code, 200, out)
+
+    def test_the_writer_never_leaves_the_console_without_an_owner(self):
+        # Catches: the last owner demoted or cleared while others stay listed (nobody could run the console),
+        # and clearing the last entry leaving an empty file (which reads as "everyone a viewer").
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        RO.set_role(self.cfg.state, "mo@example.com", "member", ["LANE"])
+        with self.assertRaisesRegex(RO.RolesError, "no owner"):
+            RO.set_role(self.cfg.state, self.OWNER, "viewer")
+        with self.assertRaisesRegex(RO.RolesError, "no owner"):
+            RO.set_role(self.cfg.state, self.OWNER, None)
+        with self.assertRaisesRegex(RO.RolesError, "only a member"):
+            RO.set_role(self.cfg.state, "v@example.com", "viewer", ["LANE"])
+        RO.set_role(self.cfg.state, "mo@example.com", None)
+        RO.set_role(self.cfg.state, self.OWNER, None)
+        self.assertFalse((Path(self.cfg.state) / RO.FILE).exists())
+        self.assertIsNone(RO.load(self.cfg.state))
+
+    def test_an_area_walk_ends_on_a_parent_loop(self):
+        # Catches: a register whose parents loop (A under B under A) spinning the request thread forever.
+        from overture import roles as RO
+        loop = {"A": {"parent": "B"}, "B": {"parent": "A"}}
+        self.assertFalse(RO.within("A", ["C"], loop))
+        self.assertTrue(RO.within("A", ["B"], loop))
+
+    def test_access_is_set_listed_and_refused_inside_a_session(self):
+        # Catches: the command wired to nothing, a roles file readable by others, and a Claude Code session
+        # able to raise a login's role (the escalation the guard exists for); its listing masks emails.
+        from overture import roles as RO
+
+        def cli(*args, session=False):
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            if session:
+                env["CLAUDECODE"] = "1"
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state),
+                                "access", *args], capture_output=True, text=True, timeout=30, env=env)
+            return r.returncode, r.stdout + r.stderr
+        self.assertIn("every login that passes Access is the owner", cli()[1])
+        self.assertEqual(cli(self.OWNER, "owner")[0], 0)
+        self.assertEqual(cli("mo@example.com", "member", "LANE", "API")[0], 0)
+        self.assertEqual(RO.load(self.cfg.state)["mo@example.com"], {"role": "member", "areas": ["LANE", "API"]})
+        self.assertEqual(os.stat(Path(self.cfg.state) / RO.FILE).st_mode & 0o077, 0)
+        self.assertIn("mo@example.com member of LANE, API", cli()[1])
+        rc, out = cli(session=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("m…@example.com member of LANE, API", out)
+        self.assertNotIn("mo@example.com", out)
+        rc, out = cli("mo@example.com", "owner", session=True)
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(RO.load(self.cfg.state)["mo@example.com"]["role"], "member")
+        self.assertEqual(cli(self.OWNER, "--clear")[0], 2)   # mo would be left with no owner
+        self.assertEqual(list(Path(self.cfg.state).glob(".roles.json.*")), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
