@@ -8650,14 +8650,22 @@ class OperatorTests(_Live, unittest.TestCase):
         # by others (the state dir's 0700 is the only other guard).
         from overture import operators as OP
 
-        def cli(*args):
+        def cli(*args, session=False):
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}   # the owner's own terminal
+            if session:
+                env["CLAUDECODE"] = "1"   # what Claude Code sets in a session's shell
             r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state),
-                                "operator-name", *args], capture_output=True, text=True, timeout=30)
+                                "operator-name", *args], capture_output=True, text=True, timeout=30, env=env)
             return r.returncode, r.stdout + r.stderr
         self.assertEqual(cli("frank@example.com", "frank")[0], 0)
         self.assertEqual(OP.load_names(self.cfg.state), {"frank@example.com": "frank"})
         self.assertEqual(os.stat(Path(self.cfg.state) / OP.NAMES_FILE).st_mode & 0o077, 0)
         self.assertIn("frank@example.com frank", cli()[1])
+        # Catches: the listing handing a session the emails the agent socket withholds (Sourcery on #164).
+        rc, out = cli(session=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("f…@example.com frank", out)
+        self.assertNotIn("frank@example.com", out)
         rc, out = cli("frank@example.com", "Not A Name")
         self.assertEqual(rc, 2)
         self.assertEqual(OP.load_names(self.cfg.state), {"frank@example.com": "frank"})

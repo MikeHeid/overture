@@ -3019,7 +3019,8 @@ behind one console's Access policy a lock could not say who took it.
   a fresh unguessable temp file that never follows a symlink. Emails are
   compared in lower case, so `Alice@` from Access meets a name set for
   `alice@`. The Feed shows emails to everyone the Access policy admits;
-  agents never see them.
+  agents never see them, and `operator-name`'s listing masks them
+  (`a…@example.com`) when run inside a Claude Code session.
 - New `OperatorTests` in `test_server.py` (12 tests), through the real
   owner gate with signed tokens: two logins on one console, a kept-alive
   connection, agent and unnamed writes, letter case, the export, the

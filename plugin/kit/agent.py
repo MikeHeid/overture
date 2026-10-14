@@ -1724,6 +1724,12 @@ def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
             f"--as {name}, /overture:as {name} typed in the session, or {N.ENV}={name}.)")
 
 
+def _masked(email: str) -> str:
+    """`a…@example.com`: enough to tell logins apart in a list, not enough to write to one."""
+    local, _, domain = email.partition("@")
+    return f"{local[:1]}…@{domain}"
+
+
 def _operator_name(state: Path, email: str | None, short: str | None, clear: bool) -> int:
     """`operator-name` (1.38): list, show, set or clear the export name of an Access login, in STATE."""
     try:
@@ -1732,7 +1738,11 @@ def _operator_name(state: Path, email: str | None, short: str | None, clear: boo
                 print("agent.py: operator-name: name the login (EMAIL) first", file=sys.stderr)
                 return 2
             got = OP.load_names(state)
-            print("\n".join(f"{e} {n}" for e, n in sorted(got.items())) if got else
+            # The agent socket never shows an owner's email, so neither does this listing inside a Claude
+            # Code session (CLAUDECODE is set there): a guardrail between the owner's own cooperating
+            # sessions, as ask_guard is (Sourcery on PR #164). The owner's own terminal sees them whole.
+            show = _masked if os.environ.get("CLAUDECODE") else str
+            print("\n".join(f"{show(e)} {n}" for e, n in sorted(got.items())) if got else
                   "no operator names: locks are exported with no name")
             return 0
         if short is None and not clear:

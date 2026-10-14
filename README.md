@@ -513,7 +513,7 @@ repository carry a short name only when you set one, so nothing personal
 lands in a repository that may be public:
 
     agent.py --state STATE operator-name alice@example.com alice
-    agent.py --state STATE operator-name                    # list them
+    agent.py --state STATE operator-name                    # list them (emails masked inside a Claude session)
     agent.py --state STATE operator-name alice@example.com --clear
 
 The next export then adds `"locked_by_name": "alice"` to each lock that
