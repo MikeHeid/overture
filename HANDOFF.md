@@ -7,6 +7,8 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.38.1 released — locked by, on the card** (PR #165, `a5708bb`): owner-door `view["locked_by"]` (answer id → login);
+  the receipt shows "Locked by EMAIL" (text only). Browser suite re-run after 1.38.0: 92 OK.
 - **v1.38.0 released — who decided** (PR #164, `a095d68`): owner writes keep the Access JWT `email` per request
   (thread-local set in `_gate`, `Store.on_append` / `refactor.Log.on_append` → `STATE/operators.jsonl`, 0600).
   Feed shows "by EMAIL"; agent socket never does. Owner ruled 2026-10-14: no email in committed files, so
@@ -101,7 +103,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.38.0 (PR #164), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.38.1 (PR #165), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
