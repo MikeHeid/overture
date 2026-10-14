@@ -490,6 +490,7 @@
   font-size: 13px;
 }
 .ck-receipt-by { color: var(--c-fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+.ck-your-role { color: var(--c-fg-muted); font-size: 13px; margin: 0 0 12px; overflow-wrap: anywhere; }
 .ck-receipt-heading {
   font-weight: 600;
   font-size: 12px;

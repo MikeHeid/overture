@@ -3181,6 +3181,33 @@ class InboxUXTests(unittest.TestCase):
                 self.assertEqual(by.text_content(), "Locked by ivan@example.com")
                 self.assertEqual(page.locator(".ck-question[data-qid='LANE.1/Q2'] .ck-receipt-by").count(), 0)
 
+    def test_a_member_sees_their_role_above_the_inbox(self):
+        # Catches (1.39.0): `view.you` never rendered, so a member learns their limits only from refused
+        # clicks; and the line shown on a console with no roles, where every login is the owner.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)   # where a member answers; the line sits under its status bar
+                self.assertEqual(page.locator(".ck-your-role").count(), 0)
+                # The page's token is owner@example.com's: make that login a member.
+                (self.cfg.state / RO.FILE).write_text(json.dumps({"roles": {
+                    "boss@example.com": {"role": "owner"},
+                    "owner@example.com": {"role": "member", "areas": ["LANE"]}}}))
+                page = self.page(kind, 1280, url)
+                drafts = []
+                page.on("request", lambda r: drafts.append(r.url) if "/api/draft" in r.url else None)
+                self.open_item(page)
+                line = page.wait_for_selector(".ck-your-role")
+                self.assertIn("member here: you can answer, lock and message in LANE", line.text_content())
+                # Catches (review): the member's typing autosaved to /api/draft, which refuses it, so the
+                # box says "Draft not saved" on every pause. Their words stay in the tab instead.
+                page.fill(".ck-question[data-qid='LANE.1/Q1'] .ck-textarea", "my own words")   # open: unanswered
+                page.wait_for_timeout(2500)   # past the page's 1.5 s autosave pause
+                self.assertEqual(drafts, [])
+
     def test_q37_a_stale_question_stays_whole(self):
         # Catches: rolling up every question with a lock, so a stale ruling (which needs the owner) hides.
         for kind in BROWSERS:
