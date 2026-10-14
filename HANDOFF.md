@@ -91,7 +91,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.36.0 (PR #162), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.38.0 (PR #164), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
