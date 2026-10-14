@@ -275,11 +275,17 @@ Next, run these yourself, in order. Each one is yours to approve:
  5. Check it:
       curl -s -o /dev/null -w '%{{http_code}}\\n' http://127.0.0.1:{a['port']}/api/view   # 403: no token, refused
       then open https://{a['hostname']}: an Access login, then the page
- 6. Push the project's items so an agent can `ask` on anything but the starter PROJECT item.
+ 6. Make yourself the administrator. Until you do, everyone your Access policy lets in can do
+    everything. In the console open People (under More) and press "Make me the administrator":
+    it takes the login you are signed in with, so you type no email and no session sees one.
+    Or, in your own terminal (a Claude session is refused), with your Access login:
+      python3 ~/.local/share/overture/kit/agent.py --state "{state_dir(a['name'])}" access YOU@EXAMPLE.COM owner
+    Then add each other person there, as a member of their areas or a viewer.
+ 7. Push the project's items so an agent can `ask` on anything but the starter PROJECT item.
     The server never runs your adapter (CONSOLE-kit/Q24); run this now and whenever the item
     list or the adapter changes:
       python3 ~/.local/share/overture/kit/agent.py --state "{state_dir(a['name'])}" items-push --adapter "{a['adapter']}"
- 7. (Optional, for the dashboard page) Send the page from a merged commit, then press
+ 8. (Optional, for the dashboard page) Send the page from a merged commit, then press
     "Use this page" in the console. Reads the default branch from origin/HEAD (0.9.1):
       python3 ~/.local/share/overture/kit/agent.py --state "{state_dir(a['name'])}" page-snapshot --path "{a['page']}"
 """
