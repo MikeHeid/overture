@@ -7,6 +7,13 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.35.0 released — MCP server** (PR #161, `d3096e5`): `plugin/kit/mcp_server.py`, stdlib-only stdio MCP server
+  so non-Claude agents (Cursor, Codex, Copilot) use the agent door: todo, view, answers, check, lesson_match, health,
+  ask, reply, working. Runs `agent.py` in-process (same door/token/name/cap checks); no steward/owner/checkout
+  commands. 2025 handshake + stateless 2026-07-28. `test_mcp.py` 16 tests, 11 mutants caught; independent review
+  green after one fix round (crash-on-hostile-line, relative --state, bare `--`). Next per STRATEGY.md: a standalone
+  `check` + GitHub Action (stale rulings on PRs), then operator identity on locks. Not yet tried in a real
+  Cursor/Codex session.
 - **Lane 3 merged** (PR #160, `8ef2571`, test only, no release): `LiveConsoleTests.test_a_related_ruling_reaches_the_card_
   from_the_real_server_under_its_csp`, the 1.34.4 probe made permanent. Fails on three mutants (`related_lessons`
   renamed; CSP loosened; an inline script). Browser 91. ⚠ One unidentified ERROR in 1 of 3 full browser runs; not
