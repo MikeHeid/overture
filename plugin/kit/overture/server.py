@@ -71,7 +71,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
@@ -98,6 +98,7 @@ from . import assets as AS
 from . import names as N
 from . import operators as OP
 from . import roles as RO
+from . import notify as NT
 from . import settings as SET
 from . import twokey as KEY
 from .roles import RolesError
@@ -1026,6 +1027,13 @@ class Console:
         # braces with the existing Origin check on every write.
         self._csrf = secrets.token_urlsafe(32)
         self._lessons_cache: tuple[tuple[int, int, int] | None, list[dict]] | None = None
+        # 1.45.0: notifications (notify.py), one look a minute on a thread of their own, so a slow webhook
+        # never holds up the cron triggers. `_notify_post` is NT.send; a test swaps it.
+        self._notify_post = NT.send
+        self._notify_said: str | None = None   # the last problem logged, so a broken file is named once
+        self._notify_hold: tuple | None = None  # (since, how long): sends held after the state could not be written
+        self._notify_thread = threading.Thread(target=self._notify_loop, name="ck-notify", daemon=True)
+        self._notify_thread.start()
 
     def _lessons_rows(self) -> list[dict]:
         """The lessons, re-read only when the file's (inode, size, mtime_ns) stamp moved.
@@ -1303,7 +1311,9 @@ class Console:
                 "lane_colors": list(PC.LANE_COLORS), "two_key": two_key,
                 # who decided here already (their emails are on every card's "Locked by") and who has a name
                 "operators": sorted(set(self.operators.mapping().values()) | set(names)), "names": names,
-                "log": log, "log_total": log_total, "me": me.lower() if isinstance(me, str) else None}
+                "log": log, "log_total": log_total, "me": me.lower() if isinstance(me, str) else None,
+                # 1.45.0: the webhook's host only (its path is the secret) and how the last send went
+                "notify": {**NT.status(self.cfg.state), "every": list(SET.NOTIFY_EVERY)}}
 
     def put_setting(self, body: object) -> dict:
         """POST /api/settings {"key", "value"}: set one setting (null: back to the default), logged."""
@@ -2064,6 +2074,44 @@ class Console:
                 continue
             records.append(rec)
         return {"records": records, "skipped": skipped}
+
+    def _notify_loop(self) -> None:
+        """1.45.0: once a minute, tell the webhook about questions newly waiting (notify_tick)."""
+        while not self._cron_stop.wait(timeout=60):
+            try:
+                self.notify_tick(datetime.now())
+            except Exception as e:  # noqa: BLE001 — one bad look must not stop the next
+                sys.stderr.write(f"console notify: {type(e).__name__}: {e}\n")
+
+    def notify_tick(self, now) -> str | None:
+        """One look (notify.tick): "sent", "failed" or None. Off, it reads nothing but the settings."""
+        cfg = {k: self.setting(k) for k in SET.NOTIFY}
+        if not cfg["notify_on"]:
+            return None
+        if self._notify_hold is not None and abs(now - self._notify_hold[0]) < self._notify_hold[1]:
+            return None   # (code review) the state could not be written: no digest again until the window passes
+        self._notify_hold = None
+        view = self.payload().get("view") or {}
+        waiting = {qid: (q.get("question") or {}).get("item") or qid.split("/")[0]
+                   for qid, q in (view.get("questions") or {}).items() if q.get("state") == "awaiting_you"}
+        try:
+            done = NT.tick(self.cfg.state, now, waiting, cfg, self.cfg.project,
+                           f"https://{self.cfg.hostname}/", post=self._notify_post)
+        except NT.NotifyError as e:
+            self._notify_hold = (now, timedelta(minutes=cfg["notify_every"]))
+            self._notify_log(str(e))
+            return None
+        if done == "failed":
+            self._notify_log(NT.status(self.cfg.state)["last_error"] or "the last send failed")
+        if done:
+            self._bump()   # the Settings tab shows how the last send went
+        return done
+
+    def _notify_log(self, what: str) -> None:
+        """A notify problem in the server log, once per new problem rather than once a window or a minute."""
+        if what != self._notify_said:
+            sys.stderr.write(f"console notify: {what}\n")
+            self._notify_said = what
 
     def _cron_tick_loop(self) -> None:
         """0.15.0: every minute, check every trigger's cron and fire the matched ones.

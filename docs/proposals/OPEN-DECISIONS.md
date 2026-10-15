@@ -119,6 +119,22 @@ All four are the owner's own picks ("1a 2a 3a 4 yes").
 | S3 | The first wave | **A.** Two-key areas, chat limits, agents per item, operator short names, lane labels and colours; notification settings as they are built. Folders, the committee seat and next-step skills stay in `.overture.json` for now. |
 | S4 | Order | **Yes.** Settings now (1.44), notifications next. |
 
+## Notifications (decided 2026-10-15)
+
+Weighed after Settings (1.44). The owner took every recommendation ("go").
+
+| # | Decision | Outcome |
+|---|---|---|
+| N1 | Channel | **A.** A Slack-style incoming webhook (Slack, Mattermost, Discord's `/slack` URL). Email can come later behind the same switch. |
+| N2 | Who sets the webhook URL | **B.** The owner, in the terminal (`agent.py notify-url`); it is a credential. Settings turns notifications on or off and sets the timing. |
+| N3 | What a message says | **A.** Counts, item ids and a link to the console. Never a question's text, never an email. |
+| N4 | When | **B.** A digest: at most one message every N minutes (default 30), plus quiet hours. |
+| N5 | Who sends | **A.** The console server, to the configured host only: HTTPS, no redirects, timeouts. |
+
+Weighed and not chosen: SMTP email (N1 B), the URL set from Settings (N2 A),
+question text in messages (N3 B), a message per question (N4 A), and the
+steward session sending (N5 B).
+
 ---
 
 ## Server hosting

@@ -27,6 +27,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import notify as NT
 from . import operators as OP
 from . import projectcfg as PC
 from . import roles as RO
@@ -38,7 +39,10 @@ LIMITS = {
     "chat_per_hour": (1, 1000, 60, "Chat messages an hour"),
     "working_per_item": (1, 50, 8, "Agents working one item at once"),
 }
-KEYS = frozenset(LIMITS) | {"lanes"}
+# 1.45.0: notifications (notify.py). The webhook URL is not here: it is the owner's, set in the terminal.
+NOTIFY = {"notify_on": False, "notify_every": 30, "notify_quiet": None}
+NOTIFY_EVERY = (5, 1440)   # minutes between two messages
+KEYS = frozenset(LIMITS) | {"lanes"} | frozenset(NOTIFY)
 
 
 class SettingsError(Exception):
@@ -55,6 +59,19 @@ def problem(key: object, value: object) -> str | None:
         lo, hi, _, what = LIMITS[key]
         if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
             return f"{what}: a whole number from {lo} to {hi}"
+        return None
+    if key == "notify_on":
+        return None if isinstance(value, bool) else "notify_on is true or false"
+    if key == "notify_every":
+        lo, hi = NOTIFY_EVERY
+        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+            return f"Minutes between two notifications: a whole number from {lo} to {hi}"
+        return None
+    if key == "notify_quiet":
+        if (not isinstance(value, dict) or set(value) != {"from", "to"}
+                or not all(isinstance(v, str) and NT.HHMM.fullmatch(v) for v in value.values())
+                or value["from"] == value["to"]):
+            return 'quiet hours are {"from": "HH:MM", "to": "HH:MM"}, two different times, e.g. 22:00 to 07:00'
         return None
     # lanes: the `.overture.json` shape, labels and colours only (`ux` changes a lane's flow: the repo's).
     if not isinstance(value, dict) or any(not isinstance(o, dict) or set(o) - {"color", "label"}
@@ -94,6 +111,7 @@ def effective(state: Path, project_lanes: dict) -> tuple[dict, str | None]:
     except SettingsError as e:
         got, bad = {}, str(e)
     out = {k: got.get(k, LIMITS[k][2]) for k in LIMITS}
+    out.update({k: got.get(k, d) for k, d in NOTIFY.items()})
     lanes = {lane: dict(o) for lane, o in project_lanes.items()}
     for lane, o in got.get("lanes", {}).items():
         lanes[lane] = {**lanes.get(lane, {}), **o}

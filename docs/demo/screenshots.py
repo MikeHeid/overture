@@ -644,8 +644,99 @@ def capture(demo: Demo) -> list[str]:
         shot("feature-shortcuts", shortcuts)
 
         record_gifs(browser, url, problems)
+        team_scenes(demo, shot, tab, panel, item)
         browser.close()
     return problems
+
+
+# -- the team features (1.39–1.45) ------------------------------------------
+def team_scenes(demo: Demo, shot, tab, panel, item) -> None:
+    """Roles, routing, two-key locks, Settings and notifications. Captured last: once roles are on, every
+    question carries a "For" line, so the scenes above (and the animations) are taken without them."""
+    from overture import notify as NT
+    from overture import roles as RO
+    from overture import settings as SET
+    st, me = demo.cfg.state, "owner@example.com"   # the page's own login, as token() signs it
+    RO.set_role(st, me, "owner")
+    RO.set_role(st, "bob@example.com", "member", ["API-2", "UI-2"], by=me)
+    RO.set_role(st, "carol@example.com", "viewer", director=True, by=me)
+    RO.set_two_key(st, ["SEC-2"], by=me)
+    SET.put(st, "chat_per_minute", 4, by=me)
+    SET.put(st, "lanes", {"lane-api": {"label": "API", "color": "blue"}}, by=me)
+    SET.put_name(st, "bob@example.com", "bob", by=me)
+    NT.set_url(st, "https://hooks.slack.com/services/T0DEMO/B0DEMO/not-a-real-hook")
+    SET.put(st, "notify_on", True, by=me)
+    SET.put(st, "notify_quiet", {"from": "22:00", "to": "07:00"}, by=me)
+    # A first key on SEC-2/Q2 (answered in seed): the card waits for a second person.
+    demo.owner("/api/lock", {"qid": "SEC-2/Q2", "answer": demo.console.store.head("SEC-2/Q2")["id"]})
+
+    shot("feature-people", tab("feature-people", "people"))
+    shot("feature-settings", tab("feature-settings", "settings"))
+
+    def notify(pg):
+        tab("feature-settings", "settings")(pg)
+        pg.locator(".ck-settings-notify").screenshot(path=str(OUT / "feature-notify.png"))
+    shot("feature-notify", notify)
+
+    def routing(pg):
+        pg.evaluate("ConsoleKit.openTab('inbox')")
+        pg.wait_for_timeout(1500)
+        panel(pg, "feature-routing")
+    shot("feature-routing", routing)
+
+    def two_key(pg):
+        item(pg, "SEC-2")
+        card = pg.locator(".ck-question[data-qid='SEC-2/Q2']")
+        if not card.locator(".ck-two-key-note").count():
+            pg.locator(".ck-q-line[data-qid='SEC-2/Q2']").click()
+            pg.wait_for_timeout(800)
+        card.screenshot(path=str(OUT / "feature-two-key.png"))
+    shot("feature-two-key", two_key)
+
+
+# -- the team features (1.39–1.45) ------------------------------------------
+def team_scenes(demo: Demo, shot, tab, panel, item) -> None:
+    """Roles, routing, two-key locks, Settings and notifications. Captured last: once roles are on, every
+    question carries a "For" line, so the scenes above (and the animations) are taken without them."""
+    from overture import notify as NT
+    from overture import roles as RO
+    from overture import settings as SET
+    st, me = demo.cfg.state, "owner@example.com"   # the page's own login, as token() signs it
+    RO.set_role(st, me, "owner")
+    RO.set_role(st, "bob@example.com", "member", ["API-2", "UI-2"], by=me)
+    RO.set_role(st, "carol@example.com", "viewer", director=True, by=me)
+    RO.set_two_key(st, ["SEC-2"], by=me)
+    SET.put(st, "chat_per_minute", 4, by=me)
+    SET.put(st, "lanes", {"lane-api": {"label": "API", "color": "blue"}}, by=me)
+    SET.put_name(st, "bob@example.com", "bob", by=me)
+    NT.set_url(st, "https://hooks.slack.com/services/T0DEMO/B0DEMO/not-a-real-hook")
+    SET.put(st, "notify_on", True, by=me)
+    SET.put(st, "notify_quiet", {"from": "22:00", "to": "07:00"}, by=me)
+    # A first key on SEC-2/Q2 (answered in seed): the card waits for a second person.
+    demo.owner("/api/lock", {"qid": "SEC-2/Q2", "answer": demo.console.store.head("SEC-2/Q2")["id"]})
+
+    shot("feature-people", tab("feature-people", "people"))
+    shot("feature-settings", tab("feature-settings", "settings"))
+
+    def notify(pg):
+        tab("feature-settings", "settings")(pg)
+        pg.locator(".ck-settings-notify").screenshot(path=str(OUT / "feature-notify.png"))
+    shot("feature-notify", notify)
+
+    def routing(pg):
+        pg.evaluate("ConsoleKit.openTab('inbox')")
+        pg.wait_for_timeout(1500)
+        panel(pg, "feature-routing")
+    shot("feature-routing", routing)
+
+    def two_key(pg):
+        item(pg, "SEC-2")
+        card = pg.locator(".ck-question[data-qid='SEC-2/Q2']")
+        if not card.locator(".ck-two-key-note").count():
+            pg.locator(".ck-q-line[data-qid='SEC-2/Q2']").click()
+            pg.wait_for_timeout(800)
+        card.screenshot(path=str(OUT / "feature-two-key.png"))
+    shot("feature-two-key", two_key)
 
 
 # -- animations ------------------------------------------------------------
