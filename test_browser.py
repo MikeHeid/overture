@@ -3328,6 +3328,49 @@ class InboxUXTests(unittest.TestCase):
                 self.assertGreater(page.locator(".ck-more-item").count(), 0)
                 self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
 
+    def test_a_director_sets_a_limit_the_two_key_areas_and_a_short_name_in_settings(self):
+        # Catches (1.44.0): the Settings tab never shown to a director (or shown to any viewer), a Save posting
+        # nothing or the text "3", the two-key form left behind in People (which a director never sees), the
+        # short-name form wired to nothing, and the changes not drawn with "You".
+        from overture import operators as OP
+        from overture import roles as RO
+        from overture import settings as SET
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer", director=True)   # the page's login
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.click(".ck-tab-more")
+                page.click(".ck-more-item:has-text('Settings')")
+                self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
+                page.fill("#ck-setting-chat_per_minute", "3")
+                page.click(".ck-settings-row[data-key='chat_per_minute'] button:has-text('Save')")
+                page.wait_for_selector(".ck-settings-row[data-key='chat_per_minute'] >> text=set here; the default is 6")
+                self.assertEqual(SET.load(self.cfg.state), {"chat_per_minute": 3})
+                page.fill("#ck-two-key-areas", "LANE")
+                page.click(".ck-two-key-form button[type='submit']")
+                _wait_for(page, "() => document.querySelector('.ck-live').textContent.includes('Two-key areas: LANE')")
+                self.assertEqual(RO.two_key_areas(self.cfg.state), ["LANE"])
+                page.fill(".ck-settings-name-add input[type='email']", "bob@example.com")
+                page.fill(".ck-settings-name-add input[type='text']", "bob")
+                page.click(".ck-settings-name-add button[type='submit']")
+                page.wait_for_selector(".ck-settings-row[data-email='bob@example.com']")
+                self.assertEqual(OP.load_names(self.cfg.state), {"bob@example.com": "bob"})
+                log = page.locator(".ck-people-log").text_content()
+                self.assertIn("You set Chat messages a minute to 3 (was the default)", log)
+                self.assertIn("You set the short name of bob@example.com to bob", log)
+                # A plain viewer: no Settings tab, and #settings says why.
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                page.wait_for_selector("text=Only an administrator or a director changes settings.")
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.click(".ck-tab-more")
+                page.wait_for_selector(".ck-more-menu")
+                self.assertEqual(page.locator(".ck-more-item", has_text="Settings").count(), 0)
+
     def test_the_people_tab_shows_who_changed_whose_role_newest_first(self):
         # Catches (1.42.0, W5): the log sent but never drawn, drawn oldest first, a console change not shown
         # as "You", and a terminal change credited to a login rather than to `agent.py access`.

@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -569,7 +569,7 @@ what to what. The log (`STATE/roles-log.jsonl`) stays on the console's
 machine beside `roles.json` and keeps every line; the tab shows the
 newest 50.
 
-**Two-key locks (1.43).** Under People, **Two-key areas** names the
+**Two-key locks (1.43).** Under Settings, **Two-key areas** names the
 items (each with everything under it) where one person may not lock
 alone. A lock there waits, shown on the card as "You locked this:
 waiting for a second person", until a second login that may lock there
@@ -578,6 +578,16 @@ the same answer. Only then is it a ruling: until then agents, the
 process request and the ruling export see an unlocked answer. The card
 then says "Locked by A, confirmed by B". Re-lock and **Lock all** follow
 the same rule. Two-key areas need roles on.
+
+**Settings (1.44).** An administrator or a director opens **Settings**
+to make the project's own choices: how many chat messages a minute and
+an hour, how many agents may work one item at once, each lane's label
+and colour, the two-key areas (moved here from People), and the short
+names committed rulings carry instead of emails. A value set there
+lives beside the project on the console's machine
+(`STATE/settings.json`), overrides the default, applies at once, and is
+listed under **Changes**. **Reset** goes back to the default. People
+stays the administrator's alone.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1093,6 +1103,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.44 — Settings**: administrators and directors set the limits, lane
+  labels and colours, two-key areas and short names in the console.
 - **1.43 — Two-key locks**: in the areas an administrator names, a lock
   counts once a second person confirms it.
 - **1.42 — Role changes**: People lists who changed whose role, and

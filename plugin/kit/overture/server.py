@@ -98,6 +98,7 @@ from . import assets as AS
 from . import names as N
 from . import operators as OP
 from . import roles as RO
+from . import settings as SET
 from . import twokey as KEY
 from .roles import RolesError
 from . import peers as PE
@@ -120,7 +121,12 @@ OWNER_ROUTES = {"/api/message": "message", "/api/answer": "answer", "/api/lock":
 # (intent, move_to, pr, step, about_qid...) asks an agent for something or points elsewhere: the owner's.
 MEMBER_ROUTES = frozenset(OWNER_ROUTES)
 OWNER_ROLES = "/api/roles"   # 1.40.0: the People tab sets a login's role; an owner's alone, as every non-member route
-OWNER_TWO_KEY = "/api/two-key"   # 1.43.0 (W6): the People tab's two-key areas; an owner's alone
+OWNER_TWO_KEY = "/api/two-key"   # 1.43.0 (W6): two-key areas; 1.44.0: an owner's or a director's
+OWNER_SETTINGS = "/api/settings"            # 1.44.0: the Settings tab (settings.py)
+OWNER_OPERATOR_NAME = "/api/operator-name"  # 1.44.0: the short names ruling exports carry (operators.py)
+# 1.44.0 (owner, 2026-10-15): what a director may change, besides an administrator. People (who has which role)
+# stays the administrator's alone, so no director can raise anyone, themselves included.
+DIRECTOR_ROUTES = frozenset({OWNER_TWO_KEY, OWNER_SETTINGS, OWNER_OPERATOR_NAME})
 MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 # 0.8.19: starred visuals and items. A side-route (not a store kind): toggles are owner-only, idempotent, cheap.
 OWNER_FAVORITE = "/api/favorite"
@@ -145,8 +151,8 @@ OWNER_ASSET_UPLOAD = "/api/asset-upload"     # F2: the owner attaches an image t
 WAIT_MAX = 25.0
 MAX_WAITERS = 16            # open long polls at once; past this a poll is told to back off (429)
 # The chat (0.7.0): at most this many owner messages a minute and an hour.
-CHAT_PER_MINUTE = 6
-CHAT_PER_HOUR = 60
+CHAT_PER_MINUTE = SET.LIMITS["chat_per_minute"][2]   # 1.44.0: the default; the setting applies
+CHAT_PER_HOUR = SET.LIMITS["chat_per_hour"][2]
 MAX_LOCK_ALL = 12           # entries in one "Lock all & process" (a round holds at most 5)
 LOCK_ALL_NONCE = 48         # characters: room for the per-record suffixes within the nonce limit
 AGENT_ROUTES = {"/question": "question", "/message": "message", "/transcript": "transcript"}
@@ -987,6 +993,7 @@ class Console:
         # 0.8.0: specs_dir and visuals_dir from the project's .overture.json (data only;
         # a bad key raises ConfigError here, by name, so the server never starts half-configured).
         self.project = PC.load(cfg.root)
+        self._settings_cache: tuple | None = None   # 1.44.0: (stamp, the settings as they apply), see setting()
         self.store = Store(cfg.store)
         self.names = N.Names(cfg.state)   # 0.8.2: record id -> agent name, beside the store
         # 1.38.0: record id -> the Access email of the owner request that wrote it, beside the store.
@@ -1114,6 +1121,8 @@ class Console:
             sys.stderr.write(f"console roles: {e}\n")
             raise RequestError(503, "the roles file cannot be read, so no write is let through; see the "
                                     "server log") from None
+        if path in DIRECTOR_ROUTES and entry.get("director"):
+            return entry   # 1.44.0: a director sets the project's settings, whatever their role writes otherwise
         if entry["role"] == "viewer":
             raise RequestError(403, "you are signed in as a viewer: this console is read-only for you")
         if entry["role"] == "member" and path not in MEMBER_ROUTES:
@@ -1140,7 +1149,8 @@ class Console:
             out["two_key"] = []
         # 1.42.0 (W5): who changed whose role, newest first; kept with roles off too (removing everyone is a change).
         try:
-            out["log"], out["log_total"] = RO.history(self.cfg.state)
+            # 1.44.0: role changes only; settings, short names and two-key areas are listed under Settings.
+            out["log"], out["log_total"] = RO.history(self.cfg.state, where=RO.role_line)
         except RolesError as e:
             sys.stderr.write(f"console roles: {e}\n")   # the path stays in the log, never on the page
             out["log"], out["log_total"] = [], 0
@@ -1205,8 +1215,8 @@ class Console:
             except RolesError as e:
                 sys.stderr.write(f"console roles: {e}\n")
                 raise RequestError(503, "the roles file cannot be read; see the server log") from None
-            if current is not None and RO.role_of(current, me)["role"] != "owner":
-                raise RequestError(403, "you are no longer an administrator here; reload the console")
+            if current is not None and not self._may_configure(RO.role_of(current, me)):
+                raise RequestError(403, "you are no longer an administrator or a director here; reload the console")
             # (security review) An area the register does not know would look set and guard nothing.
             unknown = [a for a in body["areas"] if a not in self.items()]
             if unknown:
@@ -1223,7 +1233,121 @@ class Console:
                 sys.stderr.write(f"console roles: write failed: {type(e).__name__}: {e}\n")
                 raise RequestError(500, "could not write the roles file; see the server log") from None
         self._bump()   # every open page shows the new two-key marks
-        return {"roles": self.roles_view()}
+        # 1.44.0: a director sets these too, and the roster (every login's email) is an administrator's alone.
+        out = {"settings": self.settings_view()}
+        if self.you()["role"] == "owner":
+            out["roles"] = self.roles_view()
+        return out
+
+    # -- settings (1.44.0; settings.py) ----------------------------------------------------------
+
+    @staticmethod
+    def _may_configure(entry: dict) -> bool:
+        """An administrator, or a director (member or viewer with the flag): who sets the project's settings."""
+        return entry["role"] == "owner" or bool(entry.get("director"))
+
+    def _configurer(self) -> str | None:
+        """This login, re-checked under the lock as one who may set settings (role_gate ran before it)."""
+        me = getattr(self._acting, "email", None)
+        try:
+            current = RO.load(self.cfg.state)
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}\n")
+            raise RequestError(503, "the roles file cannot be read; see the server log") from None
+        if current is not None and not self._may_configure(RO.role_of(current, me)):
+            raise RequestError(403, "you are no longer an administrator or a director here; reload the console")
+        return me if isinstance(me, str) else None
+
+    def setting(self, key: str):
+        """One setting as it applies now (settings.py), read on every use so a change needs no restart."""
+        p = self.cfg.state / SET.FILE
+        try:
+            st = p.stat()
+            stamp = (st.st_ino, st.st_size, st.st_mtime_ns, id(self.project.lanes))
+        except OSError:
+            stamp = (None, id(self.project.lanes))
+        # Kept while the file and the project's lanes are unchanged: a chat message reads two of these, and
+        # a damaged file is named in the server log once per change of the file, not on every use.
+        if self._settings_cache is None or self._settings_cache[0] != stamp:
+            got, bad = SET.effective(self.cfg.state, self.project.lanes)
+            if bad:
+                sys.stderr.write(f"console settings: {bad}; the defaults apply\n")
+            self._settings_cache = (stamp, got)
+        return self._settings_cache[1][key]
+
+    def settings_view(self) -> dict:
+        """The Settings tab's data, for an administrator's or a director's page: what applies, what was set
+        here, the defaults, the two-key areas, the short names and the changes. Never the role roster."""
+        got, bad = SET.effective(self.cfg.state, self.project.lanes)
+        me = getattr(self._acting, "email", None)   # this page's own login, for "You" in the changes
+        try:
+            set_here = SET.load(self.cfg.state)
+        except SET.SettingsError:
+            set_here = {}
+        try:
+            two_key = RO.two_key_areas(self.cfg.state)
+        except RolesError:
+            two_key = []
+        try:
+            names = OP.load_names(self.cfg.state)
+        except (OSError, OP.OperatorsError):
+            names = {}
+        try:
+            log, log_total = RO.history(self.cfg.state, where=RO.settings_line)
+        except RolesError:
+            log, log_total = [], 0
+        return {"values": got, "set": set_here, "problem": "the settings file cannot be read, so the defaults "
+                "apply; see the server log" if bad else None,
+                "defaults": {k: v[2] for k, v in SET.LIMITS.items()}, "lanes_repo": self.project.lanes,
+                "limits": {k: {"min": v[0], "max": v[1], "label": v[3]} for k, v in SET.LIMITS.items()},
+                "lane_colors": list(PC.LANE_COLORS), "two_key": two_key,
+                # who decided here already (their emails are on every card's "Locked by") and who has a name
+                "operators": sorted(set(self.operators.mapping().values()) | set(names)), "names": names,
+                "log": log, "log_total": log_total, "me": me.lower() if isinstance(me, str) else None}
+
+    def put_setting(self, body: object) -> dict:
+        """POST /api/settings {"key", "value"}: set one setting (null: back to the default), logged."""
+        if not isinstance(body, dict) or set(body) - {"key", "value", "nonce"} or "key" not in body \
+                or "value" not in body:
+            raise RequestError(400, '/api/settings takes {"key", "value", "nonce"?}; a null value restores the '
+                                    'default')
+        with self._lock:
+            me = self._configurer()
+            try:
+                SET.put(self.cfg.state, body["key"], body["value"], by=me)
+            except SET.SettingsError as e:
+                if str(self.cfg.state) in str(e):
+                    sys.stderr.write(f"console settings: {e}\n")
+                    raise RequestError(503, "the settings file cannot be read; see the server log") from None
+                raise RequestError(400, str(e)) from None
+            except OSError as e:
+                sys.stderr.write(f"console settings: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not write the settings file; see the server log") from None
+        self._bump()   # every open page shows the new lanes and limits
+        return {"settings": self.settings_view()}
+
+    def put_operator_name(self, body: object) -> dict:
+        """POST /api/operator-name {"email", "name"}: the short name committed rulings carry for that login,
+        as `agent.py operator-name` sets it (null clears it), logged. The email stays in the console."""
+        if not isinstance(body, dict) or set(body) - {"email", "name", "nonce"} or "email" not in body \
+                or "name" not in body:
+            raise RequestError(400, '/api/operator-name takes {"email", "name": NAME|null, "nonce"?}')
+        email, name = body["email"], body["name"]
+        why = OP.email_problem(email) or (OP.name_problem(name) if name is not None else None)
+        if why:
+            raise RequestError(400, why)
+        with self._lock:
+            me = self._configurer()
+            try:
+                SET.put_name(self.cfg.state, email, name, by=me)
+            except OP.OperatorsError as e:
+                sys.stderr.write(f"console operators: {e}\n")
+                raise RequestError(503, "the operator-names file cannot be read; see the server log") from None
+            except OSError as e:
+                sys.stderr.write(f"console operators: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not write the operator names; see the server log") from None
+        self._bump()
+        return {"settings": self.settings_view()}
 
     # -- two-key locks (1.43.0, OPEN-DECISIONS.md W6; twokey.py) -------------------------------
 
@@ -1483,18 +1607,21 @@ class Console:
             raise RequestError(409, f"a merge of #{n} is already requested and no session has answered yet")
 
     def _chat_gate(self) -> None:
-        """Refuse an owner chat message past CHAT_PER_MINUTE a minute or CHAT_PER_HOUR an hour; the caller holds `_lock`."""
+        """Refuse an owner chat message past the chat limits a minute or an hour; the caller holds `_lock`.
+
+        1.44.0: the limits are settings (Settings tab; CHAT_PER_MINUTE and CHAT_PER_HOUR are the defaults)."""
+        per_min, per_hour = self.setting("chat_per_minute"), self.setting("chat_per_hour")
         now = time.monotonic()
         while self._chat_times and now - self._chat_times[0] >= 3600:
             self._chat_times.popleft()
         last_min = [t for t in self._chat_times if now - t < 60]
-        if len(last_min) >= CHAT_PER_MINUTE:
+        if len(last_min) >= per_min:
             wait = int(60 - (now - last_min[0])) + 1
-            raise RequestError(429, f"at most {CHAT_PER_MINUTE} chat messages a minute: try again in {wait}s. "
+            raise RequestError(429, f"at most {per_min} chat messages a minute: try again in {wait}s. "
                                     f"Nothing you typed was lost")
-        if len(self._chat_times) >= CHAT_PER_HOUR:
+        if len(self._chat_times) >= per_hour:
             wait = int(3600 - (now - self._chat_times[0])) + 1
-            raise RequestError(429, f"at most {CHAT_PER_HOUR} chat messages an hour: try again in {wait // 60 + 1} "
+            raise RequestError(429, f"at most {per_hour} chat messages an hour: try again in {wait // 60 + 1} "
                                     f"min. Nothing you typed was lost")
 
     def items(self) -> dict[str, dict]:
@@ -1536,7 +1663,7 @@ class Console:
         view = V.build(self.store, items, holds, names=self.names.mapping())
         view["tags"] = self.tags(view, items)
         view["config"] = {"specs_dir": self.project.specs_dir, "visuals_dir": self.project.visuals_dir,
-                          "sections": self.project.sections, "lanes": self.project.lanes}
+                          "sections": self.project.sections, "lanes": self.setting("lanes")}
         view["playbooks"] = [p.to_dict() for p in PB.load(self.cfg.root).values()]
         view["triggers"] = [t.to_public() for t in self.triggers.all().values()]
         view["trigger_log"] = self.triggers.recent(20)
@@ -1607,6 +1734,9 @@ class Console:
         # 1.40.0: the People tab's list, to an owner's login only (it names every login by email).
         if you["role"] == "owner":
             out["view"] = {**out["view"], "roles": self.roles_view()}
+        # 1.44.0: the Settings tab's data, to an administrator's or a director's login (roles off: everyone's).
+        if self._may_configure(you):
+            out["view"] = {**out["view"], "settings": self.settings_view()}
         # 1.33: the artifact lists agents posted for the owner's Claude Design links (the UX View picker).
         out["view"] = {**out["view"], "designs": DG.load(self.cfg.state)}
         # 1.32: assets an agent posted (FEED-ASSETS.md); owner door only, like tickets.
@@ -3714,7 +3844,7 @@ class Console:
             while self._chat_times and self._chat_times[0] < cutoff:
                 self._chat_times.popleft()
             chat_used = len(self._chat_times)
-        chat_remaining = max(0, CHAT_PER_MINUTE - chat_used)
+        chat_remaining = max(0, self.setting("chat_per_minute") - chat_used)
         # Age of the last cron tick in seconds, or None if the thread has not ticked yet.
         last_tick = self._cron_last_tick
         cron_age = int(now - last_tick) if last_tick is not None else None
@@ -3732,12 +3862,12 @@ class Console:
             "waiters": self._waiters,
             "max_waiters": MAX_WAITERS,
             "chat_remaining": chat_remaining,
-            "chat_per_minute": CHAT_PER_MINUTE,
+            "chat_per_minute": self.setting("chat_per_minute"),
             "cron_last_tick_age_s": cron_age,
             "peers_last_fetched_age_s": peers_age,
             "working_global": working_global,
             "working_global_max": MAX_WORKING_GLOBAL,
-            "working_per_item_max": MAX_WORKING_PER_ITEM,
+            "working_per_item_max": self.setting("working_per_item"),
         })
         return body
 
@@ -3831,11 +3961,12 @@ class Console:
                     429, f"would push the global working set to {global_count}; cap is {MAX_WORKING_GLOBAL}. "
                          f"Close an item or wait for an agent to sync before marking more.")
             # Per-item: count distinct agent-buckets that would hold a mark on each of the new items.
+            per_item = self.setting("working_per_item")   # 1.44.0: a setting; MAX_WORKING_PER_ITEM is its default
             for item in items:
                 holders = sum(1 for b_items in would_be.values() if item in b_items)
-                if holders > MAX_WORKING_PER_ITEM:
+                if holders > per_item:
                     raise RequestError(
-                        429, f"item {item!r} would have {holders} agents active; cap is {MAX_WORKING_PER_ITEM}. "
+                        429, f"item {item!r} would have {holders} agents active; cap is {per_item}. "
                              f"Wait for one to sync before another starts.")
             by[bucket] = new_bucket
             self._write_working(by)
@@ -4347,7 +4478,7 @@ class OwnerHandler(_Handler):
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
                                               OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD,
-                                              OWNER_ROLES, OWNER_TWO_KEY):
+                                              OWNER_ROLES, OWNER_TWO_KEY, OWNER_SETTINGS, OWNER_OPERATOR_NAME):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -4397,8 +4528,12 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.save_draft(body))
             if self.path == OWNER_ROLES:         # 1.40.0: the People tab
                 return self._send(200, self.console.set_role(body))
-            if self.path == OWNER_TWO_KEY:       # 1.43.0: the People tab's two-key areas
+            if self.path == OWNER_TWO_KEY:       # 1.43.0: two-key areas (1.44.0: in Settings)
                 return self._send(200, self.console.set_two_key(body))
+            if self.path == OWNER_SETTINGS:      # 1.44.0: the Settings tab
+                return self._send(200, self.console.put_setting(body))
+            if self.path == OWNER_OPERATOR_NAME:  # 1.44.0: short names for committed rulings
+                return self._send(200, self.console.put_operator_name(body))
             if self.path == "/api/lock":         # 1.43.0: write() for a lock, but two keys in a two-key area
                 return self._send(200, self.console.lock(body))
             if self.path == OWNER_CSRF_ROTATE:   # rotate the CSRF token without a restart
@@ -4615,7 +4750,7 @@ MAX_WORKING = 32           # per-bucket (per-agent) marks; also the input valida
 #   - MAX_WORKING_PER_ITEM — the number of distinct agents allowed to hold a mark on ONE item
 # A /working POST that would push either cap over is refused by name with 429.
 MAX_WORKING_GLOBAL = 64
-MAX_WORKING_PER_ITEM = 8
+MAX_WORKING_PER_ITEM = SET.LIMITS["working_per_item"][2]   # 1.44.0: the default; the setting applies
 TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 SOCKET_PATH_MAX = 107  # sun_path is 108 bytes on Linux, one of them the terminating NUL
 
