@@ -2990,7 +2990,38 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
-## Routing (1.41.0)
+## Role changes (1.42.0)
+
+Wave 3, OPEN-DECISIONS.md W5 (the owner's choice of 2026-10-14).
+
+- **A log of every role change**, `STATE/roles-log.jsonl`, beside
+  `roles.json`: one line per change, `{"at", "by", "email", "from",
+  "to"}`. `by` is the console login that made it, or null for
+  `agent.py access` in the owner's terminal; `from` and `to` are the
+  role entries (null for not listed). Like `roles.json` it is never
+  committed and stays on the console's machine (mode 0600).
+- **Shown under People**, newest 50 first: "You added bob@example.com
+  as member of LANE", "agent.py access changed … from … to …". It is
+  shown with roles off too, since removing everyone is a change. Only an
+  administrator's page carries it; agents never see it.
+- **No change goes unlogged, and none is logged that did not land.**
+  The line is written and synced before `roles.json` is replaced, and
+  cut back if that fails. Saving a row unchanged writes nothing. One
+  case remains: a process killed between the line and the rename keeps
+  a line for a change that did not land (`roles.json` is what is in
+  force). A line a killed writer left half-written is cut back by the
+  next change, with a note in the server log.
+- `access` with a mistyped `--state` now fails ("nothing was written")
+  instead of creating that directory.
+- **The console and the terminal take turns.** Both read, change and
+  rewrite the whole map; the log's lock is now held across that, so a
+  People click and an `agent.py access` at the same moment no longer
+  drop one another's change.
+- A damaged log line is named in the server log by line number and the
+  tab says the log cannot be read; it never blocks a role change. A
+  last line still being written is left out.
+- **Downgrade:** 1.41 ignores the log and writes no lines to it.
+
 
 Wave 3, as the owner decided on 2026-10-14 (OPEN-DECISIONS.md W1–W4).
 
