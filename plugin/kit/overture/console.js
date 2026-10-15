@@ -1251,7 +1251,7 @@
     markSeen();
     const unread = unreadCount();
     // Fix #1: inbox.length is the true count, not summed totals which double-count children
-    const total = (view.inbox ? view.inbox.length : 0);
+    const total = inboxQids().length;   // 1.41: under the Inbox's scope, so "Mine" counts only mine
     // A second, separate count: threads where the owner wrote last and an agent
     // owes the answer. Kept apart from the first so "waiting for you" never
     // includes work that is not the owner's to do.
@@ -2233,7 +2233,7 @@
 
   function tabNote(id) {
     const unread = unreadCount();
-    if (id === 'inbox' && view && view.inbox && view.inbox.length) return String(view.inbox.length);
+    if (id === 'inbox' && view && inboxQids().length) return String(inboxQids().length);
     if (id === 'feed' && unread) return unread + ' new';
     if (id === 'tickets') {
       const n = ticketOpenTotal();
@@ -2516,9 +2516,20 @@
       }
       body.appendChild(list);
     }
+    const scope = renderInboxScope();
+    if (scope) body.appendChild(scope);
+    const elsewhere = (view.inbox || []).length;
+    if (scope && inboxScope === 'mine' && !inboxQids().length && elsewhere) {
+      // Not a blank Inbox: say the questions are outside Mine, and how to see them.
+      const line = el('p', { className: 'ck-muted ck-mine-empty' }, ['Nothing in Mine. ']);
+      const all = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet' }, ['See All (' + elsewhere + ')']);
+      all.addEventListener('click', () => { inboxScope = 'all'; renderPanel(); updateInboxButton(); });
+      line.appendChild(all);
+      body.appendChild(line);
+    }
     const rounds = new Map();
     const loose = [];
-    for (const qid of view.inbox || []) {
+    for (const qid of inboxQids()) {
       const q = view.questions[qid];
       if (!q) continue;
       const f = q.question.forked_from;
@@ -2705,6 +2716,66 @@
     return w.join(', ');
   }
 
+  // 1.41 routing (OPEN-DECISIONS.md W1–W3). A question is for the members whose areas cover its item
+  // (an area is an item and everything under it); administrators cover all. view.you.mine is the areas
+  // this login's Inbox opens on, or null for everything (an administrator, a director, roles off).
+  let inboxScope = 'mine';
+  function underArea(itemId, areas) {
+    const seen = new Set();
+    let cur = itemId;
+    while (typeof cur === 'string' && !seen.has(cur)) {   // a parent loop ends the walk
+      if (areas.indexOf(cur) >= 0) return true;
+      seen.add(cur);
+      cur = items && items[cur] ? items[cur].parent : null;
+    }
+    return false;
+  }
+  function mineAreas() {
+    const you = view && view.you;
+    return you && Array.isArray(you.mine) ? you.mine : null;
+  }
+  function isMine(itemId) {
+    const areas = mineAreas();
+    return !areas || underArea(itemId, areas);
+  }
+  // The Inbox's questions under the current scope: all of them, or "Mine".
+  function inboxQids() {
+    const all = (view && view.inbox) || [];
+    if (inboxScope !== 'mine' || !mineAreas()) return all;
+    return all.filter(qid => view.questions[qid] && isMine(view.questions[qid].question.item));
+  }
+  // "For: …": an administrator (who has the People list) sees which members a question is for; anyone
+  // else sees "For you" on their own. Nothing when roles are off or no member covers the item.
+  function renderForLine(itemId, compact) {
+    const roles = view && view.roles;
+    let text = null;
+    if (roles && roles.on) {
+      const who = roles.people.filter(p => p.role === 'member' && Array.isArray(p.areas) && underArea(itemId, p.areas))
+        .map(p => p.email);
+      if (who.length) text = 'For ' + who.join(', ');
+    } else if (mineAreas() && isMine(itemId)) {
+      text = 'For you';
+    }
+    if (!text) return null;
+    return el(compact ? 'span' : 'div', { className: 'ck-q-for' }, [text]);
+  }
+
+  // The "Mine · All" switch, for a login whose Inbox opens on its areas (W3). It opens on Mine.
+  function renderInboxScope() {
+    const areas = mineAreas();
+    if (!areas) return null;
+    const bar = el('div', { className: 'ck-inbox-scope', role: 'group', 'aria-label': 'Which questions' });
+    const all = (view.inbox || []).length;
+    for (const [id, label] of [['mine', 'Mine (' + inboxQids().length + ')'], ['all', 'All (' + all + ')']]) {
+      const b = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-scope-' + id,
+        'aria-pressed': inboxScope === id ? 'true' : 'false' }, [label]);
+      b.addEventListener('click', () => { inboxScope = id; renderPanel(); updateInboxButton(); });
+      bar.appendChild(b);
+    }
+    bar.appendChild(el('span', { className: 'ck-muted' }, [' Mine: ' + areas.join(', ') + ' and everything under them']));
+    return bar;
+  }
+
   function looseRow(q) {
     const itemData = items[q.question.item];
     const qid = q.question.qid;
@@ -2720,7 +2791,8 @@
       el('span', { className: 'ck-inbox-item-id' }, [q.question.item]),
       el('span', { className: 'ck-inbox-item-qnum', title: qid }, ['Q' + qNum(qid)]),
       el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
-      waiting ? el('span', { className: 'ck-inbox-item-waiting' }, [waiting]) : ''
+      waiting ? el('span', { className: 'ck-inbox-item-waiting' }, [waiting]) : '',
+      renderForLine(q.question.item, true) || ''
     ]);
     const go = () => openFromInbox(q.question.item, qid);
     item.addEventListener('click', go);
@@ -3203,6 +3275,8 @@
       textCol.appendChild(srcEl);
     }
     if (qData.agent) textCol.appendChild(el('div', { className: 'ck-q-agent' }, ['asked by ' + qData.agent]));
+    const forLine = renderForLine(qData.item);
+    if (forLine) textCol.appendChild(forLine);
     // grill provenance — if this qid is on view.grill_qids, show a ⚡ chip so the
     // operator sees the question was written by an agent IN RESPONSE TO their own grill
     // request. Different weight than a question an agent raised independently.
@@ -3895,9 +3969,12 @@
   function parseAreas(text) {
     return String(text || '').split(/[\s,]+/).filter(Boolean);
   }
-  async function postRole(email, role, areas) {
-    const r = await apiPost('/roles', { email, role, areas: role === 'member' ? areas : [] },
-      'roles-' + email + '-' + role + '-' + areas.join(','), { quiet: true });
+  async function postRole(email, role, areas, director) {
+    // 1.41: a viewer may name areas too (what its Inbox opens on), and a member or viewer may be a director.
+    const body = { email, role, areas: role === 'owner' ? [] : areas };
+    if (director && role && role !== 'owner') body.director = true;
+    const r = await apiPost('/roles', body,
+      'roles-' + email + '-' + role + '-' + areas.join(',') + (body.director ? '-d' : ''), { quiet: true });
     peopleError = r && r.error ? r.error : null;
     if (!peopleError) announce(role ? email + ' is now ' + ROLE_LABEL[role].toLowerCase() : email + ' removed');
     renderPanel();
@@ -3914,6 +3991,21 @@
   function areasInput(value, id) {
     return el('input', { type: 'text', className: 'ck-input ck-people-areas', id, value: value || '',
       list: 'ck-people-items', placeholder: 'item ids, e.g. AUTH BILLING', autocomplete: 'off' });
+  }
+  // A role's controls: the select, the areas box (not for an administrator) and the director box
+  // (members and viewers: their Inbox opens on everything; it grants no decision).
+  function roleControls(idBase, p) {
+    const sel = roleSelect(p.role, idBase + '-role');
+    const areas = areasInput((p.areas || []).join(' '), idBase + '-areas');
+    const dirBox = el('input', { type: 'checkbox', className: 'ck-people-director-box', id: idBase + '-director' });
+    dirBox.checked = !!p.director;
+    const dir = el('label', { className: 'ck-people-director', for: idBase + '-director',
+      title: 'Their Inbox opens on every question; what they may decide is still their role' },
+      [dirBox, ' Director']);
+    const sync = () => { areas.hidden = sel.value === 'owner'; dir.hidden = sel.value === 'owner'; };
+    sel.addEventListener('change', sync);
+    sync();
+    return { sel, areas, dir, dirBox };
   }
   function renderPeopleTab(body) {
     const roles = view && view.roles;
@@ -3951,25 +4043,25 @@
     }
     body.appendChild(el('p', { className: 'ck-muted' }, [
       'An administrator can do everything. A member answers, locks and writes plain messages in their ' +
-      'areas (an item and everything under it). A viewer only reads. Anyone not listed only reads.']));
+      'areas (an item and everything under it), and their Inbox opens on those. A viewer only reads; ' +
+      'areas give a viewer\'s Inbox its "Mine". A director\'s Inbox opens on everything. Anyone not listed ' +
+      'only reads.']));
     const list = el('ul', { className: 'ck-people-list' });
     roles.people.forEach((p, i) => {
       const row = el('li', { className: 'ck-people-row', dataEmail: p.email });
       const you = p.email === roles.me;
       row.appendChild(el('span', { className: 'ck-people-email' }, [p.email, you ? ' (you)' : '']));
-      const sel = roleSelect(p.role, 'ck-people-role-' + i);
-      sel.setAttribute('aria-label', 'Role for ' + p.email);
-      const areas = areasInput((p.areas || []).join(' '), 'ck-people-areas-' + i);
-      areas.setAttribute('aria-label', 'Areas for ' + p.email);
-      areas.hidden = p.role !== 'member';
-      sel.addEventListener('change', () => { areas.hidden = sel.value !== 'member'; });
+      const c = roleControls('ck-people-' + i, p);
+      c.sel.setAttribute('aria-label', 'Role for ' + p.email);
+      c.areas.setAttribute('aria-label', 'Areas for ' + p.email);
       const save = el('button', { className: 'ck-btn ck-people-save', type: 'button' }, ['Save']);
-      save.addEventListener('click', () => postRole(p.email, sel.value, parseAreas(areas.value)));
+      save.addEventListener('click', () => postRole(p.email, c.sel.value, parseAreas(c.areas.value), c.dirBox.checked));
       const remove = el('button', { className: 'ck-btn ck-btn-quiet ck-people-remove', type: 'button',
         'aria-label': 'Remove ' + p.email }, ['Remove']);
       remove.addEventListener('click', () => postRole(p.email, null, []));
-      row.appendChild(sel);
-      row.appendChild(areas);
+      row.appendChild(c.sel);
+      row.appendChild(c.areas);
+      row.appendChild(c.dir);
       row.appendChild(save);
       row.appendChild(remove);
       if (you) row.appendChild(el('span', { className: 'ck-muted ck-people-note' }, [
@@ -3980,19 +4072,18 @@
     const add = el('form', { className: 'ck-people-add', 'aria-label': 'Add a person' });
     const email = el('input', { type: 'email', className: 'ck-input ck-people-new-email', required: true,
       placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email', autocomplete: 'off' });
-    const sel = roleSelect('member', 'ck-people-new-role');
-    sel.setAttribute('aria-label', 'Role');
-    const areas = areasInput('', 'ck-people-new-areas');
-    areas.setAttribute('aria-label', 'Areas');
-    sel.addEventListener('change', () => { areas.hidden = sel.value !== 'member'; });
+    const c = roleControls('ck-people-new', { role: 'member' });
+    c.sel.setAttribute('aria-label', 'Role');
+    c.areas.setAttribute('aria-label', 'Areas');
     const go = el('button', { className: 'ck-btn ck-btn-primary', type: 'submit' }, ['Add']);
     add.addEventListener('submit', e => {
       e.preventDefault();
-      postRole(email.value.trim(), sel.value, parseAreas(areas.value));
+      postRole(email.value.trim(), c.sel.value, parseAreas(c.areas.value), c.dirBox.checked);
     });
     add.appendChild(email);
-    add.appendChild(sel);
-    add.appendChild(areas);
+    add.appendChild(c.sel);
+    add.appendChild(c.areas);
+    add.appendChild(c.dir);
     add.appendChild(go);
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Add a person']));
     body.appendChild(add);

@@ -2990,6 +2990,42 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Routing (1.41.0)
+
+Wave 3, as the owner decided on 2026-10-14 (OPEN-DECISIONS.md W1–W4).
+
+- **Who a question is for.** The members whose areas cover its item
+  (an area is an item and everything under it); administrators cover
+  all. No new question field: it is worked out from `roles.json`.
+  An administrator's page shows "For bob@example.com" on Inbox rows
+  and question cards (it already has the People list); a member's shows
+  "For you" on their own, and never the roster.
+- **Mine · All.** A member's Inbox opens on Mine, the questions in their
+  areas, with All one click away; the badge and tab count follow it.
+  `view.you.mine` carries the areas, or null for everything.
+- **Director.** `"director": true` on a member or viewer (People tab
+  checkbox, `agent.py access ... --director`): their Inbox opens on
+  everything. It widens what is shown, never what may be decided.
+- **Viewer areas.** A viewer may carry areas too, for what Mine shows;
+  they still write nothing.
+- **Drafts per login.** Each login's unsent text is its own, kept in
+  the one `drafts.json` under a short hash of the login (never the
+  email) and sent only to that login. Drafts saved before 1.41 still
+  show until their key is saved again, then the shared copy is dropped,
+  so a cleared draft cannot come back. A service token keeps the old
+  shared keys. A key the page sends may not start with `u:` (that would
+  name another login's stored draft), and stored keys allow the prefix,
+  so the page's 256-character limit is unchanged. The 500-draft cap is
+  still counted across all logins.
+- **"Nothing in Mine."** When Mine is empty but other questions wait,
+  the Inbox says so, with a button to All, instead of showing nothing.
+- `roles.json` entries may carry `director` and (viewers) `areas`; a
+  1.40 kit refuses such a file by name, so a downgrade fails closed
+  (writes 503) rather than misreading it. An owner entry stays
+  `{"role": "owner"}` only. **After a downgrade** neither the console nor
+  1.40's `access` can change that file: remove the `director` and viewer
+  `areas` fields from `STATE/roles.json` by hand.
+
 ## People (1.40.0)
 
 Roles (1.39) could be set only from a terminal. Now the administrator

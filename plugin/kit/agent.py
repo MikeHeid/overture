@@ -1541,9 +1541,12 @@ def main(argv=None) -> int:
                        "committed. You run this, never a session.")
     s.add_argument("email", nargs="?", help="the Access login, e.g. you@example.com (none: list every role)")
     s.add_argument("role", nargs="?", choices=RO.ROLES, help="the login's role")
-    s.add_argument("areas", nargs="*", metavar="ITEM", help="a member's areas: item ids")
+    s.add_argument("areas", nargs="*", metavar="ITEM", help="a member's areas: item ids (a viewer may name some "
+                   "too, for what its Inbox opens on)")
     s.add_argument("--clear", action="store_true", help="remove this login's role: it only reads, or, when it was "
                    "the last one listed, roles are off again")
+    s.add_argument("--director", action="store_true", help="a member or viewer whose Inbox opens on everything "
+                   "(1.41); it decides no more than its role allows")
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1773,10 +1776,14 @@ def _operator_name(state: Path, email: str | None, short: str | None, clear: boo
 
 
 def _show_role(entry: dict) -> str:
-    return f"member of {', '.join(entry['areas'])}" if entry["role"] == "member" else entry["role"]
+    out = entry["role"]
+    if entry.get("areas"):
+        out += (" of " if entry["role"] == "member" else ", Inbox on ") + ", ".join(entry["areas"])
+    return out + (", director" if entry.get("director") else "")
 
 
-def _access(state: Path, email: str | None, role: str | None, areas: list[str], clear: bool) -> int:
+def _access(state: Path, email: str | None, role: str | None, areas: list[str], clear: bool,
+            director: bool = False) -> int:
     """`access` (1.39): list, show, set or clear an Access login's role in the console, in STATE (roles.py)."""
     try:
         if email is None or (role is None and not clear):
@@ -1804,7 +1811,7 @@ def _access(state: Path, email: str | None, role: str | None, areas: list[str], 
             print("agent.py: access: refused inside a Claude Code session: roles are set by you, in your own "
                   "terminal", file=sys.stderr)
             return 2
-        got = RO.set_role(state, email, None if clear else role, areas)
+        got = RO.set_role(state, email, None if clear else role, areas, director=director)
     except (OSError, RO.RolesError) as e:
         print(f"agent.py: access: {e}; nothing was written", file=sys.stderr)
         return 2
@@ -1826,7 +1833,7 @@ def _run(a, bell: Path) -> int:
     if a.cmd == "operator-name":
         return _operator_name(a.state, a.email, a.short, a.clear)
     if a.cmd == "access":
-        return _access(a.state, a.email, a.role, a.areas, a.clear)
+        return _access(a.state, a.email, a.role, a.areas, a.clear, a.director)
     if a.cmd == "role":
         if a.value is None:
             r = R.machine_role()

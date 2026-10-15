@@ -500,6 +500,13 @@
 .ck-people-row .ck-input, .ck-people-add .ck-input { flex: 1 1 160px; min-width: 0; margin-top: 0; }
 .ck-people-row .ck-input[hidden], .ck-people-add .ck-input[hidden] { display: none; }
 .ck-people-note { flex: 1 1 100%; font-size: 12px; }
+.ck-people-director { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+.ck-people-director[hidden] { display: none; }
+/* 1.41 routing: who a question is for, and the Inbox's Mine · All switch. */
+.ck-q-for { color: var(--c-fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+span.ck-q-for { margin-left: 6px; }
+.ck-inbox-scope { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; font-size: 13px; }
+.ck-inbox-scope .ck-btn[aria-pressed="true"] { font-weight: 600; text-decoration: underline; }
 .ck-receipt-heading {
   font-weight: 600;
   font-size: 12px;
