@@ -119,6 +119,8 @@ def load(state: Path) -> dict[str, dict] | None:
         doc = json.loads(text)
     except ValueError as e:
         raise RolesError(f"{p}: not JSON ({e})") from None
+    except RecursionError:   # not a ValueError: would 500 every request rather than read as a viewer's 503
+        raise RolesError(f"{p}: nested too deep to be a roles file") from None
     got = doc.get("roles") if isinstance(doc, dict) and set(doc) == {"roles"} else None
     if not isinstance(got, dict):
         raise RolesError(f"{p}: the file is exactly {{\"roles\": {{EMAIL: ROLE}}}}")
@@ -289,6 +291,8 @@ def history(state: Path, limit: int = LOG_SHOWN) -> tuple[list[dict], int]:
             rec = json.loads(raw)
         except ValueError as e:
             raise RolesError(f"{p}:{n}: not JSON ({e})") from None
+        except RecursionError:   # not a ValueError: a line nested too deep would 500 every owner poll
+            raise RolesError(f"{p}:{n}: nested too deep to be a role change") from None
         why = _line_problem(rec)
         if why:
             raise RolesError(f"{p}:{n}: {why}")

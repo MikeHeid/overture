@@ -3020,8 +3020,13 @@ Wave 3, OPEN-DECISIONS.md W5 (the owner's choice of 2026-10-14).
 - A damaged log line is named in the server log by line number and the
   tab says the log cannot be read; it never blocks a role change. A
   last line still being written is left out.
+- A file nested too deep to parse is refused like any damaged one, not
+  a 500 on every request: a log line so nested shows as "cannot be
+  read"; a `roles.json` so nested stops writes (503) while the page
+  reads on as a viewer's.
 - **Downgrade:** 1.41 ignores the log and writes no lines to it.
 
+## Routing (1.41.0)
 
 Wave 3, as the owner decided on 2026-10-14 (OPEN-DECISIONS.md W1–W4).
 

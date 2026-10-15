@@ -8794,8 +8794,9 @@ class RoleTests(_Live, unittest.TestCase):
         # Catches: a damaged file read as "no roles" (every login the owner again: the failure opens the door)
         # and a file listing no owner accepted, which nobody could then change from the console.
         from overture import roles as RO
+        # (review) and a file nested past the parser's depth: RecursionError is no ValueError, so it was a 500.
         for bad in ("{not json", json.dumps({"roles": {"x@example.com": {"role": "member", "areas": ["LANE"]}}}),
-                    json.dumps({"roles": {self.OWNER: {"role": "admin"}}})):
+                    json.dumps({"roles": {self.OWNER: {"role": "admin"}}}), "[" * 100_000):
             (Path(self.cfg.state) / RO.FILE).write_text(bad)
             code, out = self.answer_as(self.OWNER, f"rolebad{len(bad):04d}")
             self.assertEqual(code, 503, (bad, out))
@@ -9144,7 +9145,11 @@ class RoleLogTests(_Live, unittest.TestCase):
         # never happened), and the line written after the map, so a failed log leaves a change unlogged.
         from overture import roles as RO
         RO.set_role(self.cfg.state, self.OWNER, "owner")
-        with mock.patch.object(RO, "_write_map", side_effect=OSError("disk full")):
+        def fail_after_checking_the_line_is_down(*_):
+            # (review) asserts the order itself: the line is on disk before the map is replaced
+            self.assertEqual(len(self.log()), 2)
+            raise OSError("disk full")
+        with mock.patch.object(RO, "_write_map", side_effect=fail_after_checking_the_line_is_down):
             with self.assertRaises(OSError):
                 RO.set_role(self.cfg.state, "bob@example.com", "viewer")
         self.assertEqual(len(self.log()), 1)
@@ -9173,7 +9178,16 @@ class RoleLogTests(_Live, unittest.TestCase):
         # put on the page, and a damaged log blocking role changes (the roles file is the gate, not the log).
         from overture import roles as RO
         RO.set_role(self.cfg.state, self.OWNER, "owner")
-        with open(Path(self.cfg.state) / RO.LOG_FILE, "a") as fh:
+        # Catches (security review): a line nested past the parser's depth raising RecursionError, which is
+        # no ValueError, so every owner page load answers 500 instead of naming the line.
+        p = Path(self.cfg.state) / RO.LOG_FILE
+        good = p.read_bytes()
+        p.write_bytes(good + b"[" * 100_000 + b"\n")
+        with self.assertRaisesRegex(RO.RolesError, r"roles-log.jsonl:2: nested too deep"):
+            RO.history(self.cfg.state)
+        self.assertIn("cannot be read", self.view_roles()["log_problem"])
+        p.write_bytes(good)
+        with open(p, "a") as fh:
             fh.write('{"at": "yesterday"}\n')
         with self.assertRaisesRegex(RO.RolesError, r"roles-log.jsonl:2"):
             RO.history(self.cfg.state)
