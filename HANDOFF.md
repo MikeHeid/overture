@@ -7,6 +7,9 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.45.0 released — notifications** (PR #172, `7212504`, zip sha afb241ef…9775): owner "go" (N1a N2b N3a N4b N5a, OPEN-DECISIONS "Notifications").
+  A digest of waiting questions to a Slack-style webhook (notify.py); URL set only via `agent.py notify-url` (host shown only);
+  Settings → Notifications for on/off, window, quiet hours. README gained five team-feature screenshots.
 - **v1.44.0 released — Settings** (PR #171, `a8cfe43`, zip sha c79077b0…d4c1): owner "1a 2a 3a 4 yes" (OPEN-DECISIONS "Settings", amends W3).
   A Settings tab for administrators and directors: chat limits, agents per item, lane labels/colours, two-key areas
   (moved from People), operator short names; STATE/settings.json (settings.py), live, logged in the role log.
@@ -131,7 +134,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.44.0 (PR #171), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.45.0 (PR #172), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
