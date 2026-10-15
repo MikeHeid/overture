@@ -7,6 +7,11 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.43.0 released — two-key locks** (PR #170, `3d6c273`): W6. roles.json "two_key" areas (People, POST /api/two-key);
+  first keys wait in STATE/pending-locks.json (twokey.py), outside the store; a second login that may lock there
+  writes the lock (Console._key; first key re-checked; lock/relock/lock-all all routed). Review: a HIGH (forged
+  "finished re-lock" = one-login lock) and a MEDIUM (swapped answer) closed on a server-held `confirming` mark.
+  Open owner choice: export `locked_by` names the second key (writer); card shows both. Next: notifications.
 - **v1.42.0 released — role changes** (PR #169, `a63565b`): W5. STATE/roles-log.jsonl {at,by,email,from,to}, written
   under flock before roles.json is replaced (cut back on failure; torn tail mended; the lock also serialises the
   console and `agent.py access`). People shows the newest 50. Over-nested roles.json/log → RolesError, not 500.
@@ -119,7 +124,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.42.0 (PR #169), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.43.0 (PR #170), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
