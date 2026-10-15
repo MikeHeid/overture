@@ -502,6 +502,10 @@
 .ck-people-note { flex: 1 1 100%; font-size: 12px; }
 .ck-people-director { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
 .ck-people-director[hidden] { display: none; }
+/* 1.42: the role log under People: one change a line, emails wrap rather than widen the dock. */
+.ck-people-log { list-style: none; margin: 8px 0 16px; padding: 0; font-size: 13px; }
+.ck-people-log-row { padding: 4px 0; overflow-wrap: anywhere; border-bottom: 1px solid var(--c-border-light); }
+.ck-people-log-row .ck-feed-time { margin-right: 4px; }
 /* 1.41 routing: who a question is for, and the Inbox's Mine · All switch. */
 .ck-q-for { color: var(--c-fg-muted); font-size: 12px; overflow-wrap: anywhere; }
 span.ck-q-for { margin-left: 6px; }

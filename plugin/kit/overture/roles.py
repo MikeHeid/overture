@@ -24,21 +24,42 @@ The file is the owner's, set with `agent.py access`, and never committed: like
 `operators.jsonl` it names logins by email, which stay in the console (the
 owner's ruling of 2026-10-14). A file the kit cannot read stops every write
 rather than letting one through: an unreadable list is not an empty one.
+
+(1.42.0, OPEN-DECISIONS.md W5) Every change is a line of an append-only log
+beside it, shown in the People tab:
+
+    STATE/roles-log.jsonl    {"at": UTC, "by": EMAIL | null, "email": EMAIL,
+                              "from": ENTRY | null, "to": ENTRY | null}
+
+`by` is the console login that made the change, or null for `agent.py access`
+in the owner's terminal. The line is written before roles.json is replaced and
+cut back if that fails, so no change lands unlogged. One case stays: a process
+killed between the line and the rename leaves a line for a change that did not
+land (roles.json is what is in force). A line a killed writer left half-written
+is cut back by the next writer. The log's lock also keeps the console and the
+terminal from writing roles.json over each other.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 from . import operators as OP
 from . import schema as S
+from .store import utc_now
 
 FILE = "roles.json"
+LOG_FILE = "roles-log.jsonl"
 ROLES = ("owner", "member", "viewer")
 MAX_AREAS = 50
+LOG_SHOWN = 50   # the People tab shows the newest; the file keeps every line
+_AT = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")   # store.utc_now's shape
 
 
 class RolesError(Exception):
@@ -98,6 +119,8 @@ def load(state: Path) -> dict[str, dict] | None:
         doc = json.loads(text)
     except ValueError as e:
         raise RolesError(f"{p}: not JSON ({e})") from None
+    except RecursionError:   # not a ValueError: would 500 every request rather than read as a viewer's 503
+        raise RolesError(f"{p}: nested too deep to be a roles file") from None
     got = doc.get("roles") if isinstance(doc, dict) and set(doc) == {"roles"} else None
     if not isinstance(got, dict):
         raise RolesError(f"{p}: the file is exactly {{\"roles\": {{EMAIL: ROLE}}}}")
@@ -139,13 +162,14 @@ def within(item: object, areas: list[str], items: Mapping[str, dict]) -> bool:
 
 
 def set_role(state: Path, email: str, role: str | None, areas: list[str] | None = None,
-             director: bool = False) -> dict[str, dict]:
+             director: bool = False, by: str | None = None) -> dict[str, dict]:
     """Set (or, with role None, remove) the role of `email`; return the whole map as written.
 
     Refuses a change that leaves no owner: the console could then be changed by nobody.
-    Removing the last login deletes the file, so roles are off again.
+    Removing the last login deletes the file, so roles are off again. `by` is the console login making the
+    change, None from the terminal; a change that changes nothing writes nothing, not even a log line.
     """
-    why = OP.email_problem(email)
+    why = OP.email_problem(email) or (by is not None and OP.email_problem(by))
     if why:
         raise RolesError(why)
     entry = None
@@ -159,18 +183,66 @@ def set_role(state: Path, email: str, role: str | None, areas: list[str] | None 
         if why:
             raise RolesError(why)
     email = email.lower()
-    got = load(state) or {}
-    if entry is None:
-        got.pop(email, None)
-    else:
-        got[email] = entry
-    p = Path(state) / FILE
+    # No mkdir: a mistyped --state fails here ("nothing was written") rather than starting a new state dir.
+    log = os.open(Path(state) / LOG_FILE, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                  0o600)
+    try:
+        # Held from the load to the rename: the console and `agent.py access` each read, change and write the
+        # whole map, and without one lock across processes the second writer drops the first one's change.
+        fcntl.flock(log, fcntl.LOCK_EX)
+        got = load(state) or {}
+        before = got.get(email)
+        if before == entry:
+            return got
+        if entry is None:
+            got.pop(email)
+        else:
+            got[email] = entry
+        if got and not any(e["role"] == "owner" for e in got.values()):
+            raise RolesError("that leaves no owner, so nobody could run the console; make another login the "
+                             "owner first (`agent.py access EMAIL owner`)")
+        line = (json.dumps({"at": utc_now(), "by": by.lower() if by else None, "email": email, "from": before,
+                            "to": entry}, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        end = _mend_tail(log)
+        try:
+            if os.write(log, line) != len(line):
+                raise OSError("short write")
+            os.fsync(log)
+            _write_map(Path(state) / FILE, got)
+        except BaseException:
+            os.ftruncate(log, end)   # the change did not land, so neither does its line
+            raise
+        return got
+    finally:
+        os.close(log)   # closing releases the lock
+
+
+def _mend_tail(log: int) -> int:
+    """Cut a half-written last line (a writer killed mid-append) back to the last whole line; return the end.
+
+    Under the lock, so no live writer is mid-append: one that fails cuts its own line back. Without this the
+    next line would be appended onto the fragment, and the merged line would stop the log reading for good.
+    """
+    size = os.lseek(log, 0, os.SEEK_END)
+    if size == 0 or os.pread(log, 1, size - 1) == b"\n":
+        return size
+    pos = size
+    while pos > 0:
+        start = max(0, pos - 4096)
+        cut = os.pread(log, pos - start, start).rfind(b"\n")
+        if cut >= 0:
+            pos = start + cut + 1
+            break
+        pos = start
+    sys.stderr.write(f"roles log: dropped {size - pos} bytes of a half-written last line\n")
+    os.ftruncate(log, pos)
+    return pos
+
+
+def _write_map(p: Path, got: dict[str, dict]) -> None:
     if not got:
-        p.unlink(missing_ok=True)
-        return {}
-    if not any(e["role"] == "owner" for e in got.values()):
-        raise RolesError("that leaves no owner, so nobody could run the console; make another login the owner "
-                         "first (`agent.py access EMAIL owner`)")
+        p.unlink(missing_ok=True)   # the last login removed: roles are off again
+        return
     data = (json.dumps({"roles": dict(sorted(got.items()))}, indent=2, sort_keys=True) + "\n").encode()
     # The operator-names writer: a fresh temp file no symlink names, then one rename.
     tmp = p.with_name(f".{FILE}.{os.urandom(8).hex()}.tmp")
@@ -184,4 +256,45 @@ def set_role(state: Path, email: str, role: str | None, areas: list[str] | None 
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    return got
+
+
+def _line_problem(rec: object) -> str | None:
+    if not isinstance(rec, dict) or set(rec) != {"at", "by", "email", "from", "to"}:
+        return 'a line is exactly {"at", "by", "email", "from", "to"}'
+    if not isinstance(rec["at"], str) or not _AT.match(rec["at"]):
+        return f"at {rec['at']!r} is not a UTC time"
+    if rec["by"] is not None and OP.email_problem(rec["by"]):
+        return OP.email_problem(rec["by"])
+    if rec["from"] is None and rec["to"] is None:
+        return "a change has a from or a to"
+    return OP.email_problem(rec["email"]) or next(
+        (_entry_problem(rec[k]) for k in ("from", "to") if rec[k] is not None and _entry_problem(rec[k])), None)
+
+
+def history(state: Path, limit: int = LOG_SHOWN) -> tuple[list[dict], int]:
+    """The newest `limit` role changes, newest first, and how many the log holds in all.
+
+    A line that is not well formed is refused by line number, never skipped. A last line with no newline is
+    left out: a writer holds the lock mid-append, and one that failed cut its line back (`set_role`).
+    """
+    p = Path(state) / LOG_FILE
+    try:
+        lines = p.read_text(encoding="utf-8").split("\n")
+    except FileNotFoundError:
+        return [], 0
+    except (OSError, UnicodeDecodeError) as e:
+        raise RolesError(f"{p}: not readable ({e})") from None
+    lines.pop()   # "" after the last newline, or a line still being written
+    out = []
+    for n, raw in enumerate(lines, 1):
+        try:
+            rec = json.loads(raw)
+        except ValueError as e:
+            raise RolesError(f"{p}:{n}: not JSON ({e})") from None
+        except RecursionError:   # not a ValueError: a line nested too deep would 500 every owner poll
+            raise RolesError(f"{p}:{n}: nested too deep to be a role change") from None
+        why = _line_problem(rec)
+        if why:
+            raise RolesError(f"{p}:{n}: {why}")
+        out.append(rec)
+    return out[::-1][:limit], len(out)

@@ -8794,8 +8794,9 @@ class RoleTests(_Live, unittest.TestCase):
         # Catches: a damaged file read as "no roles" (every login the owner again: the failure opens the door)
         # and a file listing no owner accepted, which nobody could then change from the console.
         from overture import roles as RO
+        # (review) and a file nested past the parser's depth: RecursionError is no ValueError, so it was a 500.
         for bad in ("{not json", json.dumps({"roles": {"x@example.com": {"role": "member", "areas": ["LANE"]}}}),
-                    json.dumps({"roles": {self.OWNER: {"role": "admin"}}})):
+                    json.dumps({"roles": {self.OWNER: {"role": "admin"}}}), "[" * 100_000):
             (Path(self.cfg.state) / RO.FILE).write_text(bad)
             code, out = self.answer_as(self.OWNER, f"rolebad{len(bad):04d}")
             self.assertEqual(code, 503, (bad, out))
@@ -8902,7 +8903,8 @@ class PeopleTests(_Live, unittest.TestCase):
         # Catches: the tab fed nothing until roles exist (so nobody could ever turn them on from the console),
         # and `me` taken from anything but the verified login.
         code, out = self.req("GET", "/api/view", tok=token(email="Olivia@Example.com"))
-        self.assertEqual(out["view"]["roles"], {"on": False, "me": "olivia@example.com", "people": []})
+        self.assertEqual(out["view"]["roles"], {"on": False, "me": "olivia@example.com", "people": [], "log": [],
+                                                "log_total": 0})
 
     def test_the_first_role_must_make_the_signed_in_login_the_administrator(self):
         # Catches: a first click on someone else (or on yourself as a member) turning roles on with the
@@ -9091,6 +9093,172 @@ class RoutingTests(_Live, unittest.TestCase):
         r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state), "access"],
                            capture_output=True, text=True, timeout=30, env=env)
         self.assertIn("dee@example.com viewer, director", r.stdout)
+
+
+class RoleLogTests(_Live, unittest.TestCase):
+    """1.42.0 (W5): every role change is a line of STATE/roles-log.jsonl, shown in People."""
+
+    OWNER = RoleTests.OWNER
+    post = PeopleTests.post
+
+    def log(self):
+        from overture import roles as RO
+        p = Path(self.cfg.state) / RO.LOG_FILE
+        return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+    def view_roles(self):
+        return self.req("GET", "/api/view", tok=token(email=self.OWNER))[1]["view"]["roles"]
+
+    def test_every_console_change_is_logged_with_the_login_that_made_it(self):
+        # Catches: no line written, `by` taken from anything but the verified login (or left out), from/to
+        # swapped, and the People view showing the oldest first.
+        self.assertEqual(self.post(self.OWNER, "owner")[0], 200)
+        self.assertEqual(self.post("bob@example.com", "member", ["LANE"])[0], 200)
+        self.assertEqual(self.post("bob@example.com", "viewer")[0], 200)
+        self.assertEqual(self.post("bob@example.com", None)[0], 200)
+        got = [{k: e[k] for k in ("by", "email", "from", "to")} for e in self.log()]
+        member, viewer = {"role": "member", "areas": ["LANE"]}, {"role": "viewer"}
+        self.assertEqual(got, [
+            {"by": self.OWNER, "email": self.OWNER, "from": None, "to": {"role": "owner"}},
+            {"by": self.OWNER, "email": "bob@example.com", "from": None, "to": member},
+            {"by": self.OWNER, "email": "bob@example.com", "from": member, "to": viewer},
+            {"by": self.OWNER, "email": "bob@example.com", "from": viewer, "to": None}])
+        shown = self.view_roles()
+        self.assertEqual([e["to"] for e in shown["log"]], [None, viewer, member, {"role": "owner"}])
+        self.assertEqual(shown["log_total"], 4)
+        self.assertRegex(shown["log"][0]["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(os.stat(Path(self.cfg.state) / "roles-log.jsonl").st_mode & 0o077, 0)
+
+    def test_a_change_that_changes_nothing_or_is_refused_writes_no_line(self):
+        # Catches: a re-saved row (the Save button on an unchanged row) or a removal of a login nobody listed
+        # filling the log, and a refused change (no owner left, a bad area) logged as if it had landed.
+        self.post(self.OWNER, "owner")
+        self.post("bob@example.com", "member", ["LANE"])
+        self.post("bob@example.com", "member", ["LANE"])
+        self.post("nobody@example.com", None)
+        self.assertEqual(self.post(self.OWNER, "viewer")[0], 400)
+        self.assertEqual(self.post("bob@example.com", "member", ["not an id!"])[0], 400)
+        self.assertEqual(len(self.log()), 2)
+
+    def test_a_roles_write_that_fails_takes_its_line_back(self):
+        # Catches: the line kept when roles.json could not be replaced (the log would show a change that
+        # never happened), and the line written after the map, so a failed log leaves a change unlogged.
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        def fail_after_checking_the_line_is_down(*_):
+            # (review) asserts the order itself: the line is on disk before the map is replaced
+            self.assertEqual(len(self.log()), 2)
+            raise OSError("disk full")
+        with mock.patch.object(RO, "_write_map", side_effect=fail_after_checking_the_line_is_down):
+            with self.assertRaises(OSError):
+                RO.set_role(self.cfg.state, "bob@example.com", "viewer")
+        self.assertEqual(len(self.log()), 1)
+        self.assertNotIn("bob@example.com", RO.load(self.cfg.state))
+        with mock.patch.object(RO.os, "fsync", side_effect=OSError("log disk full")):
+            with self.assertRaises(OSError):
+                RO.set_role(self.cfg.state, "bob@example.com", "viewer")
+        self.assertNotIn("bob@example.com", RO.load(self.cfg.state))
+        self.assertEqual(len(self.log()), 1)
+
+    def test_a_terminal_change_is_logged_with_no_login_and_shown_with_roles_off(self):
+        # Catches: `agent.py access` bypassing the log (it is the other writer of roles.json), a terminal
+        # change credited to some console login, and the log hidden once the last login is removed.
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        for args in ((self.OWNER, "owner"), (self.OWNER, "--clear")):
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state),
+                                "access", *args], capture_output=True, text=True, timeout=30, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([e["by"] for e in self.log()], [None, None])
+        shown = self.view_roles()
+        self.assertFalse(shown["on"])
+        self.assertEqual(shown["log_total"], 2)
+
+    def test_a_bad_log_line_is_named_in_the_server_log_and_stops_no_write(self):
+        # Catches: a damaged line skipped silently (a change disappears from the record), its path or text
+        # put on the page, and a damaged log blocking role changes (the roles file is the gate, not the log).
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        # Catches (security review): a line nested past the parser's depth raising RecursionError, which is
+        # no ValueError, so every owner page load answers 500 instead of naming the line.
+        p = Path(self.cfg.state) / RO.LOG_FILE
+        good = p.read_bytes()
+        p.write_bytes(good + b"[" * 100_000 + b"\n")
+        with self.assertRaisesRegex(RO.RolesError, r"roles-log.jsonl:2: nested too deep"):
+            RO.history(self.cfg.state)
+        self.assertIn("cannot be read", self.view_roles()["log_problem"])
+        p.write_bytes(good)
+        with open(p, "a") as fh:
+            fh.write('{"at": "yesterday"}\n')
+        with self.assertRaisesRegex(RO.RolesError, r"roles-log.jsonl:2"):
+            RO.history(self.cfg.state)
+        shown = self.view_roles()
+        self.assertEqual(shown["log"], [])
+        self.assertIn("cannot be read", shown["log_problem"])
+        self.assertNotIn(str(self.cfg.state), json.dumps(shown))
+        self.assertEqual(self.post("bob@example.com", "viewer")[0], 200)
+
+    def test_a_last_line_still_being_written_is_left_out_and_the_newest_are_shown(self):
+        # Catches: a half-appended last line (another process mid-write) refused as damage, and the limit
+        # cutting the newest rather than the oldest.
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        for n in range(3):
+            RO.set_role(self.cfg.state, f"p{n}@example.com", "viewer")
+        with open(Path(self.cfg.state) / RO.LOG_FILE, "a") as fh:
+            fh.write('{"at": "2026-10-')
+        got, total = RO.history(self.cfg.state, limit=2)
+        self.assertEqual(total, 4)
+        self.assertEqual([e["email"] for e in got], ["p2@example.com", "p1@example.com"])
+
+    def test_a_line_a_killed_writer_left_half_written_is_cut_before_the_next(self):
+        # Catches (review, MEDIUM): the next change appended onto a fragment a killed process left (no
+        # newline), merging the two into one bad line that stops the log reading for good.
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        with open(Path(self.cfg.state) / RO.LOG_FILE, "a") as fh:
+            fh.write('{"at": "2026-10-14T00:00:00Z", "by": null, "email": "half')
+        RO.set_role(self.cfg.state, "bob@example.com", "viewer")
+        got, total = RO.history(self.cfg.state)
+        self.assertEqual(total, 2)
+        self.assertEqual([e["email"] for e in got], ["bob@example.com", self.OWNER])
+        # Catches (review): the backward scan reading one 4 KiB chunk only, so a fragment longer than that
+        # is cut at the wrong place (or not at all).
+        with open(Path(self.cfg.state) / RO.LOG_FILE, "a") as fh:
+            fh.write('{"at": "' + "x" * 9000)
+        RO.set_role(self.cfg.state, "dan@example.com", "viewer")
+        self.assertEqual(RO.history(self.cfg.state)[1], 3)
+        # Also a log that is one fragment with no whole line at all.
+        (Path(self.cfg.state) / RO.LOG_FILE).write_text('{"at": "2026-')
+        RO.set_role(self.cfg.state, "cy@example.com", "viewer")
+        self.assertEqual([e["email"] for e in RO.history(self.cfg.state)[0]], ["cy@example.com"])
+
+    def test_a_missing_state_directory_is_refused_not_made(self):
+        # Catches (review): a mistyped `--state` quietly starting a new state directory with a roles file the
+        # console never reads, the operator believing the role was set.
+        from overture import roles as RO
+        missing = Path(self.cfg.state) / "no-such-dir"
+        with self.assertRaises(OSError):
+            RO.set_role(missing, self.OWNER, "owner")
+        self.assertFalse(missing.exists())
+
+    def test_the_console_and_the_terminal_take_turns_on_the_roles_file(self):
+        # Catches: no lock across processes, so `agent.py access` and a People click that read the map at the
+        # same moment each write their own copy and one change is lost. Held here as the other writer would.
+        import fcntl
+        import threading
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        fd = os.open(Path(self.cfg.state) / RO.LOG_FILE, os.O_WRONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        t = threading.Thread(target=RO.set_role, args=(self.cfg.state, "bob@example.com", "viewer"))
+        t.start()
+        t.join(0.5)
+        self.assertTrue(t.is_alive(), "set_role went ahead while another writer held the lock")
+        self.assertNotIn("bob@example.com", RO.load(self.cfg.state))
+        os.close(fd)
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        self.assertIn("bob@example.com", RO.load(self.cfg.state))
 
 
 if __name__ == "__main__":
