@@ -9858,5 +9858,318 @@ class SettingsTests(_Live, unittest.TestCase):
         self.assertEqual(self.put("chat_per_hour", 7, email="anyone@example.com")[0], 200)
 
 
+
+class NotifyTests(_Live, unittest.TestCase):
+    """1.45.0: a digest of waiting questions to the webhook the owner set in the terminal."""
+
+    URL = "https://hooks.example.com/services/T000/B000/SECRETPATHxyz"
+    OWNER, DIRECTOR, MEMBER = RoleTests.OWNER, "dee@example.com", "mo@example.com"
+
+    def setUp(self):
+        _Live.setUp(self)
+        import datetime as dt
+        from overture import notify as NT
+        from overture import roles as RO
+        from overture import settings as SET
+        self.dt, self.NT, self.RO, self.SET = dt, NT, RO, SET
+        self.sent = []
+        self.console._notify_post = lambda url, text: self.sent.append((url, text))
+        self.now = dt.datetime(2026, 10, 15, 12, 0)
+
+    def turn_on(self, **more):
+        self.NT.set_url(self.cfg.state, self.URL)
+        self.SET.put(self.cfg.state, "notify_on", True, by=None)
+        for k, v in more.items():
+            self.SET.put(self.cfg.state, k, v, by=None)
+
+    def tick(self, minutes=0):
+        return self.console.notify_tick(self.now + self.dt.timedelta(minutes=minutes))
+
+    def ask(self, n):
+        code, out = self.agent_post("/question", self.seed_q(qid=f"LANE.1/Q{n}", text=f"Secret question {n}?",
+                                                            nonce=f"notifyq{n:05d}"))
+        self.assertEqual(code, 200, out)
+
+    def waiting(self):
+        v = self.req("GET", "/api/view", tok=token())[1]["view"]
+        return sorted(q for q, r in v["questions"].items() if r.get("state") == "awaiting_you")
+
+    def test_off_or_with_no_webhook_nothing_is_sent(self):
+        # Catches: a console that posts before anyone turned it on, or with notify_on but no URL set.
+        self.assertTrue(self.waiting())
+        self.assertIsNone(self.tick())
+        self.NT.set_url(self.cfg.state, self.URL)
+        self.assertIsNone(self.tick())
+        self.NT.set_url(self.cfg.state, None)
+        self.SET.put(self.cfg.state, "notify_on", True, by=None)
+        self.assertIsNone(self.tick())
+        self.assertEqual(self.sent, [])
+
+    def test_a_digest_names_counts_and_items_once_and_never_the_text(self):
+        # Catches: a question's text or an email in the message (N3: they stay in the console), a question
+        # told twice, a second message inside the window, and new questions never told after it.
+        self.turn_on(notify_every=30)
+        before = self.waiting()
+        self.assertEqual(self.tick(), "sent")
+        url, text = self.sent[0]
+        self.assertEqual(url, self.URL)
+        self.assertIn(f"{len(before)} new question", text)
+        self.assertIn("LANE.1", text)
+        self.assertIn(f"<https://{self.cfg.hostname}/|Open the console>", text)
+        self.assertNotIn("Which?", text)
+        self.assertNotIn("@", text)
+        self.assertIsNone(self.tick(1))   # nothing new
+        self.ask(7)
+        self.assertIsNone(self.tick(10))  # new, but inside the 30 minutes
+        self.assertEqual(self.tick(31), "sent")
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("1 new question waiting", self.sent[1][1])
+        self.assertNotIn("Secret question", self.sent[1][1])
+        self.assertIsNone(self.tick(90))
+
+    def test_quiet_hours_hold_the_message_and_wrap_past_midnight(self):
+        # Catches: quiet hours ignored, a span past midnight read as empty (22:00 > 07:00), and `to` counted
+        # as quiet (the message waits a minute too long).
+        self.turn_on(notify_quiet={"from": "22:00", "to": "07:00"})
+        self.now = self.dt.datetime(2026, 10, 15, 23, 30)
+        self.assertIsNone(self.tick())
+        self.assertIsNone(self.tick(60 * 7 + 29))   # 06:59
+        self.assertEqual(self.tick(60 * 7 + 30), "sent")   # 07:00
+        q = self.NT.quiet
+        at = lambda h, m: self.dt.datetime(2026, 1, 1, h, m)  # noqa: E731
+        self.assertTrue(q(at(9, 0), {"from": "09:00", "to": "17:00"}))
+        self.assertFalse(q(at(17, 0), {"from": "09:00", "to": "17:00"}))
+        self.assertFalse(q(at(8, 59), {"from": "09:00", "to": "17:00"}))
+        self.assertTrue(q(at(0, 0), {"from": "22:00", "to": "07:00"}))
+        self.assertFalse(q(at(12, 0), {"from": "22:00", "to": "07:00"}))
+
+    def test_a_failure_is_shown_without_the_url_and_tried_again_next_window(self):
+        # Catches: a failed send marking its questions told (they would never be told), the URL or its secret
+        # path on the page, and a retry every minute (hammering a webhook that is down).
+        self.turn_on(notify_every=30)
+
+        def down(url, text):
+            raise self.NT.NotifyError("the webhook answered HTTP 500")
+        self.console._notify_post = down
+        self.assertEqual(self.tick(), "failed")
+        s = self.req("GET", "/api/view", tok=token())[1]["view"]["settings"]
+        self.assertEqual(s["notify"]["last_error"], "the webhook answered HTTP 500")
+        self.assertEqual(s["notify"]["host"], "hooks.example.com")
+        self.assertNotIn("SECRETPATH", json.dumps(s))
+        self.console._notify_post = lambda url, text: self.sent.append((url, text))
+        self.assertIsNone(self.tick(5))
+        self.assertEqual(self.tick(30), "sent")
+        s = self.req("GET", "/api/view", tok=token())[1]["view"]["settings"]
+        self.assertIsNone(s["notify"]["last_error"])
+        self.assertEqual(s["notify"]["last_ok"], (self.now + self.dt.timedelta(minutes=30)).isoformat(timespec="seconds"))
+
+    def test_the_webhook_url_is_https_with_no_credentials_and_logged_by_host_only(self):
+        # Catches: a webhook over http (the channel's message in the clear), a URL carrying a user name or a
+        # fragment, the secret path written into the role log, and a damaged file read as no webhook silently.
+        for bad in ("http://hooks.example.com/x", "https://user:pw@hooks.example.com/x", "https:///nohost",
+                    "https://hooks.example.com/x#frag", "https://hooks.example.com:99999/x", "ftp://a.example/x",
+                    "https://hooks.example.com/a b", 42):
+            with self.subTest(bad=bad):
+                with self.assertRaises(self.NT.NotifyError):
+                    self.NT.set_url(self.cfg.state, bad)
+        self.NT.set_url(self.cfg.state, self.URL)
+        self.assertEqual(stat.S_IMODE((self.cfg.state / self.NT.URL_FILE).stat().st_mode), 0o600)
+        line = self.RO.history(self.cfg.state)[0][0]
+        self.assertEqual(line["setting"], {"key": "notify_url", "from": None, "to": "hooks.example.com"})
+        self.assertNotIn("SECRETPATH", (self.cfg.state / self.RO.LOG_FILE).read_text())
+        (self.cfg.state / self.NT.URL_FILE).write_text('{"url": "http://plain.example/x"}')
+        self.SET.put(self.cfg.state, "notify_on", True, by=None)
+        self.assertIsNone(self.tick())
+        self.assertEqual(self.sent, [])
+        s = self.req("GET", "/api/view", tok=token())[1]["view"]["settings"]
+        self.assertIn("cannot be read", s["notify"]["problem"])
+        self.assertNotIn(str(self.cfg.state), json.dumps(s))
+
+    def test_a_director_sets_the_timing_a_member_cannot_and_bad_values_are_refused(self):
+        # Catches: the notify settings left out of the director's door, a member able to silence the channel,
+        # and quiet hours or minutes the tick cannot read (a crash every minute).
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        self.RO.set_role(self.cfg.state, self.DIRECTOR, "viewer", director=True)
+        self.RO.set_role(self.cfg.state, self.MEMBER, "member", ["LANE"])
+        put = lambda k, v, who: self.req("POST", "/api/settings", {"key": k, "value": v},  # noqa: E731
+                                         tok=token(email=who))[0]
+        self.assertEqual(put("notify_on", True, self.DIRECTOR), 200)
+        self.assertEqual(put("notify_every", 15, self.DIRECTOR), 200)
+        self.assertEqual(put("notify_quiet", {"from": "21:30", "to": "06:00"}, self.DIRECTOR), 200)
+        self.assertEqual(put("notify_on", False, self.MEMBER), 403)
+        for k, v in (("notify_on", 1), ("notify_on", "yes"), ("notify_every", 4), ("notify_every", 1441),
+                     ("notify_every", True), ("notify_quiet", {"from": "25:00", "to": "06:00"}),
+                     ("notify_quiet", {"from": "06:00", "to": "06:00"}), ("notify_quiet", {"from": "6:00", "to": "07:00"}),
+                     ("notify_quiet", {"from": "06:00"}), ("notify_quiet", "22-07"), ("notify_url", self.URL)):
+            with self.subTest(k=k, v=v):
+                self.assertEqual(put(k, v, self.OWNER), 400)
+        got = self.SET.effective(self.cfg.state, {})[0]
+        self.assertEqual((got["notify_on"], got["notify_every"], got["notify_quiet"]),
+                         (True, 15, {"from": "21:30", "to": "06:00"}))
+
+    def test_nothing_of_it_reaches_an_agent(self):
+        # Catches: the webhook host, the notify state or the settings on the agent socket.
+        self.turn_on()
+        self.assertEqual(self.tick(), "sent")
+        code, v = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertEqual(code, 200)
+        self.assertNotIn("hooks.example.com", json.dumps(v))
+        self.assertNotIn("notify", json.dumps(v["view"]))
+
+    def test_the_terminal_sets_it_shows_only_the_host_and_a_session_may_not(self):
+        # Catches: the URL printed back (scrollback is shared more than STATE), and a Claude Code session able
+        # to point the digest somewhere else.
+        from unittest import mock
+        clean = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            rc, out1, err1 = self.agent_cli("notify-url", self.URL)
+            self.assertEqual(rc, 0, out1 + err1)
+            rc, out, err = self.agent_cli("notify-url")
+        self.assertEqual(rc, 0, err)
+        for printed in (out1, out):
+            self.assertIn("hooks.example.com", printed)
+        self.assertNotIn("SECRETPATH", out1 + err1 + out + err)
+        with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            rc, out, err = self.agent_cli("notify-url", "https://evil.example/x")
+            self.assertEqual(rc, 2)
+            self.assertIn("refused inside a Claude Code session", err)
+            self.assertEqual(self.agent_cli("notify-url", "--clear")[0], 2)
+            # (security review) nor post at will. The refusal, not a failed send: the example host is unreachable.
+            rc, out, err = self.agent_cli("notify-url", "--test")
+            self.assertEqual(rc, 2)
+            self.assertIn("refused inside a Claude Code session", err)
+        self.assertEqual(self.NT.load_url(self.cfg.state), self.URL)
+
+    def test_send_posts_json_and_refuses_a_redirect(self):
+        # Catches: a redirect followed (the digest carried to a host nobody configured), and a body that is
+        # not the {"text"} a Slack-style webhook takes.
+        import http.server
+        got = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                got.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+                if self.path == "/hop":
+                    self.send_response(302)
+                    self.send_header("Location", "/elsewhere")
+                else:
+                    self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{srv.server_address[1]}"
+            self.NT.send(base + "/ok", "hello")
+            with self.assertRaises(self.NT.NotifyError) as cm:
+                self.NT.send(base + "/hop", "hello")
+            self.assertIn("302", str(cm.exception))
+            self.assertNotIn("127.0.0.1", str(cm.exception))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        self.assertEqual(got, [("/ok", {"text": "hello"}), ("/hop", {"text": "hello"})])
+
+    def test_a_state_that_cannot_be_written_holds_the_digest_for_a_window(self):
+        # Catches (code review, HIGH): a send whose record could not be written (disk full, read-only STATE)
+        # posting the same digest again every minute, since nothing says it went.
+        from unittest import mock
+        self.turn_on(notify_every=30)
+        real = self.NT.save_state
+
+        def full(state, doc):
+            if doc.get("last_ok"):
+                raise OSError(28, "No space left on device")
+            return real(state, doc)
+        with mock.patch.object(self.NT, "save_state", full):
+            self.assertIsNone(self.tick())
+            self.assertEqual(len(self.sent), 1)
+            for m in (1, 2, 29):
+                self.assertIsNone(self.tick(m))
+            self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.tick(31), "sent")   # the window passed and the disk has room again
+        self.assertEqual(len(self.sent), 2)
+
+    def test_answered_then_asked_again_is_new_and_the_clock_going_back_holds(self):
+        # Catches (code review): a question answered and asked again inside a window staying "told" for good
+        # (it is never announced again), a last_at in the future (the clock moved back) letting a send through
+        # at once, and a damaged state file stopping notifications rather than starting fresh.
+        on = {"notify_on": True, "notify_every": 30, "notify_quiet": None}
+        self.NT.set_url(self.cfg.state, self.URL)
+        posts = []
+        tick = lambda m, waiting: self.NT.tick(self.cfg.state, self.now + self.dt.timedelta(minutes=m),  # noqa: E731
+                                               waiting, on, "p", "https://c.example/",
+                                               post=lambda u, t: posts.append(t))
+        self.assertEqual(tick(0, {"A/Q1": "A"}), "sent")
+        self.assertIsNone(tick(1, {"B/Q1": "B"}))            # A answered, B new: inside the window
+        self.assertEqual(tick(31, {"A/Q1": "A", "B/Q1": "B"}), "sent")
+        self.assertIn("2 new questions", posts[-1])            # A again, and B
+        st = self.NT.load_state(self.cfg.state)
+        self.NT.save_state(self.cfg.state, {**st, "told": [], "last_at": (self.now + self.dt.timedelta(minutes=100))
+                                            .isoformat(timespec="seconds")})
+        self.assertIsNone(tick(80, {"C/Q1": "C"}))            # last_at 20 minutes ahead of the clock
+        self.assertEqual(tick(200, {"C/Q1": "C"}), "sent")
+        (self.cfg.state / self.NT.STATE_FILE).write_text("{not json")
+        self.assertEqual(tick(300, {"D/Q1": "D"}), "sent")
+        self.assertEqual(self.NT.load_state(self.cfg.state)["told"], ["D/Q1"])
+
+    def test_a_reply_dripped_slowly_is_cut_off(self):
+        # Catches (security review): a webhook that answers a byte at a time holding the notify thread for as
+        # long as it likes (the socket timeout is per read, not for the whole reply).
+        import http.server
+        from unittest import mock
+
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(200)
+                self.send_header("Content-Length", "100")
+                self.end_headers()
+                for _ in range(100):
+                    try:
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    time.sleep(0.1)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            started = time.monotonic()
+            with mock.patch.object(self.NT, "TOTAL", 0.5), self.assertRaises(self.NT.NotifyError) as cm:
+                self.NT.send(f"http://127.0.0.1:{srv.server_address[1]}/slow", "hi")
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertIn("took more than", str(cm.exception))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_the_message_escapes_what_slack_reads_as_markup_and_caps_the_items(self):
+        # Catches: a project or item name read by Slack as a link or a mention, and a message naming every
+        # item of a large round.
+        # The whole message, word for word: anything more (a question's text, an email, a qid) shows here.
+        self.assertEqual(self.NT.message("northwind", {"API-2/Q1": "API-2", "API-2/Q2": "API-2", "OPS-1/Q1": "OPS-1"},
+                                         3, "https://c.example/"),
+                         "overture · northwind: 3 new questions waiting for an answer: API-2 (2), OPS-1 (1). "
+                         "<https://c.example/|Open the console>")
+        # tick() itself honours "off", whoever calls it (not only the server's own check before it).
+        self.NT.set_url(self.cfg.state, self.URL)
+        self.assertIsNone(self.NT.tick(self.cfg.state, self.now, {"A/Q1": "A"},
+                                       {"notify_on": False, "notify_every": 30, "notify_quiet": None},
+                                       "p", "https://c.example/", post=lambda u, t: self.sent.append(t)))
+        self.assertEqual(self.sent, [])
+        text = self.NT.message("a<b>&c", {f"Q{n}": f"IT{n:02d}" for n in range(15)}, 20, "https://c.example/")
+        self.assertIn("a&lt;b&gt;&amp;c", text)
+        self.assertIn("and 5 more items", text)
+        self.assertIn("(20 waiting in all)", text)
+        self.assertTrue(text.endswith("<https://c.example/|Open the console>"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

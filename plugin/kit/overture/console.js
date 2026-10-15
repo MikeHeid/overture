@@ -4044,6 +4044,13 @@
         : ' cleared the short name of ' + s.email + ' (was ' + s.from + ')';
     }
     if (s.key === 'lanes') return s.to ? ' changed the lane labels and colours' : ' reset the lanes to the project\'s';
+    // 1.45: notifications. The webhook is logged by its host only.
+    if (s.key === 'notify_url') return s.to ? ' set the notification webhook to ' + s.to : ' removed the notification webhook';
+    if (s.key === 'notify_on') return s.to ? ' turned notifications on' : ' turned notifications off';
+    if (s.key === 'notify_quiet') return s.to ? ' set the quiet hours to ' + s.to.from + '–' + s.to.to
+      : ' removed the quiet hours';
+    if (s.key === 'notify_every') return ' set the minutes between notifications to ' +
+      (s.to === null || s.to === undefined ? 'the default' : s.to);
     const lim = (view && view.settings && view.settings.limits && view.settings.limits[s.key]) || {};
     const what = lim.label || s.key;
     return s.to === null || s.to === undefined ? ' reset ' + what + ' to the default (was ' + s.from + ')'
@@ -4242,6 +4249,61 @@
     });
     body.appendChild(el('div', { className: 'ck-settings-actions' }, [save]));
   }
+  // 1.45: notifications: a digest of waiting questions to the webhook the owner set in the terminal.
+  function renderNotifySettings(parent, s) {
+    const n = s.notify || {};
+    const body = el('section', { className: 'ck-settings-notify', 'aria-label': 'Notifications' });
+    parent.appendChild(body);
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Notifications']));
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'A message to your team\'s channel when questions are waiting: how many, on which items, and a link ' +
+      'here. Never a question\'s text or anyone\'s email.']));
+    if (n.problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [n.problem]));
+    body.appendChild(el('p', { className: 'ck-settings-notify-where' }, n.host
+      ? ['Posting to ', el('code', {}, [n.host]), '. The owner changes it in the terminal.']
+      : ['No webhook yet. The owner sets one in the terminal: ',
+        el('code', {}, ['agent.py notify-url https://hooks.slack.com/…'])]));
+    const ul = el('ul', { className: 'ck-settings-list' });
+    const on = el('input', { type: 'checkbox', id: 'ck-setting-notify_on', className: 'ck-settings-notify-on' });
+    on.checked = !!s.values.notify_on;
+    on.addEventListener('change', () => postSettings('/settings', { key: 'notify_on', value: on.checked },
+      on.checked ? 'Notifications on' : 'Notifications off'));
+    ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_on' }, [on,
+      el('label', { for: 'ck-setting-notify_on' }, ['Send notifications'])]));
+    const [lo, hi] = n.every || [5, 1440];
+    const every = el('input', { type: 'number', className: 'ck-input ck-settings-number', id: 'ck-setting-notify_every',
+      min: String(lo), max: String(hi), step: '1', value: String(s.values.notify_every) });
+    const everyHere = Object.prototype.hasOwnProperty.call(s.set, 'notify_every');
+    ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_every' }, [
+      el('label', { className: 'ck-settings-label', for: 'ck-setting-notify_every' }, ['At most one message every (minutes)']),
+      every,
+      settingsButton('Save', () => {
+        const v = Number(every.value);
+        if (!every.value.trim() || !Number.isInteger(v)) {
+          settingsError = 'Minutes between two notifications: a whole number from ' + lo + ' to ' + hi;
+          renderPanel();
+          return;
+        }
+        postSettings('/settings', { key: 'notify_every', value: v }, 'At most one message every ' + v + ' minutes');
+      }),
+      everyHere ? settingsButton('Reset', () => postSettings('/settings', { key: 'notify_every', value: null },
+        'Notifications: back to the default'), true) : null]));
+    const q = s.values.notify_quiet;
+    const from = el('input', { type: 'time', className: 'ck-input', value: q ? q.from : '22:00', 'aria-label': 'Quiet from' });
+    const to = el('input', { type: 'time', className: 'ck-input', value: q ? q.to : '07:00', 'aria-label': 'Quiet until' });
+    ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_quiet' }, [
+      el('span', { className: 'ck-settings-label' }, ['Quiet hours (this console\'s clock)' + (q ? '' : ': none')]),
+      from, to,
+      settingsButton('Save', () => postSettings('/settings',
+        { key: 'notify_quiet', value: { from: from.value, to: to.value } }, 'Quiet ' + from.value + '–' + to.value)),
+      q ? settingsButton('No quiet hours', () => postSettings('/settings', { key: 'notify_quiet', value: null },
+        'No quiet hours'), true) : null]));
+    body.appendChild(ul);
+    if (n.last_error) body.appendChild(el('p', { className: 'ck-error-msg' }, ['The last message failed: ' + n.last_error +
+      '. It is tried again next time.']));
+    else if (n.last_ok) body.appendChild(el('p', { className: 'ck-muted' }, [
+      'Last message sent ', el('span', { title: new Date(n.last_ok).toLocaleString() }, [relTime(n.last_ok)]), '.']));
+  }
   function renderTwoKeySettings(body, s) {
     // 1.43 (W6): the areas where a lock needs a second person.
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Two-key areas']));
@@ -4312,6 +4374,7 @@
     body.appendChild(dl);
     renderLimits(body, s);
     renderLaneSettings(body, s);
+    renderNotifySettings(body, s);
     renderTwoKeySettings(body, s);
     renderOperatorNames(body, s);
     renderRoleLog(body, { log: s.log, log_total: s.log_total, me: s.me }, 'Changes');

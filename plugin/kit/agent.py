@@ -162,6 +162,7 @@ from overture import bundle as B  # noqa: E402
 from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
 from overture import names as N  # noqa: E402
+from overture import notify as NT  # noqa: E402
 from overture import operators as OP  # noqa: E402
 from overture import roles as RO  # noqa: E402
 from overture import registry as R  # noqa: E402
@@ -1535,6 +1536,15 @@ def main(argv=None) -> int:
     g = s.add_mutually_exclusive_group()
     g.add_argument("short", nargs="?", metavar="NAME", help="the short name, e.g. michael")
     g.add_argument("--clear", action="store_true", help="remove this login's name: its locks are exported unnamed")
+    s = sub.add_parser("notify-url", description="Show, set or clear the incoming webhook (Slack, Mattermost, or "
+                       "Discord's /slack URL) the console posts its digest of waiting questions to (1.45). Whoever "
+                       "holds the URL can post to that channel, so it is set here, never from the console or a "
+                       "session; the console shows only its host. Turn notifications on, and set how often and the "
+                       "quiet hours, under Settings. You run this, never a session.")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("url", nargs="?", help="the webhook URL, https://... (none: show its host)")
+    g.add_argument("--clear", action="store_true", help="remove the webhook: nothing is sent")
+    g.add_argument("--test", action="store_true", help="post one test message to the webhook now")
     s = sub.add_parser("access", description="Show, set or clear what an Access login may do in the console (1.39). "
                        "With no roles set, every login that passes Access is the owner. Once one is set, an unlisted "
                        "login only reads. owner: everything; member AREA...: answers, locks and plain messages on "
@@ -1715,7 +1725,8 @@ def main(argv=None) -> int:
         _DOOR = None
 
 
-USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access")
+USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access",
+                 "notify-url")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1777,6 +1788,37 @@ def _operator_name(state: Path, email: str | None, short: str | None, clear: boo
     return 0
 
 
+def _notify_url(state: Path, url: str | None, clear: bool, test: bool) -> int:
+    """`notify-url` (1.45): show the webhook's host, set it, clear it, or post a test. Never prints the URL:
+    its path is what lets anyone post to the channel, and a terminal's scrollback is shared more than STATE."""
+    try:
+        if (url is not None or clear or test) and os.environ.get("CLAUDECODE"):
+            # As `access`: a session that could point the webhook elsewhere could carry the digest there, or
+            # silence it, and one that could test it could post to the team's channel at will. A guardrail
+            # between the owner's own sessions (the same user can still edit STATE); the owner's terminal does it.
+            print("agent.py: notify-url: refused inside a Claude Code session: the webhook is set and tested by "
+                  "you, in your own terminal", file=sys.stderr)
+            return 2
+        if url is not None or clear:
+            NT.set_url(state, None if clear else url)
+            print("notifications: webhook removed; nothing is sent" if clear else
+                  f"notifications: webhook set ({NT.host(url)}); turn them on under Settings in the console")
+            return 0
+        current = NT.load_url(state)
+        if current is None:
+            print("notifications: no webhook; set one with agent.py notify-url https://...")
+            return 0
+        if test:
+            NT.send(current, "overture: a test message. The console's digest of waiting questions comes here.")
+            print(f"notifications: test sent to {NT.host(current)}")
+            return 0
+        print(f"notifications: webhook set ({NT.host(current)})")
+        return 0
+    except (OSError, NT.NotifyError, RO.RolesError) as e:
+        print(f"agent.py: notify-url: {e}", file=sys.stderr)
+        return 2
+
+
 def _show_role(entry: dict) -> str:
     out = entry["role"]
     if entry.get("areas"):
@@ -1834,6 +1876,8 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "operator-name":
         return _operator_name(a.state, a.email, a.short, a.clear)
+    if a.cmd == "notify-url":
+        return _notify_url(a.state, a.url, a.clear, a.test)
     if a.cmd == "access":
         return _access(a.state, a.email, a.role, a.areas, a.clear, a.director)
     if a.cmd == "role":

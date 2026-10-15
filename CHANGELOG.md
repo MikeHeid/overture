@@ -2990,6 +2990,47 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Notifications (1.45.0)
+
+The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Notifications", N1a
+N2b N3a N4b N5a): the console tells your team's channel when questions are
+waiting.
+
+- **One channel: an incoming webhook** that takes `{"text": ...}`: Slack,
+  Mattermost, or Discord's `/slack` URL. One HTTPS POST and no mail server.
+- **The URL is the owner's, set in the terminal:** `agent.py notify-url
+  https://...` (also `--clear`, and `--test` to post a test message). It is
+  kept in `STATE/notify.json` (0600). Anyone who holds the URL can post to
+  the channel, so the console shows only its host, the role log records only
+  its host, and the CLI never prints it back. A Claude Code session is
+  refused, as it is for `agent.py access`.
+- **Settings → Notifications** (administrators and directors) turns them on,
+  sets at most one message every N minutes (5–1440, default 30), and sets
+  quiet hours on the console machine's clock (for example 22:00 to 07:00).
+  The tab says where messages go, when the last one was sent, and why the
+  last one failed.
+- **What a message says:** how many questions are newly waiting, on which
+  items, and a link to the console, e.g. "overture · northwind: 3 new
+  questions waiting for an answer: API-2 (2), OPS-1 (1). Open the console".
+  It never includes a question's text or anyone's email. Each question is
+  told once. A failed send is tried again in the next window, never every
+  minute.
+- **Who sends:** the console server, once a minute on a thread of its own.
+  It sends only to the configured host, over HTTPS, refusing redirects, with
+  a 10-second timeout, and reads at most 4 KiB of the reply. This is the
+  server's first outbound request other than to its peers. A reply
+  dripped slowly is cut off after 30 seconds. If the record of a send
+  cannot be written (a full disk), nothing more is sent until the next
+  window, so the channel is never posted the same digest every minute. It
+  honours `HTTPS_PROXY` like any Python client.
+- The first message after notifications are switched on lists every
+  question already waiting. A question answered and later asked again is
+  announced again. One console runs per STATE.
+- The session refusal is a guardrail between the owner's own sessions, as
+  it is for `access`: a session runs as the same user and can still edit
+  STATE by hand.
+- Nothing of it reaches the agent socket.
+
 ## Settings (1.44.0)
 
 The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Settings", 1A 2A
