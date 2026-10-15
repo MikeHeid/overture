@@ -48,7 +48,7 @@ All seven items below are done.
 - **v1.37.0 released — strict, no token beside the adapter** (PR #163, `4a68867`): `--strict`/`strict`; Action is
   three steps (check: no token, `env -i`; comment: skipped with adapter; finish); adapter refuses a persisted
   checkout token; exit 0 without a report = error. Verified on scratch repo `MikeHeid/overture-rulecheck-scratch`
-  (private; PRs #1 on v1.36.0, #2 on 1.37: fail + comment, fix turns it green). Owner may delete that repo.
+  (private; PRs #1 on v1.36.0, #2 on 1.37: fail + comment, fix turns it green). Deleted 2026-10-15 on owner request.
 
 - **v1.36.0 released — rulings that block a merge** (PR #162, `acddc57`): `plugin/kit/rulecheck.py` checks the
   committed ruling files (`fold.py export`) against the checkout with no server; `--base` reads rulings and
