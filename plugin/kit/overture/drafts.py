@@ -46,7 +46,12 @@ MAX_KEYS = 500           # live entries; older-ts entries pruned above this
 MAX_KEY_LEN = 256
 # A draft key is a shaped tag like "chat:", "answer:AB-1/Q3", "delegate:text". Shape it so a bad
 # string cannot escape the drafts namespace or embed anything that becomes a path or URL.
-KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@\-]{0,255}\Z")
+# 1.41.0: the console keeps each login's drafts apart under a "u:<12 hex>:" prefix (server._draft_ns), so a
+# stored key may be that much longer than one the page sends; the page's own keys still stop at MAX_KEY_LEN
+# and may not start with "u:", or one login could name another's stored key.
+LOGIN_PREFIX_LEN = 15
+KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@\-]{0,%d}\Z" % (MAX_KEY_LEN - 1 + LOGIN_PREFIX_LEN))
+CLIENT_KEY_RE = re.compile(r"^(?!u:)[A-Za-z0-9][A-Za-z0-9_.:/@\-]{0,%d}\Z" % (MAX_KEY_LEN - 1))
 STATE_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 
 

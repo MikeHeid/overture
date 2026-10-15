@@ -8811,9 +8811,9 @@ class RoleTests(_Live, unittest.TestCase):
         self.roles({self.OWNER: {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}})
         code, out = self.req("GET", "/api/view", tok=token(email="mo@example.com"))
         self.assertEqual(code, 200)
-        self.assertEqual(out["view"]["you"], {"role": "member", "areas": ["LANE"]})
+        self.assertEqual(out["view"]["you"], {"role": "member", "areas": ["LANE"], "mine": ["LANE"]})
         code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
-        self.assertEqual(out["view"]["you"], {"role": "owner"})
+        self.assertEqual(out["view"]["you"], {"role": "owner", "mine": None})
         code, out = SV.agent_request(self.cfg.socket, "GET", "/view", None)
         self.assertNotIn("mo@example.com", json.dumps(out))
         self.assertNotIn("you", out["view"])
@@ -8841,8 +8841,8 @@ class RoleTests(_Live, unittest.TestCase):
             RO.set_role(self.cfg.state, self.OWNER, "viewer")
         with self.assertRaisesRegex(RO.RolesError, "no owner"):
             RO.set_role(self.cfg.state, self.OWNER, None)
-        with self.assertRaisesRegex(RO.RolesError, "only a member"):
-            RO.set_role(self.cfg.state, "v@example.com", "viewer", ["LANE"])
+        with self.assertRaisesRegex(RO.RolesError, "an owner takes no other field"):
+            RO.set_role(self.cfg.state, "o2@example.com", "owner", ["LANE"])   # an owner's reach is everything
         RO.set_role(self.cfg.state, "mo@example.com", None)
         RO.set_role(self.cfg.state, self.OWNER, None)
         self.assertFalse((Path(self.cfg.state) / RO.FILE).exists())
@@ -8961,14 +8961,136 @@ class PeopleTests(_Live, unittest.TestCase):
         self.assertNotIn("roles", out["view"])
         self.assertNotIn(self.OWNER, json.dumps(out))
 
+    def test_an_administrator_sets_a_director_and_viewer_areas(self):
+        # Catches (1.41.0): the director flag dropped on its way through the route, or refused on a viewer.
+        self.roles({self.OWNER: {"role": "owner"}})
+        body = {"email": "dee@example.com", "role": "viewer", "areas": ["LANE"], "director": True}
+        code, out = self.req("POST", "/api/roles", body, tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.assertEqual(self.file()["dee@example.com"], {"role": "viewer", "areas": ["LANE"], "director": True})
+
     def test_a_malformed_roles_request_is_refused_by_shape(self):
         # Catches: an unknown role or field written through, or a missing role read as "remove".
         self.roles({self.OWNER: {"role": "owner"}})
         for body in ({"email": "b@example.com", "role": "admin"}, {"email": "b@example.com"},
-                     {"email": "b@example.com", "role": "viewer", "extra": 1}, {"email": 5, "role": "viewer"}):
+                     {"email": "b@example.com", "role": "viewer", "extra": 1}, {"email": 5, "role": "viewer"},
+                     {"email": "b@example.com", "role": "viewer", "director": "yes"}):
             code, out = self.req("POST", "/api/roles", body, tok=token(email=self.OWNER))
             self.assertEqual(code, 400, (body, out))
         self.assertEqual(self.file(), {self.OWNER: {"role": "owner"}})
+
+
+class RoutingTests(_Live, unittest.TestCase):
+    """1.41.0 (OPEN-DECISIONS.md W2–W4): "Mine" by area, the director flag, and drafts per login."""
+
+    OWNER = RoleTests.OWNER
+    roles = RoleTests.roles
+
+    def you(self, email):
+        code, out = self.req("GET", "/api/view", tok=token(email=email))
+        self.assertEqual(code, 200)
+        return out["view"]["you"]
+
+    def test_mine_is_the_areas_unless_owner_director_or_a_viewer_without_areas(self):
+        # Catches: a director's Inbox narrowed to areas (the owner ruled "director sees all"), a member's
+        # opened on everything, and a viewer with no areas handed an empty "Mine".
+        self.roles({self.OWNER: {"role": "owner"},
+                    "mo@example.com": {"role": "member", "areas": ["LANE"]},
+                    "dir@example.com": {"role": "member", "areas": ["LANE"], "director": True},
+                    "vi@example.com": {"role": "viewer", "areas": ["LANE.1"]},
+                    "vo@example.com": {"role": "viewer"}})
+        self.assertEqual(self.you("mo@example.com")["mine"], ["LANE"])
+        self.assertIsNone(self.you("dir@example.com")["mine"])
+        self.assertEqual(self.you("vi@example.com")["mine"], ["LANE.1"])
+        self.assertIsNone(self.you("vo@example.com")["mine"])
+        self.assertIsNone(self.you(self.OWNER)["mine"])
+
+    def test_the_director_flag_shows_all_and_decides_nothing_more(self):
+        # Catches: "director" read as a write grant: a director viewer answering, or a director member
+        # ruling outside their areas.
+        self.roles({self.OWNER: {"role": "owner"},
+                    "dv@example.com": {"role": "viewer", "director": True},
+                    "dm@example.com": {"role": "member", "areas": ["ELSEWHERE"], "director": True}})
+        for email in ("dv@example.com", "dm@example.com"):
+            code, out = self.req("POST", "/api/answer", self.answer(nonce="dir" + email[:2] + "0001"),
+                                 tok=token(email=email))
+            self.assertEqual(code, 403, (email, out))
+
+    def test_a_roles_file_refuses_a_director_that_is_not_true_and_an_owner_with_extras(self):
+        # Catches: "director": "no" read as truthy, and an owner entry carrying fields an older reader skips.
+        from overture import roles as RO
+        for bad in ({"role": "viewer", "director": "no"}, {"role": "owner", "director": True},
+                    {"role": "viewer", "areas": []}, {"role": "member", "director": True}):
+            self.roles({self.OWNER: {"role": "owner"}, "x@example.com": bad})
+            with self.assertRaises(RO.RolesError, msg=bad):
+                RO.load(self.cfg.state)
+
+    def test_two_administrators_keep_their_own_drafts(self):
+        # Catches (W4): one shared drafts map, so one administrator's unsent text overwrites (and is shown
+        # to) another; and an email written into drafts.json.
+        self.roles({self.OWNER: {"role": "owner"}, "al@example.com": {"role": "owner"}})
+        for email, text in ((self.OWNER, "olivia's thought"), ("al@example.com", "al's thought")):
+            code, out = self.req("POST", "/api/draft", {"key": "chat:", "text": text, "nonce": "d" + email[:2]},
+                                 tok=token(email=email))
+            self.assertEqual(code, 200, out)
+            self.assertEqual(out["drafts"], {"chat:": text})
+        for email, text in ((self.OWNER, "olivia's thought"), ("al@example.com", "al's thought")):
+            code, out = self.req("GET", "/api/view", tok=token(email=email))
+            self.assertEqual(out["view"]["drafts"], {"chat:": text})
+        raw = (Path(self.cfg.state) / "drafts.json").read_text()
+        self.assertNotIn("@example.com", raw)
+
+    def test_a_login_cannot_reach_another_logins_stored_draft_and_long_keys_still_save(self):
+        # Catches (review): a page key naming another login's stored "u:<hash>:" key (so one administrator
+        # could blank another's draft), and the per-login prefix pushing a 256-character key past the limit.
+        import hashlib
+        self.roles({self.OWNER: {"role": "owner"}, "al@example.com": {"role": "owner"}})
+        code, _ = self.req("POST", "/api/draft", {"key": "chat:", "text": "al's", "nonce": "dal1"},
+                           tok=token(email="al@example.com"))
+        self.assertEqual(code, 200)
+        theirs = "u:" + hashlib.sha256(b"al@example.com").hexdigest()[:12] + ":chat:"
+        code, out = self.req("POST", "/api/draft", {"key": theirs, "text": "", "nonce": "dol1"},
+                             tok=token(email=self.OWNER))
+        self.assertEqual(code, 400, out)
+        code, out = self.req("GET", "/api/view", tok=token(email="al@example.com"))
+        self.assertEqual(out["view"]["drafts"], {"chat:": "al's"})
+        long_key = "answer:" + "x" * 249   # 256 characters, the page's limit
+        code, out = self.req("POST", "/api/draft", {"key": long_key, "text": "t", "nonce": "dlong1"},
+                             tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["drafts"].get(long_key), "t")
+
+    def test_a_draft_saved_before_per_login_drafts_is_kept_until_its_key_is_saved_again(self):
+        # Catches: an upgrade that drops every unsent draft, and one that keeps the old shared copy after the
+        # owner clears the key, so the cleared text comes back on the next page load.
+        from overture import drafts as DR
+        DR.set_draft(self.cfg.state, "chat:", "typed before the upgrade", "2026-10-14T00:00:00Z")
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertEqual(out["view"]["drafts"], {"chat:": "typed before the upgrade"})
+        # Catches (review): a refused save (text over the cap) that had already dropped the shared copy.
+        code, out = self.req("POST", "/api/draft", {"key": "chat:", "text": "x" * 20_001, "nonce": "dbig01"},
+                             tok=token(email=self.OWNER))
+        self.assertEqual(code, 400, out)
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertEqual(out["view"]["drafts"], {"chat:": "typed before the upgrade"})
+        code, out = self.req("POST", "/api/draft", {"key": "chat:", "text": "", "nonce": "dclear01"},
+                             tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        code, out = self.req("GET", "/api/view", tok=token(email=self.OWNER))
+        self.assertEqual(out["view"]["drafts"], {})
+
+    def test_access_sets_a_director_from_the_command_line(self):
+        # Catches: the --director flag parsed and dropped.
+        from overture import roles as RO
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        for args in ((self.OWNER, "owner"), ("dee@example.com", "viewer", "--director")):
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state),
+                                "access", *args], capture_output=True, text=True, timeout=30, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(RO.load(self.cfg.state)["dee@example.com"], {"role": "viewer", "director": True})
+        r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.cfg.state), "access"],
+                           capture_output=True, text=True, timeout=30, env=env)
+        self.assertIn("dee@example.com viewer, director", r.stdout)
 
 
 if __name__ == "__main__":

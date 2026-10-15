@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~35%: who decided (1.38), roles (1.39) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~50%: who decided (1.38), roles (1.39), People (1.40), routing (1.41) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -551,6 +551,16 @@ take effect on the next write, with no restart. The file
 (`STATE/roles.json`) stays on the console's machine. Run `access`
 yourself: it refuses inside a Claude Code session, and refuses to leave
 the console with no owner.
+
+**Routing (1.41).** Each question shows who it is for: the members
+whose areas cover its item. An administrator sees "For bob@example.com"
+on every row and card; a member sees "For you" on their own. A member's
+Inbox opens on **Mine** (their areas and everything under them), with
+**All** one click away. A viewer can be given areas too, for what their
+Inbox opens on. Tick **Director** on a member or viewer (or pass
+`--director`) and their Inbox opens on everything; it changes what they
+see first, never what they may decide. Unsent drafts are now each
+login's own, so two administrators no longer overwrite each other.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1066,6 +1076,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.41 — Routing**: each question says who it is for; members' Inbox
+  opens on Mine; a director flag shows all; drafts per login.
 - **1.40 — People**: a tab where the administrator manages roles, and
   onboarding's step to claim the administrator account.
 - **1.39 — Who may decide**: owner, member (by area) and viewer roles
