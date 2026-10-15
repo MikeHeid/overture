@@ -8904,7 +8904,7 @@ class PeopleTests(_Live, unittest.TestCase):
         # and `me` taken from anything but the verified login.
         code, out = self.req("GET", "/api/view", tok=token(email="Olivia@Example.com"))
         self.assertEqual(out["view"]["roles"], {"on": False, "me": "olivia@example.com", "people": [], "log": [],
-                                                "log_total": 0})
+                                                "log_total": 0, "two_key": []})
 
     def test_the_first_role_must_make_the_signed_in_login_the_administrator(self):
         # Catches: a first click on someone else (or on yourself as a member) turning roles on with the
@@ -9259,6 +9259,354 @@ class RoleLogTests(_Live, unittest.TestCase):
         t.join(5)
         self.assertFalse(t.is_alive())
         self.assertIn("bob@example.com", RO.load(self.cfg.state))
+
+
+class TwoKeyTests(_Live, unittest.TestCase):
+    """1.43.0 (W6): in a two-key area a lock is written only when a second person confirms it."""
+
+    OWNER, ANN, MO, NELL = RoleTests.OWNER, "ann@example.com", "mo@example.com", "nell@example.com"
+
+    def setUp(self):
+        _Live.setUp(self)
+        from overture import roles as RO
+        self.RO = RO
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        RO.set_role(self.cfg.state, self.ANN, "owner")
+        RO.set_role(self.cfg.state, self.MO, "member", ["LANE"])
+        RO.set_role(self.cfg.state, self.NELL, "member", ["ELSEWHERE"])
+        RO.set_two_key(self.cfg.state, ["LANE"])
+
+    def answered(self, email=None, nonce="tkanswer001", **over):
+        code, out = self.req("POST", "/api/answer", self.answer(nonce=nonce, **over), tok=token(email=email or self.OWNER))
+        self.assertEqual(code, 200, out)
+        return out["record"]
+
+    def lock(self, answer_id, email, nonce):
+        return self.req("POST", "/api/lock", {"qid": "LANE.1/Q1", "answer": answer_id, "nonce": nonce},
+                        tok=token(email=email))
+
+    def locks(self):
+        return [r for r in self.console.store.records() if r["type"] == "lock"]
+
+    def view(self, email=None):
+        return self.req("GET", "/api/view", tok=token(email=email or self.OWNER))[1]["view"]
+
+    def test_a_first_lock_waits_and_a_second_person_writes_it(self):
+        # Catches: a lock in a two-key area written at once (one person deciding alone), the first key put in
+        # the store (agents and exports would act on it), the second key not writing it, and the card naming
+        # only whoever wrote the record.
+        a = self.answered()
+        code, out = self.lock(a["id"], self.OWNER, "tklock00001")
+        self.assertEqual(code, 200, out)
+        self.assertIsNone(out["record"])
+        self.assertEqual(out["pending"]["email"], self.OWNER)
+        self.assertEqual(self.locks(), [])
+        self.assertEqual(self.view()["pending_locks"]["LANE.1/Q1"]["by"], self.OWNER)
+        code, agent_view = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertNotIn("pending_locks", agent_view["view"])
+        self.assertNotIn(self.OWNER, json.dumps(agent_view))
+        code, out = self.lock(a["id"], self.MO, "tklock00002")
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["record"]["answer"], a["id"])
+        self.assertEqual(out["confirmed"], self.OWNER)
+        self.assertEqual(len(self.locks()), 1)
+        v = self.view()
+        self.assertEqual(v["locked_by"][a["id"]], self.OWNER)
+        self.assertEqual(v["confirmed_by"][a["id"]], self.MO)
+        self.assertEqual(v["pending_locks"], {})
+        self.assertEqual(v["two_key"], ["LANE"])
+
+    def test_one_person_is_one_key(self):
+        # Catches: the same login pressing Lock twice (or in another case, or from a second tab) counted as
+        # two people.
+        a = self.answered()
+        for n, email in enumerate((self.OWNER, self.OWNER.upper(), self.OWNER)):
+            code, out = self.lock(a["id"], email, f"tkonekey00{n}")
+            self.assertEqual(code, 200, out)
+            self.assertIsNone(out["record"])
+        self.assertEqual(self.locks(), [])
+
+    def test_a_key_is_one_login_however_the_file_spells_it_and_hides_when_the_area_is_not_two_key(self):
+        # Catches (security review): a hand-written key "Olivia@Example.com" not matched to olivia@example.com,
+        # so she confirms her own lock; (code review) a key left after its area stopped being two-key still
+        # offered for "Confirm lock".
+        from overture import twokey as TKY
+        a = self.answered()
+        TKY.save(self.cfg.state, {"LANE.1/Q1": {"answer": a["id"], "email": "Olivia@Example.COM",
+                                                "at": "2026-10-14T00:00:00Z"}})
+        code, out = self.lock(a["id"], self.OWNER, "tkcase0001")
+        self.assertIsNone(out["record"], out)
+        self.assertEqual(self.locks(), [])
+        self.assertIn("LANE.1/Q1", self.view()["pending_locks"])
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        self.assertEqual(self.view()["pending_locks"], {})
+
+    def test_only_someone_who_may_lock_there_is_a_second_key(self):
+        # Catches: a member of another area, or a viewer, confirming a lock they could not take themselves.
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkwho00001")
+        self.assertEqual(self.lock(a["id"], self.NELL, "tkwho00002")[0], 403)
+        self.assertEqual(self.lock(a["id"], "stranger@example.com", "tkwho00003")[0], 403)
+        self.assertEqual(self.locks(), [])
+        self.assertEqual(self.view()["pending_locks"]["LANE.1/Q1"]["by"], self.OWNER)
+
+    def test_a_first_key_whose_login_lost_its_role_is_not_confirmed(self):
+        # Catches: a key taken by a member who has since been removed still counting: a second person would
+        # then confirm alone what nobody else may decide any more.
+        a = self.answered()
+        self.lock(a["id"], self.MO, "tkdrop0001")
+        self.RO.set_role(self.cfg.state, self.MO, "viewer")
+        code, out = self.lock(a["id"], self.OWNER, "tkdrop0002")
+        self.assertEqual(code, 409, out)
+        self.assertIn("may no longer lock", out["error"])
+        self.assertEqual(self.locks(), [])
+        self.assertEqual(self.view()["pending_locks"], {})
+
+    def test_a_key_on_an_older_answer_is_not_a_key_on_the_new_one(self):
+        # Catches: a first key on answer A matched by a second key on a later answer B: the two people would
+        # have agreed to different things.
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkold00001")
+        b = self.answered(email=self.MO, nonce="tkanswer002", picks=["b"])
+        self.assertEqual(self.view()["pending_locks"], {})
+        code, out = self.lock(b["id"], self.ANN, "tkold00002")
+        self.assertIsNone(out["record"])
+        self.assertEqual(self.lock(a["id"], self.ANN, "tkold00003")[0], 409)   # A is no longer the answer
+        self.assertEqual(self.locks(), [])
+
+    def test_outside_a_two_key_area_one_lock_is_enough(self):
+        # Catches: every lock made two-key once any area is, so a solo lane stops.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        code, out = self.lock(a["id"], self.OWNER, "tkplain001")
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["record"]["answer"], a["id"])
+
+    def test_a_relock_takes_two_keys_and_keeps_the_first_keys_reason(self):
+        # Catches: the stale banner's re-lock (an answer that supersedes, and its lock) written by one person in
+        # a two-key area, and the confirming key's own reason replacing the one the first person gave.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkrelock01")
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        code, out = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "reason": "checked, still holds",
+                                                     "nonce": "tkrelock02"}, tok=token(email=self.OWNER))
+        self.assertEqual((code, out["records"]), (200, []), out)
+        self.assertTrue(self.view()["pending_locks"]["LANE.1/Q1"]["relock"])
+        self.assertEqual(len(self.locks()), 1)
+        code, out = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkrelock03"},
+                             tok=token(email=self.ANN))
+        self.assertEqual(code, 200, out)
+        ans, lk = out["records"]
+        self.assertEqual(ans["reason"], "checked, still holds")
+        self.assertEqual(lk["answer"], ans["id"])
+        # The confirming request sent again writes nothing new.
+        code, again = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkrelock03"},
+                               tok=token(email=self.ANN))
+        self.assertEqual([r["id"] for r in again["records"]], [ans["id"], lk["id"]])
+        # (review) ...and so does the FIRST key's request, sent again after the second confirmed: not a new
+        # waiting re-lock of the answer just written.
+        code, again = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "reason": "checked, still holds",
+                                                       "nonce": "tkrelock02"}, tok=token(email=self.OWNER))
+        self.assertEqual([r["id"] for r in again["records"]], [ans["id"], lk["id"]])
+        self.assertEqual(len(self.locks()), 2)
+        self.assertEqual(self.view()["pending_locks"], {})
+
+    def test_a_confirmed_relock_whose_lock_failed_is_finished_when_sent_again(self):
+        # Catches (review): the superseding answer written and its lock not (a full disk), and the resend
+        # answering "done" with the answer alone: the ruling would stay unlocked though both keys agreed.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkpart0001")
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkpart0002"}, tok=token(email=self.OWNER))
+        real = self.console._append
+
+        def no_lock(kind, *args):
+            if kind == "lock":
+                raise SV.RequestError(500, "disk full")
+            return real(kind, *args)
+        with mock.patch.object(self.console, "_append", side_effect=no_lock):
+            code, _ = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkpart0003"},
+                               tok=token(email=self.ANN))
+        self.assertEqual(code, 500)
+        self.assertEqual(len(self.locks()), 1)
+        code, out = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkpart0003"},
+                             tok=token(email=self.ANN))
+        self.assertEqual(code, 200, out)
+        ans, lk = out["records"]
+        self.assertEqual(lk["answer"], ans["id"])
+        self.assertEqual(len(self.locks()), 2)
+        self.assertEqual(self.view()["locked_by"][ans["id"]], self.OWNER)
+        self.assertEqual(self.view()["pending_locks"], {})
+
+    def test_a_failed_relock_is_not_finished_for_a_first_key_whose_login_lost_its_role(self):
+        # Catches (security review, LOW): the finish of a half-written re-lock skipping the check every
+        # confirmation makes, so a first key's login removed in the window still has its re-lock written.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        self.lock(a["id"], self.MO, "tkgone0001")
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkgone0002"}, tok=token(email=self.OWNER))
+        real = self.console._append
+
+        def no_lock(kind, *args):
+            if kind == "lock":
+                raise SV.RequestError(500, "disk full")
+            return real(kind, *args)
+        with mock.patch.object(self.console, "_append", side_effect=no_lock):
+            code, _ = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkgone0003"},
+                               tok=token(email=self.ANN))
+        self.assertEqual(code, 500)   # the half-written state: answer down, lock not
+        self.assertIsNotNone(self.console.store.head("LANE.1/Q1").get("supersedes"))
+        self.RO.set_role(self.cfg.state, self.OWNER, "viewer")
+        code, out = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkgone0003"},
+                             tok=token(email=self.ANN))
+        self.assertEqual(code, 400, out)
+        self.assertEqual(len(self.locks()), 1)
+
+    def test_one_login_cannot_forge_a_finished_relock(self):
+        # Catches (found while clearing the review fixes, HIGH): the "finish a re-lock whose lock failed" path
+        # trusting an answer's nonce. /api/answer lets the writer choose nonce and supersedes, so one
+        # administrator posts a superseding answer named like a confirmed re-lock's, re-locks with the
+        # matching nonce, and the lock is written with one key. Only a confirmation's own mark may finish one.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkforge001")
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkforge002"}, tok=token(email=self.OWNER))
+        for nonce in ("tkforge002", "tkforge003"):   # the waiting key's own nonce, and one of the attacker's
+            head = self.console.store.head("LANE.1/Q1")
+            code, out = self.req("POST", "/api/answer", {"qid": "LANE.1/Q1", "picks": head["picks"],
+                                                         "own_text": head["own_text"], "supersedes": head["id"],
+                                                         "reason": "mine alone", "nonce": nonce + "-a"},
+                                 tok=token(email=self.OWNER))
+            self.assertEqual(code, 200, out)
+            self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": nonce}, tok=token(email=self.OWNER))
+            self.assertEqual(len(self.locks()), 1, nonce)
+
+    def test_a_failed_confirmation_does_not_lock_an_answer_put_in_its_place(self):
+        # Catches (security review, MEDIUM): the second key's resend locking whatever answer carries the
+        # confirmed nonce. Confirmed, and its answer write failed (a full disk); the first key then posts its
+        # own answer under that nonce, different words; the second key's resend would lock that, unseen.
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkswap0001")
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "reason": "still holds", "nonce": "tkswap0002"},
+                 tok=token(email=self.OWNER))
+        real = self.console._append
+
+        def no_answer(kind, *args):
+            if kind == "answer":
+                raise SV.RequestError(500, "disk full")
+            return real(kind, *args)
+        with mock.patch.object(self.console, "_append", side_effect=no_answer):
+            self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkswap0003"}, tok=token(email=self.ANN))
+        code, out = self.req("POST", "/api/answer", {"qid": "LANE.1/Q1", "picks": ["b"], "own_text": "swapped",
+                                                     "supersedes": a["id"], "reason": "still holds",
+                                                     "nonce": "tkswap0002-a"}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkswap0003"}, tok=token(email=self.ANN))
+        self.assertEqual(len(self.locks()), 1)
+        self.assertIsNone(self.console.store.lock_of(out["record"]["id"]))
+
+    def test_lock_all_refuses_whole_what_a_key_would_refuse(self):
+        # Catches (review): Lock all's trial skipping the two-key checks, so a key refused only in the real pass
+        # (here: the first key's login lost its role) stops the batch half written.
+        self.RO.set_two_key(self.cfg.state, ["LANE.1"])
+        code, f = self.req("POST", "/api/message", {"item": "LANE.1", "text": "deliberate", "intent": "fork",
+                                                    "mode": "tighten", "nonce": "tkfork0002"},
+                           tok=token(email=self.OWNER))
+        f = f["record"]
+        for n in (2, 3):
+            self.round_q(f["id"], n)
+        code, a = self.req("POST", "/api/answer", {"qid": "LANE.1/Q2", "picks": ["fix"], "own_text": "",
+                                                   "nonce": "tkla2answer"}, tok=token(email=self.OWNER))
+        self.req("POST", "/api/lock", {"qid": "LANE.1/Q2", "answer": a["record"]["id"], "nonce": "tkla2lock1"},
+                 tok=token(email=self.MO))
+        self.RO.set_role(self.cfg.state, self.MO, "viewer")
+        body = {"fork": f["id"], "nonce": "tklockall3", "entries": [
+            {"qid": f"LANE.1/Q{n}", "picks": ["fix"], "own_text": ""} for n in (3, 2)]}
+        code, out = self.req("POST", "/api/lock-all", body, tok=token(email=self.ANN))
+        self.assertEqual(code, 409, out)
+        self.assertIsNone(self.console.store.head("LANE.1/Q3"))   # nothing of the batch was written
+
+    def test_a_lock_key_left_on_an_answer_is_not_a_relock_key(self):
+        # Catches: a first key for a lock taken as the first key of a re-lock of the same answer. It happens when
+        # two-key is switched off, the answer locked by one person, and switched on again: the stale lock key
+        # would then let one more person re-lock with a reason nobody gave.
+        a = self.answered()
+        self.lock(a["id"], self.OWNER, "tkkind0001")
+        self.RO.set_two_key(self.cfg.state, ["ELSEWHERE"])
+        self.assertIsNotNone(self.lock(a["id"], self.ANN, "tkkind0002")[1]["record"])
+        self.RO.set_two_key(self.cfg.state, ["LANE"])
+        code, out = self.req("POST", "/api/relock", {"qid": "LANE.1/Q1", "nonce": "tkkind0003"},
+                             tok=token(email=self.ANN))   # re-lock is an administrator's; the old key is OWNER's
+        self.assertEqual((code, out.get("records")), (200, []), out)
+        self.assertEqual(len(self.locks()), 1)
+        self.assertEqual(self.view()["pending_locks"]["LANE.1/Q1"]["by"], self.ANN)
+
+    def test_two_key_areas_are_the_administrators_and_logged(self):
+        # Catches: a member able to switch two keys off for their own area, a bad area id written, two-key
+        # areas with roles off (every login the owner: anyone's second tab a "second person"), the change
+        # missing from the role log, and the last login removed with two-key areas left behind.
+        code, out = self.req("POST", "/api/two-key", {"areas": []}, tok=token(email=self.MO))
+        self.assertEqual(code, 403, out)
+        code, out = self.req("POST", "/api/two-key", {"areas": ["not an id!"]}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 400, out)
+        # (security review) an id the register does not know: it would look set and guard nothing.
+        code, out = self.req("POST", "/api/two-key", {"areas": ["LANE", "NOPE"]}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 400, out)
+        self.assertIn("NOPE", out["error"])
+        code, out = self.req("POST", "/api/two-key", {"areas": ["LANE", "LANE.1"]}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["roles"]["two_key"], ["LANE", "LANE.1"])
+        self.assertEqual(self.RO.two_key_areas(self.cfg.state), ["LANE", "LANE.1"])
+        line = self.RO.history(self.cfg.state)[0][0]
+        self.assertEqual(line["two_key"], {"from": ["LANE"], "to": ["LANE", "LANE.1"]})
+        self.assertEqual(line["by"], self.OWNER)
+        for email in (self.ANN, self.MO, self.NELL):
+            self.RO.set_role(self.cfg.state, email, None)
+        with self.assertRaisesRegex(self.RO.RolesError, "clear them"):
+            self.RO.set_role(self.cfg.state, self.OWNER, None)
+        self.RO.set_two_key(self.cfg.state, [])
+        self.RO.set_role(self.cfg.state, self.OWNER, None)
+        with self.assertRaisesRegex(self.RO.RolesError, "roles are off"):
+            self.RO.set_two_key(self.cfg.state, ["LANE"])
+
+    def test_a_roles_file_with_an_unknown_top_level_key_is_still_refused(self):
+        # Catches: the shape check loosened to "roles plus anything", so a typo ("twokey") reads as no two-key
+        # areas and one person locks alone where the owner asked for two.
+        p = Path(self.cfg.state) / self.RO.FILE
+        doc = json.loads(p.read_text())
+        p.write_text(json.dumps({**doc, "twokey": ["LANE"]}))
+        code, out = self.req("POST", "/api/answer", self.answer(nonce="tktypo0001"), tok=token(email=self.OWNER))
+        self.assertEqual(code, 503, out)
+
+    def test_lock_all_leaves_two_key_questions_waiting_and_locks_the_rest(self):
+        # Catches: "Lock all & process" writing locks in a two-key area with one key (the round's path around
+        # the rule), refusing the batch because its questions wait, and a second press by another
+        # administrator not confirming them.
+        self.RO.set_two_key(self.cfg.state, ["LANE.1"])
+        code, f = self.req("POST", "/api/message", {"item": "LANE.1", "text": "deliberate", "intent": "fork",
+                                                    "mode": "tighten", "nonce": "tkfork0001"},
+                           tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, f)
+        f = f["record"]
+        for n in (2, 3):
+            self.round_q(f["id"], n)
+        body = {"fork": f["id"], "nonce": "tklockall1", "entries": [
+            {"qid": f"LANE.1/Q{n}", "picks": ["fix"], "own_text": ""} for n in (2, 3)]}
+        code, out = self.req("POST", "/api/lock-all", body, tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.assertEqual([r["status"] for r in out["results"]], ["awaiting_second_key"] * 2)
+        self.assertEqual(self.locks(), [])
+        self.assertEqual(sorted(self.view()["pending_locks"]), ["LANE.1/Q2", "LANE.1/Q3"])
+        code, out = self.req("POST", "/api/lock-all", {**body, "nonce": "tklockall2"}, tok=token(email=self.ANN))
+        self.assertEqual(code, 200, out)
+        self.assertEqual([r["status"] for r in out["results"]], ["locked"] * 2)
+        self.assertEqual(len(self.locks()), 2)
 
 
 if __name__ == "__main__":

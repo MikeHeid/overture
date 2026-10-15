@@ -10,6 +10,9 @@ answer, lock and run anything. Now the owner can say who does what:
 (1.41.0) `areas` on a viewer and `director` on either only shape the Inbox's
 "Mine": see `mine`. Writing is still the role's alone.
 
+(1.43.0) `"two_key": [ITEM_ID, ...]` beside "roles": the areas where a lock
+needs a second person (twokey.py). Set with `set_two_key`; logged like a role.
+
 - **No file: nothing changes.** Every login that passes Access is the owner,
   as through 1.38, so a solo console needs no setup.
 - **owner**: every owner action.
@@ -108,6 +111,18 @@ def mine(entry: Mapping) -> list[str] | None:
 
 def load(state: Path) -> dict[str, dict] | None:
     """Email -> role entry from STATE/roles.json, or None when there is no file (roles are off)."""
+    got = _read(state)
+    return None if got is None else got[0]
+
+
+def two_key_areas(state: Path) -> list[str]:
+    """1.43.0 (W6): the areas where a lock needs a second person to confirm it; [] when none or roles are off."""
+    got = _read(state)
+    return [] if got is None else got[1]
+
+
+def _read(state: Path) -> tuple[dict[str, dict], list[str]] | None:
+    """(email -> role entry, two-key areas) from STATE/roles.json, or None when there is no file."""
     p = Path(state) / FILE
     try:
         text = p.read_text(encoding="utf-8")
@@ -121,9 +136,17 @@ def load(state: Path) -> dict[str, dict] | None:
         raise RolesError(f"{p}: not JSON ({e})") from None
     except RecursionError:   # not a ValueError: would 500 every request rather than read as a viewer's 503
         raise RolesError(f"{p}: nested too deep to be a roles file") from None
-    got = doc.get("roles") if isinstance(doc, dict) and set(doc) == {"roles"} else None
+    # 1.43.0: "two_key" beside "roles". A 1.42 kit refuses the file by its shape, so a downgrade stops writes
+    # (503) rather than letting one person lock alone where the owner asked for two.
+    got = doc.get("roles") if isinstance(doc, dict) and "roles" in doc and set(doc) <= {"roles", "two_key"} \
+        else None
     if not isinstance(got, dict):
-        raise RolesError(f"{p}: the file is exactly {{\"roles\": {{EMAIL: ROLE}}}}")
+        raise RolesError(f"{p}: the file is exactly {{\"roles\": {{EMAIL: ROLE}}, \"two_key\"?: [ITEM_ID, ...]}}")
+    two_key = doc.get("two_key", [])
+    if "two_key" in doc:
+        why = _areas_problem(two_key)
+        if why:
+            raise RolesError(f"{p}: two_key: {why}")
     out: dict[str, dict] = {}
     for email, entry in got.items():
         why = OP.email_problem(email) or _entry_problem(entry)
@@ -136,7 +159,7 @@ def load(state: Path) -> dict[str, dict] | None:
         # Written by hand, perhaps: the kit's own writer refuses this. Nobody could change it from the console.
         raise RolesError(f"{p}: no login is an owner, so nobody could run the console; name one with "
                          f"`agent.py access EMAIL owner`")
-    return out
+    return out, list(two_key)
 
 
 def role_of(roles: Mapping[str, dict] | None, email: str | None) -> dict:
@@ -183,32 +206,67 @@ def set_role(state: Path, email: str, role: str | None, areas: list[str] | None 
         if why:
             raise RolesError(why)
     email = email.lower()
-    # No mkdir: a mistyped --state fails here ("nothing was written") rather than starting a new state dir.
-    log = os.open(Path(state) / LOG_FILE, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-                  0o600)
-    try:
-        # Held from the load to the rename: the console and `agent.py access` each read, change and write the
-        # whole map, and without one lock across processes the second writer drops the first one's change.
-        fcntl.flock(log, fcntl.LOCK_EX)
-        got = load(state) or {}
+
+    def change(got: dict[str, dict], two_key: list[str]):
         before = got.get(email)
         if before == entry:
-            return got
-        if entry is None:
-            got.pop(email)
-        else:
+            return None
+        got = {k: v for k, v in got.items() if k != email}
+        if entry is not None:
             got[email] = entry
         if got and not any(e["role"] == "owner" for e in got.values()):
             raise RolesError("that leaves no owner, so nobody could run the console; make another login the "
                              "owner first (`agent.py access EMAIL owner`)")
-        line = (json.dumps({"at": utc_now(), "by": by.lower() if by else None, "email": email, "from": before,
-                            "to": entry}, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        if not got and two_key:
+            raise RolesError("two-key areas are set (People): clear them before removing the last login")
+        return got, two_key, {"email": email, "from": before, "to": entry}
+    return _commit(state, change, by)
+
+
+def set_two_key(state: Path, areas: list[str], by: str | None = None) -> list[str]:
+    """1.43.0 (W6): set the two-key areas ([] clears them); return them as written. Roles must be on: with
+    no roles every login is the owner, and a second key could be anyone's second tab."""
+    why = (by is not None and OP.email_problem(by)) or (areas and _areas_problem(areas))
+    if why:
+        raise RolesError(why)
+    areas = list(areas)
+
+    def change(got: dict[str, dict], two_key: list[str]):
+        if not got:
+            raise RolesError("roles are off: make yourself the administrator and add the people who will "
+                             "confirm, then set two-key areas")
+        if two_key == areas:
+            return None
+        return got, areas, {"two_key": {"from": two_key, "to": areas}}
+    _commit(state, change, by)
+    return areas
+
+
+def _commit(state: Path, change, by: str | None) -> dict[str, dict]:
+    """Apply `change(roles, two_key)` -> (roles, two_key, log fields) | None (nothing to do) to roles.json.
+
+    The log line is written before roles.json is replaced and cut back if that fails, under the log's lock,
+    held from the read to the rename: the console and `agent.py access` each read, change and write the
+    whole file, and without one lock across processes the second writer drops the first one's change.
+    """
+    # No mkdir: a mistyped --state fails here ("nothing was written") rather than starting a new state dir.
+    log = os.open(Path(state) / LOG_FILE, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                  0o600)
+    try:
+        fcntl.flock(log, fcntl.LOCK_EX)
+        got, two_key = _read(state) or ({}, [])
+        done = change(got, two_key)
+        if done is None:
+            return got
+        got, two_key, fields = done
+        line = (json.dumps({"at": utc_now(), "by": by.lower() if by else None, **fields}, sort_keys=True,
+                           separators=(",", ":")) + "\n").encode()
         end = _mend_tail(log)
         try:
             if os.write(log, line) != len(line):
                 raise OSError("short write")
             os.fsync(log)
-            _write_map(Path(state) / FILE, got)
+            _write_map(Path(state) / FILE, got, two_key)
         except BaseException:
             os.ftruncate(log, end)   # the change did not land, so neither does its line
             raise
@@ -239,11 +297,12 @@ def _mend_tail(log: int) -> int:
     return pos
 
 
-def _write_map(p: Path, got: dict[str, dict]) -> None:
+def _write_map(p: Path, got: dict[str, dict], two_key: list[str] | None = None) -> None:
     if not got:
         p.unlink(missing_ok=True)   # the last login removed: roles are off again
         return
-    data = (json.dumps({"roles": dict(sorted(got.items()))}, indent=2, sort_keys=True) + "\n").encode()
+    doc = {"roles": dict(sorted(got.items())), **({"two_key": list(two_key)} if two_key else {})}
+    data = (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
     # The operator-names writer: a fresh temp file no symlink names, then one rename.
     tmp = p.with_name(f".{FILE}.{os.urandom(8).hex()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
@@ -259,12 +318,19 @@ def _write_map(p: Path, got: dict[str, dict]) -> None:
 
 
 def _line_problem(rec: object) -> str | None:
-    if not isinstance(rec, dict) or set(rec) != {"at", "by", "email", "from", "to"}:
-        return 'a line is exactly {"at", "by", "email", "from", "to"}'
+    # A role change, or (1.43.0) a change of the two-key areas: {"at", "by", "two_key": {"from", "to"}}.
+    if not isinstance(rec, dict) or set(rec) not in ({"at", "by", "email", "from", "to"}, {"at", "by", "two_key"}):
+        return 'a line is exactly {"at", "by", "email", "from", "to"} or {"at", "by", "two_key"}'
     if not isinstance(rec["at"], str) or not _AT.match(rec["at"]):
         return f"at {rec['at']!r} is not a UTC time"
     if rec["by"] is not None and OP.email_problem(rec["by"]):
         return OP.email_problem(rec["by"])
+    if "two_key" in rec:
+        tk = rec["two_key"]
+        if not isinstance(tk, dict) or set(tk) != {"from", "to"}:
+            return 'two_key is exactly {"from": [ITEM_ID, ...], "to": [ITEM_ID, ...]}'
+        return next((f"two_key {k}: {_areas_problem(tk[k])}" for k in ("from", "to")
+                     if tk[k] != [] and _areas_problem(tk[k])), None)
     if rec["from"] is None and rec["to"] is None:
         return "a change has a from or a to"
     return OP.email_problem(rec["email"]) or next(
