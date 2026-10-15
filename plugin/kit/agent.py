@@ -166,6 +166,7 @@ from overture import operators as OP  # noqa: E402
 from overture import roles as RO  # noqa: E402
 from overture import registry as R  # noqa: E402
 from overture import sessions as SN  # noqa: E402
+from overture import settings as SET  # noqa: E402
 from overture import view as V  # noqa: E402
 from overture.server import agent_request  # noqa: E402
 
@@ -1767,8 +1768,9 @@ def _operator_name(state: Path, email: str | None, short: str | None, clear: boo
             got = OP.load_names(state)
             print(f"{email} {got[email]}" if email in got else f"{email}: no name; its locks are exported unnamed")
             return 0
-        OP.set_name(state, email, None if clear else short)
-    except (OSError, OP.OperatorsError) as e:
+        # 1.44: through the role log's lock, as the console's Settings tab writes it, and logged (by: the terminal).
+        SET.put_name(state, email, None if clear else short, by=None)
+    except (OSError, OP.OperatorsError, RO.RolesError) as e:
         print(f"agent.py: operator-name: {e}; nothing was written", file=sys.stderr)
         return 2
     print(f"{email}: name cleared" if clear else f"{email} {short}: its locks carry this name in the next export")

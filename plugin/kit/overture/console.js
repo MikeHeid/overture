@@ -19,6 +19,7 @@
   // vendor/LUCIDE-LICENSE.txt), copied in as element lists and drawn with currentColor, so they follow
   // the theme with no icon font, no CDN and no request. test_kit checks every name used below exists here.
   const ICONS = {
+    'sliders-horizontal': [["line",{"x1":"21","x2":"14","y1":"4","y2":"4"}],["line",{"x1":"10","x2":"3","y1":"4","y2":"4"}],["line",{"x1":"21","x2":"12","y1":"12","y2":"12"}],["line",{"x1":"8","x2":"3","y1":"12","y2":"12"}],["line",{"x1":"21","x2":"16","y1":"20","y2":"20"}],["line",{"x1":"12","x2":"3","y1":"20","y2":"20"}],["line",{"x1":"14","x2":"14","y1":"2","y2":"6"}],["line",{"x1":"8","x2":"8","y1":"10","y2":"14"}],["line",{"x1":"16","x2":"16","y1":"18","y2":"22"}]],
     'inbox': [["polyline",{"points":"22 12 16 12 14 15 10 15 8 12 2 12"}],["path",{"d":"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"}]],
     'rss': [["path",{"d":"M4 11a9 9 0 0 1 9 9"}],["path",{"d":"M4 4a16 16 0 0 1 16 16"}],["circle",{"cx":"5","cy":"19","r":"1"}]],
     'ticket': [["path",{"d":"M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"}],["path",{"d":"M13 5v2"}],["path",{"d":"M13 17v2"}],["path",{"d":"M13 11v2"}]],
@@ -2196,6 +2197,8 @@
       renderChat(body);
     } else if (currentTab === 'people') {
       renderPeopleTab(body);
+    } else if (currentTab === 'settings') {
+      renderSettingsTab(body);
     } else {
       renderInboxList(body);
     }
@@ -2218,15 +2221,19 @@
     ['portfolio', 'Portfolio'],
     ['favorite', 'Favorite'],
     ['chat', 'Chat'],
-    ['people', 'People']   // 1.40: roles; shown to an owner's login only (visibleTabs)
+    ['people', 'People'],   // 1.40: roles; shown to an owner's login only (visibleTabs)
+    ['settings', 'Settings']   // 1.44: an administrator's or a director's login only
   ];
-  // The tabs this login sees: People only when the server sent its list, which it does to an owner alone.
+  // The tabs this login sees: People only when the server sent its list, which it does to an owner alone;
+  // Settings only when it sent the settings, which it does to an administrator or a director.
   function visibleTabs() {
-    return TABS.filter(([id]) => id !== 'people' || !!(view && view.roles));
+    return TABS.filter(([id]) => (id !== 'people' || !!(view && view.roles)) &&
+      (id !== 'settings' || !!(view && view.settings)));
   }
   // D8/D9 (owner, 2026-10-11): every tab shows its icon and its label.
   const TAB_ICON = { inbox: 'inbox', feed: 'rss', tickets: 'ticket', prs: 'git-pull-request', playbooks: 'book-open',
-    triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square', people: 'users' };
+    triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square', people: 'users',
+    settings: 'sliders-horizontal' };
   // Which TABS are shown directly in the bar vs. folded behind "More ▾".
   // D9: five tabs with icon and label fit a ~530px column on one line; the rest sit behind More.
   const TABS_PRIMARY_IDS = ['inbox', 'feed', 'tickets', 'prs', 'portfolio'];
@@ -4030,16 +4037,33 @@
     if (e.areas && e.areas.length) s += (e.role === 'member' ? ' of ' : ', Inbox on ') + e.areas.join(', ');
     return s + (e.director ? ', director' : '');
   }
-  function renderRoleLog(body, roles) {
+  // 1.44: a line of the Settings tab: a limit, the lane labels and colours, or an operator's short name.
+  function describeSetting(s) {
+    if (s.key === 'operator_name') {
+      return s.to ? ' set the short name of ' + s.email + ' to ' + s.to + (s.from ? ' (was ' + s.from + ')' : '')
+        : ' cleared the short name of ' + s.email + ' (was ' + s.from + ')';
+    }
+    if (s.key === 'lanes') return s.to ? ' changed the lane labels and colours' : ' reset the lanes to the project\'s';
+    const lim = (view && view.settings && view.settings.limits && view.settings.limits[s.key]) || {};
+    const what = lim.label || s.key;
+    return s.to === null || s.to === undefined ? ' reset ' + what + ' to the default (was ' + s.from + ')'
+      : ' set ' + what + ' to ' + s.to + ' (was ' + (s.from === null || s.from === undefined ? 'the default' : s.from) + ')';
+  }
+  function renderRoleLog(body, roles, heading) {
     const log = Array.isArray(roles.log) ? roles.log : [];
     if (!log.length && !roles.log_problem) return;
-    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Role changes']));
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, [heading || 'Role changes']));
     if (roles.log_problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [roles.log_problem]));
     const ul = el('ul', { className: 'ck-people-log' });
     for (const e of log) {
-      const who = e.by ? (e.by === roles.me ? 'You' : e.by) : 'agent.py access';
+      // by null: the owner's terminal (`agent.py access`, or `operator-name` for a short name); a limit or a
+      // lane has no terminal command, so its null is a console sign-in that carried no email (a service token).
+      const who = e.by ? (e.by === roles.me ? 'You' : e.by)
+        : !e.setting ? 'agent.py access'
+        : e.setting.key === 'operator_name' ? 'agent.py operator-name' : 'A sign-in with no email';
       const areaWords = a => (a && a.length ? a.join(', ') : 'none');   // 1.43: a change of the two-key areas
-      const what = e.two_key ? ' set the two-key areas to ' + areaWords(e.two_key.to) + ' (was ' +
+      const what = e.setting ? describeSetting(e.setting)
+        : e.two_key ? ' set the two-key areas to ' + areaWords(e.two_key.to) + ' (was ' +
           areaWords(e.two_key.from) + ')'
         : !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
         : !e.from ? ' added ' + e.email + ' as ' + describeRole(e.to)
@@ -4133,26 +4157,164 @@
     add.appendChild(go);
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Add a person']));
     body.appendChild(add);
+    // 1.44: the two-key areas moved to Settings, where a director sets them too.
+    body.appendChild(el('p', { className: 'ck-muted' }, ['Two-key areas, limits, lanes and short names are under Settings.']));
+    renderRoleLog(body, roles);
+  }
+
+  // 1.44: the Settings tab, for an administrator or a director: what the team decides for this project.
+  // Values live beside the project on the console's machine (STATE/settings.json), override the defaults,
+  // apply at once and are logged; the server re-checks every value and who sent it.
+  let settingsError = null;
+  async function postSettings(endpoint, body, done) {
+    const r = await apiPost(endpoint, body, 'settings-' + JSON.stringify(body), { quiet: true });
+    settingsError = r && r.error ? r.error : null;
+    if (!settingsError) announce(done);
+    renderPanel();
+  }
+  function settingsButton(label, onClick, quiet) {
+    const b = el('button', { className: 'ck-btn' + (quiet ? ' ck-btn-quiet' : ''), type: 'button' }, [label]);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function renderLimits(body, s) {
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Limits']));
+    const ul = el('ul', { className: 'ck-settings-list' });
+    for (const key of Object.keys(s.limits)) {
+      const lim = s.limits[key];
+      const id = 'ck-setting-' + key;
+      const input = el('input', { type: 'number', className: 'ck-input ck-settings-number', id,
+        min: String(lim.min), max: String(lim.max), step: '1', value: String(s.values[key]) });
+      const here = Object.prototype.hasOwnProperty.call(s.set, key);
+      const row = el('li', { className: 'ck-settings-row', dataKey: key }, [
+        el('label', { className: 'ck-settings-label', for: id }, [lim.label]), input,
+        settingsButton('Save', () => {
+          const n = Number(input.value);
+          if (!input.value.trim() || !Number.isInteger(n)) {   // NaN would reach the server as null: a reset
+            settingsError = lim.label + ': a whole number from ' + lim.min + ' to ' + lim.max;
+            renderPanel();
+            return;
+          }
+          postSettings('/settings', { key, value: n }, lim.label + ': ' + n);
+        }),
+        here ? settingsButton('Reset', () => postSettings('/settings', { key, value: null },
+          lim.label + ': back to ' + s.defaults[key]), true) : null,
+        el('span', { className: 'ck-muted ck-settings-note' }, [
+          here ? 'set here; the default is ' + s.defaults[key] : 'the default (' + lim.min + ' to ' + lim.max + ')'])]);
+      ul.appendChild(row);
+    }
+    body.appendChild(ul);
+  }
+  function renderLaneSettings(body, s) {
+    const repo = s.lanes_repo || {};
+    const mine = (s.set && s.set.lanes) || {};
+    const all = new Set(Object.keys(s.values.lanes || {}));
+    for (const id of Object.keys(items || {})) { const l = laneOf(id); if (l) all.add(l); }
+    if (!all.size) return;
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Lanes']));
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'A label and a colour per lane. Left empty, a lane keeps the project\'s own (.overture.json), ' +
+      'or an automatic colour.']));
+    const ul = el('ul', { className: 'ck-settings-list' });
+    const rows = [];
+    for (const lane of Array.from(all).sort()) {
+      const label = el('input', { type: 'text', className: 'ck-input ck-settings-lane-label', maxlength: '40',
+        value: (mine[lane] && mine[lane].label) || '', placeholder: (repo[lane] && repo[lane].label) || 'no label',
+        'aria-label': 'Label for ' + lane, autocomplete: 'off' });
+      const color = el('select', { className: 'ck-input ck-settings-lane-color', 'aria-label': 'Colour for ' + lane });
+      const repoColor = repo[lane] && repo[lane].color;
+      color.appendChild(el('option', { value: '' }, [repoColor ? 'project\'s (' + repoColor + ')' : 'automatic']));
+      for (const c of s.lane_colors) color.appendChild(el('option', { value: c }, [c]));
+      color.value = (mine[lane] && mine[lane].color) || '';
+      rows.push([lane, label, color]);
+      ul.appendChild(el('li', { className: 'ck-settings-row', dataLane: lane }, [el('code', {}, [lane]), label, color]));
+    }
+    body.appendChild(ul);
+    const save = settingsButton('Save lanes', () => {
+      const value = {};
+      for (const [lane, label, color] of rows) {
+        const o = {};
+        if (label.value.trim()) o.label = label.value.trim();
+        if (color.value) o.color = color.value;
+        if (Object.keys(o).length) value[lane] = o;
+      }
+      postSettings('/settings', { key: 'lanes', value: Object.keys(value).length ? value : null }, 'Lanes saved');
+    });
+    body.appendChild(el('div', { className: 'ck-settings-actions' }, [save]));
+  }
+  function renderTwoKeySettings(body, s) {
     // 1.43 (W6): the areas where a lock needs a second person.
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Two-key areas']));
     body.appendChild(el('p', { className: 'ck-muted' }, [
       'In these areas (an item and everything under it) a lock counts once a second person confirms it: ' +
       'another administrator, or a member of that area. Leave it empty for none.']));
     const tk = el('form', { className: 'ck-people-add ck-two-key-form', 'aria-label': 'Two-key areas' });
-    const tkAreas = areasInput((roles.two_key || []).join(' '), 'ck-two-key-areas');
+    const tkAreas = areasInput((s.two_key || []).join(' '), 'ck-two-key-areas');
     tkAreas.setAttribute('aria-label', 'Two-key areas');
     tk.appendChild(tkAreas);
     tk.appendChild(el('button', { className: 'ck-btn', type: 'submit' }, ['Save']));
-    tk.addEventListener('submit', async e => {
+    tk.addEventListener('submit', e => {
       e.preventDefault();
       const areas = parseAreas(tkAreas.value);
-      const r = await apiPost('/two-key', { areas }, 'two-key-' + areas.join(','), { quiet: true });
-      peopleError = r && r.error ? r.error : null;
-      if (!peopleError) announce(areas.length ? 'Two-key areas: ' + areas.join(', ') : 'No two-key areas');
-      renderPanel();
+      postSettings('/two-key', { areas }, areas.length ? 'Two-key areas: ' + areas.join(', ') : 'No two-key areas');
     });
     body.appendChild(tk);
-    renderRoleLog(body, roles);
+  }
+  function renderOperatorNames(body, s) {
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Short names']));
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'What a committed ruling says instead of an email: lowercase letters, digits and hyphens, e.g. michael. ' +
+      'The email itself stays in this console.']));
+    const ul = el('ul', { className: 'ck-settings-list' });
+    const nameRow = (email, value) => {
+      const input = el('input', { type: 'text', className: 'ck-input ck-settings-name', value: value || '',
+        maxlength: '40', placeholder: 'none', 'aria-label': 'Short name for ' + email, autocomplete: 'off' });
+      return [input, settingsButton('Save', () => {
+        const name = input.value.trim() || null;
+        postSettings('/operator-name', { email, name }, name ? email + ' is ' + name : email + ': no short name');
+      })];
+    };
+    for (const email of s.operators || []) {
+      ul.appendChild(el('li', { className: 'ck-settings-row', dataEmail: email },
+        [el('span', { className: 'ck-people-email' }, [email])].concat(nameRow(email, (s.names || {})[email]))));
+    }
+    body.appendChild(ul);
+    const add = el('form', { className: 'ck-people-add ck-settings-name-add', 'aria-label': 'Add a short name' });
+    const email = el('input', { type: 'email', className: 'ck-input', required: true, autocomplete: 'off',
+      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email' });
+    const name = el('input', { type: 'text', className: 'ck-input', required: true, maxlength: '40',
+      placeholder: 'short name', 'aria-label': 'Short name', autocomplete: 'off' });
+    add.appendChild(email);
+    add.appendChild(name);
+    add.appendChild(el('button', { className: 'ck-btn', type: 'submit' }, ['Add']));
+    add.addEventListener('submit', e => {
+      e.preventDefault();
+      postSettings('/operator-name', { email: email.value.trim(), name: name.value.trim() },
+        email.value.trim() + ' is ' + name.value.trim());
+    });
+    body.appendChild(add);
+  }
+  function renderSettingsTab(body) {
+    const s = view && view.settings;
+    body.appendChild(el('h2', { className: 'ck-section-heading' }, ['Settings']));
+    if (!s) {   // a login that is neither an administrator nor a director opened #settings
+      body.appendChild(el('p', { className: 'ck-muted' }, ['Only an administrator or a director changes settings.']));
+      return;
+    }
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'What your team decides for this project. A value set here is kept on this console\'s machine, ' +
+      'beside the project and never in it; it overrides the default and applies at once. Every change is ' +
+      'listed below.']));
+    if (s.problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [s.problem]));
+    if (settingsError) body.appendChild(el('p', { className: 'ck-error-msg', role: 'alert' }, [settingsError]));
+    const dl = el('datalist', { id: 'ck-people-items' });
+    for (const id of items ? Object.keys(items).sort() : []) dl.appendChild(el('option', { value: id }));
+    body.appendChild(dl);
+    renderLimits(body, s);
+    renderLaneSettings(body, s);
+    renderTwoKeySettings(body, s);
+    renderOperatorNames(body, s);
+    renderRoleLog(body, { log: s.log, log_total: s.log_total, me: s.me }, 'Changes');
   }
 
   function renderTriggersTab(body) {
