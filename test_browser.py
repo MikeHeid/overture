@@ -3371,6 +3371,34 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_selector(".ck-more-menu")
                 self.assertEqual(page.locator(".ck-more-item", has_text="Settings").count(), 0)
 
+    def test_settings_turns_notifications_on_and_shows_the_webhook_by_host_only(self):
+        # Catches (1.45.0): the Notifications section never drawn, the switch or the quiet hours posting
+        # nothing, the webhook's secret path on the page, and no word of how to set one when none is set.
+        from overture import notify as NT
+        from overture import settings as SET
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                page.wait_for_selector(".ck-settings-notify-where >> text=No webhook yet")
+                self.assertIn("agent.py notify-url", page.locator(".ck-settings-notify-where").text_content())
+                NT.set_url(self.cfg.state, "https://hooks.example.com/services/T0/B0/SECRETPATHxyz")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                page.wait_for_selector(".ck-settings-notify-where >> text=hooks.example.com")
+                self.assertNotIn("SECRETPATH", page.content())
+                page.check("#ck-setting-notify_on")
+                _wait_for(page, "() => document.querySelector('.ck-live').textContent.includes('Notifications on')")
+                self.assertIs(SET.load(self.cfg.state)["notify_on"], True)
+                row = ".ck-settings-row[data-key='notify_quiet']"
+                page.fill(row + " input[aria-label='Quiet from']", "21:00")
+                page.fill(row + " input[aria-label='Quiet until']", "06:30")
+                page.click(row + " button:has-text('Save')")
+                page.wait_for_selector(row + " button:has-text('No quiet hours')")
+                self.assertEqual(SET.load(self.cfg.state)["notify_quiet"], {"from": "21:00", "to": "06:30"})
+                self.assertIn("set the quiet hours to 21:00–06:30", page.locator(".ck-people-log").text_content())
+
     def test_the_people_tab_shows_who_changed_whose_role_newest_first(self):
         # Catches (1.42.0, W5): the log sent but never drawn, drawn oldest first, a console change not shown
         # as "You", and a terminal change credited to a login rather than to `agent.py access`.

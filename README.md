@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -552,6 +552,8 @@ take effect on the next write, with no restart. The file
 yourself: it refuses inside a Claude Code session, and refuses to leave
 the console with no owner.
 
+<img src="docs/screenshots/feature-people.png" alt="The People tab: an administrator, a member of API-2 and a director, each with a role, areas and Save, and Role changes below" width="400">
+
 **Routing (1.41).** Each question shows who it is for: the members
 whose areas cover its item. An administrator sees "For bob@example.com"
 on every row and card; a member sees "For you" on their own. A member's
@@ -561,6 +563,8 @@ Inbox opens on. Tick **Director** on a member or viewer (or pass
 `--director`) and their Inbox opens on everything; it changes what they
 see first, never what they may decide. Unsent drafts are now each
 login's own, so two administrators no longer overwrite each other.
+
+<img src="docs/screenshots/feature-routing.png" alt="The Inbox as an administrator: each waiting question says who it is for" width="400">
 
 **Role changes (1.42).** Under People, **Role changes** lists every
 change, newest first: who made it ("You", another administrator's
@@ -579,6 +583,8 @@ process request and the ruling export see an unlocked answer. The card
 then says "Locked by A, confirmed by B". Re-lock and **Lock all** follow
 the same rule. Two-key areas need roles on.
 
+<img src="docs/screenshots/feature-two-key.png" alt="A question in a two-key area: one person has locked it, and the card waits for a second person to confirm" width="400">
+
 **Settings (1.44).** An administrator or a director opens **Settings**
 to make the project's own choices: how many chat messages a minute and
 an hour, how many agents may work one item at once, each lane's label
@@ -588,6 +594,28 @@ lives beside the project on the console's machine
 (`STATE/settings.json`), overrides the default, applies at once, and is
 listed under **Changes**. **Reset** goes back to the default. People
 stays the administrator's alone.
+
+<img src="docs/screenshots/feature-settings.png" alt="The Settings tab: chat and agent limits with their defaults, lane labels and colours, notifications, two-key areas and short names" width="400">
+
+**Notifications (1.45).** The console can tell your team's channel when
+questions are waiting. It posts at most one message every N minutes
+(default 30), never during quiet hours, and each question is mentioned
+only once. A message says how many questions wait, on which items, with
+a link to the console. It never includes a question's text or anyone's
+email. It posts to any incoming webhook that takes Slack's format:
+Slack, Mattermost, or Discord's `/slack` URL. The URL works like a
+password, so you set it in your own terminal and the console shows only
+its host:
+
+    agent.py --state STATE notify-url https://hooks.slack.com/services/...
+    agent.py --state STATE notify-url --test     # post a test message
+    agent.py --state STATE notify-url --clear
+
+Then an administrator or a director turns notifications on under
+**Settings → Notifications** and sets how often and the quiet hours.
+The first message lists every question already waiting.
+
+<img src="docs/screenshots/feature-notify.png" alt="Settings, Notifications: posting to hooks.slack.com, Send notifications ticked, at most one message every 30 minutes, quiet hours 22:00 to 07:00" width="400">
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1103,6 +1131,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.45 — Notifications**: a digest of waiting questions to your team's
+  Slack-style channel, with quiet hours; never a question's text.
 - **1.44 — Settings**: administrators and directors set the limits, lane
   labels and colours, two-key areas and short names in the console.
 - **1.43 — Two-key locks**: in the areas an administrator names, a lock
