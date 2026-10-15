@@ -2990,6 +2990,49 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Settings (1.44.0)
+
+The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Settings", 1A 2A
+3A 4): the settings that are a team's decision are made in the console,
+by a project's administrators and its directors.
+
+- **A Settings tab** for an administrator or a director (with roles off,
+  every login). People (who has which role) stays the administrator's
+  alone, so a director can never raise anyone, themselves included.
+  This amends W3: the director flag now also lets a login set the
+  project's settings.
+- **What it sets:**
+  - **Limits:** chat messages a minute (1–60, default 6) and an hour
+    (1–1000, default 60), and agents working one item at once (1–50,
+    default 8).
+  - **Lanes:** a label and a colour for each lane. A field left empty
+    keeps the project's own value from `.overture.json`, or an automatic
+    colour. A lane's `ux` flag stays in the repo.
+  - **Two-key areas**, moved here from People (`POST /api/two-key`,
+    which a director may now call too).
+  - **Short names:** what a committed ruling says instead of an email,
+    as `agent.py operator-name` sets it (`POST /api/operator-name`). The
+    email itself stays in the console.
+- **Beside the project, never in it.** Values live in
+  `STATE/settings.json` on the console's machine (`POST /api/settings
+  {"key", "value"}`; a null value restores the default). They override
+  the committed defaults, apply at once with no restart, and the console
+  still writes nothing into the repo. A damaged file means the defaults,
+  with a problem line on the tab and the path only in the server log;
+  the next change made on the tab replaces it.
+- **Logged.** Every change is a line of the role log
+  (`{"setting": {"key", "from", "to"}}`) and is listed under the tab's
+  **Changes**: "You set Chat messages a minute to 3 (was the default)".
+  `agent.py operator-name` now writes through the same lock and is
+  logged too. People's **Role changes** lists role changes only.
+- **Who sees what.** Only an administrator's or a director's page
+  carries the settings, and never the role roster: the two-key answer
+  hands a director the settings, not the list of every login. Nothing
+  of it reaches the agent socket.
+- Plumbing stays where it is: Access, hosts, ports, paths, tokens, the
+  steward and the adapter are never set from a web page. Folders, the
+  committee seat and next-step skills stay in `.overture.json` for now.
+
 ## Two-key locks (1.43.0)
 
 Wave 3, OPEN-DECISIONS.md W6 A (the owner's choice of 2026-10-14):

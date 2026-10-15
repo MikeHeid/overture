@@ -249,16 +249,39 @@ def _commit(state: Path, change, by: str | None) -> dict[str, dict]:
     held from the read to the rename: the console and `agent.py access` each read, change and write the
     whole file, and without one lock across processes the second writer drops the first one's change.
     """
+    out: list[dict[str, dict]] = []
+
+    def plan():
+        got, two_key = _read(state) or ({}, [])
+        out.append(got)
+        done = change(got, two_key)
+        if done is None:
+            return None
+        got, two_key, fields = done
+        out[0] = got
+        # Looked up at call time, not bound here: a test (and the review's ordering check) patches it.
+        return fields, lambda: _write_map(Path(state) / FILE, got, two_key)
+    logged_change(state, by, plan)
+    return out[0]
+
+
+def logged_change(state: Path, by: str | None, plan) -> bool:
+    """Run `plan()` -> (log fields, write) | None under the log's lock; log the line, then `write()`.
+
+    The one way the console's settings change (roles, two-key areas, 1.44.0 settings.py and operator
+    names): the line is written and synced before `write()` and cut back if it fails, so no change lands
+    unlogged; the lock, held from plan's read to write's rename, keeps two writers (the console and the
+    terminal) from dropping one another's change. False when plan found nothing to do.
+    """
     # No mkdir: a mistyped --state fails here ("nothing was written") rather than starting a new state dir.
     log = os.open(Path(state) / LOG_FILE, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
                   0o600)
     try:
         fcntl.flock(log, fcntl.LOCK_EX)
-        got, two_key = _read(state) or ({}, [])
-        done = change(got, two_key)
+        done = plan()
         if done is None:
-            return got
-        got, two_key, fields = done
+            return False
+        fields, write = done
         line = (json.dumps({"at": utc_now(), "by": by.lower() if by else None, **fields}, sort_keys=True,
                            separators=(",", ":")) + "\n").encode()
         end = _mend_tail(log)
@@ -266,11 +289,11 @@ def _commit(state: Path, change, by: str | None) -> dict[str, dict]:
             if os.write(log, line) != len(line):
                 raise OSError("short write")
             os.fsync(log)
-            _write_map(Path(state) / FILE, got, two_key)
+            write()
         except BaseException:
             os.ftruncate(log, end)   # the change did not land, so neither does its line
             raise
-        return got
+        return True
     finally:
         os.close(log)   # closing releases the lock
 
@@ -318,9 +341,18 @@ def _write_map(p: Path, got: dict[str, dict], two_key: list[str] | None = None) 
 
 
 def _line_problem(rec: object) -> str | None:
-    # A role change, or (1.43.0) a change of the two-key areas: {"at", "by", "two_key": {"from", "to"}}.
-    if not isinstance(rec, dict) or set(rec) not in ({"at", "by", "email", "from", "to"}, {"at", "by", "two_key"}):
-        return 'a line is exactly {"at", "by", "email", "from", "to"} or {"at", "by", "two_key"}'
+    # A role change, or (1.43.0) a change of the two-key areas: {"at", "by", "two_key": {"from", "to"}}, or
+    # (1.44.0) of a setting: {"at", "by", "setting": {"key", "from", "to", "email"?}} (settings.py; operator
+    # names carry the email they name). Its values are settings.py's to judge; the shape is checked here.
+    if not isinstance(rec, dict) or set(rec) not in ({"at", "by", "email", "from", "to"}, {"at", "by", "two_key"},
+                                                     {"at", "by", "setting"}):
+        return 'a line is exactly {"at", "by", "email", "from", "to"}, {"at", "by", "two_key"} or {"at", "by", "setting"}'
+    if "setting" in rec:
+        st = rec["setting"]
+        if not isinstance(st, dict) or not {"key", "from", "to"} <= set(st) <= {"key", "from", "to", "email"} \
+                or not isinstance(st["key"], str) or not re.fullmatch(r"[a-z_]{1,40}", st["key"]) \
+                or ("email" in st and OP.email_problem(st["email"])):
+            return 'setting is {"key": NAME, "from": VALUE, "to": VALUE, "email"?: EMAIL}'
     if not isinstance(rec["at"], str) or not _AT.match(rec["at"]):
         return f"at {rec['at']!r} is not a UTC time"
     if rec["by"] is not None and OP.email_problem(rec["by"]):
@@ -331,23 +363,56 @@ def _line_problem(rec: object) -> str | None:
             return 'two_key is exactly {"from": [ITEM_ID, ...], "to": [ITEM_ID, ...]}'
         return next((f"two_key {k}: {_areas_problem(tk[k])}" for k in ("from", "to")
                      if tk[k] != [] and _areas_problem(tk[k])), None)
+    if "setting" in rec:
+        return None   # its shape was checked above; at and by just now
     if rec["from"] is None and rec["to"] is None:
         return "a change has a from or a to"
     return OP.email_problem(rec["email"]) or next(
         (_entry_problem(rec[k]) for k in ("from", "to") if rec[k] is not None and _entry_problem(rec[k])), None)
 
 
-def history(state: Path, limit: int = LOG_SHOWN) -> tuple[list[dict], int]:
-    """The newest `limit` role changes, newest first, and how many the log holds in all.
+def role_line(rec: dict) -> bool:
+    """A change of someone's role (People's "Role changes"), not of the two-key areas or a setting."""
+    return "setting" not in rec and "two_key" not in rec
+
+
+def settings_line(rec: dict) -> bool:
+    """A change the Settings tab lists: a setting, a short name, or the two-key areas."""
+    return "setting" in rec or "two_key" in rec
+
+
+# 1.44.0: the parsed log, kept while the file is unchanged (path, inode, size, mtime). Every administrator's
+# and director's poll reads it, and re-parsing a log that only ever grows on every poll is wasted work.
+_parsed: dict[str, tuple[tuple, list[dict]]] = {}
+
+
+def history(state: Path, limit: int = LOG_SHOWN, where=None) -> tuple[list[dict], int]:
+    """The newest `limit` changes for which `where(line)` holds (every line when None), newest first, and
+    how many such lines the log holds in all.
 
     A line that is not well formed is refused by line number, never skipped. A last line with no newline is
     left out: a writer holds the lock mid-append, and one that failed cut its line back (`set_role`).
     """
     p = Path(state) / LOG_FILE
     try:
-        lines = p.read_text(encoding="utf-8").split("\n")
+        st = p.stat()
     except FileNotFoundError:
         return [], 0
+    except OSError as e:
+        raise RolesError(f"{p}: not readable ({e})") from None
+    stamp = (st.st_ino, st.st_size, st.st_mtime_ns)
+    hit = _parsed.get(str(p))
+    out = hit[1] if hit and hit[0] == stamp else _parse_log(p, stamp)
+    if where is not None:
+        out = [r for r in out if where(r)]
+    return out[::-1][:limit], len(out)
+
+
+def _parse_log(p: Path, stamp: tuple) -> list[dict]:
+    try:
+        lines = p.read_text(encoding="utf-8").split("\n")
+    except FileNotFoundError:
+        return []
     except (OSError, UnicodeDecodeError) as e:
         raise RolesError(f"{p}: not readable ({e})") from None
     lines.pop()   # "" after the last newline, or a line still being written
@@ -363,4 +428,7 @@ def history(state: Path, limit: int = LOG_SHOWN) -> tuple[list[dict], int]:
         if why:
             raise RolesError(f"{p}:{n}: {why}")
         out.append(rec)
-    return out[::-1][:limit], len(out)
+    # The stamp was taken before the read: a line appended in between changes the size, so the next call
+    # parses again rather than keep a log that is missing it.
+    _parsed[str(p)] = (stamp, out)
+    return out

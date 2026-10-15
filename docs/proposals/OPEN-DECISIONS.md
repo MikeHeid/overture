@@ -106,6 +106,19 @@ solo mode without Cloudflare), B for W3 (members confined to their areas
 on every surface, which one forgotten path would leak), C for W6 (every
 member's lock confirmed by an administrator).
 
+## Settings (decided 2026-10-15)
+
+The owner asked that config parameters which are a team's or project's
+administrative decision be set in the console by a project's directors.
+All four are the owner's own picks ("1a 2a 3a 4 yes").
+
+| # | Decision | Outcome |
+|---|---|---|
+| S1 | Who sets them | **A.** A Settings tab for administrators and directors, two-key areas included. People (role assignment) stays administrator-only. **Amends W3:** the director flag now also lets a login set project settings; it still grants no decision on questions. |
+| S2 | Where the values live | **A.** `STATE/settings.json` on the console's machine: overrides the committed defaults, takes effect at once, logged in the role log. The console never writes to the repo. |
+| S3 | The first wave | **A.** Two-key areas, chat limits, agents per item, operator short names, lane labels and colours; notification settings as they are built. Folders, the committee seat and next-step skills stay in `.overture.json` for now. |
+| S4 | Order | **Yes.** Settings now (1.44), notifications next. |
+
 ---
 
 ## Server hosting

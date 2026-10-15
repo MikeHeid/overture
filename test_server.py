@@ -9609,5 +9609,254 @@ class TwoKeyTests(_Live, unittest.TestCase):
         self.assertEqual(len(self.locks()), 2)
 
 
+class SettingsTests(_Live, unittest.TestCase):
+    """1.44.0: the Settings tab: an administrator or a director sets the project's settings, logged, live."""
+
+    OWNER, DIRECTOR, MEMBER, VIEWER = RoleTests.OWNER, "dee@example.com", "mo@example.com", "vic@example.com"
+
+    def setUp(self):
+        _Live.setUp(self)
+        from overture import roles as RO
+        from overture import settings as SET
+        self.RO, self.SET = RO, SET
+        RO.set_role(self.cfg.state, self.OWNER, "owner")
+        RO.set_role(self.cfg.state, self.DIRECTOR, "viewer", director=True)
+        RO.set_role(self.cfg.state, self.MEMBER, "member", ["LANE"])
+        RO.set_role(self.cfg.state, self.VIEWER, "viewer")
+
+    def put(self, key, value, email=None):
+        return self.req("POST", "/api/settings", {"key": key, "value": value, "nonce": "set" + os.urandom(6).hex()},
+                        tok=token(email=email or self.OWNER))
+
+    def name(self, email, name, by=None):
+        return self.req("POST", "/api/operator-name", {"email": email, "name": name,
+                                                       "nonce": "nm" + os.urandom(6).hex()},
+                        tok=token(email=by or self.OWNER))
+
+    def view(self, email=None):
+        code, out = self.req("GET", "/api/view", tok=token(email=email or self.OWNER))
+        self.assertEqual(code, 200, out)
+        return out["view"]
+
+    def chat(self, n):
+        return self.req("POST", "/api/message", {"item": "@chat", "text": f"q{n}", "intent": "chat",
+                                                 "nonce": f"setchat{n:03d}"}, tok=token(email=self.OWNER))
+
+    def test_a_limit_set_here_applies_at_once_and_reset_brings_the_default_back(self):
+        # Catches: a setting read once at start (a change needing a restart), a chat gate still on the
+        # constant, a reset that leaves the old value in the file, and a value with no line in the role log.
+        code, out = self.put("chat_per_minute", 2)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["settings"]["values"]["chat_per_minute"], 2)
+        self.assertEqual(self.SET.load(self.cfg.state), {"chat_per_minute": 2})
+        self.assertEqual([self.chat(n)[0] for n in range(3)], [200, 200, 429])
+        status = lambda: self.req("GET", "/api/status", tok=token(email=self.OWNER))[1]["chat_per_minute"]  # noqa: E731
+        self.assertEqual(status(), 2)
+        line = self.RO.history(self.cfg.state)[0][0]
+        self.assertEqual((line["by"], line["setting"]), (self.OWNER, {"key": "chat_per_minute", "from": None, "to": 2}))
+        code, out = self.put("chat_per_minute", None)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["settings"]["values"]["chat_per_minute"], SV.CHAT_PER_MINUTE)
+        self.assertEqual(out["settings"]["set"], {})
+        self.assertFalse((self.cfg.state / self.SET.FILE).exists())
+        self.assertEqual(self.RO.history(self.cfg.state)[0][0]["setting"]["to"], None)
+        self.assertEqual(status(), SV.CHAT_PER_MINUTE)   # (review) the per-request cache sees the file go
+
+    def test_a_director_sets_settings_but_never_roles_nor_sees_the_roster(self):
+        # Catches: the director's door opened wider than settings (People is the administrator's), and the
+        # two-key answer handing a director the roster (every login's email) it was never shown.
+        self.assertEqual(self.put("working_per_item", 3, email=self.DIRECTOR)[0], 200)
+        code, out = self.req("POST", "/api/two-key", {"areas": ["LANE"]}, tok=token(email=self.DIRECTOR))
+        self.assertEqual(code, 200, out)
+        self.assertNotIn("roles", out)
+        self.assertEqual(out["settings"]["two_key"], ["LANE"])
+        self.assertNotIn(self.VIEWER, json.dumps(out))
+        code, out = self.req("POST", "/api/roles", {"email": self.VIEWER, "role": "owner", "areas": []},
+                             tok=token(email=self.DIRECTOR))
+        self.assertEqual(code, 403, out)
+        v = self.view(self.DIRECTOR)
+        self.assertIn("settings", v)
+        self.assertNotIn("roles", v)
+        self.assertNotIn(self.VIEWER, json.dumps(v["settings"]))
+        self.assertEqual(self.RO.history(self.cfg.state)[0][0]["by"], self.DIRECTOR)
+
+    def test_a_member_or_viewer_who_is_not_a_director_sets_nothing_and_sees_no_settings(self):
+        # Catches: role_gate's director door opened to every member or viewer, and the settings (with the
+        # emails of who decided) sent to every page.
+        for email in (self.MEMBER, self.VIEWER):
+            self.assertEqual(self.put("chat_per_hour", 5, email=email)[0], 403)
+            self.assertEqual(self.name(self.MEMBER, "mo", by=email)[0], 403)
+            self.assertEqual(self.req("POST", "/api/two-key", {"areas": []}, tok=token(email=email))[0], 403)
+            self.assertNotIn("settings", self.view(email))
+        self.assertEqual(self.SET.load(self.cfg.state), {})
+        self.assertIn("settings", self.view(self.OWNER))
+
+    def test_the_director_door_opens_only_on_settings_and_only_for_a_director(self):
+        # Catches: role_gate letting a director past on every route (a viewer-director answering questions),
+        # and its settings door opened to any member or viewer (left to the handler's re-check alone, so one
+        # handler that forgets it is a member changing the limits).
+        code, out = self.req("POST", "/api/answer", self.answer(nonce="dirans0001"), tok=token(email=self.DIRECTOR))
+        self.assertEqual(code, 403, out)
+        for email in (self.MEMBER, self.VIEWER):
+            self.console.act_as(email)
+            try:
+                for path in sorted(SV.DIRECTOR_ROUTES):
+                    with self.assertRaises(SV.RequestError) as cm:
+                        self.console.role_gate(path)
+                    self.assertEqual(cm.exception.code, 403, (email, path))
+            finally:
+                self.console.act_as(None)
+        self.console.act_as(self.DIRECTOR)
+        try:
+            self.assertTrue(self.console.role_gate(SV.OWNER_SETTINGS)["director"])
+        finally:
+            self.console.act_as(None)
+
+    def test_a_director_demoted_since_the_page_loaded_is_refused(self):
+        # Catches: _configurer trusting role_gate's earlier read, not re-checking under the lock.
+        from unittest import mock
+        real = self.RO.load
+        calls = []
+
+        def late(state):
+            calls.append(1)
+            got = real(state)
+            if len(calls) > 1:   # role_gate's read passes; the re-check under the lock sees the demotion
+                got = {k: v for k, v in got.items() if k != self.DIRECTOR}
+            return got
+        with mock.patch.object(self.RO, "load", late):
+            code, out = self.put("chat_per_hour", 5, email=self.DIRECTOR)
+        self.assertEqual(code, 403, out)
+        self.assertEqual(self.SET.load(self.cfg.state), {})
+
+    def test_bad_values_and_unknown_keys_are_refused_by_name(self):
+        # Catches: a value outside its range, a bool taken for 1, a float, a string, a key the kit does not
+        # have (a stray key in the file would fail every later load), and a lane entry carrying `ux` (a lane's
+        # flow is the repo's, not a console setting).
+        lines = len(self.RO.history(self.cfg.state)[0])   # setUp's roles
+        for key, value in (("chat_per_minute", 0), ("chat_per_minute", 61), ("chat_per_minute", True),
+                           ("chat_per_hour", 2.5), ("working_per_item", "3"), ("host", "0.0.0.0"),
+                           ("lanes", {"lane-api": {"ux": True}}), ("lanes", {"api": {"label": "API"}}),
+                           ("lanes", {"lane-api": {"color": "chartreuse"}}), ("lanes", ["lane-api"]),
+                           ([1], 1), ({"k": 1}, 1)):   # (review) unhashable keys: a 400, never a 500
+            code, out = self.put(key, value)
+            self.assertEqual(code, 400, (key, value, out))
+        self.assertIn("1 to 60", self.put("chat_per_minute", 0)[1]["error"])
+        self.assertEqual(self.req("POST", "/api/settings", {"key": "chat_per_minute"},
+                                  tok=token(email=self.OWNER))[0], 400)
+        self.assertEqual(self.SET.load(self.cfg.state), {})
+        self.assertEqual(len(self.RO.history(self.cfg.state)[0]), lines)
+
+    def test_a_damaged_settings_file_means_the_defaults_and_a_problem_with_no_path(self):
+        # Catches: a damaged file crashing every page or chat (these are limits, not who may decide), its
+        # path reaching the page, and (code review) a damaged file that no change from the console can mend,
+        # so Reset is a dead end until someone edits STATE by hand.
+        (self.cfg.state / self.SET.FILE).write_text('{"settings": {"chat_per_minute": 999}}')
+        s = self.view()["settings"]
+        self.assertEqual(s["values"]["chat_per_minute"], SV.CHAT_PER_MINUTE)
+        self.assertIn("cannot be read", s["problem"])
+        self.assertNotIn(str(self.cfg.state), json.dumps(s))
+        self.assertEqual(self.chat(0)[0], 200)
+        code, out = self.put("chat_per_hour", 5)
+        self.assertEqual(code, 200, out)
+        self.assertIsNone(out["settings"]["problem"])
+        self.assertEqual(self.SET.load(self.cfg.state), {"chat_per_hour": 5})
+        # (fix review) Reset on a damaged file mends it too, rather than doing nothing.
+        (self.cfg.state / self.SET.FILE).write_text("not json")
+        code, out = self.put("chat_per_minute", None)
+        self.assertEqual(code, 200, out)
+        self.assertIsNone(out["settings"]["problem"])
+        self.assertFalse((self.cfg.state / self.SET.FILE).exists())
+
+    def test_lanes_set_here_override_the_projects_and_reach_every_page(self):
+        # Catches: lanes still read only from .overture.json, an override that replaces a lane's other
+        # fields instead of merging, and lanes not in view.config (the page colours from there).
+        import dataclasses
+        self.console.project = dataclasses.replace(self.console.project,
+                                                   lanes={"lane-api": {"label": "API", "color": "blue", "ux": True}})
+        code, out = self.put("lanes", {"lane-api": {"color": "red"}, "lane-web": {"label": "Web"}})
+        self.assertEqual(code, 200, out)
+        lanes = self.view(self.MEMBER)["config"]["lanes"]
+        self.assertEqual(lanes["lane-api"], {"label": "API", "color": "red", "ux": True})
+        self.assertEqual(lanes["lane-web"], {"label": "Web"})
+        self.assertEqual(self.RO.history(self.cfg.state)[0][0]["setting"]["key"], "lanes")
+        # (code review) Reset: back to the project's own, and a lane only this console named is gone.
+        self.assertEqual(self.put("lanes", None)[0], 200)
+        self.assertEqual(self.view(self.MEMBER)["config"]["lanes"],
+                         {"lane-api": {"label": "API", "color": "blue", "ux": True}})
+
+    def test_people_lists_role_changes_and_settings_lists_its_own(self):
+        # Catches (code review): settings and short-name lines filling People's "Role changes" window (pushing
+        # real role changes out), role changes listed under Settings, a malformed setting line accepted, and a
+        # log parse cached past a new line.
+        self.assertEqual(self.put("chat_per_hour", 9)[0], 200)
+        self.assertEqual(self.name(self.MEMBER, "mo")[0], 200)
+        people = self.view()["roles"]["log"]
+        self.assertTrue(people)
+        self.assertTrue(all("email" in e and "setting" not in e for e in people), people)
+        self.assertEqual([e["setting"]["key"] for e in self.view()["settings"]["log"]],
+                         ["operator_name", "chat_per_hour"])
+        self.assertEqual(self.view()["settings"]["log_total"], 2)
+        self.RO.set_role(self.cfg.state, "new@example.com", "viewer")
+        self.assertEqual(self.view()["roles"]["log"][0]["email"], "new@example.com")
+        log = self.cfg.state / self.RO.LOG_FILE
+        for bad in ({"key": "Chat!", "from": None, "to": 1}, {"key": "chat_per_hour", "to": 1}, "x"):
+            with self.subTest(bad=bad):
+                before = log.read_bytes()
+                log.write_bytes(before + (json.dumps({"at": "2026-10-15T00:00:00Z", "by": None, "setting": bad})
+                                          + "\n").encode())
+                with self.assertRaises(self.RO.RolesError):
+                    self.RO.history(self.cfg.state)
+                log.write_bytes(before)
+
+    def test_a_short_name_set_in_the_terminal_is_logged_too(self):
+        # Catches (code review): `agent.py operator-name` writing beside the role log's lock (a console change
+        # in between lost) and leaving no line, so the Settings tab's changes miss it.
+        rc, out, err = self.agent_cli("operator-name", self.MEMBER, "mo")
+        self.assertEqual(rc, 0, out + err)
+        line = self.RO.history(self.cfg.state)[0][0]
+        self.assertEqual((line["by"], line["setting"]),
+                         (None, {"key": "operator_name", "email": self.MEMBER, "from": None, "to": "mo"}))
+        self.assertEqual(self.view()["settings"]["names"], {self.MEMBER: "mo"})
+
+    def test_working_per_item_obeys_the_setting(self):
+        # Catches: the per-item cap still the constant 8 after a director lowered it.
+        self.assertEqual(self.put("working_per_item", 1)[0], 200)
+        self.assertEqual(self.agent_cli("--as", "agent-5", "working", "LANE")[0], 0)
+        rc, out, err = self.agent_cli("--as", "agent-6", "working", "LANE")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("cap is 1", out + err)
+        self.assertEqual(self.req("GET", "/api/status", tok=token())[1]["working_per_item_max"], 1)
+
+    def test_an_operator_short_name_is_set_cleared_and_logged_and_its_email_stays_in_the_console(self):
+        # Catches: the name not written where committed rulings read it, a clear that leaves it, a bad name
+        # or email accepted, no line in the log, and the email or the settings reaching the agent socket.
+        from overture import operators as OP
+        code, out = self.name("Mo@Example.com", "mo", by=self.DIRECTOR)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(OP.load_names(self.cfg.state), {self.MEMBER: "mo"})
+        self.assertEqual(out["settings"]["names"], {self.MEMBER: "mo"})
+        self.assertIn(self.MEMBER, out["settings"]["operators"])
+        line = self.RO.history(self.cfg.state)[0][0]
+        self.assertEqual(line["setting"], {"key": "operator_name", "email": self.MEMBER, "from": None, "to": "mo"})
+        self.assertEqual(self.name(self.MEMBER, "Mo Smith")[0], 400)
+        self.assertEqual(self.name("not-an-email", "mo")[0], 400)
+        self.assertEqual(self.name(self.MEMBER, None)[0], 200)
+        self.assertEqual(OP.load_names(self.cfg.state), {})
+        self.assertEqual(self.RO.history(self.cfg.state)[0][0]["setting"]["to"], None)
+        code, agent_view = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertEqual(code, 200)
+        self.assertNotIn("settings", agent_view["view"])
+        self.assertNotIn(self.MEMBER, json.dumps(agent_view))
+        self.assertNotIn(self.DIRECTOR, json.dumps(agent_view))
+
+    def test_with_roles_off_everyone_is_the_administrator_and_sees_settings(self):
+        # Catches: Settings hidden on a solo console (roles off: every login may do everything).
+        (self.cfg.state / self.RO.FILE).unlink()
+        self.assertFalse((self.cfg.state / self.RO.FILE).exists())
+        self.assertIn("settings", self.view("anyone@example.com"))
+        self.assertEqual(self.put("chat_per_hour", 7, email="anyone@example.com")[0], 200)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
