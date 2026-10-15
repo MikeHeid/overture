@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.41.0 released — routing** (PR #168, `6ba3f5e`): owner decisions W1–W6 in docs/proposals/OPEN-DECISIONS.md.
+  Built W1–W4: "For" (members whose areas cover the item; admins see emails, members "For you"), Inbox Mine·All
+  (`view.you.mine`), `director` flag (shows all, decides nothing more), viewer areas, drafts per login
+  (`u:<sha256[:12]>:` prefix, page keys may not start `u:`). Next: W5 role-change log, W6 two-key by area, notifications.
 - **v1.40.0 released — People** (PR #167, `050c4a1`): owner-only People tab over roles.json via `POST /api/roles`
   (`Console.set_role`, owner re-checked under `_lock`); roles off → "Make me the administrator" (signed-in login only, 409
   otherwise); `view.roles` to owner logins only. onboard.py next steps gain step 6 (claim administrator); the skill never
@@ -111,7 +115,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.40.0 (PR #167), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.41.0 (PR #168), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
 - `test_build.py`: 3 failures, believed environmental. WSL's Claude CLI is **2.1.71**, Windows has **2.1.292**; the old one rejects the manifest's `userConfig` key and `--strict`. Not yet confirmed by updating the WSL CLI.
@@ -138,7 +142,7 @@ All seven items below are done.
 
 ## Open items
 
-- **WSL Claude CLI update** on the Windows side (item 2 above). Owner's call.
+- ~~WSL Claude CLI update~~: closed 2026-10-14. `test_build` passes 15/15 in every run since 1.39, so its 3 failures are gone without it.
 - Nothing else open. (Closed 2026-10-13: items 4 and 6, the `flock`, the nested-key LOW; see the top.)
 
 ## Rules of the house
