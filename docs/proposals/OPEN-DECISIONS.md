@@ -87,6 +87,25 @@ One entry point with five modes, modelled on `lean-ctx`:
 - If no session for that repository is running, the request waits in its
   inbox, like any other owner message.
 
+## Wave 3: teams (decided 2026-10-14)
+
+Weighed in one deliberation after roles (1.39) and the People tab (1.40).
+All six are the owner's own picks, none an architect default.
+
+| # | Decision | Outcome |
+|---|---|---|
+| W1 | What to build next | **A.** Routing: each question shows who it is for, and a "Mine" filter. Two-key locks and Slack/email notifications need it to know whom to ask. |
+| W2 | How a question finds its people | **A.** From member areas: a question on item X is for every member whose areas cover X; administrators cover all. No new question field. |
+| W3 | What members and viewers can read | **C, amended.** They read everything, and their Inbox opens on "Mine". A **director** flag on a login makes "Mine" everything: a director sees all by default. The flag widens what is shown, never what may be decided (that stays the role and its areas). |
+| W4 | Drafts with several administrators | **A.** Drafts per login, served only to that login. |
+| W5 | A record of role changes | **A.** A log beside `roles.json`: who changed which login's role, to what, when; shown in the People tab. Emails stay in the console. |
+| W6 | Two-key locks, when built | **A.** Per area, set in roles: a lock in a two-key area needs a second person (an administrator, or a member of that area) to confirm it. |
+
+Weighed and not chosen: B for W1 (two-key first), D for W1 (Wave 2's
+solo mode without Cloudflare), B for W3 (members confined to their areas
+on every surface, which one forgotten path would leak), C for W6 (every
+member's lock confirmed by an administrator).
+
 ---
 
 ## Server hosting

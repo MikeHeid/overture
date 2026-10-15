@@ -4,8 +4,11 @@ With several people behind one console's Access policy, every login could
 answer, lock and run anything. Now the owner can say who does what:
 
     STATE/roles.json    {"roles": {EMAIL: {"role": "owner"}
-                                 | {"role": "member", "areas": [ITEM_ID, ...]}
-                                 | {"role": "viewer"}}}
+                                 | {"role": "member", "areas": [ITEM_ID, ...], "director"?: true}
+                                 | {"role": "viewer", "areas"?: [ITEM_ID, ...], "director"?: true}}}
+
+(1.41.0) `areas` on a viewer and `director` on either only shape the Inbox's
+"Mine": see `mine`. Writing is still the role's alone.
 
 - **No file: nothing changes.** Every login that passes Access is the owner,
   as through 1.38, so a solo console needs no setup.
@@ -42,21 +45,44 @@ class RolesError(Exception):
     """A roles file the kit refuses to read, or a role it refuses to write; named."""
 
 
+def _areas_problem(areas: object) -> str | None:
+    if not isinstance(areas, list) or not 1 <= len(areas) <= MAX_AREAS:
+        return f"\"areas\" is a list of 1 to {MAX_AREAS} item ids"
+    for a in areas:
+        if not isinstance(a, str) or not S.ITEM_ID.match(a):
+            return f"area {a!r} is not an item id"
+    if len(set(areas)) != len(areas):
+        return "an area is listed twice"
+    return None
+
+
 def _entry_problem(entry: object) -> str | None:
+    """1.41.0 (OPEN-DECISIONS.md W3): a member or viewer may carry `"director": true`, and a viewer may
+    carry areas. Both only shape what "Mine" shows; neither grants a write. A 1.40 kit refuses such a file
+    by name rather than reading past the fields, so a downgrade fails closed."""
     if not isinstance(entry, dict) or entry.get("role") not in ROLES:
         return f"a role is one of {', '.join(ROLES)}"
-    if entry["role"] == "member":
-        areas = entry.get("areas")
-        if set(entry) != {"role", "areas"} or not isinstance(areas, list) or not 1 <= len(areas) <= MAX_AREAS:
-            return f"a member has \"areas\": a list of 1 to {MAX_AREAS} item ids"
-        for a in areas:
-            if not isinstance(a, str) or not S.ITEM_ID.match(a):
-                return f"area {a!r} is not an item id"
-        if len(set(areas)) != len(areas):
-            return "an area is listed twice"
-    elif set(entry) != {"role"}:
-        return f"{entry['role']} takes no other field"
+    role = entry["role"]
+    if role == "owner":
+        return None if set(entry) == {"role"} else "an owner takes no other field (an owner sees and decides all)"
+    extra = set(entry) - {"role", "areas", "director"}
+    if extra:
+        return f"{role} takes role, areas and director only, not {', '.join(sorted(extra))}"
+    if "director" in entry and entry["director"] is not True:
+        return "director is true when present (leave it out otherwise)"
+    if role == "member" and "areas" not in entry:
+        return f"a member has \"areas\": a list of 1 to {MAX_AREAS} item ids"
+    if "areas" in entry:
+        return _areas_problem(entry["areas"])
     return None
+
+
+def mine(entry: Mapping) -> list[str] | None:
+    """The areas "Mine" shows for this entry, or None for everything (W3): an owner, a director, and a
+    viewer with no areas see all by default; a member, or a viewer with areas, sees their areas."""
+    if entry.get("role") == "owner" or entry.get("director") or not entry.get("areas"):
+        return None
+    return list(entry["areas"])
 
 
 def load(state: Path) -> dict[str, dict] | None:
@@ -112,7 +138,8 @@ def within(item: object, areas: list[str], items: Mapping[str, dict]) -> bool:
     return False
 
 
-def set_role(state: Path, email: str, role: str | None, areas: list[str] | None = None) -> dict[str, dict]:
+def set_role(state: Path, email: str, role: str | None, areas: list[str] | None = None,
+             director: bool = False) -> dict[str, dict]:
     """Set (or, with role None, remove) the role of `email`; return the whole map as written.
 
     Refuses a change that leaves no owner: the console could then be changed by nobody.
@@ -123,9 +150,11 @@ def set_role(state: Path, email: str, role: str | None, areas: list[str] | None 
         raise RolesError(why)
     entry = None
     if role is not None:
-        if role != "member" and areas:
-            raise RolesError(f"only a member has areas; {role} takes none")
-        entry = {"role": role, "areas": list(areas or [])} if role == "member" else {"role": role}
+        entry = {"role": role}
+        if areas or role == "member":
+            entry["areas"] = list(areas or [])
+        if director:
+            entry["director"] = True
         why = _entry_problem(entry)
         if why:
             raise RolesError(why)

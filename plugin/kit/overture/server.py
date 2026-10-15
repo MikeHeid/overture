@@ -1077,6 +1077,28 @@ class Console:
             sys.stderr.write(f"console roles: {e}\n")   # the path stays in the log, never on the page
             return {"role": "viewer", "problem": "the roles file cannot be read; see the server log"}
 
+    def _draft_ns(self) -> str:
+        """1.41.0 (W4): the prefix that keeps this login's drafts its own in the one drafts.json.
+
+        A short hash of the login, never the email: drafts.json names nobody. A request with no email (a
+        service token) keeps the unprefixed keys every console had before 1.41.
+        """
+        email = getattr(self._acting, "email", None)
+        if not isinstance(email, str):
+            return ""
+        return "u:" + hashlib.sha256(email.lower().encode()).hexdigest()[:12] + ":"
+
+    def _own_drafts(self, drafts: dict) -> dict:
+        """`{key: text}` cut down to this login's drafts, prefix removed: the page never sees another's.
+        Item ids hold no colon, so no draft key the page makes starts with "u:" on its own."""
+        ns = self._draft_ns()
+        shared = {k: v for k, v in drafts.items() if not k.startswith("u:")}
+        if ns:
+            # Drafts saved before 1.41 had no prefix: still shown, under this login's own, until it saves or
+            # clears that key (save_draft then drops the shared one, so a cleared draft cannot come back).
+            return {**shared, **{k[len(ns):]: v for k, v in drafts.items() if k.startswith(ns)}}
+        return shared
+
     def role_gate(self, path: str) -> dict:
         """Refuse an owner write this login's role never allows, before its body is read (roles.py).
 
@@ -1119,12 +1141,13 @@ class Console:
         """
         # `nonce` is accepted because the page sends one with every POST; setting a role is idempotent, so it
         # is no retry key here.
-        if (not isinstance(body, dict) or set(body) - {"email", "role", "areas", "nonce"}
+        if (not isinstance(body, dict) or set(body) - {"email", "role", "areas", "director", "nonce"}
                 or not isinstance(body.get("email"), str) or "role" not in body
                 or (body["role"] is not None and body["role"] not in RO.ROLES)
-                or not isinstance(body.get("areas", []), list)):
+                or not isinstance(body.get("areas", []), list)
+                or not isinstance(body.get("director", False), bool)):
             raise RequestError(400, '/api/roles takes {"email", "role": "owner"|"member"|"viewer"|null, '
-                                    '"areas"?: [ITEM_ID, ...], "nonce"?}')
+                                    '"areas"?: [ITEM_ID, ...], "director"?: bool, "nonce"?}')
         me = getattr(self._acting, "email", None)
         with self._lock:
             try:
@@ -1142,7 +1165,8 @@ class Console:
             if current is not None and RO.role_of(current, me)["role"] != "owner":
                 raise RequestError(403, "you are no longer an administrator here; reload the console")
             try:
-                RO.set_role(self.cfg.state, body["email"], body["role"], body.get("areas") or None)
+                RO.set_role(self.cfg.state, body["email"], body["role"], body.get("areas") or None,
+                            director=body.get("director", False))
             except RolesError as e:
                 if str(self.cfg.state) in str(e):   # the file went bad since the load above: no path on the page
                     sys.stderr.write(f"console roles: {e}\n")
@@ -1339,7 +1363,8 @@ class Console:
             from . import drafts as DR
             out.setdefault("view", {})
             keys = DR.load(self.cfg.state)["keys"] if you["role"] == "owner" else {}
-            out["view"] = {**out["view"], "drafts": DR.as_view(keys)}
+            # 1.41.0 (W4): and only this login's own (drafts.json holds every administrator's, apart).
+            out["view"] = {**out["view"], "drafts": self._own_drafts(DR.as_view(keys))}
         except (DR.DraftError, OSError):
             out["view"] = {**out["view"], "drafts": {}}
         # tickets — children-of-items; same owner-door-only exposure as drafts and
@@ -1357,7 +1382,8 @@ class Console:
                                                     if r["type"] == "lock" and r["id"] in ops}}
         # 1.39.0: this login's role, for the page's banner; absent when roles are off, so a solo page is unchanged.
         if (self.cfg.state / RO.FILE).exists():
-            out["view"] = {**out["view"], "you": you}
+            # 1.41.0 (W2, W3): `mine`, the areas this login's Inbox opens on, or null for everything.
+            out["view"] = {**out["view"], "you": {**you, "mine": RO.mine(you)}}
         # 1.40.0: the People tab's list, to an owner's login only (it names every login by email).
         if you["role"] == "owner":
             out["view"] = {**out["view"], "roles": self.roles_view()}
@@ -1830,9 +1856,19 @@ class Console:
                 or not isinstance(body.get("text"), str)):
             raise RequestError(400, '/api/draft takes {"key": "<tag>", "text": "<content>", "nonce": "<nonce>"}')
         from . import drafts as DR
+        if not DR.CLIENT_KEY_RE.match(body["key"]):
+            # Never "u:...": that is a stored, per-login key (1.41.0 review), and naming one would reach another
+            # login's draft.
+            raise RequestError(400, f"draft key {body['key']!r} must be alnum + _.:/@-, up to {DR.MAX_KEY_LEN} "
+                                    f"chars, and not start with u:")
         try:
             with self._lock:
-                drafts = DR.set_draft(self.cfg.state, body["key"], body["text"], _iso_now())
+                ns = self._draft_ns()
+                if len(body["text"]) > DR.MAX_TEXT:   # refused before the shared copy below is dropped
+                    raise DR.DraftError(f"draft text is {len(body['text'])} characters; limit is {DR.MAX_TEXT}")
+                if ns and body["key"] in DR.load(self.cfg.state)["keys"]:
+                    DR.set_draft(self.cfg.state, body["key"], "", _iso_now())   # a pre-1.41 shared draft: now this login's
+                drafts = self._own_drafts(DR.set_draft(self.cfg.state, ns + body["key"], body["text"], _iso_now()))
         except DR.DraftError as e:
             raise RequestError(400, str(e)) from None
         except OSError as e:

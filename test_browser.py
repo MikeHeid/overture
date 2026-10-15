@@ -3208,6 +3208,45 @@ class InboxUXTests(unittest.TestCase):
                 page.wait_for_timeout(2500)   # past the page's 1.5 s autosave pause
                 self.assertEqual(drafts, [])
 
+    def test_a_members_inbox_opens_on_mine_and_an_administrator_sees_who_each_is_for(self):
+        # Catches (1.41.0, W1–W3): the Inbox showing a member every question with no way to narrow it; a
+        # "Mine" that ignores parents (LANE.1 sits under LANE); and an administrator who cannot see which
+        # member a question is for.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1, item="LANE")
+                self.ask(2, item="LANE.1")
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "member", ["LANE.1"])   # the page's login
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-inbox-scope")
+                rows = lambda: sorted(page.eval_on_selector_all(   # noqa: E731
+                    ".ck-inbox-item[data-qid]", "els => els.map(e => e.dataset.qid)"))
+                self.assertEqual(rows(), ["LANE.1/Q2"])
+                self.assertIn("For you", page.locator(".ck-inbox-item[data-qid='LANE.1/Q2']").text_content())
+                page.click(".ck-scope-all")
+                _wait_for(page, "document.querySelectorAll('.ck-inbox-item[data-qid]').length === 2")
+                # An administrator: no switch (Mine is everything), and each row names its member.
+                RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                RO.set_role(self.cfg.state, "bob@example.com", "member", ["LANE"])
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-inbox-item[data-qid='LANE.1/Q2'] .ck-q-for")
+                self.assertEqual(page.locator(".ck-inbox-scope").count(), 0)
+                self.assertEqual(page.locator(".ck-inbox-item[data-qid='LANE.1/Q2'] .ck-q-for").text_content(),
+                                 "For bob@example.com")
+                self.assertEqual(page.locator(".ck-inbox-item[data-qid='LANE/Q1'] .ck-q-for").text_content(),
+                                 "For bob@example.com")
+                # A member whose areas hold no question: a line pointing at All, never a blank Inbox (review).
+                RO.set_role(self.cfg.state, "owner@example.com", "member", ["ELSEWHERE"])
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.click(".ck-mine-empty button")
+                _wait_for(page, "document.querySelectorAll('.ck-inbox-item[data-qid]').length === 2")
+
     def test_the_people_tab_claims_the_administrator_then_adds_a_member(self):
         # Catches (1.40.0): no way to turn roles on from the console (the claim button wired to nothing),
         # the add form posting no areas, and the tab shown to a login the server sent no list.
