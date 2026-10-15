@@ -67,9 +67,10 @@ def name_problem(v: object) -> str | None:
 class Operators:
     """The operators sidecar of one state directory: record id -> the email of whoever wrote it."""
 
-    def __init__(self, state: Path, *, reader: bool = False) -> None:
-        """`reader`: another process reading while the console may be appending (`fold.py export`)."""
-        self.path = Path(state) / FILE
+    def __init__(self, state: Path, *, reader: bool = False, file: str = FILE) -> None:
+        """`reader`: another process reading while the console may be appending (`fold.py export`).
+        `file`: another sidecar of the same shape (1.43.0: twokey.KEYS_FILE, the first keys)."""
+        self.path = Path(state) / file
         self._lock = threading.Lock()
         self._by_id: dict[str, str] = {}
         self._load(reader)

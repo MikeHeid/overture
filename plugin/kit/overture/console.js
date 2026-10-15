@@ -3097,18 +3097,22 @@
       openForms.delete(key);
       renderPanel();
       let done = 0;
+      let waiting = 0;
       let failed = null;
       for (const t of todo) {
         const r = await apiPost('/lock', { qid: t.qid, answer: t.answer }, 'lock-' + t.qid);
         if (r.error) { failed = t.qid + ' was not locked: ' + r.error; break; }
-        done += 1;
+        if (r.pending && !r.record) waiting += 1;   // 1.43 (W6): a key that waits for a second person
+        else done += 1;
       }
       lockingAll = null;
+      const waitWords = waiting ? ' ' + waiting + ' wait for a second person to confirm.' : '';
       if (failed) {
-        lockAllError[itemId] = 'Locked ' + done + ' of ' + todo.length + '. ' + failed;
+        lockAllError[itemId] = 'Locked ' + done + ' of ' + todo.length + '.' + waitWords + ' ' + failed;
         announce(lockAllError[itemId]);
       } else {
-        announce('Locked ' + done + ' answers.');
+        announce('Locked ' + done + ' answers.' + waitWords);
+        if (waiting) await fetchView();
       }
       renderPanel();
       // The owner may have moved on while the run was in flight: only then leave focus alone.
@@ -3337,6 +3341,9 @@
         list.appendChild(el('li', {}, [msg]));
       }
       banner.appendChild(list);
+      const lockedHead = q.answers && q.answers.length ? q.answers[q.answers.length - 1] : null;
+      const relockKey = pendingKey(qData.qid, lockedHead && lockedHead.id, true);   // 1.43 (W6)
+      if (relockKey) banner.appendChild(keyNote(relockKey, 're-locked'));
       // 0.5.0: say which condition failed and why, and let the owner re-lock
       // the answer as it stands once they have checked the change.
       const tools = el('div', { className: 'ck-actions' });
@@ -3423,15 +3430,23 @@
       }
       const actions = el('div', { className: 'ck-actions' });
       const truncText = truncateText(qData.text, 40);
-      {
+      // 1.43 (W6): in a two-key area the first lock waits for a second person's; its holder gets no button.
+      const key = pendingKey(qData.qid, headAnswer && headAnswer.id, false);
+      if (key) bodyEl.appendChild(keyNote(key, 'locked'));
+      else if (inTwoKey(qData.item)) bodyEl.appendChild(el('p', { className: 'ck-muted ck-two-key-note' }, [
+        'Two-key area: a lock here counts once a second person confirms it.']));
+      if (!(key && key.mine)) {
+        const word = key ? 'Confirm lock' : 'Lock this answer';
         const lockBtn = el('button', {
           className: 'ck-btn ck-btn-primary ck-lock-one',
           type: 'button',
           dataFocusKey: 'lock-' + qData.qid,
-          'aria-label': 'Lock this answer: ' + truncText
-        }, ['Lock this answer']);
+          'aria-label': word + ': ' + truncText
+        }, [word]);
         lockBtn.addEventListener('click', () => startLock(q, headAnswer));
         actions.appendChild(lockBtn);
+      }
+      {
         const changeBtn = el('button', {
           className: 'ck-btn',
           type: 'button',
@@ -4023,7 +4038,10 @@
     const ul = el('ul', { className: 'ck-people-log' });
     for (const e of log) {
       const who = e.by ? (e.by === roles.me ? 'You' : e.by) : 'agent.py access';
-      const what = !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
+      const areaWords = a => (a && a.length ? a.join(', ') : 'none');   // 1.43: a change of the two-key areas
+      const what = e.two_key ? ' set the two-key areas to ' + areaWords(e.two_key.to) + ' (was ' +
+          areaWords(e.two_key.from) + ')'
+        : !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
         : !e.from ? ' added ' + e.email + ' as ' + describeRole(e.to)
         : ' changed ' + e.email + ' from ' + describeRole(e.from) + ' to ' + describeRole(e.to);
       ul.appendChild(el('li', { className: 'ck-people-log-row' }, [
@@ -4115,6 +4133,25 @@
     add.appendChild(go);
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Add a person']));
     body.appendChild(add);
+    // 1.43 (W6): the areas where a lock needs a second person.
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Two-key areas']));
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'In these areas (an item and everything under it) a lock counts once a second person confirms it: ' +
+      'another administrator, or a member of that area. Leave it empty for none.']));
+    const tk = el('form', { className: 'ck-people-add ck-two-key-form', 'aria-label': 'Two-key areas' });
+    const tkAreas = areasInput((roles.two_key || []).join(' '), 'ck-two-key-areas');
+    tkAreas.setAttribute('aria-label', 'Two-key areas');
+    tk.appendChild(tkAreas);
+    tk.appendChild(el('button', { className: 'ck-btn', type: 'submit' }, ['Save']));
+    tk.addEventListener('submit', async e => {
+      e.preventDefault();
+      const areas = parseAreas(tkAreas.value);
+      const r = await apiPost('/two-key', { areas }, 'two-key-' + areas.join(','), { quiet: true });
+      peopleError = r && r.error ? r.error : null;
+      if (!peopleError) announce(areas.length ? 'Two-key areas: ' + areas.join(', ') : 'No two-key areas');
+      renderPanel();
+    });
+    body.appendChild(tk);
     renderRoleLog(body, roles);
   }
 
@@ -4771,7 +4808,10 @@
     ]);
     // Since 1.38: the Access login that locked it, when the console kept one; text only.
     const lockedBy = answer && view && view.locked_by && view.locked_by[answer.id];
-    if (lockedBy) receipt.appendChild(el('div', { className: 'ck-receipt-by' }, ['Locked by ' + lockedBy]));
+    // 1.43 (W6): a two-key lock names its second key too.
+    const confirmedBy = answer && view && view.confirmed_by && view.confirmed_by[answer.id];
+    if (lockedBy) receipt.appendChild(el('div', { className: 'ck-receipt-by' }, [
+      'Locked by ' + lockedBy + (confirmedBy ? ', confirmed by ' + confirmedBy : '')]));
     if (qData.options && qData.options.length > 0) {
       const picked = answer && answer.picks ? answer.picks : [];
       for (const opt of qData.options) {
@@ -4865,7 +4905,14 @@
       const result = await apiPost('/relock', body, 'relock-' + qid);
       go.disabled = false;
       if (result.error) announce('Error: ' + result.error);
-      else { openForms.delete('relock-' + qid); openForms.delete('why-' + qid); renderPanel(); }
+      else {
+        // 1.43 (W6): in a two-key area an empty answer is a key waiting for a second person's.
+        if (result.records && !result.records.length) {
+          announce('Your key is in: the re-lock waits for a second person to confirm.');
+          await fetchView();
+        }
+        openForms.delete('relock-' + qid); openForms.delete('why-' + qid); renderPanel();
+      }
     });
     const cancel = el('button', { className: 'ck-btn', type: 'button' }, ['Cancel']);
     cancel.addEventListener('click', () => { openForms.delete('relock-' + qid); renderPanel(); });
@@ -5096,6 +5143,21 @@
   // Locking one answer is one tap. The 5-second Undo countdown was removed; the request goes right away
   // (same POST the old confirm sent, so the owner door's checks are unchanged). lockErrors[qid] keeps the
   // server's refusal if one lands, so the question card can surface "Not locked: ..." on the next render.
+  // 1.43 (W6): the first key waiting on this question's answer (view.pending_locks), or null. `relock`: a
+  // re-lock's key (the stale banner) rather than a first lock's.
+  function pendingKey(qid, answerId, relock) {
+    const p = view && view.pending_locks && view.pending_locks[qid];
+    return p && answerId && p.answer === answerId && !!p.relock === !!relock ? p : null;
+  }
+  function inTwoKey(itemId) {
+    return !!(view && Array.isArray(view.two_key) && view.two_key.length && underArea(itemId, view.two_key));
+  }
+  function keyNote(p, what) {
+    return el('p', { className: 'ck-two-key-note', role: 'status' }, [p.mine
+      ? 'You ' + what + ' this: waiting for a second person to confirm. It counts once they do.'
+      : p.by + ' ' + what + ' this. It needs a second person: confirm to lock it.']);
+  }
+
   async function startLock(q, answer) {
     const qid = q.question.qid;
     if (!answer) return;
@@ -5106,9 +5168,12 @@
     if (result && result.error) {
       lockErrors[qid] = result.error;
       announce('Not locked: ' + result.error);
+    } else if (result && result.pending && !result.record) {
+      announce('Your key is in: waiting for a second person to confirm.');
+      await fetchView();
     } else {
       justLocked.add(qid);
-      announce('Locked.');
+      announce(result && result.confirmed ? 'Locked: you were the second key.' : 'Locked.');
     }
     if (!panelEl || panelEl.getAttribute('data-open') !== 'true') return;
     if (busyInPanel()) { pendingLive = true; return; }
@@ -7654,7 +7719,9 @@
       mem.review = false;
       mem.step = 0;
       memSet('round:' + forkId, null);
-      announce('Locked ' + data.results.filter(r => r.status === 'locked').length + ' answers; the agent was asked to process them.');
+      const waiting = data.results.filter(r => r.status === 'awaiting_second_key').length;   // 1.43 (W6)
+      announce('Locked ' + data.results.filter(r => r.status === 'locked').length + ' answers; the agent was asked to process them.' +
+        (waiting ? ' ' + waiting + ' wait for a second person to confirm.' : ''));
     } else {
       mem.failure = { status: resp ? resp.status : 0, error: data.error, results: data.results || [] };
       saveRound(forkId);
@@ -7694,7 +7761,7 @@
       }
       const l = await apiPost('/lock', { qid: qid, answer: answerId }, 'lock-' + qid);
       if (l.error) { failure = { qid: qid, error: l.error }; break; }
-      results.push({ qid: qid, status: 'locked' });
+      results.push({ qid: qid, status: l.pending && !l.record ? 'awaiting_second_key' : 'locked' });
     }
     let processed = false;
     if (results.length) {
@@ -7729,7 +7796,8 @@
     const r = mem.result;
     body.appendChild(el('h2', { className: 'ck-result-heading', tabindex: '-1' }, ['Locked, and sent to the agent']));
     const list = el('ul', { className: 'ck-review-list' });
-    const words = { locked: '✓ locked now', already_locked: '✓ was already locked' };
+    const words = { locked: '✓ locked now', already_locked: '✓ was already locked',
+      awaiting_second_key: '… your key is in; waits for a second person' };
     for (const x of r.results || []) {
       list.appendChild(el('li', { className: 'ck-review-row', dataStatus: x.status }, [
         el('span', { className: 'ck-inbox-item-id' }, [x.qid || '']), ' ' + (words[x.status] || x.status)]));

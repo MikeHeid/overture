@@ -3181,6 +3181,56 @@ class InboxUXTests(unittest.TestCase):
                 self.assertEqual(by.text_content(), "Locked by ivan@example.com")
                 self.assertEqual(page.locator(".ck-question[data-qid='LANE.1/Q2'] .ck-receipt-by").count(), 0)
 
+    def test_a_two_key_lock_waits_on_the_card_until_a_second_person_confirms(self):
+        # Catches (1.43.0, W6): the card locking at once in a two-key area, offering the first key's holder a
+        # second press (one person as both keys), never saying whose key waits, and a receipt that names only
+        # whoever wrote the lock record.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                RO.set_role(self.cfg.state, "bob@example.com", "owner")
+                RO.set_two_key(self.cfg.state, ["LANE"])
+                self.ask(1)
+                self.answer("LANE.1/Q1", pick="record")
+                page = self.page(kind, 1280, url)
+                self.open_item(page)   # an answered, unlocked question is drawn open: no line to click
+                page.wait_for_selector("text=Two-key area: a lock here counts once a second person confirms it.")
+                page.click(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one")
+                page.wait_for_selector("text=You locked this: waiting for a second person to confirm.")
+                self.assertEqual(page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-lock-one").count(), 0)
+                self.assertEqual(self.locks(), [])
+                head = self.console.store.head("LANE.1/Q1")
+                self.console.act_as("bob@example.com")   # the second person, as the owner gate sets it
+                try:
+                    self.assertEqual(self.console.lock({"qid": "LANE.1/Q1", "answer": head["id"],
+                                                        "nonce": "bobkey0001"})["confirmed"], "owner@example.com")
+                finally:
+                    self.console.act_as(None)
+                self.assertEqual(len(self.locks()), 1)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.click(".ck-q-line[data-qid='LANE.1/Q1']")
+                by = page.locator(".ck-question[data-qid='LANE.1/Q1'] .ck-receipt-by")
+                by.wait_for()
+                self.assertEqual(by.text_content(), "Locked by owner@example.com, confirmed by bob@example.com")
+                # (review) The other side: someone else's key waits, the page names them and offers Confirm lock.
+                self.ask(2)
+                self.answer("LANE.1/Q2", pick="record")
+                self.console.act_as("bob@example.com")
+                try:
+                    self.console.lock({"qid": "LANE.1/Q2", "answer": self.console.store.head("LANE.1/Q2")["id"],
+                                       "nonce": "bobkey0002"})
+                finally:
+                    self.console.act_as(None)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.wait_for_selector("text=bob@example.com locked this. It needs a second person: confirm to lock it.")
+                page.click(".ck-question[data-qid='LANE.1/Q2'] .ck-lock-one:has-text('Confirm lock')")
+                _wait_for(page, "() => document.querySelector('.ck-live').textContent.includes('second key')")
+                self.assertEqual(len(self.locks()), 2)
+
     def test_a_member_sees_their_role_above_the_inbox(self):
         # Catches (1.39.0): `view.you` never rendered, so a member learns their limits only from refused
         # clicks; and the line shown on a console with no roles, where every login is the owner.

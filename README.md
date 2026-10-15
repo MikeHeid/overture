@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~55%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -568,6 +568,16 @@ login, or `agent.py access` from your terminal), whose role, and from
 what to what. The log (`STATE/roles-log.jsonl`) stays on the console's
 machine beside `roles.json` and keeps every line; the tab shows the
 newest 50.
+
+**Two-key locks (1.43).** Under People, **Two-key areas** names the
+items (each with everything under it) where one person may not lock
+alone. A lock there waits, shown on the card as "You locked this:
+waiting for a second person", until a second login that may lock there
+(another administrator, or a member of that area) confirms it by locking
+the same answer. Only then is it a ruling: until then agents, the
+process request and the ruling export see an unlocked answer. The card
+then says "Locked by A, confirmed by B". Re-lock and **Lock all** follow
+the same rule. Two-key areas need roles on.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1083,6 +1093,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.43 — Two-key locks**: in the areas an administrator names, a lock
+  counts once a second person confirms it.
 - **1.42 — Role changes**: People lists who changed whose role, and
   when, from the console or the terminal.
 - **1.41 — Routing**: each question says who it is for; members' Inbox

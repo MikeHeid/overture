@@ -2990,6 +2990,57 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Two-key locks (1.43.0)
+
+Wave 3, OPEN-DECISIONS.md W6 A (the owner's choice of 2026-10-14):
+per area, set in roles, a lock needs a second person to confirm it.
+
+- **Two-key areas**, set by an administrator under People
+  (`POST /api/two-key`), kept in `roles.json` as `"two_key": [ITEM_ID,
+  ...]`. An area is an item and everything under it. Roles must be on,
+  and the last login cannot be removed while any are set. Each change
+  is a line of the role log ("set the two-key areas to …").
+- **The first key waits outside the store**, in
+  `STATE/pending-locks.json`. Agents, the process request after Lock
+  all, the ruling export, stale checks and older kits all read the
+  store, so none of them treats an unconfirmed lock as a ruling.
+- **A second login confirms** by locking the same answer: anyone who may
+  lock there (an administrator, or a member covering the item). The
+  lock is then written by that request. The first key's login is
+  checked again at that moment; one that may no longer lock there is
+  dropped (409), so nobody confirms a removed member's decision alone.
+  The same login pressing twice, in any letter case, is one key. A key
+  on an older answer never matches a key on a newer one. A service
+  token is no key.
+- **On the card:** "Two-key area: …" before any key, "You locked this:
+  waiting for a second person" for its holder (who gets no second
+  button), "A locked this. It needs a second person: confirm to lock
+  it" with **Confirm lock** for everyone else, and "Locked by A,
+  confirmed by B" once written (`view.confirmed_by`; the first keys are
+  kept in `STATE/lock-keys.jsonl`).
+- **Re-lock and Lock all follow the rule.** A re-lock's first key waits
+  with its reason; the second writes the superseding answer and lock,
+  keeping the first person's reason. Lock all writes the answers and
+  reports each two-key question as `awaiting_second_key`, locking the
+  rest; the item page's Lock all says how many wait, and a loose round
+  marks each waiting question. Lock all's dry run refuses the whole
+  batch for what a key would refuse (no login, a first key whose login
+  may no longer lock), so it never stops half written for that. A
+  re-lock sent again by either key finds what landed. The second key's
+  resend finishes a confirmed re-lock whose lock failed after its
+  answer, on a mark the confirmation saved first; an answer's own nonce
+  is the writer's to choose and proves nothing.
+- Two-key areas must be items of the project: an unknown id is refused
+  rather than shown as set and guarding nothing. A key left on an area
+  no longer two-key is not offered for confirmation.
+- **What the export says:** a two-key lock's `locked_by` in the ruling
+  files is its writer, the second key (operators.jsonl), as for every
+  lock record.
+- **Downgrade:** 1.42 refuses a `roles.json` that has `two_key` by its
+  shape, so writes stop (503) rather than letting one person lock alone
+  there. Remove `two_key` by hand to go back. Waiting first keys are
+  lost, never confirmed.
+
 ## Role changes (1.42.0)
 
 Wave 3, OPEN-DECISIONS.md W5 (the owner's choice of 2026-10-14).

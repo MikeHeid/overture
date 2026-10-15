@@ -98,6 +98,7 @@ from . import assets as AS
 from . import names as N
 from . import operators as OP
 from . import roles as RO
+from . import twokey as KEY
 from .roles import RolesError
 from . import peers as PE
 from . import projectcfg as PC
@@ -108,7 +109,7 @@ from . import stewardgit as SG
 from . import tags as T
 from . import view as V
 from . import visuals as VIS
-from .store import Store, StoreError
+from .store import Store, StoreError, utc_now
 
 HOST = "127.0.0.1"          # never configurable: the tunnel is the only way in
 DRAIN_SECONDS = 2.0         # at most this long, in all, reading a body an early refusal left unread
@@ -119,6 +120,7 @@ OWNER_ROUTES = {"/api/message": "message", "/api/answer": "answer", "/api/lock":
 # (intent, move_to, pr, step, about_qid...) asks an agent for something or points elsewhere: the owner's.
 MEMBER_ROUTES = frozenset(OWNER_ROUTES)
 OWNER_ROLES = "/api/roles"   # 1.40.0: the People tab sets a login's role; an owner's alone, as every non-member route
+OWNER_TWO_KEY = "/api/two-key"   # 1.43.0 (W6): the People tab's two-key areas; an owner's alone
 MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 # 0.8.19: starred visuals and items. A side-route (not a store kind): toggles are owner-only, idempotent, cheap.
 OWNER_FAVORITE = "/api/favorite"
@@ -990,6 +992,7 @@ class Console:
         # 1.38.0: record id -> the Access email of the owner request that wrote it, beside the store.
         # The request's email is per thread (one request per handler thread), set at the owner gate.
         self.operators = OP.Operators(cfg.state)
+        self.first_keys = KEY.first_keys(cfg.state)   # 1.43.0 (W6): lock id -> the email of its first key
         self._acting = threading.local()
         self.store.on_append = self.store.refactor.on_append = self._keep_operator
         self.favorites = FV.Favorites(cfg.state)   # 0.8.19: the owner's starred visuals and items
@@ -1131,6 +1134,10 @@ class Console:
             got = None   # page_payload's `you` already says the file cannot be read; writes are refused
         people = [{"email": e, **r} for e, r in sorted((got or {}).items())]
         out = {"on": got is not None, "me": me.lower() if isinstance(me, str) else None, "people": people}
+        try:
+            out["two_key"] = RO.two_key_areas(self.cfg.state)   # 1.43.0 (W6)
+        except RolesError:
+            out["two_key"] = []
         # 1.42.0 (W5): who changed whose role, newest first; kept with roles off too (removing everyone is a change).
         try:
             out["log"], out["log_total"] = RO.history(self.cfg.state)
@@ -1184,6 +1191,199 @@ class Console:
                 sys.stderr.write(f"console roles: write failed: {type(e).__name__}: {e}\n")
                 raise RequestError(500, "could not write the roles file; see the server log") from None
         return {"roles": self.roles_view()}
+
+    def set_two_key(self, body: object) -> dict:
+        """POST /api/two-key (1.43.0, W6): the areas where a lock needs a second person. Owner only (role_gate),
+        re-checked under the lock as set_role does."""
+        if (not isinstance(body, dict) or set(body) - {"areas", "nonce"} or not isinstance(body.get("areas"), list)
+                or not all(isinstance(a, str) for a in body["areas"])):
+            raise RequestError(400, '/api/two-key takes {"areas": [ITEM_ID, ...], "nonce"?}; [] clears them')
+        me = getattr(self._acting, "email", None)
+        with self._lock:
+            try:
+                current = RO.load(self.cfg.state)
+            except RolesError as e:
+                sys.stderr.write(f"console roles: {e}\n")
+                raise RequestError(503, "the roles file cannot be read; see the server log") from None
+            if current is not None and RO.role_of(current, me)["role"] != "owner":
+                raise RequestError(403, "you are no longer an administrator here; reload the console")
+            # (security review) An area the register does not know would look set and guard nothing.
+            unknown = [a for a in body["areas"] if a not in self.items()]
+            if unknown:
+                raise RequestError(400, f"{', '.join(unknown)}: not an item of this project, so nothing would be "
+                                        f"guarded there; check the id")
+            try:
+                RO.set_two_key(self.cfg.state, body["areas"], by=me if isinstance(me, str) else None)
+            except RolesError as e:
+                if str(self.cfg.state) in str(e):
+                    sys.stderr.write(f"console roles: {e}\n")
+                    raise RequestError(503, "the roles file cannot be read; see the server log") from None
+                raise RequestError(400, str(e)) from None
+            except OSError as e:
+                sys.stderr.write(f"console roles: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not write the roles file; see the server log") from None
+        self._bump()   # every open page shows the new two-key marks
+        return {"roles": self.roles_view()}
+
+    # -- two-key locks (1.43.0, OPEN-DECISIONS.md W6; twokey.py) -------------------------------
+
+    def _two_key_item(self, qid: object, items: dict, store: Store | None = None) -> str | None:
+        """The item of `qid` when it sits in a two-key area, else None. A roles file gone bad since role_gate
+        read it stops the lock (503) rather than letting one key through."""
+        try:
+            areas = RO.two_key_areas(self.cfg.state)
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}\n")
+            raise RequestError(503, "the roles file cannot be read, so no lock is let through; see the server "
+                                    "log") from None
+        q = (store or self.store).question(qid) if isinstance(qid, str) else None
+        return q["item"] if areas and q is not None and RO.within(q["item"], areas, items) else None
+
+    def _pending(self) -> dict[str, dict]:
+        try:
+            return KEY.load(self.cfg.state)
+        except KEY.TwoKeyError as e:
+            sys.stderr.write(f"console two-key: {e}\n")
+            raise RequestError(503, "the pending-locks file cannot be read, so no two-key lock is let through; "
+                                    "see the server log") from None
+
+    def _save_pending(self, pending: dict[str, dict]) -> None:
+        try:
+            KEY.save(self.cfg.state, pending)
+        except OSError as e:
+            sys.stderr.write(f"console two-key: write failed: {type(e).__name__}: {e}\n")
+            raise RequestError(500, "could not write the pending-locks file; see the server log") from None
+        self._bump()
+
+    def _may_lock(self, email: str, item: str, items: dict) -> bool:
+        """Whether `email`'s role, read now, lets it lock on `item`: an administrator, or a member covering it."""
+        try:
+            entry = RO.role_of(RO.load(self.cfg.state), email)
+        except RolesError:
+            return False
+        return entry["role"] == "owner" or (entry["role"] == "member" and RO.within(item, entry["areas"], items))
+
+    def _key_check(self, qid: str, answer: str, items: dict) -> None:
+        """What `_key` would refuse before writing, for Lock all's trial (review): no login, an unreadable
+        pending file, or a first key whose login may no longer lock. Refused there, nothing of the batch is
+        written."""
+        email = getattr(self._acting, "email", None)
+        if not isinstance(email, str):
+            raise RequestError(403, "a lock in a two-key area needs a signed-in login; a service token is no key")
+        first = self._pending().get(qid)
+        if (first is not None and first["answer"] == answer and "relock" not in first
+                and first["email"] != email.lower()):
+            item = self.store.question(qid)["item"]
+            if not self._may_lock(first["email"], item, items):
+                raise RequestError(409, f"the first key's login ({first['email']}) may no longer lock {item}; "
+                                        f"lock {qid} from its card to be its first key")
+
+    def lock(self, body: object) -> dict:
+        """POST /api/lock: write() for a lock, except in a two-key area (W6), where the first lock of an answer
+        waits as its first key ({"record": None, "pending": ...}) and a second login's lock writes it.
+
+        Checked under the same hold of the lock as the write, so an area made two-key a moment before is
+        never locked by one key."""
+        if not isinstance(body, dict):
+            raise RequestError(400, "the body must be a JSON object")
+        named = [f for f in WRITER_FIELDS + SERVER_LOCK_FIELDS if f in body]
+        if named:
+            raise RequestError(400, f"{', '.join(named)} is the server's to set, not the writer's")
+        with self._lock:
+            items = self.items()
+            if self._two_key_item(body.get("qid"), items) is not None and isinstance(body.get("answer"), str) \
+                    and not set(body) - {"qid", "answer", "nonce"}:
+                return self._key(body["qid"], body["answer"], body.get("nonce"), items)
+            return {"record": self._append("lock", body, "owner", items)}
+
+    def _key(self, qid: str, answer: str, nonce: object, items: dict, relock: str | None = None) -> dict:
+        """One key of a two-key lock; the caller holds `self._lock` and has checked the area is two-key.
+
+        A different login's key on the same answer (and the same kind: lock or re-lock) writes the lock, after
+        checking the first key's login may still lock there. Otherwise this key waits, replacing any first key
+        on another answer of the question. The same login pressing again changes nothing: one person is one key.
+        """
+        email = getattr(self._acting, "email", None)
+        if not isinstance(email, str):
+            raise RequestError(403, "a lock in a two-key area needs a signed-in login; a service token is no key")
+        email = email.lower()
+        if not isinstance(nonce, str) or not S.NONCE.match(nonce) or len(nonce) > 60:
+            raise RequestError(400, "nonce must be 8-60 of [A-Za-z0-9_-]")
+        head = self.store.head(qid)
+        if head is None or head["id"] != answer:
+            raise RequestError(409, f"{answer} is not the current answer of {qid}; reload and lock the one shown")
+        done = self.store.lock_of(answer)
+        if relock is None and done is not None:
+            return {"record": done}   # locked already, by two keys or before the area was two-key
+        if relock is not None and done is None:
+            raise RequestError(400, f"{qid} has no locked answer to re-lock")
+        pending = self._pending()
+        first = pending.get(qid)
+        rest = {k: v for k, v in pending.items() if k != qid}
+        if (first is not None and first["answer"] == answer and ("relock" in first) == (relock is not None)
+                and first["email"] != email):
+            item = self.store.question(qid)["item"]
+            if not self._may_lock(first["email"], item, items):
+                self._save_pending(rest)
+                raise RequestError(409, f"the first key's login ({first['email']}) may no longer lock {item}, so its "
+                                        f"key was dropped; press again to be the first key yourself")
+            records = []
+            target, lock_nonce = answer, nonce
+            if relock is not None:
+                # The two keys' agreement is saved first, as server-held state: the only thing a re-lock whose
+                # lock fails below may be finished on (an answer's nonce is the writer's to choose).
+                self._save_pending({**rest, qid: {**first, "confirming": email}})
+                # The answer takes the FIRST key's nonce: that request sent again then finds it landed (relock).
+                ans = self._append("answer", {"qid": qid, "picks": head["picks"], "own_text": head["own_text"],
+                                              "supersedes": head["id"], "reason": first["relock"],
+                                              "nonce": first.get("nonce", nonce) + "-a"}, "owner", items)
+                records.append(ans)
+                target, lock_nonce = ans["id"], nonce + "-l"
+            rec = self._append("lock", {"qid": qid, "answer": target, "nonce": lock_nonce}, "owner", items)
+            records.append(rec)
+            try:
+                self.first_keys.add(rec["id"], first["email"])
+            except (OSError, OP.OperatorsError) as e:
+                sys.stderr.write(f"console two-key: lock {rec['id']} keeps no first key: {type(e).__name__}: {e}\n")
+            try:
+                self._save_pending(rest)
+            except RequestError:
+                pass   # the lock stands; a first key on a locked answer is never shown nor matched again
+            return {"record": rec, "records": records, "confirmed": first["email"]}
+        entry = {"answer": answer, "email": email, "at": utc_now(),
+                 **({"relock": relock, "nonce": nonce} if relock else {})}
+        if first is not None and {k: v for k, v in first.items() if k not in ("at", "nonce")} == \
+                {k: v for k, v in entry.items() if k not in ("at", "nonce")}:
+            return {"record": None, "pending": first}   # the same key pressed again
+        self._save_pending({**rest, qid: entry})
+        return {"record": None, "pending": entry}
+
+    def pending_view(self) -> dict[str, dict]:
+        """QID -> its waiting first key, for the page: only keys still on the question's current answer (a new
+        answer, or a lock written since, leaves an old key behind; it is shown and matched no more)."""
+        try:
+            pending = KEY.load(self.cfg.state)
+        except KEY.TwoKeyError as e:
+            sys.stderr.write(f"console two-key: {e}\n")
+            return {}
+        me = getattr(self._acting, "email", None)
+        items = self.items()
+        out = {}
+        for qid, e in pending.items():
+            head = self.store.head(qid)
+            if head is None or head["id"] != e["answer"]:
+                continue
+            try:
+                if self._two_key_item(qid, items) is None:
+                    continue   # (review) the area is no longer two-key: one lock is enough, offer no "Confirm"
+            except RequestError:
+                return {}
+            locked = self.store.lock_of(head["id"]) is not None
+            if locked == ("relock" in e):
+                # `mine`: whether this page's login holds it, so the page offers no second key to the first.
+                out[qid] = {"answer": e["answer"], "by": e["email"], "at": e["at"], "relock": "relock" in e,
+                            "mine": isinstance(me, str) and me.lower() == e["email"]}
+        return out
 
     def area_gate(self, entry: dict, path: str, body: object) -> None:
         """A member's answer, lock or message lands inside their areas, or is refused.
@@ -1386,8 +1586,20 @@ class Console:
         # 1.38.1: answer id -> the Access login that LOCKED it, for the card's "Locked by". Owner door
         # only, like drafts: the agent socket's /view never carries an email (operators.py).
         ops = self.operators.mapping()
-        out["view"] = {**out["view"], "locked_by": {r["answer"]: ops[r["id"]] for r in self.store.records()
-                                                    if r["type"] == "lock" and r["id"] in ops}}
+        # 1.43.0 (W6): a two-key lock was written by its second key; "Locked by" names the first and
+        # "confirmed by" the second. Waiting first keys and the two-key areas travel the same door.
+        firsts = self.first_keys.mapping()
+        locks = [r for r in self.store.records() if r["type"] == "lock"]
+        out["view"] = {**out["view"],
+                       "locked_by": {r["answer"]: firsts.get(r["id"]) or ops[r["id"]] for r in locks
+                                     if r["id"] in firsts or r["id"] in ops},
+                       "confirmed_by": {r["answer"]: ops[r["id"]] for r in locks if r["id"] in firsts
+                                        and r["id"] in ops},
+                       "pending_locks": self.pending_view()}
+        try:
+            out["view"]["two_key"] = RO.two_key_areas(self.cfg.state)
+        except RolesError:
+            out["view"]["two_key"] = []   # `you` already says the file cannot be read; every lock is refused
         # 1.39.0: this login's role, for the page's banner; absent when roles are off, so a solo page is unchanged.
         if (self.cfg.state / RO.FILE).exists():
             # 1.41.0 (W2, W3): `mine`, the areas this login's Inbox opens on, or null for everything.
@@ -2836,9 +3048,47 @@ class Console:
             raise RequestError(400, "nonce must be 8-60 of [A-Za-z0-9_-]")
         if not isinstance(qid, str):
             raise RequestError(400, "qid must be <itemId>/Q<n>")
+        if not isinstance(reason, str) or len(reason) > KEY.MAX_REASON:
+            raise RequestError(400, f"a re-lock reason is text of at most {KEY.MAX_REASON} characters")
         with self._lock:
             items = self.items()
             head = self.store.head(qid)
+            if self._two_key_item(qid, items) is not None:
+                # 1.43.0 (W6): a re-lock is a lock: the first key waits, the second writes answer and lock.
+                lk = self.store.lock_of(head["id"]) if head is not None else None
+                if lk is not None and head.get("supersedes") and (
+                        head.get("nonce") == nonce + "-a" or lk.get("nonce") == nonce + "-l"):
+                    return [head, lk]   # the first or the second key's request again, after it landed: no write
+                first = self._pending().get(qid) if head is not None else None
+                me = (getattr(self._acting, "email", None) or "").lower()
+                agreed = self.store.get(first["answer"]) if first is not None else None
+                if (lk is None and head is not None and first is not None and "relock" in first
+                        and first.get("confirming") == me and head.get("nonce") == first.get("nonce", "") + "-a"
+                        # (security review) and it IS what the two keys agreed: the locked answer word for word,
+                        # superseding it, with the first key's reason. Another answer posted under that nonce in
+                        # the window would otherwise be locked on a confirmation of something else.
+                        and agreed is not None and head.get("supersedes") == agreed["id"]
+                        and head["picks"] == agreed["picks"] and head["own_text"] == agreed["own_text"]
+                        and head.get("reason") == first["relock"]
+                        # and the first key's login may still lock there, as _key checks on every confirmation
+                        and self._may_lock(first["email"], self.store.question(qid)["item"], items)):
+                    # (review) A confirmed re-lock whose lock failed after its answer (a full disk), sent again
+                    # by its second key: finished, on the mark only a confirmation writes. (A HIGH found while
+                    # clearing: trusting the answer's nonce alone let one login forge this and lock alone.)
+                    lk = self._append("lock", {"qid": qid, "answer": head["id"], "nonce": nonce + "-l"},
+                                      "owner", items)
+                    try:
+                        self.first_keys.add(lk["id"], first["email"])
+                    except (OSError, OP.OperatorsError) as e:
+                        sys.stderr.write(f"console two-key: lock {lk['id']} keeps no first key: {e}\n")
+                    try:
+                        self._save_pending({k: v for k, v in self._pending().items() if k != qid})
+                    except RequestError:
+                        pass
+                    return [head, lk]
+                if head is None:
+                    raise RequestError(400, f"{qid} has no locked answer to re-lock")
+                return self._key(qid, head["id"], nonce, items, relock=reason).get("records", [])
             if head is not None and head.get("nonce") == nonce + "-a":
                 ans = head  # a retry: the answer landed the first time
             elif head is None or self.store.lock_of(head["id"]) is None:
@@ -3234,7 +3484,10 @@ class Console:
                     raise RequestError(500, "the batch stopped part way: the questions marked locked are "
                                             "locked. Nothing else was written. Press Lock all again to finish; "
                                             "what is already locked is skipped", {"results": results}) from None
-                res.update(status="locked", answer=ans["id"], lock=lk["id"])
+                if lk is None:   # a two-key area: this login's key waits for a second person's
+                    res.update(status="awaiting_second_key", answer=ans["id"])
+                else:
+                    res.update(status="locked", answer=ans["id"], lock=lk["id"])
             try:
                 proc = self._append("message", proc_body, "owner", items)
             except (RequestError, OSError) as err:
@@ -3274,6 +3527,14 @@ class Console:
                 raise RequestError(400, str(err)) from None
         ans = head if same else put("answer", {"qid": qid, "picks": picks, "own_text": own,
                                                 "nonce": f"{nonce}-{n}a"})
+        if self._two_key_item(qid, items, store) is not None:
+            # 1.43.0 (W6): the answer is written; its lock is this login's key, written only by a second one.
+            if append is None:
+                # The trial: keys are not store records, but what `_key` would refuse is refused here, before
+                # anything of the batch is written (review).
+                self._key_check(qid, ans["id"], items)
+                return ans, None
+            return ans, self._key(qid, ans["id"], f"{nonce}-{n}l", items).get("record")
         lk = put("lock", {"qid": qid, "answer": ans["id"], "nonce": f"{nonce}-{n}l"})
         return ans, lk
 
@@ -4086,7 +4347,7 @@ class OwnerHandler(_Handler):
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
                                               OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD,
-                                              OWNER_ROLES):
+                                              OWNER_ROLES, OWNER_TWO_KEY):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted".
@@ -4136,6 +4397,10 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.save_draft(body))
             if self.path == OWNER_ROLES:         # 1.40.0: the People tab
                 return self._send(200, self.console.set_role(body))
+            if self.path == OWNER_TWO_KEY:       # 1.43.0: the People tab's two-key areas
+                return self._send(200, self.console.set_two_key(body))
+            if self.path == "/api/lock":         # 1.43.0: write() for a lock, but two keys in a two-key area
+                return self._send(200, self.console.lock(body))
             if self.path == OWNER_CSRF_ROTATE:   # rotate the CSRF token without a restart
                 return self._send(200, self.console.rotate_csrf())
             if self.path == OWNER_TICKET_CREATE:    # create a ticket under an item
