@@ -1130,7 +1130,15 @@ class Console:
         except RolesError:
             got = None   # page_payload's `you` already says the file cannot be read; writes are refused
         people = [{"email": e, **r} for e, r in sorted((got or {}).items())]
-        return {"on": got is not None, "me": me.lower() if isinstance(me, str) else None, "people": people}
+        out = {"on": got is not None, "me": me.lower() if isinstance(me, str) else None, "people": people}
+        # 1.42.0 (W5): who changed whose role, newest first; kept with roles off too (removing everyone is a change).
+        try:
+            out["log"], out["log_total"] = RO.history(self.cfg.state)
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}\n")   # the path stays in the log, never on the page
+            out["log"], out["log_total"] = [], 0
+            out["log_problem"] = "the role log cannot be read; see the server log"
+        return out
 
     def set_role(self, body: object) -> dict:
         """POST /api/roles (1.40.0): set or clear one login's role, as `agent.py access` does (roles.py).
@@ -1166,7 +1174,7 @@ class Console:
                 raise RequestError(403, "you are no longer an administrator here; reload the console")
             try:
                 RO.set_role(self.cfg.state, body["email"], body["role"], body.get("areas") or None,
-                            director=body.get("director", False))
+                            director=body.get("director", False), by=me if isinstance(me, str) else None)
             except RolesError as e:
                 if str(self.cfg.state) in str(e):   # the file went bad since the load above: no path on the page
                     sys.stderr.write(f"console roles: {e}\n")

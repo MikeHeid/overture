@@ -4007,6 +4007,33 @@
     sync();
     return { sel, areas, dir, dirBox };
   }
+  // 1.42 (W5): the role log, newest first: who changed whose role, from what to what. `by` is null for a
+  // change made with `agent.py access` in the owner's terminal.
+  function describeRole(e) {
+    if (!e) return 'not listed';
+    let s = ROLE_LABEL[e.role].toLowerCase();
+    if (e.areas && e.areas.length) s += (e.role === 'member' ? ' of ' : ', Inbox on ') + e.areas.join(', ');
+    return s + (e.director ? ', director' : '');
+  }
+  function renderRoleLog(body, roles) {
+    const log = Array.isArray(roles.log) ? roles.log : [];
+    if (!log.length && !roles.log_problem) return;
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Role changes']));
+    if (roles.log_problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [roles.log_problem]));
+    const ul = el('ul', { className: 'ck-people-log' });
+    for (const e of log) {
+      const who = e.by ? (e.by === roles.me ? 'You' : e.by) : 'agent.py access';
+      const what = !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
+        : !e.from ? ' added ' + e.email + ' as ' + describeRole(e.to)
+        : ' changed ' + e.email + ' from ' + describeRole(e.from) + ' to ' + describeRole(e.to);
+      ul.appendChild(el('li', { className: 'ck-people-log-row' }, [
+        el('span', { className: 'ck-feed-time', title: new Date(e.at).toLocaleString() }, [relTime(e.at)]),
+        ' ' + who + what]));
+    }
+    body.appendChild(ul);
+    if (roles.log_total > log.length) body.appendChild(el('p', { className: 'ck-muted' }, [
+      'The newest ' + log.length + ' of ' + roles.log_total + ' changes; STATE/roles-log.jsonl keeps them all.']));
+  }
   function renderPeopleTab(body) {
     const roles = view && view.roles;
     body.appendChild(el('h2', { className: 'ck-section-heading' }, ['People']));
@@ -4039,6 +4066,7 @@
           'Open the console with your own Access login.']));
       }
       body.appendChild(box);
+      renderRoleLog(body, roles);
       return;
     }
     body.appendChild(el('p', { className: 'ck-muted' }, [
@@ -4087,6 +4115,7 @@
     add.appendChild(go);
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Add a person']));
     body.appendChild(add);
+    renderRoleLog(body, roles);
   }
 
   function renderTriggersTab(body) {

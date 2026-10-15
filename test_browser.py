@@ -3278,6 +3278,30 @@ class InboxUXTests(unittest.TestCase):
                 self.assertGreater(page.locator(".ck-more-item").count(), 0)
                 self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
 
+    def test_the_people_tab_shows_who_changed_whose_role_newest_first(self):
+        # Catches (1.42.0, W5): the log sent but never drawn, drawn oldest first, a console change not shown
+        # as "You", and a terminal change credited to a login rather than to `agent.py access`.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.click(".ck-people-claim")
+                page.wait_for_selector(".ck-people-log-row")
+                page.fill(".ck-people-new-email", "bob@example.com")
+                page.fill("#ck-people-new-areas", "LANE")
+                page.click(".ck-people-add button[type='submit']")
+                page.wait_for_selector(".ck-people-log-row >> nth=1")
+                RO.set_role(self.cfg.state, "bob@example.com", "viewer")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.wait_for_selector(".ck-people-log-row >> nth=2")
+                rows = page.locator(".ck-people-log-row").all_text_contents()
+                self.assertIn("agent.py access changed bob@example.com from member of LANE to viewer", rows[0])
+                self.assertIn("You added bob@example.com as member of LANE", rows[1])
+                self.assertIn("You added owner@example.com as administrator", rows[2])
+
     def test_q37_a_stale_question_stays_whole(self):
         # Catches: rolling up every question with a lock, so a stale ruling (which needs the owner) hides.
         for kind in BROWSERS:

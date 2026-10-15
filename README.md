@@ -117,7 +117,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~50%: who decided (1.38), roles (1.39), People (1.40), routing (1.41) |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~55%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -561,6 +561,13 @@ Inbox opens on. Tick **Director** on a member or viewer (or pass
 `--director`) and their Inbox opens on everything; it changes what they
 see first, never what they may decide. Unsent drafts are now each
 login's own, so two administrators no longer overwrite each other.
+
+**Role changes (1.42).** Under People, **Role changes** lists every
+change, newest first: who made it ("You", another administrator's
+login, or `agent.py access` from your terminal), whose role, and from
+what to what. The log (`STATE/roles-log.jsonl`) stays on the console's
+machine beside `roles.json` and keeps every line; the tab shows the
+newest 50.
 
 ### Lessons: what you settled stays settled (1.33–1.34)
 
@@ -1076,6 +1083,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.42 — Role changes**: People lists who changed whose role, and
+  when, from the console or the terminal.
 - **1.41 — Routing**: each question says who it is for; members' Inbox
   opens on Mine; a director flag shows all; drafts per login.
 - **1.40 — People**: a tab where the administrator manages roles, and
