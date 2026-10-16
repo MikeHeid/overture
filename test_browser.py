@@ -5041,9 +5041,10 @@ class SectionTests(unittest.TestCase):
                 self.assertEqual(page.evaluate("location.hash"), "#chat&section=team")
 
     def test_a_host_opening_a_tab_before_the_first_view_outranks_a_pending_section_link(self):
-        # Catches (J34, R1): resolvePendingSection moving a tab the host chose, in another section (Feed, after
-        # `#section=team`) to Team's entry tab when the view landed; and ConsoleKit.openTab not clearing the pending
-        # link as goTab does, so openTab('chat') in the same section was moved on to People.
+        # Catches (R1): ConsoleKit.openTab not clearing the pending section link as goTab does, so a tab the host
+        # chose before the first view was moved when the view landed: openTab('chat') after `#section=team` went on
+        # to People. (The Feed case also covered resolvePendingSection's own other-section guard, J34, before R1;
+        # with openTab clearing the link that guard is unreachable from here, so J34 is now equivalent.)
         for kind in BROWSERS:
             for tab, sec in (("feed", "work"), ("chat", "team")):
                 with self.subTest(browser=kind, tab=tab):
