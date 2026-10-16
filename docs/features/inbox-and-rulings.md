@@ -60,14 +60,18 @@ Answer what your agents ask, lock it into a ruling, and keep each ruling honest 
   its questions await you and how many are open; press it to fold the group.
   Lanes with questions awaiting you come first (the most first), then the
   most open, then by name; items with no lane are under **Other**. A round is
-  in its item's lane. Folded groups are remembered in this browser, per
-  project, and a link to a question in a folded group opens it. Each row
-  works as before: open, snooze, filter, Mine, the palette and links.
+  in its item's lane, and a row in its own lane's group does not repeat the
+  lane's chip. Folded groups are remembered in this browser, per project. A
+  link to a question in a folded group, the outline or `j` / `k` opens it for
+  now, without changing what is remembered; only pressing the heading does.
+  Each row works as before: open, snooze, filter, Mine, the palette and
+  links.
 
-  <img src="../screenshots/feature-inbox-groups.png" alt="The Inbox grouped by lane: the outline strip of lanes with their counts, then the Infra, API, UI and Data groups, each headed by its lane chip and counts" width="400">
+  <img src="../screenshots/feature-inbox-groups.png" alt="The Inbox: the Priority list, the outline strip of lanes with its legend, counts and j / k hint, then the lane groups, each headed by its lane chip and counts" width="400">
 
 - **The outline and j / k (1.49).** The outline of the groups stays at the
-  top as you scroll, and `j` / `k` walk the questions waiting for you
+  top as you scroll ("2/3": awaiting you / open, as its legend says), and
+  `j` / `k` walk the questions waiting for you
   across them; see [Moving through a long Inbox](navigation.md#moving-through-a-long-inbox-149).
 - **Filter chips (1.1).** A row of four chips sits above the Inbox's
   groups: **you** (waiting on you), **unlocked** (answered, not yet

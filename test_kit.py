@@ -1171,6 +1171,27 @@ class PublishTests(unittest.TestCase):
         self.assertNotIn("renderPanel", toggle)
         self.assertIn("memGet('inbox-collapsed')", body)
 
+    def test_the_collapsed_lanes_map_has_no_prototype_and_is_read_by_own_keys(self):
+        # 1.49 (C8). Catches: the collapsed-groups map built as `{}` and read as `shut[key]`, so a key such as
+        # `constructor` or `toString` is found on Object.prototype and its group draws collapsed for good.
+        js = (KIT / "overture" / "console.js").read_text()
+        body = re.search(r"\n  function collapsedLanes\(\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("const out = Object.create(null);", body)
+        self.assertNotIn("const out = {};", body)
+        shut = re.search(r"\n  function isLaneShut\(shut, key\) \{(.*?)\}\n", js, re.S).group(1)
+        self.assertIn("Object.prototype.hasOwnProperty.call(shut, key)", shut)
+        groups = js[js.index("  function renderLaneGroups("):js.index("  function setGroupOpen(")]
+        self.assertIn("isLaneShut(shut, key)", groups)
+        self.assertNotRegex(groups, r"shut\[key\]")
+
+    def test_a_pop_out_is_drawn_beside_the_console_with_480px_of_room(self):
+        # 1.49 (X2, lead decision). Catches: the room threshold moved off 480px (at 720px a 1280px window with the
+        # default 576px column, 704px of room, drew a sheet over the console instead of a pop-out beside it).
+        js = (KIT / "overture" / "console.js").read_text()
+        self.assertRegex(js, r"\n  const POP_ROOM_MIN = 480;")
+        wants = re.search(r"\n  function popWantsSheet\(\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("window.innerWidth - consoleWidth() < POP_ROOM_MIN", wants)
+
     def test_lane_palette_is_one_list_and_readable_in_both_themes(self):
         # D10: the console and the config parser agree on the palette, and every lane colour is
         # at least 3:1 against the surfaces it sits on (WCAG 1.4.11), in light and in dark.

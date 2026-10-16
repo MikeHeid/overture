@@ -3875,8 +3875,8 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 /* ========= Pop-outs (1.49, U3) =================================================================================
    A tabbed stack of up to three, over the host's dashboard beside the console (console.js sets its right edge and
    width from the console's), never over the console itself. Not modal there: no backdrop, no focus trap. Below
-   720px of room, or on a phone, it is one full-screen sheet (.ck-pop-sheet, role=dialog, aria-modal, focus kept
-   inside). Motion: the stack slides in and out (150 ms), a new pop-out's panel fades in (120 ms); none under
+   480px of room, or on a phone, the same stack is one full-screen sheet (.ck-pop-sheet, role=dialog, aria-modal,
+   focus kept inside) showing the one on show, its tab strip kept to switch when more than one is open. Motion: the stack slides in and out (150 ms), a new pop-out's panel fades in (120 ms); none under
    prefers-reduced-motion, and none on a live redraw (the elements are kept, never rebuilt, so nothing replays). */
 .ck-pop {
   position: fixed; top: 16px; bottom: 16px; right: 16px; z-index: 998; box-sizing: border-box;
@@ -3934,6 +3934,11 @@ html.ck-footer-on .ck-pop:not(.ck-pop-sheet) { bottom: calc(var(--ck-footer-h, 2
 .ck-pop-gone { margin: auto 0; padding: 16px; border: 1px dashed var(--c-border); border-radius: var(--radius-sm); }
 .ck-pop-actions { flex: 0 0 auto; }
 .ck-pop-row { display: flex; justify-content: flex-end; padding: 6px 10px 0; }
+/* C10: a chart fold's Pop out beside its summary, outside the <details>, so it shows while the fold is shut. */
+.ck-chart-fold { position: relative; margin: 10px 16px 14px; }
+.ck-chart-fold > .ck-item-chart { margin: 0; }
+.ck-chart-fold > .ck-item-chart > .ck-item-chart-summary { padding-right: 104px; }
+.ck-chart-fold > .ck-chart-fold-pop { position: absolute; top: 3px; right: 6px; padding: 0; }
 .ck-pop-btn { display: inline-flex; align-items: center; gap: 4px; }
 .ck-visual-title-row .ck-pop-btn, .ck-fork .ck-pop-row { margin-left: auto; }
 .ck-fork .ck-pop-row { padding: 0 0 4px; }
@@ -3943,7 +3948,8 @@ html.ck-footer-on .ck-pop:not(.ck-pop-sheet) { bottom: calc(var(--ck-footer-h, 2
   border: 0; border-radius: 0; box-shadow: none;
   padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
 }
-.ck-pop-sheet .ck-pop-tabs, .ck-pop-sheet .ck-pop-pin { display: none; }
+.ck-pop-sheet[data-count="1"] .ck-pop-tabs { display: none; }
+.ck-pop-sheet .ck-pop-tab { min-height: 44px; }
 .ck-pop-sheet .ck-pop-head { position: sticky; top: 0; background: var(--c-surface); }
 .ck-pop-sheet .ck-pop-close { min-height: 44px; min-width: 44px; font-weight: 600; }
 html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
@@ -3964,7 +3970,8 @@ html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
 
 /* ========= The Inbox by lane, its outline and the sticky bars (1.49, U5 U6) ===================================
    The Mine switch (and, on a phone, the outline's <select>) sit in .ck-inbox-nav, sticky at the top of the
-   Inbox's scroll. The outline is a sticky one-line strip under it, or, when the Inbox is at least 720px wide
+   Inbox's scroll. The outline is a sticky one-line strip under it (a legend for its counts first, a j / k hint
+   last, hidden on a phone), or, when the Inbox is at least 720px wide
    (a dock dragged wide), a sticky column beside the groups: at the default 576px column the content is about
    480px, and a column beside it would leave the rows some 300px, cutting their ids and questions. console.js
    measures the bars (--ck-nav-h, --ck-sticky-h) so the outline sits under the nav and every jump lands clear. */
@@ -3980,7 +3987,17 @@ html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
   position: sticky; top: calc(var(--ck-nav-h, 0px) - 16px); z-index: 5; margin: 0 -16px 8px; padding: 4px 16px;
   background: var(--c-surface); border-bottom: 1px solid var(--c-border-light);
 }
-.ck-outline-list { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; overflow-x: auto; white-space: nowrap; }
+.ck-outline { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.ck-outline-beside .ck-outline { display: block; }
+.ck-outline-list { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; overflow-x: auto; white-space: nowrap;
+  flex: 1 1 100%; min-width: 0; order: 2; }
+/* The legend and the j / k hint share one short line above the strip, so the lanes keep the strip's full width. */
+.ck-outline-legend, .ck-outline-hint { flex: 0 0 auto; color: var(--c-fg-muted); font-size: 11px; white-space: nowrap; }
+.ck-outline-hint { margin-left: auto; }
+.ck-outline-hint kbd { font: inherit; font-family: ui-monospace, monospace; padding: 0 4px; border: 1px solid var(--c-border);
+  border-radius: 3px; background: var(--c-surface-alt); color: var(--c-fg); }
+.ck-outline-beside .ck-outline-legend, .ck-outline-beside .ck-outline-hint { display: block; margin: 0 0 6px; }
+.ck-outline-beside .ck-outline-hint { margin: 8px 0 0; }
 .ck-outline-btn {
   display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 10px;
   border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-fg);
@@ -4016,3 +4033,4 @@ html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
   .ck-outline-select { display: block; flex: 1 1 100%; min-height: 40px; font: inherit; }
   .ck-outline { display: none; }
 }
+@media (pointer: coarse) { .ck-outline-hint { display: none; } }

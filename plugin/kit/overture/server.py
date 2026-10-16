@@ -271,6 +271,14 @@ def _cytoscape_js_bytes() -> bytes:
     return data
 
 
+# 1.49 (X3): a keydown inside a chart frame never reaches the console's page (an opaque-origin sandbox), so Esc there
+# is told to the parent: one fixed message with no data, which the console accepts only from its own chart frames and
+# only in exactly this shape. Target '*' is the only one an opaque origin can name. Runs inside each wrapper's nonced
+# script, so the CSP is unchanged.
+CHART_ESCAPE_GLUE = ("document.addEventListener('keydown',function(e){if(e.key==='Escape'){"
+                     "try{window.parent.postMessage({type:'ck-escape'},'*');}catch(err){}}});")
+
+
 def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str, str]:
     """0.14.0: HTML wrapper that inlines Cytoscape + the graph JSON + a tiny init. Same opaque-origin story
     as `_mermaid_wrapper`: the lib + styles are inline, so no subresource fetch is blocked by Access.
@@ -317,6 +325,7 @@ def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str,
         f"{lib_block}"
         f"<script nonce=\"{esc(nonce)}\" id=\"ck-data\" type=\"application/json\">{data_json}</script>"
         f"<script nonce=\"{esc(nonce)}\">"
+        f"{CHART_ESCAPE_GLUE}"
         "(function(){"
         "var raw=JSON.parse(document.getElementById('ck-data').textContent);"
         "if(typeof cytoscape==='undefined'){document.body.innerHTML='<p class=\\'err\\'>Cytoscape failed to load.</p>';return;}"
@@ -635,6 +644,7 @@ def _mermaid_wrapper(source: str, title: str, nonce: str, clickable: bool = Fals
         "</div>"
         f"{lib_block}"
         f"<script nonce=\"{esc(nonce)}\">"
+        f"{CHART_ESCAPE_GLUE}"
         f"{click_glue}"
         "var ckShowErr=function(m){document.body.innerHTML='<p class=\\'err\\'>Mermaid failed to render: '+m+'</p>';};"
         "var ckLoaded=function(){var l=document.getElementById('ck-loading');if(l){l.hidden=true;}};"
