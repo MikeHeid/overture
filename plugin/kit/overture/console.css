@@ -3871,3 +3871,148 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 @keyframes ck-rail-mark-y { from { transform: translateY(calc(var(--ck-rail-from, 0) * 60px)); } }
 /* On the bottom bar the bar is 76% of an equal-width button: one step is 100% / 0.76 of its own width. */
 @keyframes ck-rail-mark-x { from { transform: translateX(calc(var(--ck-rail-from, 0) * 131.6%)); } }
+
+/* ========= Pop-outs (1.49, U3) =================================================================================
+   A tabbed stack of up to three, over the host's dashboard beside the console (console.js sets its right edge and
+   width from the console's), never over the console itself. Not modal there: no backdrop, no focus trap. Below
+   720px of room, or on a phone, it is one full-screen sheet (.ck-pop-sheet, role=dialog, aria-modal, focus kept
+   inside). Motion: the stack slides in and out (150 ms), a new pop-out's panel fades in (120 ms); none under
+   prefers-reduced-motion, and none on a live redraw (the elements are kept, never rebuilt, so nothing replays). */
+.ck-pop {
+  position: fixed; top: 16px; bottom: 16px; right: 16px; z-index: 998; box-sizing: border-box;
+  display: flex; flex-direction: column; min-height: 0; width: min(960px, calc(100vw - 32px));
+  background: var(--c-surface); color: var(--c-fg); border: 1px solid var(--c-border); border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28); font-size: 14px;
+}
+html.ck-footer-on .ck-pop:not(.ck-pop-sheet) { bottom: calc(var(--ck-footer-h, 28px) + 12px); }
+.ck-pop-tabs {
+  display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--c-border);
+  overflow-x: auto; flex: 0 0 auto;
+}
+.ck-pop-tab {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 280px; min-height: 36px; padding: 6px 12px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent; color: var(--c-fg); font: inherit; font-size: 13px; cursor: pointer;
+}
+.ck-pop-tab:hover { background: var(--c-surface-alt); }
+.ck-pop-tab[aria-selected="true"] {
+  background: var(--c-surface-alt); border-color: var(--c-border); font-weight: 600;
+  box-shadow: inset 0 -3px 0 var(--ck-rail-mark, var(--c-accent));
+}
+.ck-pop-tab:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+.ck-pop-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-pop-tab-pin svg { width: 14px; height: 14px; }
+.ck-pop-tab[data-pinned="false"] .ck-pop-tab-pin { display: none; }
+.ck-pop-tab[data-gone="true"] .ck-pop-tab-title { text-decoration: line-through; }
+.ck-pop { --ck-rail-mark: color-mix(in srgb, var(--c-accent) 60%, var(--c-fg)); }
+.ck-pop-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ck-pop-panel[hidden] { display: none; }
+.ck-pop-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); }
+.ck-pop-title {
+  flex: 1 1 auto; min-width: 0; margin: 0; font-size: 15px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ck-pop-head .ck-btn { display: inline-flex; align-items: center; gap: 4px; }
+.ck-pop-head svg, .ck-pop-btn svg { width: 14px; height: 14px; }
+.ck-pop-pin[aria-pressed="true"] { background: var(--c-surface-alt); border-color: var(--ck-rail-mark); font-weight: 600; }
+.ck-pop-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; }
+.ck-pop-content { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.ck-pop-chart { position: relative; flex: 1 1 auto; min-height: 320px; display: flex; flex-direction: column; }
+.ck-pop-chart > iframe { flex: 1 1 auto; width: 100%; height: auto; min-height: 320px; }
+.ck-pop-chart.ck-impact-slot { max-height: none; overflow: visible; }
+.ck-pop-chart.ck-impact-slot > iframe { flex: 0 0 auto; }
+/* A frame being replaced loads out of sight, then takes the old one's place (console.js swapPopFrame). */
+.ck-pop-chart > iframe.ck-pop-buffer { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+.ck-pop-note { margin: 0; }
+.ck-pop-q { border: 1px solid var(--c-border-light); border-radius: var(--radius-sm); padding: 10px 12px; }
+.ck-pop-q-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ck-pop-q-text { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ck-pop-sub { font-size: 13px; margin: 8px 0 0; }
+.ck-pop-round, .ck-pop-ruling { display: flex; flex-direction: column; gap: 10px; }
+.ck-pop-asset { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.ck-pop-asset img { max-width: 100%; height: auto; align-self: center; border: 1px solid var(--c-border-light); }
+.ck-pop-gone { margin: auto 0; padding: 16px; border: 1px dashed var(--c-border); border-radius: var(--radius-sm); }
+.ck-pop-actions { flex: 0 0 auto; }
+.ck-pop-row { display: flex; justify-content: flex-end; padding: 6px 10px 0; }
+.ck-pop-btn { display: inline-flex; align-items: center; gap: 4px; }
+.ck-visual-title-row .ck-pop-btn, .ck-fork .ck-pop-row { margin-left: auto; }
+.ck-fork .ck-pop-row { padding: 0 0 4px; }
+/* The phone's sheet (and a desktop with no room beside the console): the whole screen, over the console. */
+.ck-pop.ck-pop-sheet {
+  top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 1001;
+  border: 0; border-radius: 0; box-shadow: none;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+.ck-pop-sheet .ck-pop-tabs, .ck-pop-sheet .ck-pop-pin { display: none; }
+.ck-pop-sheet .ck-pop-head { position: sticky; top: 0; background: var(--c-surface); }
+.ck-pop-sheet .ck-pop-close { min-height: 44px; min-width: 44px; font-weight: 600; }
+html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) {
+  .ck-pop.ck-pop-enter { animation: ck-pop-in 150ms ease-out; }
+  .ck-pop.ck-pop-leaving { animation: ck-pop-out 150ms ease-in forwards; }
+  .ck-pop-sheet.ck-pop-enter { animation: ck-pop-sheet-in 150ms ease-out; }
+  .ck-pop-panel.ck-pop-enter { animation: ck-section-in 120ms ease-out; }
+}
+.ck-pop.ck-pop-leaving { pointer-events: none; }
+@keyframes ck-pop-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes ck-pop-out { to { opacity: 0; transform: translateX(24px); } }
+@keyframes ck-pop-sheet-in { from { opacity: 0; transform: translateY(16px); } }
+@media (forced-colors: active) {
+  .ck-pop { border: 1px solid CanvasText; }
+  .ck-pop-tab[aria-selected="true"] { outline: 2px solid Highlight; }
+}
+
+/* ========= The Inbox by lane, its outline and the sticky bars (1.49, U5 U6) ===================================
+   The Mine switch (and, on a phone, the outline's <select>) sit in .ck-inbox-nav, sticky at the top of the
+   Inbox's scroll. The outline is a sticky one-line strip under it, or, when the Inbox is at least 720px wide
+   (a dock dragged wide), a sticky column beside the groups: at the default 576px column the content is about
+   480px, and a column beside it would leave the rows some 300px, cutting their ids and questions. console.js
+   measures the bars (--ck-nav-h, --ck-sticky-h) so the outline sits under the nav and every jump lands clear. */
+.ck-inbox-nav {
+  position: sticky; top: -16px; z-index: 6; margin: 0 -16px 8px; padding: 6px 16px;
+  background: var(--c-surface); border-bottom: 1px solid var(--c-border-light);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.ck-inbox-nav .ck-inbox-scope { margin: 0; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; }
+.ck-inbox-nav .ck-inbox-scope > .ck-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ck-outline-select { display: none; }
+.ck-outline {
+  position: sticky; top: calc(var(--ck-nav-h, 0px) - 16px); z-index: 5; margin: 0 -16px 8px; padding: 4px 16px;
+  background: var(--c-surface); border-bottom: 1px solid var(--c-border-light);
+}
+.ck-outline-list { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; overflow-x: auto; white-space: nowrap; }
+.ck-outline-btn {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 10px;
+  border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface); color: var(--c-fg);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.ck-outline-btn:hover { background: var(--c-surface-alt); }
+.ck-outline-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+.ck-outline-count { color: var(--c-fg-muted); font-variant-numeric: tabular-nums; }
+.ck-outline-count[data-awaiting="true"] { color: var(--c-fg); font-weight: 700; }
+.ck-groups-wrap.ck-outline-beside { display: grid; grid-template-columns: minmax(150px, 200px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ck-outline-beside .ck-outline {
+  top: calc(var(--ck-nav-h, 0px) - 8px); margin: 0; padding: 4px 0; border-bottom: 0;
+  max-height: calc(100vh - 160px); overflow-y: auto;
+}
+.ck-outline-beside .ck-outline-list { flex-direction: column; overflow-x: visible; white-space: normal; }
+.ck-outline-beside .ck-outline-btn { width: 100%; justify-content: space-between; border-radius: var(--radius-sm); }
+.ck-lane-group { margin: 0 0 10px; scroll-margin-top: calc(var(--ck-sticky-h, 0px) + 8px); }
+.ck-groups [data-jk] { scroll-margin-top: calc(var(--ck-sticky-h, 0px) + 8px); scroll-margin-bottom: 8px; }
+.ck-group-head { margin: 0; font-size: inherit; }
+.ck-group-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 8px;
+  border: 0; border-bottom: 1px solid var(--c-border-light); background: transparent; color: var(--c-fg);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ck-group-toggle:hover { background: var(--c-surface-alt); }
+.ck-group-toggle:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+.ck-group-caret { width: 1em; color: var(--c-fg-muted); }
+.ck-group-counts { margin-left: auto; color: var(--c-fg-muted); font-size: 12px; white-space: nowrap; }
+.ck-group-body[hidden] { display: none; }
+.ck-group-body > .ck-inbox-list { margin-top: 8px; }
+.ck-lane-other { --ck-lane: var(--c-fg-muted); }
+@media (max-width: 640px) {
+  .ck-outline-select { display: block; flex: 1 1 100%; min-height: 40px; font: inherit; }
+  .ck-outline { display: none; }
+}

@@ -667,6 +667,35 @@ def capture(demo: Demo) -> list[str]:
         except Exception as e:
             problems.append(f"feature-phone: {str(e).splitlines()[0]}")
 
+        # 1.49 (U3): a status flowchart popped out over the dashboard beside the docked console, in a stack of two
+        # (the impact graph behind it). (U5, U6): the Inbox grouped by lane, its outline strip on top.
+        def popout(pg):
+            item(pg, "OPS-3")
+            for title, key in (("Impact graph", "impact:OPS-3"), ("Status flowchart", "flow:OPS-3")):
+                pg.locator(".ck-panel summary", has_text=title).first.click()
+                pg.wait_for_timeout(400)
+                pg.locator(f".ck-panel .ck-pop-btn[data-pop='{key}']").first.click()
+                pg.wait_for_timeout(600)
+            pg.wait_for_timeout(3500)   # the diagram draws in its frame
+            pg.screenshot(path=str(OUT / "feature-popout.png"))
+        try:
+            pg = page_for("dark", 1440, 900)
+            popout(pg)
+            pg.context.close()
+            print("wrote feature-popout")
+        except Exception as e:
+            problems.append(f"feature-popout: {str(e).splitlines()[0]}")
+
+        def inbox_groups(pg):
+            pg.evaluate("ConsoleKit.openTab('inbox')")
+            pg.wait_for_timeout(1200)
+            pg.locator(".ck-panel .ck-groups-wrap").first.evaluate(
+                "w => { const b = w.closest('.ck-body');"
+                " b.scrollTop += w.getBoundingClientRect().top - b.getBoundingClientRect().top - 12; }")
+            pg.wait_for_timeout(600)
+            panel(pg, "feature-inbox-groups")
+        shot("feature-inbox-groups", inbox_groups)
+
         def shortcuts(pg):
             pg.locator("body").click(position={"x": 400, "y": 600})
             pg.keyboard.press("?")
