@@ -32,6 +32,16 @@ VALUES=$(python3 "$SRC/onboard.py" show --project "$PROJECT") || exit 2
 CONSOLE_NAME=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_NAME=//p')
 CONSOLE_TUNNEL=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_TUNNEL=//p')
 CONSOLE_PORT=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_PORT=//p')
+# 1.47.0 (L7): a console that signs in by link (CONSOLE_AUTH=link) gets console-link.service.in and no tunnel
+# unit; its --listen and --origin come from `onboard.py show`, validated there like every value above.
+CONSOLE_AUTH=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_AUTH=//p')
+CONSOLE_LISTEN=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_LISTEN=//p')
+CONSOLE_ORIGIN=$(printf '%s\n' "$VALUES" | sed -n 's/^CONSOLE_ORIGIN=//p')
+LINK_ARGS=""
+if [ "$CONSOLE_AUTH" = link ]; then
+  [ -n "$CONSOLE_LISTEN" ] && LINK_ARGS=" --listen $CONSOLE_LISTEN"
+  LINK_ARGS="$LINK_ARGS --origin $CONSOLE_ORIGIN"
+fi
 
 SHARE="${XDG_DATA_HOME:-$HOME/.local/share}/overture"
 KIT="$SHARE/kit"
@@ -81,11 +91,15 @@ PYTHON="$VENV/bin/python"
 
 mkdir -p "$UNITS"
 install -d -m 700 "$STATE"
-for unit in console console-tunnel; do
+UNIT_PAIRS="console:console console-tunnel:console-tunnel"
+[ "$CONSOLE_AUTH" = link ] && UNIT_PAIRS="console:console-link"
+for pair in $UNIT_PAIRS; do
+  unit=${pair%%:*}; template=${pair#*:}
   out="$UNITS/$CONSOLE_NAME-$unit.service"
   sed -e "s|@PROJECT@|$PROJECT|g" -e "s|@KIT@|$KIT|g" -e "s|@PYTHON@|$PYTHON|g" \
       -e "s|@CLOUDFLARED@|$CLOUDFLARED|g" -e "s|@NAME@|$CONSOLE_NAME|g" -e "s|@TUNNEL@|$CONSOLE_TUNNEL|g" \
-      "$KIT/deploy/$unit.service.in" > "$out"
+      -e "s|@LINK_ARGS@|$LINK_ARGS|g" \
+      "$KIT/deploy/$template.service.in" > "$out"
   echo "unit:  $out"
 done
 systemctl --user daemon-reload
@@ -97,6 +111,14 @@ if [ "$START" = 1 ]; then
   systemctl --user restart "$CONSOLE_NAME-console.service"
   sleep 1
   systemctl --user --no-pager status "$CONSOLE_NAME-console.service" | head -5 || true
-  printf 'check: loopback without a token answers %s (want 403)\n' \
-    "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CONSOLE_PORT/api/view" || echo none)"
+  # 1.47.0: with --listen the door is on 127.0.0.1 too (same port), so loopback is still the check.
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CONSOLE_PORT/api/view")" || code=none
+  if [ "$code" != 403 ] && [ -n "$CONSOLE_LISTEN" ]; then
+    # 1.47 (C5): the server binds nothing until $CONSOLE_LISTEN is up (L16, up to 2 minutes), so "none" here
+    # is not yet a fault.
+    printf 'check: no answer on loopback yet (%s): the server may still be waiting for %s on ZeroTier or Tailscale (up to 2 minutes); `systemctl --user status %s-console.service` shows when it serves (want 403 then)\n' \
+      "$code" "$CONSOLE_LISTEN" "$CONSOLE_NAME"
+  else
+    printf 'check: loopback without a token answers %s (want 403)\n' "$code"
+  fi
 fi

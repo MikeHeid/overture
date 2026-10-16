@@ -130,6 +130,8 @@ def _read(state: Path) -> tuple[dict[str, dict], list[str]] | None:
         return None
     except OSError as e:
         raise RolesError(f"{p}: not readable ({e.strerror or e})") from None
+    except UnicodeDecodeError as e:   # 1.47.0 (L18): a RolesError (a clean 403/503), never a dropped connection
+        raise RolesError(f"{p}: not UTF-8 ({e.reason} at byte {e.start})") from None
     try:
         doc = json.loads(text)
     except ValueError as e:

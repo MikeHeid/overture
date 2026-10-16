@@ -1657,6 +1657,9 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-item-chart-hint { font-weight: 400; }
 .ck-item-chart-slot { padding: 8px 10px 12px; }
 .ck-item-chart-frame { height: 440px; min-height: 240px; }
+/* 1.47 (U9): the impact graph's frame takes the height its nodes ask for (the ck-chart-size message);
+   past this maximum its slot scrolls rather than cutting the lower nodes off. */
+.ck-impact-slot { max-height: min(720px, 75vh); overflow-y: auto; }
 
 /* 0.8.19: Project map in the Inbox tab — reuses the item-chart look, taller frame. */
 .ck-project-map { margin: 10px 16px 14px; border: 1px solid var(--c-border);
@@ -1779,8 +1782,12 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 }
 .ck-delegate-icon { color: var(--c-accent); }
 .ck-delegate-hint { font-weight: 400; }
-.ck-delegate-body { padding: 8px 12px 12px; display: grid; gap: 8px; }
-.ck-del-roundrow[hidden] { display: none; }
+/* One column no wider than the bar (U4): an `auto` track grew to the longest playbook's <option>, and the
+   radio rows ran past the right edge with it. A fieldset's min-content floor and a select's are let go too. */
+.ck-delegate-body { padding: 8px 12px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.ck-delegate-body .ck-roster { min-width: 0; }
+.ck-delegate-body .ck-select { max-width: 100%; min-width: 0; }
+.ck-del-roundrow[hidden], .ck-del-itemrow[hidden] { display: none; }
 .ck-delegate-status {
   margin-left: 10px; font-size: 12px;
   color: var(--c-blocked);
@@ -1956,7 +1963,10 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 }
 .ck-priority-row {
   display: flex; align-items: center; gap: 2px; padding: 4px 12px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Clip sideways only (U4): `overflow: hidden` also clipped the ⌛ snooze
+     menu, which hangs below the row, behind the next row. `clip` on one axis
+     leaves the other `visible`, which `hidden` cannot. */
+  overflow-x: clip; overflow-y: visible; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer; font-size: 13px;
   border-left: 3px solid transparent;
 }
@@ -2907,8 +2917,11 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-shift {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  display: flex; align-items: center; justify-content: center;
+  /* A column, so the head, body and actions stack into one card (U4): as a
+     row they sat side by side as three separate boxes. */
+  display: flex; flex-direction: column; align-items: center; justify-content: safe center;
   padding: 32px;
+  overflow-y: auto;
   z-index: 2147483100;
 }
 .ck-shift > .ck-shift-head,
@@ -3248,8 +3261,9 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   font-size: 12px;
   line-height: 1.5;
   color: var(--c-fg);
-  overflow-x: auto;
-  white-space: pre;
+  /* Wrap (U4): as one long `pre` line the command ran under the column's edge with no visible scrollbar. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .ck-portfolio-upgrade-copy {
   position: absolute;

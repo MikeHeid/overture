@@ -4290,7 +4290,11 @@ class OneServerTests(_OneServer, unittest.TestCase):
         for path in self.AGENT_GETS:
             self.assertNotEqual(self.agent("GET", f"/p/alpha{path}")[0], 403, path)
         for path in self.AGENT_POSTS:
-            self.assertNotEqual(self.agent("POST", f"/p/alpha{path}", {})[0], 403, path)
+            got = self.agent("POST", f"/p/alpha{path}", {})
+            if path == "/playbook":   # 1.47 (U7): refuses every session by design, with its own 403, not the seam's
+                self.assertNotEqual(got, (403, {"error": "forbidden"}), path)
+            else:
+                self.assertNotEqual(got[0], 403, path)
         self.assertEqual(self.agent("GET", "/p/beta/view")[0], 503)
         self.assertEqual(self.agent("GET", "/p/nobody/view"), (403, {"error": "forbidden"}))
 
@@ -5509,9 +5513,12 @@ class ProjectTokenTests(_RawAgent, _OneServer, unittest.TestCase):
             self.assertEqual(resp, first, f"not the one refusal: {label}")  # status, headers and body bytes
         self.assertEqual(state_files(b_state), before)                    # B's files untouched by any refusal
         for method, path in routes:                                       # B's token serves every B route
-            code = self.raw(method, f"/p/beta{path}", {} if method == "POST" else None,
-                            self.bearer(self.tokens["beta"]))[0]
-            self.assertNotEqual(code, 403, path)
+            code, _h, body = self.raw(method, f"/p/beta{path}", {} if method == "POST" else None,
+                                      self.bearer(self.tokens["beta"]))
+            if path == "/playbook":   # 1.47 (U7): refuses every session by design, by its own 403, not the gate's
+                self.assertNotEqual(json.loads(body), MS.FORBIDDEN, path)
+            else:
+                self.assertNotEqual(code, 403, path)
         self.assertEqual(self.raw("GET", "/p/beta/view", None, self.bearer(self.tokens["beta"]))[0], 200)
 
     def test_ac41_token_isolation_and_its_two_negative_controls(self):
@@ -11053,6 +11060,614 @@ class OneServerLinkTests(_OneServer, unittest.TestCase):
         value = self.sign_in("beta", "owner@example.com")
         code, _, text = self.door("beta", "GET", "/api/view", headers={"Cookie": f"overture-device={value}"})
         self.assertEqual((code, json.loads(text)), (503, MS.FAULT_BODY))
+
+
+# -- 1.47.0: --listen (spec147; contract 3 as amended by the owner: loopback AND the listen address) ----------------
+LISTEN = "127.0.0.2"   # a loopback alias, put on a fake ZeroTier interface through netif's test hook only
+FAKE_IFACES = [("lo", "127.0.0.1", 8, True), ("ztfake0", LISTEN, 32, True)]
+
+
+def fake_listen_net(test: unittest.TestCase) -> None:
+    from overture import netif as NI
+    NI.set_fake(lambda: list(FAKE_IFACES), loopback_ok=True)
+    test.addCleanup(NI.set_fake, None)
+
+
+def free_port() -> int:
+    """A port free on both 127.0.0.1 and LISTEN, for a console whose origin names it."""
+    for _ in range(50):
+        with socket.socket() as a:
+            a.bind(("127.0.0.1", 0))
+            port = a.getsockname()[1]
+            try:
+                with socket.socket() as b:
+                    b.bind((LISTEN, port))
+            except OSError:
+                continue
+        return port
+    raise AssertionError("no port free on both addresses")
+
+
+class ListenTests(unittest.TestCase):
+    """1.47.0: the single-project server with --listen: two sockets on one port, an origin and a Host rule per
+    socket (spec147 contract 1-6, 10; the owner's amendment of contract 3)."""
+
+    UA = SigninLinkTests.UA
+    OWNER = "owner@example.com"
+
+    def setUp(self):
+        from unittest import mock
+        from overture import devices as DV
+        from overture import roles as RO
+        self.DV, self.RO = DV, RO
+        fake_listen_net(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(Path(self.tmp.name) / "cfg")})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def serve(self, origin=None):
+        d = Path(self.tmp.name)
+        self.port = free_port()
+        self.origin = origin or f"http://{LISTEN}:{self.port}"
+        self.cfg = SV.Config(root=d, page=None, state=d / "state", adapter=d / "unused.py", team_domain="", aud="",
+                             hostname="", port=self.port, project="p", auth="link", origin=self.origin, listen=LISTEN)
+        self.console = SV.Console(self.cfg, FakeAdapter())
+        self.console.seed()
+        self.owner = SV.owner_server(self.console, SV.link_verifier(self.cfg), self.port)
+        threading.Thread(target=self.owner.serve_forever, daemon=True).start()
+        self.addCleanup(self.owner.server_close)
+        self.addCleanup(self.owner.shutdown)
+
+    def raw(self, host, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection(host, self.port, timeout=10)
+        conn.request(method, path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read().decode("utf-8", "replace")
+        conn.close()
+        return r.status, r.headers, data
+
+    def post_signin(self, host, origin):
+        tok = self.DV.invite(self.cfg.devices_file, self.OWNER, self.cfg.state)[0]
+        body = f"t={tok}".encode()
+        return self.raw(host, "POST", "/signin", body, {
+            "Origin": origin, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body)),
+            "User-Agent": self.UA})
+
+    def sign_in(self, host, origin):
+        code, h, page = self.post_signin(host, origin)
+        self.assertEqual(code, 303, page)
+        return h["Set-Cookie"]
+
+    def write(self, host, cookie_value, origin):
+        body = json.dumps({"item": "LANE.1", "text": "hi", "nonce": f"lst{secrets_hex()}"}).encode()
+        return self.raw(host, "POST", "/api/message", body, {
+            "Cookie": f"overture-device={cookie_value}", "Content-Type": "application/json", "Origin": origin,
+            "X-Overture-CSRF": self.console._csrf, "Content-Length": str(len(body))})[0]
+
+    def test_the_door_is_two_sockets_on_one_port_and_never_the_wildcard(self):
+        # Catches (contract 3, amended): --listen binding 0.0.0.0 (every interface), loopback dropped (every
+        # local probe and `tailscale serve` broken), the two sockets on different ports, and an address beside
+        # the two answering.
+        self.serve()
+        self.assertEqual(sorted(s.server_address for s in self.owner.servers),
+                         sorted([("127.0.0.1", self.port), (LISTEN, self.port)]))
+        for host in ("127.0.0.1", LISTEN):
+            self.assertEqual(self.raw(host, "GET", "/api/view")[0], 403, host)
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.3", self.port), timeout=2).close()
+
+    def test_each_socket_takes_only_its_own_origin_and_never_the_others(self):
+        # Catches (contract 3, 4, amended): the expected Origin taken from the Host header (or one origin for
+        # both sockets), so a page on one address could sign in or write through the other; localhost refused on
+        # loopback (1.46 took it); and a write or a sign-in let through with the other socket's Origin.
+        self.serve()
+        lo, ov = f"http://127.0.0.1:{self.port}", self.origin
+        for host, wrong in (("127.0.0.1", ov), (LISTEN, lo), (LISTEN, f"http://localhost:{self.port}")):
+            with self.subTest(host=host, origin=wrong):
+                self.assertEqual(self.post_signin(host, wrong)[0], 403)
+        self.assertNotIn("Secure", self.sign_in(LISTEN, ov))
+        self.assertNotIn("Secure", self.sign_in("127.0.0.1", f"http://localhost:{self.port}"))
+        on_listen = re.match(r"overture-device=([^;]+);", self.sign_in(LISTEN, ov)).group(1)
+        on_lo = re.match(r"overture-device=([^;]+);", self.sign_in("127.0.0.1", lo)).group(1)
+        self.assertEqual(self.write(LISTEN, on_listen, lo), 403)
+        self.assertEqual(self.write("127.0.0.1", on_lo, ov), 403)
+        self.assertEqual(self.write(LISTEN, on_listen, ov), 200)
+        self.assertEqual(self.write("127.0.0.1", on_lo, lo), 200)
+
+    def test_a_foreign_host_on_the_listen_socket_meets_the_gates_403_and_loopback_is_1_46s(self):
+        # Catches (contract 5): DNS rebinding (a page that points its own name at the listen address reads the
+        # console with the browser's cookie, or spends a link through /signin); two Host headers read as one;
+        # the bare address or address:port refused; and the loopback socket changed (1.46 never read Host).
+        self.serve()
+        value = re.match(r"overture-device=([^;]+);", self.sign_in(LISTEN, self.origin)).group(1)
+        cookie = {"Cookie": f"overture-device={value}"}
+        for host in ("evil.example", f"evil.example:{self.port}", "127.0.0.1", f"{LISTEN}:1"):
+            for method, path in (("GET", "/api/view"), ("GET", "/"), ("GET", "/signin?t=x"), ("POST", "/signin"),
+                                 ("OPTIONS", "/")):
+                with self.subTest(host=host, path=path, method=method):
+                    code, h, text = self.raw(LISTEN, method, path, b"", {"Host": host, **cookie})
+                    self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+        for host in (LISTEN, f"{LISTEN}:{self.port}"):
+            self.assertEqual(self.raw(LISTEN, "GET", "/api/view", headers={"Host": host, **cookie})[0], 200, host)
+        conn = http.client.HTTPConnection(LISTEN, self.port, timeout=10)
+        conn.putrequest("GET", "/api/view", skip_host=True)
+        for v in (LISTEN, "evil.example"):
+            conn.putheader("Host", v)
+        conn.putheader("Cookie", cookie["Cookie"])
+        conn.endheaders()
+        self.assertEqual(conn.getresponse().status, 403)
+        conn.close()
+        code, h, page = self.raw("127.0.0.1", "GET", "/", headers={"Host": "evil.example"})
+        self.assertEqual(code, 403)
+        self.assertTrue(h["Content-Type"].startswith("text/html"))   # 1.46's not-signed-in page, Host unread
+
+    def test_an_https_origin_with_listen_is_refused_and_the_origin_sets_stay_disjoint(self):
+        # Catches (1.47, S1): a door bound with --listen and an https origin (`tailscale serve`, which forwards to
+        # 127.0.0.1 and so gets 403 on every write and sign-in), even from a Config built in code; and the fix
+        # done the wrong way, by letting the loopback socket take the https origin too.
+        with self.assertRaisesRegex(SystemExit, "`tailscale serve` forwards to 127.0.0.1"):
+            self.serve("https://box.tailnet.ts.net")
+        self.serve()
+        self.assertEqual(SV.door_origins(self.origin, LISTEN, self.port, on_listen=False),
+                         (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}"))
+        self.assertEqual(SV.door_origins(self.origin, LISTEN, self.port, on_listen=True), (self.origin,))
+        self.assertEqual(self.post_signin("127.0.0.1", "https://box.tailnet.ts.net")[0], 403)
+
+    def test_a_door_socket_that_dies_stops_the_other_and_exits_non_zero(self):
+        # Catches (C7, S6): one of a --listen door's two loops dying (either one) while the other keeps serving, a
+        # door half up on loopback only or on the overlay only; no reason given; and the control, a shutdown the
+        # owner asked for, mistaken for a failure.
+        from http.server import BaseHTTPRequestHandler
+        for dies in (0, 1):
+            with self.subTest(dies=("LISTEN", "loopback")[dies]):
+                servers = SV.bind_doors(BaseHTTPRequestHandler, LISTEN, free_port())
+                self.addCleanup(lambda ss=servers: [s.server_close() for s in ss])
+                heard = []
+
+                def boom(_poll=0.5):
+                    raise OSError("select() failed")
+                servers[dies].serve_forever = boom
+                doors = SV.OwnerDoors(servers, on_fail=heard.append)
+                # Run in a thread with a bounded join (Catches: sv-watcher-doesnt-stop-other and
+                # sv-watcher-never-fails, which leave the other loop serving, so serve_forever never returns;
+                # that used to hang this test until the harness's timeout instead of failing it).
+                ended = []
+
+                def watch(d=doors, out=ended):
+                    try:
+                        d.serve_forever(0.05)   # returns only once the other loop has ended too
+                        out.append(None)
+                    except BaseException as e:   # noqa: BLE001 - asserted below
+                        out.append(e)
+                t = threading.Thread(target=watch, daemon=True)
+                t.start()
+                t.join(10)
+                if t.is_alive():
+                    doors.shutdown()   # free the loop left serving, then fail by name
+                    self.fail("the other door socket was never stopped: serve_forever did not return in 10 s")
+                self.assertIsInstance(ended[0], SystemExit, ended)
+                self.assertRegex(str(ended[0]), "stopped serving .*select\\(\\) failed.*the other was "
+                                                "stopped with it")
+                self.assertEqual(len(heard), 1)
+        servers = SV.bind_doors(BaseHTTPRequestHandler, LISTEN, free_port())
+        self.addCleanup(lambda: [s.server_close() for s in servers])
+        heard, out = [], []
+        doors = SV.OwnerDoors(servers, on_fail=heard.append)
+        t = threading.Thread(target=lambda: out.append(doors.serve_forever(0.05)))
+        t.start()
+        time.sleep(0.2)
+        doors.shutdown()
+        t.join(10)
+        self.assertEqual((t.is_alive(), out, heard), (False, [None], []))   # asked for: no failure, no exit
+
+    def test_the_one_server_exits_1_naming_the_door_whose_socket_died(self):
+        # Catches (C7, S6) for the one server: main waiting forever on an Event nothing sets, so a project's door
+        # half down went unseen, or exiting 0 (the service would not restart it) without saying which door.
+        from overture import multiserver as MS
+        failed, why, stopped = threading.Event(), [], []
+
+        class Fake:
+            ms = type("M", (), {"auth": "link", "listen": LISTEN, "projects": {}})()
+            socket = Path(self.tmp.name) / "s.sock"
+
+            def ports(self):
+                return {}
+
+            def shutdown(self):
+                stopped.append(True)
+        r = Fake()
+        r.failed, r.why = failed, why
+        threading.Timer(0.2, lambda: (why.append("alpha: console: an owner door socket stopped serving (x)"),
+                                      failed.set())).start()
+        err, rc = io.StringIO(), []
+        # A bounded join, not a bare call: a main that never wakes on `failed` fails here in 10 s, never hangs.
+        with mock.patch.object(MS, "start", return_value=r), contextlib.redirect_stderr(err):
+            t = threading.Thread(target=lambda: rc.append(MS.main(["--all"])), daemon=True)
+            t.start()
+            t.join(10)
+        self.assertFalse(t.is_alive(), "main never returned after a door's socket died")
+        self.assertEqual(rc, [1])
+        self.assertEqual(stopped, [True])
+        self.assertIn("overture: alpha: console: an owner door socket stopped serving (x)", err.getvalue())
+        self.assertIn("every door was stopped", err.getvalue())
+
+    def test_owner_server_never_binds_a_listen_address_contract_1_refuses(self):
+        # Catches (contract 1, 2): a Config built in code binding --listen with Access, on a non-overlay interface,
+        # or on an address no interface holds; and a loopback socket left bound when LISTEN cannot be (or the
+        # LISTEN socket left when loopback's port is taken: a half-up door).
+        d = Path(self.tmp.name)
+        base = dict(root=d, page=None, state=d / "s", adapter=d / "u.py", team_domain="", aud="", hostname="",
+                    port=0, project="p")
+        from overture import netif as NI
+        NI.set_fake(lambda: [*FAKE_IFACES, ("eth9", "127.0.0.3", 32, True)], loopback_ok=True)
+        for kw, why in ((dict(auth="cloudflare", listen=LISTEN), "--auth cloudflare"),
+                        (dict(auth="link", origin="http://127.0.0.3:1", listen="127.0.0.3"), "it is on eth9"),
+                        (dict(auth="link", origin="http://127.0.0.4:1", listen="127.0.0.4"), "holds it now")):
+            cfg = SV.Config(**base, **kw)
+            with self.subTest(why=why), self.assertRaisesRegex(SystemExit, why):
+                SV.owner_server(SV.Console(cfg, FakeAdapter()), lambda t: {}, 0)
+        port = free_port()
+        with socket.socket() as hold:
+            hold.bind(("127.0.0.1", port))
+            hold.listen()
+            cfg = SV.Config(**base, auth="link", origin=f"http://{LISTEN}:{port}", listen=LISTEN)
+            with self.assertRaises(OSError):
+                SV.owner_server(SV.Console(cfg, FakeAdapter()), lambda t: {}, port)
+            with socket.socket() as again:
+                again.bind((LISTEN, port))   # the LISTEN socket was closed again, not left half up
+
+    def test_when_loopback_cannot_bind_the_listen_socket_is_closed_by_bind_doors(self):
+        # Catches (sv-no-close-listen-on-loopback-fail): bind_doors leaving the LISTEN socket open when loopback's
+        # port is taken, a half-up door that only the garbage collector would close. Every server it makes is
+        # kept alive here, so the socket is closed only if bind_doors closes it itself.
+        from http.server import BaseHTTPRequestHandler
+        made = []
+        real = SV.ThreadingHTTPServer
+
+        class Kept(real):
+            def __init__(self_, *a, **k):
+                made.append(self_)
+                real.__init__(self_, *a, **k)
+        port = free_port()
+        with socket.socket() as hold, mock.patch.object(SV, "ThreadingHTTPServer", Kept):
+            hold.bind(("127.0.0.1", port))
+            hold.listen()
+            with self.assertRaises(OSError):
+                SV.bind_doors(BaseHTTPRequestHandler, LISTEN, port)
+            self.assertEqual(len(made), 2, made)
+            self.assertEqual(made[0].server_address, (LISTEN, port))
+            self.assertEqual([m.socket.fileno() for m in made], [-1, -1], "a door socket was left open")
+            with socket.socket() as again:
+                again.bind((LISTEN, port))   # nothing stays bound on the LISTEN address
+
+    def test_the_server_main_takes_listen_in_link_mode_only_and_defaults_the_origin(self):
+        # Catches (contract 1, 2, 4, 6): --listen accepted with Access, 0.0.0.0 / a public / an IPv6 address
+        # taken, the origin default not http://LISTEN:PORT, a loopback --origin taken as the overlay's, a wait
+        # that fails exiting 0 (or with a traceback) instead of 1 by name, and off Linux not refused by name.
+        import contextlib
+        import io
+        from unittest import mock
+        from overture import netif as NI
+        got = []
+        base = ["--root", self.tmp.name, "--state", str(Path(self.tmp.name) / "st")]
+        cf = ["--team-domain", TEAM, "--aud", AUD, "--hostname", HOSTNAME]
+        with mock.patch.object(SV, "serve", lambda cfg: got.append(cfg)):
+            self.assertEqual(SV.main(base + ["--auth", "link", "--listen", LISTEN, "--port", "4877"]), 0)
+            # 1.47 (S1): --listen with an https origin is refused by name (a proxy on 127.0.0.1 would get 403)
+            err = io.StringIO()
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(err):
+                SV.main(base + ["--auth", "link", "--listen", LISTEN, "--origin", "https://box.tailnet.ts.net"])
+            self.assertIn("`tailscale serve` forwards to 127.0.0.1", err.getvalue())
+            for bad in (cf + ["--listen", LISTEN], ["--auth", "link", "--listen", "0.0.0.0"],
+                        ["--auth", "link", "--listen", "8.8.8.8"], ["--auth", "link", "--listen", "::1"],
+                        ["--auth", "link", "--listen", LISTEN, "--origin", "http://127.0.0.1:4793"],
+                        ["--auth", "link", "--listen", LISTEN, "--origin", "http://10.1.1.1:4793"]):
+                with self.subTest(bad=bad), self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                    SV.main(base + bad)
+            err = io.StringIO()
+            with mock.patch.object(NI, "wait", side_effect=NI.ListenError("--listen x: gone")), \
+                    contextlib.redirect_stderr(err):
+                self.assertEqual(SV.main(base + ["--auth", "link", "--listen", LISTEN]), 1)
+            self.assertIn("overture: --listen x: gone", err.getvalue())
+            with mock.patch.object(sys, "platform", "darwin"), self.assertRaises(SystemExit), \
+                    contextlib.redirect_stderr(io.StringIO()) as e:
+                SV.main(base + ["--auth", "link", "--listen", LISTEN])
+            self.assertIn("comes with 1.48", e.getvalue())
+            self.assertEqual(SV.main(base + ["--auth", "link"]), 0)
+        self.assertEqual([(c.listen, c.console_origin) for c in got],
+                         [(LISTEN, f"http://{LISTEN}:4877"), ("", "http://127.0.0.1:4793")])
+
+    def test_the_startup_line_names_both_addresses_and_without_listen_is_1_46s(self):
+        # Catches: the "owner door" line naming 127.0.0.1 only for a console that is on the overlay too (or the
+        # overlay only), and the line without --listen changed.
+        import io
+        from unittest import mock
+        lines = []
+        for listen in (LISTEN, ""):
+            d = Path(self.tmp.name) / f"s{bool(listen)}"
+            port = free_port()
+            cfg = SV.Config(root=d, page=None, state=d, adapter=d / "u.py", team_domain="", aud="", hostname="",
+                            port=port, auth="link", origin=f"http://{listen or '127.0.0.1'}:{port}", listen=listen)
+            d.mkdir()
+            err = io.StringIO()
+
+            def stop(self_, *a):
+                raise KeyboardInterrupt
+            # serve() closes the git seam for the process (Q23): restored after, or later git tests break.
+            from overture import gitseam as G
+            with mock.patch("sys.stderr", err), mock.patch.object(SV.OwnerDoors, "serve_forever", stop), \
+                    mock.patch.object(SV.ThreadingHTTPServer, "serve_forever", stop), \
+                    mock.patch.object(G, "_OPEN", G._OPEN):
+                with self.assertRaises(KeyboardInterrupt):
+                    SV.serve(cfg)
+            lines.append(next(x for x in err.getvalue().splitlines() if "owner door" in x))
+        self.assertRegex(lines[0], rf"^console: owner door http://127\.0\.0\.1:(\d+) and http://{re.escape(LISTEN)}:\1 "
+                                   r"\(--listen\) through sign-in links")
+        self.assertRegex(lines[1], r"^console: owner door http://127\.0\.0\.1:\d+ through sign-in links")
+
+    def test_a_percent_encoded_invite_is_cut_from_the_log_however_it_is_spelled(self):
+        # Catches (L18 a): an `ovi_` token reaching the log percent-encoded in any character (%6Fvi_, ovi%5F,
+        # lowercase hex) or encoded twice (%256F), where the literal rule and the t= rule both miss it, and a
+        # line with no token changed by the rule.
+        import io
+        from unittest import mock
+        self.serve()
+        tok = self.DV.invite(self.cfg.devices_file, self.OWNER, self.cfg.state)[0]
+        rest = tok[4:]
+        spelled = [f"%6Fvi_{rest}", f"ovi%5F{rest}", f"%6f%76%69%5f{rest}", f"%256Fvi%255F{rest}",
+                   "ovi_" + "".join(f"%{ord(c):02X}" for c in rest[:10]) + rest[10:]]
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            for s in spelled:
+                self.raw("127.0.0.1", "GET", f"/api/view?a={s}")
+                self.raw("127.0.0.1", "GET", f"/x/{s}/y")
+            self.raw("127.0.0.1", "GET", "/api/view?q=%41b%20c")
+        log = err.getvalue()
+        self.assertNotIn(rest[12:30], log)
+        self.assertEqual(log.count("ovi_…"), 2 * len(spelled), log)
+        self.assertIn("/api/view?q=%41b%20c", log)
+
+    def test_a_roles_file_that_is_not_utf8_refuses_cleanly(self):
+        # Catches (L18 b): invalid UTF-8 in roles.json raising out of the gate's verifier, so the connection is
+        # dropped with no answer, instead of the gate's 403 (and People's 503).
+        self.serve()
+        value = re.match(r"overture-device=([^;]+);", self.sign_in("127.0.0.1", f"http://127.0.0.1:{self.port}"
+                                                                   )).group(1)
+        (self.cfg.state / self.RO.FILE).write_bytes(b'{"roles": {"\xff@example.com": {"role": "owner"}}}')
+        code, _, text = self.raw("127.0.0.1", "GET", "/api/view", headers={"Cookie": f"overture-device={value}"})
+        self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+
+
+def secrets_hex() -> str:
+    import secrets
+    return secrets.token_hex(6)
+
+
+class OneServerListenTests(_OneServer, unittest.TestCase):
+    """1.47.0 (contract 9, amended contract 3): the one server with server.json's "listen": every project's
+    port on 127.0.0.1 AND the listen address, an origin and a Host rule per socket."""
+
+    FAKE = ("from overture import netif as NI\n"
+            f"NI.set_fake(lambda: {FAKE_IFACES!r} + [('br-x', '127.0.0.9', 8, False)], loopback_ok=True)\n")
+
+    def setUp(self):
+        _OneServer.setUp(self)
+        from overture import devices as DV
+        self.DV = DV
+        fake_listen_net(self)
+        self.SF.set_auth("link", path=self.sfile)
+        self.SF.set_listen(LISTEN, path=self.sfile)
+        self.devices = self.sfile.parent / DV.FILE
+
+    def listen_spawn(self):
+        return self.spawn(ONE_SERVER.replace("verify_for=lambda aud:", "verify_for=None if True else lambda aud:")
+                          .replace("r = MS.start(", self.FAKE + "r = MS.start("))
+
+    def door(self, name, host, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection(host, self.info["ports"][name], timeout=30)
+        conn.request(method, path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read().decode("utf-8", "replace")
+        conn.close()
+        return r.status, r.headers, data
+
+    def post_signin(self, name, host, origin):
+        tok = self.DV.invite(self.devices, "owner@example.com", self.p[name]["state"])[0]
+        body = f"t={tok}".encode()
+        return self.door(name, host, "POST", "/signin", body, {
+            "Origin": origin, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+
+    def test_every_project_is_on_both_addresses_with_an_origin_and_a_host_rule_per_socket(self):
+        # Catches (contract 3 amended, 5, 9): a project port bound on one address only (or 0.0.0.0), the
+        # overlay socket's origin not http://LISTEN:PORT (the entry's port) by default, the loopback socket
+        # taking the overlay's origin (or the reverse), a foreign Host answered on the overlay, and the L17
+        # warning and the startup lines missing from the log.
+        self.listen_spawn()
+        for i, name in enumerate(sorted(self.p)):
+            with self.subTest(name=name):
+                port = self.info["ports"][name]
+                ov, lo = f"http://{LISTEN}:{4901 + i}", f"http://127.0.0.1:{port}"
+                for host in ("127.0.0.1", LISTEN):
+                    self.assertEqual(self.door(name, host, "GET", "/api/view")[0], 403)
+                with self.assertRaises(OSError):
+                    socket.create_connection(("127.0.0.3", port), timeout=2).close()
+                self.assertEqual(self.post_signin(name, LISTEN, lo)[0], 403)
+                self.assertEqual(self.post_signin(name, "127.0.0.1", ov)[0], 403)
+                code, h, _ = self.post_signin(name, LISTEN, ov)
+                self.assertEqual(code, 303)
+                value = re.match(r"overture-device=([^;]+);", h["Set-Cookie"]).group(1)
+                cookie = {"Cookie": f"overture-device={value}"}
+                self.assertEqual(self.door(name, LISTEN, "GET", "/api/view", headers=cookie)[0], 200)
+                code, _, text = self.door(name, LISTEN, "GET", "/api/view", headers={**cookie, "Host": "evil.example"})
+                self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+                self.assertEqual(self.post_signin(name, "127.0.0.1", lo)[0], 303)
+        self.stop()
+        log = self.logs[-1]
+        self.assertIn("overture: warning: br-x (down) is on 127.0.0.0/8", log)
+        self.assertEqual(json.loads(self.sfile.read_text())["listen"], LISTEN)
+
+    def test_a_listen_address_no_interface_holds_exits_1_by_name_after_the_wait(self):
+        # Catches (L16): the one server binding without its listen address (or loopback only, half up), waiting
+        # silently or for ever, and exiting 0 or with a traceback; the multiserver main must say one line and 1.
+        script = (f"import sys\nsys.path.insert(0, {str(HERE / 'plugin' / 'kit')!r})\n" + self.FAKE +
+                  "NI.WAIT_SECONDS = 0\n"
+                  "import functools\nNI.wait = functools.partial(NI.wait, seconds=0.1, every=0.05)\n"
+                  "from overture import multiserver as MS\n"
+                  f"sys.exit(MS.main(['--all', '--server-file', {str(self.sfile)!r}, '--socket', {str(self.sock)!r}]))\n")
+        self.SF.set_listen("127.0.0.7", path=self.sfile)
+        r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "XDG_CONFIG_HOME": str(self.cfg)})
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(r.stderr.count("overture: waiting for 127.0.0.7 on a ZeroTier or Tailscale interface "
+                                        "(up to 2 minutes)"), 1, r.stderr)
+        self.assertIn("overture: --listen 127.0.0.7: no ZeroTier or Tailscale interface held it", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse(self.sock.exists())
+
+    def test_a_refused_projects_door_on_the_listen_socket_keeps_the_host_and_origin_rules(self):
+        # Catches (ms-fault-door-no-listen): a refused project's FaultOwnerHandler built without the server's
+        # listen, so on the LISTEN socket it read no Host (DNS rebinding reached it with the browser's cookie)
+        # and took loopback's origins (a sign-in from the overlay's own page refused, one naming loopback taken).
+        (self.p["beta"]["state"] / "store.jsonl").write_text('{"not": "a record"}\n')
+        info = self.listen_spawn()
+        self.assertIn("beta", info["refused"])
+        ov = f"http://{LISTEN}:{4901 + sorted(self.p).index('beta')}"
+        lo = f"http://127.0.0.1:{self.info['ports']['beta']}"
+        self.assertEqual(self.post_signin("beta", LISTEN, lo)[0], 403)
+        code, h, page = self.post_signin("beta", LISTEN, ov)
+        self.assertEqual(code, 303, page)
+        cookie = {"Cookie": "overture-device=" + re.match(r"overture-device=([^;]+);", h["Set-Cookie"]).group(1)}
+        code, _, text = self.door("beta", LISTEN, "GET", "/api/view", headers=cookie)
+        self.assertEqual((code, json.loads(text)), (503, MS.FAULT_BODY))
+        code, _, text = self.door("beta", LISTEN, "GET", "/api/view", headers={**cookie, "Host": "evil.example"})
+        self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+
+    def test_a_project_whose_loopback_port_is_taken_leaves_no_listen_socket_open(self):
+        # Catches (sv-no-close-listen-on-loopback-fail, in the one server): beta's LISTEN socket left open when its
+        # loopback port is taken. Every server made is kept alive in the server process, so only an explicit
+        # close frees it; the refusal must name the port, and alpha must still serve on both addresses.
+        alpha, beta = free_port(), free_port()
+        while beta == alpha:
+            beta = free_port()
+        keep = ("_made = []\n_Real = SV.ThreadingHTTPServer\n"
+                "class _Kept(_Real):\n"
+                "    def __init__(self, *a, **k):\n        _made.append(self)\n        _Real.__init__(self, *a, **k)\n"
+                "SV.ThreadingHTTPServer = _Kept\n")
+        script = (ONE_SERVER.replace("verify_for=lambda aud:", "verify_for=None if True else lambda aud:")
+                  .replace("r = MS.start(", self.FAKE + keep + "r = MS.start(")
+                  .replace("port_for=lambda h: 0", f"port_for=lambda h: {{'alpha': {alpha}, 'beta': {beta}}}[h.name]")
+                  .replace('"stores": len(r.ms.stores())}',
+                           f'"stores": len(r.ms.stores()), "open": [list(m.server_address) for m in _made '
+                           f'if m.socket.fileno() != -1 and m.server_address[1] == {beta}]}}'))
+        with socket.socket() as hold:
+            hold.bind(("127.0.0.1", beta))
+            hold.listen()
+            info = self.spawn(script)
+            self.assertEqual(list(info["refused"]), ["beta"])
+            self.assertIn("owner door cannot listen on port", info["refused"]["beta"])   # the entry's port, named
+            self.assertIn("in use", info["refused"]["beta"])
+            self.assertEqual(info["open"], [], "beta's LISTEN socket was left open")
+            with socket.socket() as again:
+                again.bind((LISTEN, beta))
+            for host in ("127.0.0.1", LISTEN):
+                self.assertEqual(self.door("alpha", host, "GET", "/api/view")[0], 403)
+
+    def test_a_door_that_dies_reaches_the_one_servers_failed_event(self):
+        # Catches (ms-no-door-failed-watch): start() building a project's OwnerDoors without on_fail, so a door
+        # whose socket died was never reported and main waited on `failed` for ever. Drives the hook start() wired.
+        hook = ("_doors = []\n_RealDoors = SV.OwnerDoors\n"
+                "class _Seen(_RealDoors):\n"
+                "    def __init__(self, *a, **k):\n        _RealDoors.__init__(self, *a, **k)\n"
+                "        _doors.append(self)\n"
+                "SV.OwnerDoors = _Seen\n")
+        script = (ONE_SERVER.replace("verify_for=lambda aud:", "verify_for=None if True else lambda aud:")
+                  .replace("r = MS.start(", self.FAKE + hook + "r = MS.start(")
+                  .replace('"stores": len(r.ms.stores())}',
+                           '"stores": len(r.ms.stores()), "wired": [d.on_fail is not None for d in _doors], '
+                           '"failed": (_doors[0].on_fail("x") if _doors[0].on_fail else None, r.failed.is_set(), '
+                           'r.why)[1:]}'))
+        info = self.spawn(script)
+        self.assertEqual(info["wired"], [True, True])
+        self.assertEqual(info["failed"][0], True)
+        self.assertEqual(len(info["failed"][1]), 1)
+        self.assertRegex(info["failed"][1][0], r"^(alpha|beta): x$")
+
+    def test_a_listen_changed_during_the_wait_is_checked_again_before_any_bind(self):
+        # Catches (ms-no-recheck-after-wait): start() binding server.json's listen as it reads it AFTER the L16 wait
+        # without asking listen_refusal again, so an address changed meanwhile to one on a disallowed interface
+        # (here a down bridge) was bound unchecked. The code intends a refusal: exit 1 by name, nothing bound.
+        script = (f"import sys, json\nsys.path.insert(0, {str(HERE / 'plugin' / 'kit')!r})\n" + self.FAKE +
+                  "_accept = NI.accept\n"
+                  "def _changed_meanwhile(addr, say):\n"
+                  "    got = _accept(addr, say)\n"
+                  f"    p = {str(self.sfile)!r}\n"
+                  "    d = json.load(open(p)); d['listen'] = '127.0.0.9'; open(p, 'w').write(json.dumps(d))\n"
+                  "    return got\n"
+                  "NI.accept = _changed_meanwhile\n"
+                  "from overture import multiserver as MS\n"
+                  f"sys.exit(MS.main(['--all', '--server-file', {str(self.sfile)!r}, '--socket', {str(self.sock)!r}]))\n")
+        try:
+            r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "XDG_CONFIG_HOME": str(self.cfg)})
+        except subprocess.TimeoutExpired:
+            self.fail("the changed listen address was bound and served instead of refused")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("127.0.0.9", r.stderr)
+        self.assertIn("br-x", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("serving on", r.stderr)
+        self.assertFalse(self.sock.exists())
+
+
+class PlaybookOwnerOnlyTests(_Live, unittest.TestCase):
+    """1.47 (U7, owner): a playbook started from a Claude session is refused plainly, before any step runs; the
+    owner's own run from the console is unchanged. (U4): a skipped step says why in words."""
+
+    def write_playbook(self, steps):
+        d = self.cfg.root / ".overture" / "playbooks"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "triage.json").write_text(json.dumps({"description": "triage", "steps": steps}))
+
+    def test_the_agent_door_refuses_a_playbook_by_name_and_runs_nothing(self):
+        # Catches: the agent door still running each step into a per-step refusal (200 with every step skipped,
+        # which a session reads as "ran"), a refusal that does not say where playbooks run, and any step written.
+        from overture import playbooks as PB
+        self.write_playbook([{"kind": "chat", "text": "heads-up"}, {"kind": "round", "item": "LANE.1"}])
+        before = len(self.console.store.records())
+        code, out = self.agent_post("/playbook", {"name": "triage", "nonce": "pbagent0001"})
+        self.assertEqual((code, out), (403, {"error": PB.OWNER_ONLY}))
+        self.assertIn("Playbooks tab", out["error"])
+        self.assertEqual(len(self.console.store.records()), before)
+        code, out = self.req("POST", "/api/playbook", {"name": "triage", "nonce": "pbowner0001"}, tok=token())
+        self.assertEqual(code, 200, out)   # the control: the owner's run from the console still runs both steps
+        self.assertEqual((len(out["records"]), out["skipped"]), (2, []))
+
+    def test_agent_py_playbook_says_why_exits_1_and_sends_nothing(self):
+        # Catches: `agent.py playbook` contacting the server at all (it sent each step into a refusal and printed
+        # an empty {records} with exit 0), and an exit code a script would read as success.
+        from overture import playbooks as PB
+        self.write_playbook([{"kind": "chat", "text": "heads-up"}])
+        before = len(self.console.store.records())
+        rc, out, err = self.agent_cli("playbook", "triage")
+        self.assertEqual((rc, out), (1, ""))
+        self.assertEqual(err.strip(), f"not run: triage: {PB.OWNER_ONLY}")
+        self.assertEqual(len(self.console.store.records()), before)
+
+    def test_a_skipped_step_says_why_in_words(self):
+        # Catches (U4): the raw "when:not(ok)" in the preview and in a run's result.
+        self.write_playbook([{"kind": "chat", "text": "only on a new register",
+                              "when": {"kind": "not", "of": {"kind": "item_exists", "item": "LANE.1"}}},
+                             {"kind": "round", "item": "LANE.1",
+                              "when": {"kind": "item_has_state", "item": "LANE.1", "state": "stale", "min": 2}}])
+        code, plan = self.req("GET", "/api/playbook-plan?name=triage", tok=token())
+        self.assertEqual(code, 200, plan)
+        self.assertEqual([s["reason"] for s in plan["steps"]], [
+            "skipped: it runs only when item LANE.1 is not in the item list",
+            "skipped: it runs only when LANE.1 has at least 2 stale questions (it has 0)"])
+        code, out = self.req("POST", "/api/playbook", {"name": "triage", "nonce": "pbowner0002"}, tok=token())
+        self.assertEqual(code, 200, out)
+        self.assertEqual([s["why"] for s in out["skipped"]], [s["reason"] for s in plan["steps"]])
 
 
 if __name__ == "__main__":

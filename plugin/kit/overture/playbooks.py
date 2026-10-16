@@ -51,6 +51,13 @@ _STATES = ("awaiting_you", "unlocked", "locked", "stale")
 _WHEN_KINDS = ("item_has_state", "item_exists", "project_has_state", "has_section", "not")
 _MAX_WHEN_DEPTH = 3
 
+# 1.47 (U7, owner): every step kind (round, visual, chat) writes an owner intent, which a Claude session may not
+# write (the 1.30.1 fix). So `agent.py playbook` and the agent door's /playbook refuse with this, before any step
+# runs, instead of running each step into a refusal.
+OWNER_ONLY = ("playbooks run from the console's Playbooks tab, not from a Claude session: every step (a round, "
+              "a visual, a chat) is sent as the owner, and a session may not write as the owner. Open the console, "
+              "choose the Playbooks tab, and press the playbook's Run now button.")
+
 
 class PlaybookError(ValueError):
     pass
@@ -222,33 +229,54 @@ def evaluate_when(when: dict | None, view: dict, items: dict) -> tuple[bool, str
     """
     if when is None:
         return (True, "")
+    # 1.47 (U4): the reason is a sentence the owner reads in the preview and the run's result: what the step
+    # waits for, said from the predicate itself. A `not` read "when:not(ok)" before.
     kind = when["kind"]
     if kind == "not":
-        inner_ok, inner_reason = evaluate_when(when["of"], view, items)
-        return (not inner_ok, f"not({inner_reason or 'ok'})")
+        inner_ok, _ = evaluate_when(when["of"], view, items)
+        return (not inner_ok, "" if not inner_ok else f"it runs only when {describe_when(when)}")
     if kind == "item_exists":
         ok = when["item"] in items
-        return (ok, "" if ok else f"item {when['item']!r} not in register")
+        return (ok, "" if ok else f"it runs only when {describe_when(when)}")
     if kind == "has_section":
         sections = ((view or {}).get("config") or {}).get("sections") or {}
         ok = when["name"] in sections
-        return (ok, "" if ok else f"section {when['name']!r} not configured")
+        return (ok, "" if ok else f"it runs only when {describe_when(when)}")
     questions = (view or {}).get("questions") or {}
     want_state = when["state"]
     want_min = when["min"]
     if kind == "item_has_state":
         want_item = when["item"]
         if want_item not in items:
-            return (False, f"item {want_item!r} not in register")
+            return (False, f"it runs only when {describe_when(when)}, and {want_item} is not in the item list")
         n = sum(1 for q in questions.values()
                 if (q.get("question") or {}).get("item") == want_item
                 and (q.get("state") or "unlocked") == want_state)
         ok = n >= want_min
-        return (ok, "" if ok else f"{want_item} has {n} {want_state}, need {want_min}")
+        return (ok, "" if ok else f"it runs only when {describe_when(when)} (it has {n})")
     # project_has_state
     n = sum(1 for q in questions.values() if (q.get("state") or "unlocked") == want_state)
     ok = n >= want_min
-    return (ok, "" if ok else f"project has {n} {want_state}, need {want_min}")
+    return (ok, "" if ok else f"it runs only when {describe_when(when)} (it has {n})")
+
+
+_STATE_WORDS = {"awaiting_you": "awaiting you", "unlocked": "unlocked", "locked": "locked", "stale": "stale"}
+
+
+def describe_when(when: dict, negate: bool = False) -> str:
+    """1.47 (U4): a `when` predicate in words, e.g. "API-1 has at least 2 stale questions". A `not` flips its
+    inner predicate's wording ("fewer than", "is not") rather than wrapping it in "not(…)"."""
+    kind = when["kind"]
+    if kind == "not":
+        return describe_when(when["of"], not negate)
+    if kind == "item_exists":
+        return f"item {when['item']} is {'not ' if negate else ''}in the item list"
+    if kind == "has_section":
+        return f"section {when['name']!r} is {'not ' if negate else ''}configured"
+    n, word = when["min"], _STATE_WORDS.get(when["state"], when["state"])
+    count = f"{'fewer than' if negate else 'at least'} {n} {word} question{'' if n == 1 else 's'}"
+    who = when["item"] if kind == "item_has_state" else "the project"
+    return f"{who} has {count}"
 
 
 def step_body(step: dict) -> dict:

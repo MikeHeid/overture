@@ -5,6 +5,9 @@
 Description=Overture console server (every project in server.json; loopback only, reached through Cloudflare Access)
 After=network-online.target
 # A server that cannot start (a missing dependency, a bad server.json) stops retrying instead of looping forever.
+# 1.47.0 (L16): with server.json's "listen", a start waits up to 120 s for ZeroTier/Tailscale, then exits 1; with
+# RestartSec=5 such starts are >= 125 s apart, so at most one falls in any 120 s window and a slow boot never
+# reaches the burst of 5. Only fast failures (5 within 120 s) stop it, as before.
 StartLimitIntervalSec=120
 StartLimitBurst=5
 

@@ -55,6 +55,7 @@ from . import projectcfg as PC
 from . import registry as R
 from . import rootfs as RF
 from . import names as N
+from . import netif as NI
 from . import serverfile as SF
 from . import server as SV
 from .store import StoreError
@@ -137,14 +138,15 @@ class ProjectConsole(SV.Console):
         return super().board()
 
 
-def entry_origin(entry: dict, auth: str) -> str:
+def entry_origin(entry: dict, auth: str, listen: str | None = None) -> str:
     """1.46.0: a project's console origin in link mode (its `origin`, else http://127.0.0.1:PORT); "" behind
-    Cloudflare, where Config makes it https://HOSTNAME as before."""
-    return (entry.get("origin") or f"http://127.0.0.1:{entry['port']}") if auth == "link" else ""
+    Cloudflare, where Config makes it https://HOSTNAME as before. 1.47.0: with the server's `listen`, the
+    default is http://LISTEN:PORT, the LISTEN socket's origin (L15; loopback's is server.door_origins')."""
+    return (entry.get("origin") or f"http://{listen or SV.HOST}:{entry['port']}") if auth == "link" else ""
 
 
 def open_project(name: str, entry: dict, team_domain: str, registry: dict | str, auth: str = "cloudflare",
-                 devices: Path | None = None) -> Hosted:
+                 devices: Path | None = None, listen: str | None = None) -> Hosted:
     """Open one project's console, or return it refused with the reason. Never raises for a project fault.
 
     `registry` is the user's registry as `R.load` read it (or why it could not
@@ -153,7 +155,7 @@ def open_project(name: str, entry: dict, team_domain: str, registry: dict | str,
     a root the user never registered on that state.
     """
     h = Hosted(name, entry)
-    problems = SF.entry_problems(name, entry, auth)
+    problems = SF.entry_problems(name, entry, auth, listen)
     if problems:
         h.fault = "; ".join(problems)
         return h
@@ -188,7 +190,8 @@ def open_project(name: str, entry: dict, team_domain: str, registry: dict | str,
         return h
     cfg = SV.Config(root=root, page=None, state=state, adapter=Path(os.devnull),   # Q28: no page is read here
                     team_domain=team_domain, aud=entry.get("aud", ""), hostname=entry.get("hostname", ""),
-                    port=entry["port"], project=name, auth=auth, origin=entry_origin(entry, auth), devices=devices)
+                    port=entry["port"], project=name, auth=auth, origin=entry_origin(entry, auth, listen),
+                    devices=devices, listen=listen or "")
     try:
         h.console = ProjectConsole(cfg, SnapshotAdapter(state))
         h.console.seed()
@@ -212,6 +215,7 @@ class MultiServer:
         doc = SF.load(path)
         self.team_domain = doc["team_domain"] or ""
         self.auth = doc["auth"]   # 1.46.0 (L6): one way in for every project this server hosts
+        self.listen = doc["listen"]   # 1.47.0: the address every owner door binds beside 127.0.0.1 (None: none)
         # The machine's sign-ins: devices.location(), the very file `agent.py invite` writes and server.py's
         # Config reads (security review of 1.46: `path.parent / FILE` differed from it under a custom
         # --server-file, and no invite ever worked). `devices` is a test's override only.
@@ -223,7 +227,7 @@ class MultiServer:
         self.projects: dict[str, Hosted] = {}
         for name in sorted(doc["projects"]):
             self.projects[name] = open_project(name, doc["projects"][name], self.team_domain, registry, self.auth,
-                                               self.devices)
+                                               self.devices, self.listen)
 
     def token_hash(self, project: str) -> str | None:
         """The token hash server.json holds for `project` NOW: re-read whenever the file changes (K4, AC4.3).
@@ -346,9 +350,16 @@ class FaultOwnerHandler(SV.SigninDoor, SV._Handler):
     verify: Callable[[str | None], dict]
     fault: str
     signin_where: tuple | None = None   # (devices file, origin, STATE) in link mode
+    listen_at: str | None = None        # 1.47.0: server listen; Host and origin per socket, as every door
 
     def _signin_where(self):
         return self.signin_where
+
+    def _listen_at(self):
+        return self.listen_at
+
+    def _base_origin(self) -> str:
+        return self.signin_where[1] if self.signin_where else ""
 
     def _dispatch(self) -> None:
         if self._signin():
@@ -409,6 +420,10 @@ class Running:
     agent: SV.UnixHTTPServer
     socket: Path
     owners: dict[str, ThreadingHTTPServer]
+    # 1.47 (C7, S6): set with the reason when a --listen door's socket stops serving by itself; main then stops
+    # every door and exits 1, for the service to start the server again.
+    failed: threading.Event = field(default_factory=threading.Event)
+    why: list = field(default_factory=list)
 
     def ports(self) -> dict[str, int]:
         return {n: s.server_address[1] for n, s in self.owners.items()}
@@ -428,7 +443,17 @@ def start(server_file: Path | None = None, sock: Path | None = None,
     G.close()   # this process holds every project's store: no git, i.e. no project-controlled program, runs here
     RF.confine()   # and every read of a project's tree starts from its held root, following no symlink
     sf = Path(server_file or SF.location())
+    # 1.47.0 (L16, L17): with server.json's "listen", wait for that address on a ZeroTier or Tailscale interface
+    # (one line), and warn of a network overlapping it, BEFORE any project's lock or store is taken. A refusal,
+    # or no address after 2 minutes, is NI.ListenError: main exits 1 by name and the service tries again.
+    listen = SF.load(sf)["listen"]
+    if listen:
+        NI.accept(listen, lambda line: (sys.stderr.write(line + "\n"), sys.stderr.flush()))
     ms = MultiServer(sf)
+    if ms.listen and SV.listen_refusal(ms.auth, ms.listen):   # the file changed since: checked again, never bound
+        why = SV.listen_refusal(ms.auth, ms.listen)
+        ms.close()
+        raise NI.ListenError(why)
     # 1.46.0 (L6): one way in for the whole server: every project's door checks Access, or every one a device,
     # and a device only where devices.admitted lets it in, so each door's verifier is its own project's (F1).
     if verify_for is None and ms.auth == "link":
@@ -445,28 +470,39 @@ def start(server_file: Path | None = None, sock: Path | None = None,
     agent = _agent_server(ms, path)
     threading.Thread(target=agent.serve_forever, daemon=True).start()
     owners = {}
+    failed, why = threading.Event(), []
+
+    def door_failed(msg: str) -> None:   # 1.47 (C7, S6): one door half down stops the whole server, by name
+        why.append(msg)
+        failed.set()
     try:
         for name, h in ms.projects.items():
-            if not isinstance(h.entry, dict) or SF.entry_problems(name, h.entry, ms.auth):
+            if not isinstance(h.entry, dict) or SF.entry_problems(name, h.entry, ms.auth, ms.listen):
                 continue   # no port or gate can be trusted from an entry this broken; its refusal is on the agent door
             verify = door_verify(h)
             if h.console is not None:
                 handler = type("BoundMultiOwnerHandler", (MultiOwnerHandler,),
                                {"console": h.console, "verify": staticmethod(verify)})
             else:
-                where = ((ms.devices, entry_origin(h.entry, ms.auth), Path(h.entry["state"]))
+                where = ((ms.devices, entry_origin(h.entry, ms.auth, ms.listen), Path(h.entry["state"]))
                          if ms.auth == "link" else None)
                 handler = type("BoundFaultOwnerHandler", (FaultOwnerHandler,),
                                {"verify": staticmethod(verify), "fault": f"{name}: {h.fault}",
-                                "signin_where": where})
+                                "signin_where": where, "listen_at": ms.listen})
             try:
-                srv = ThreadingHTTPServer((SV.HOST, port_for(h)), handler)
+                # 1.47.0 (contract 3, as amended): with listen, every project's door is two sockets on its one
+                # port, the --listen address and HOST (SV.bind_doors: LISTEN first, loopback after, both or none).
+                if ms.listen:
+                    srv = SV.OwnerDoors(SV.bind_doors(handler, ms.listen, port_for(h)),
+                                        on_fail=lambda msg, name=name: door_failed(f"{name}: {msg}"))
+                else:
+                    srv = ThreadingHTTPServer((SV.HOST, port_for(h)), handler)
+                    srv.daemon_threads = True
             except OSError as e:   # a port in use is this project's fault, never the server's (§3.10)
                 h.console = None
                 h.fault = f"{name}'s owner door cannot listen on port {h.entry['port']}: {e.strerror}"
                 h.close()
                 continue
-            srv.daemon_threads = True
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             owners[name] = srv
     except BaseException:
@@ -476,7 +512,7 @@ def start(server_file: Path | None = None, sock: Path | None = None,
         path.unlink(missing_ok=True)
         ms.close()
         raise
-    return Running(ms, agent, path, owners)
+    return Running(ms, agent, path, owners, failed, why)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -486,18 +522,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--server-file", type=Path, help="default: server.json beside your registry")
     ap.add_argument("--socket", type=Path, help="the agent socket (default: server.sock beside server.json)")
     a = ap.parse_args(argv)
-    r = start(a.server_file, a.socket)
+    try:
+        r = start(a.server_file, a.socket)
+    except NI.ListenError as e:   # 1.47.0: by name, exit 1; the service restarts it (L16)
+        sys.stderr.write(f"overture: {e}\n")
+        return 1
     sys.stderr.write(f"console-server: every owner door signs in through "
-                     f"{'sign-in links (auth link)' if r.ms.auth == 'link' else 'Cloudflare Access (auth cloudflare)'}\n")
+                     f"{'sign-in links (auth link)' if r.ms.auth == 'link' else 'Cloudflare Access (auth cloudflare)'}"
+                     + (f", on 127.0.0.1 and {r.ms.listen} (server listen)" if r.ms.listen else "") + "\n")
     for name, h in r.ms.projects.items():
-        line = f"serving on port {r.ports().get(name)}" if h.fault is None else f"REFUSED: {h.fault}"
+        # 1.47.0: with listen, both of the door's addresses.
+        at = (f"127.0.0.1 and {r.ms.listen}, port {r.ports().get(name)}" if r.ms.listen
+              else f"port {r.ports().get(name)}")
+        line = f"serving on {at}" if h.fault is None else f"REFUSED: {h.fault}"
         sys.stderr.write(f"console-server: {name}: {line}\n")
     sys.stderr.write(f"console-server: agent door {r.socket}\n")
     sys.stderr.flush()
     try:
-        threading.Event().wait()
+        r.failed.wait()   # 1.47 (C7, S6): until a --listen door's socket stops by itself (else until killed)
     except KeyboardInterrupt:
         pass
     finally:
         r.shutdown()
+    if r.failed.is_set():
+        sys.stderr.write("".join(f"overture: {m}\n" for m in r.why) + "overture: every door was stopped; "
+                         "exiting so the service starts the server again\n")
+        return 1
     return 0

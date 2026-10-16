@@ -5,6 +5,13 @@ non-secret config, and print the commands the OWNER runs.
     python3 onboard.py write  --project DIR --name acme --team-domain acme.cloudflareaccess.com \
                               --aud <64 hex> --hostname acme-console.example.com [--port 4793] ...
     python3 onboard.py tunnel --project DIR --id <tunnel uuid>
+    python3 onboard.py write  --project DIR --name acme --auth link [--listen ADDR] [--origin URL]   (1.47.0)
+    python3 onboard.py detect [--json]      this machine's ZeroTier and Tailscale addresses (1.47.0)
+
+1.47.0 (OPEN-DECISIONS.md "Without Cloudflare", L7): `--auth link` onboards a
+console that signs browsers in by link (no Access application, no tunnel); its
+console.env carries CONSOLE_AUTH=link, CONSOLE_ORIGIN and, with --listen,
+CONSOLE_LISTEN, and `verify` checks the door itself instead of Cloudflare.
 
 `write` creates, inside the project:
 
@@ -55,9 +62,35 @@ class OnboardError(ValueError):
     pass
 
 
+AUTHS = ("cloudflare", "link")
+CLOUDFLARE_ONLY = ("team_domain", "aud", "hostname", "tunnel")
+# 1.47.0 (L7): the keys of a console.env for sign-in links, in the order written; CONSOLE_LISTEN only when set.
+LINK_KEYS = {"name": "CONSOLE_NAME", "auth": "CONSOLE_AUTH", "listen": "CONSOLE_LISTEN", "origin": "CONSOLE_ORIGIN",
+             "port": "CONSOLE_PORT", "page": "CONSOLE_PAGE", "adapter": "CONSOLE_ADAPTER"}
+
+
+def _kit_modules():
+    """overture.devices and overture.netif, from this kit (onboard.py runs before any install)."""
+    if str(KIT) not in sys.path:
+        sys.path.insert(0, str(KIT))
+    from overture import devices as DV
+    from overture import netif as NI
+    return DV, NI
+
+
 def check(answers: dict) -> dict:
     """Every answer, validated and normalised; the first bad one is refused by name."""
     a = {k: (v.strip() if isinstance(v, str) else v) for k, v in answers.items()}
+    auth = a.get("auth") or "cloudflare"
+    if auth not in AUTHS:
+        raise OnboardError(f"auth: {auth!r} is not valid: expected cloudflare or link")
+    a["auth"] = auth
+    if auth == "link":
+        return _check_link(a)
+    for key in ("listen", "origin"):   # 1.47.0: sign-in links only; behind Cloudflare it is https://HOSTNAME
+        if a.get(key) is not None:
+            raise OnboardError(f"{key}: is for --auth link; behind Cloudflare the console is on 127.0.0.1 and "
+                               f"https://HOSTNAME")
     for key in ("name", "team_domain", "hostname", "tunnel", "aud"):
         if isinstance(a.get(key), str):
             a[key] = a[key].lower()
@@ -73,6 +106,40 @@ def check(answers: dict) -> dict:
     for key, rx, want in rules:
         if not isinstance(a.get(key), str) or not rx.match(a[key]):
             raise OnboardError(f"{key}: {a.get(key)!r} is not valid: expected {want}")
+    if a["hostname"].endswith(".cloudflareaccess.com"):
+        raise OnboardError("hostname: that is the team domain; give the console's own hostname")
+    return _check_common(a)
+
+
+def _check_link(a: dict) -> dict:
+    """1.47.0 (L7): `--auth link`: no Access values (each refused by name, so none is written and forgotten),
+    an optional --listen (netif's contract 1, by name: whether an interface holds it is said, not required),
+    and the origin (default http://LISTEN:PORT, else http://127.0.0.1:PORT; L15)."""
+    for key in CLOUDFLARE_ONLY:
+        if a.get(key) is not None:
+            raise OnboardError(f"{key}: is for --auth cloudflare; a console with sign-in links needs no Cloudflare")
+    if isinstance(a.get("name"), str):
+        a["name"] = a["name"].lower()
+    if not isinstance(a.get("name"), str) or not NAME.match(a["name"]):
+        raise OnboardError(f"name: {a.get('name')!r} is not valid: expected 2-32 lowercase letters, digits and "
+                           f"hyphens, starting with a letter (e.g. acme)")
+    DV, NI = _kit_modules()
+    listen = a.get("listen") or None
+    if listen is not None:
+        why = NI.NOT_LINUX if not sys.platform.startswith("linux") else NI.static_problem(listen)
+        if why:
+            raise OnboardError(f"listen: {why}")
+    a["listen"] = listen
+    a = _check_common(a)
+    origin = DV.clean_origin(a.get("origin") or f"http://{listen or '127.0.0.1'}:{a['port']}")
+    why = DV.origin_problem(origin, listen) or (listen and DV.listen_origin_problem(origin, listen))
+    if why:
+        raise OnboardError(f"origin: {why}")
+    a["origin"] = origin
+    return a
+
+
+def _check_common(a: dict) -> dict:
     # The master agent (steward): only checked and printed into the `register` step below. It is never
     # written into the project's files: a repository must not be able to name the steward (0.8.3).
     if a.get("steward"):
@@ -81,8 +148,6 @@ def check(answers: dict) -> dict:
         why = N.problem(a["steward"])
         if why:
             raise OnboardError(f"steward: {why}")
-    if a["hostname"].endswith(".cloudflareaccess.com"):
-        raise OnboardError("hostname: that is the team domain; give the console's own hostname")
     port = a.get("port", 4793)
     try:
         port = int(port)
@@ -142,6 +207,14 @@ def _write(path: Path, text: str, force: bool) -> str:
 
 
 def env_text(a: dict) -> str:
+    if a.get("auth") == "link":   # 1.47.0 (L7); a Cloudflare console's file is byte for byte 1.46's
+        return "\n".join([
+            MARK,
+            "# The owner console's settings for this project, signing browsers in by link (no Cloudflare). None",
+            "# of these is a secret: a sign-in link is made in your terminal (agent.py invite) and never kept here.",
+            *(f"{v}={a[k]}" for k, v in LINK_KEYS.items() if a.get(k) is not None),
+            "",
+        ])
     return "\n".join([
         MARK,
         "# The owner console's settings for this project. None of these is a secret: the AUD",
@@ -199,6 +272,7 @@ def write(project: Path, answers: dict, force: bool = False, check_port: bool = 
     a = check(answers)
     if check_port and not port_free(a["port"]):
         raise OnboardError(f"port: {a['port']} is already in use on 127.0.0.1; pick another with --port")
+    notes = listen_notes(a["listen"]) if a.get("listen") else []   # refuses a non-overlay interface first
     # Every target is checked BEFORE anything is written, so a refusal leaves the project untouched.
     env, cfg = _target(project, ".overture/console.env"), _target(project, ".overture.json")
     starters = [(_target(project, a[k]), t) for k, t in (("adapter", "adapter_template.py"), ("page", "demo/index.html"))]
@@ -222,7 +296,22 @@ def write(project: Path, answers: dict, force: bool = False, check_port: bool = 
     # resolves that cleanly for the owner.
     gi_line = ".overture/console.env"
     out.append(_ensure_gitignore(project, gi_line))
-    return out
+    return out + notes
+
+
+def listen_notes(listen: str) -> list[str]:
+    """1.47.0: what a --listen address looks like on this machine now. On a ZeroTier or Tailscale interface:
+    the L17 overlap warnings, if any. On no interface yet: a note (the server waits for it, L16). On any
+    other interface: refused (OnboardError), as the server would refuse it at once."""
+    _DV, NI = _kit_modules()
+    try:
+        got = NI.check(listen)
+    except NI.ListenError as e:
+        raise OnboardError(f"listen: {e}") from None
+    if got is None:
+        return [f"NOTE      no ZeroTier or Tailscale interface holds {listen} now; the server waits up to 2 "
+                f"minutes for it when it starts (is ZeroTier joined? `onboard.py detect` lists what is here)"]
+    return NI.overlap_warnings(listen, got)
 
 
 def _ensure_gitignore(project: Path, line: str) -> str:
@@ -248,7 +337,73 @@ def _ensure_gitignore(project: Path, line: str) -> str:
     return f"wrote     {path}: appended `{line}`"
 
 
+def reach(a: dict) -> tuple[str, str]:
+    """1.47.0 (L7): (how the console is reached, its owner door's address) for a link-mode answer set:
+    "zerotier" / "tailscale" with --listen (by the address: 100.64/10 is Tailscale's), "tailscale-serve" for an
+    https origin (`tailscale serve` in front of 127.0.0.1), else "local"."""
+    _DV, NI = _kit_modules()
+    listen = a.get("listen")
+    if a["origin"].startswith("https://"):
+        # 1.47 (S1): never with --listen (check refuses an https origin there), so `tailscale serve` targets loopback.
+        return "tailscale-serve", "127.0.0.1"
+    if listen:
+        import ipaddress
+        return ("tailscale" if ipaddress.IPv4Address(listen) in NI.TAILSCALE_NET else "zerotier"), listen
+    return "local", "127.0.0.1"
+
+
+def _link_next_steps(project: Path, a: dict) -> str:
+    """1.47.0 (L7): the owner's commands for a console with sign-in links: no Access application, no tunnel."""
+    how, host = reach(a)
+    state = state_dir(a["name"])
+    steward = a.get("steward")
+    steward_flag = f" --steward {steward}" if steward else ""
+    steward_note = (f"    Then, in the Claude session that should process your answers (the master agent), type:\n"
+                    f"      /overture:as {steward}\n") if steward else ""
+    open_it = {
+        "zerotier": f"open {a['origin']} on any device joined to this ZeroTier network. Plain http is right\n"
+                    f"    here: ZeroTier encrypts every packet end to end, and only its members reach {host}",
+        "tailscale": f"open {a['origin']} on any device on your tailnet (Tailscale encrypts it end to end)",
+        "tailscale-serve": f"put it on your tailnet over HTTPS, once:\n"
+                           f"      tailscale serve --bg http://{host}:{a['port']}\n"
+                           f"    then open {a['origin']}",
+        "local": f"open {a['origin']} on this machine (nothing else can reach it)",
+    }[how]
+    return f"""
+Next, run these yourself, in order. Each one is yours to approve. This console signs browsers in by link:
+no Cloudflare, no tunnel.
+
+ 1. Install the server (a venv, the kit, a systemd user unit) and start it:
+      bash "{KIT}/deploy/install.sh" --project "{project}" --start
+ 2. Let your Claude sessions trust this project's console. It is a trust decision, so a
+    session never runs it for you:
+      python3 ~/.local/share/overture/kit/agent.py --state "{state}" register --project "{project}"{steward_flag}
+{steward_note} 3. Reach it: {open_it}.
+ 4. Make your sign-in link, in your own terminal (a Claude session is refused):
+      python3 ~/.local/share/overture/kit/agent.py --state "{state}" invite YOU@EXAMPLE.COM --origin {a['origin']}
+    It prints a link that works once, within 24 hours. Open it in the browser you will use and
+    press "Sign this browser in"; that browser stays signed in until you revoke it (People).
+    Sign in once per address you use (a browser keeps a sign-in per address).
+ 5. Check it:
+      python3 "{KIT}/onboard.py" verify --project "{project}"
+ 6. Make yourself the administrator. Until you do, everyone you invite can do everything. In the
+    console open People (under More) and press "Make me the administrator": it takes the login
+    you signed in as. Or, in your own terminal:
+      python3 ~/.local/share/overture/kit/agent.py --state "{state}" access YOU@EXAMPLE.COM owner
+    Then invite each other person (step 4 with their email) and give them a role there.
+ 7. Push the project's items so an agent can `ask` on anything but the starter PROJECT item.
+    The server never runs your adapter (CONSOLE-kit/Q24); run this now and whenever the item
+    list or the adapter changes:
+      python3 ~/.local/share/overture/kit/agent.py --state "{state}" items-push --adapter "{a['adapter']}"
+ 8. (Optional, for the dashboard page) Send the page from a merged commit, then press
+    "Use this page" in the console. Reads the default branch from origin/HEAD (0.9.1):
+      python3 ~/.local/share/overture/kit/agent.py --state "{state}" page-snapshot --path "{a['page']}"
+"""
+
+
 def next_steps(project: Path, a: dict) -> str:
+    if a.get("auth") == "link":   # 1.47.0 (L7); the Cloudflare steps below are 1.46's, unchanged
+        return _link_next_steps(project.resolve(), a)
     project = project.resolve()
     cfg = Path.home() / ".cloudflared" / f"config-{a['tunnel']}.yml"
     cert = Path.home() / ".cloudflared" / "cert.pem"
@@ -302,6 +457,11 @@ def read_env(path: Path) -> dict:
     keys = {"name": "CONSOLE_NAME", "team_domain": "CONSOLE_TEAM_DOMAIN", "aud": "CONSOLE_AUD",
             "hostname": "CONSOLE_HOSTNAME", "port": "CONSOLE_PORT", "tunnel": "CONSOLE_TUNNEL",
             "page": "CONSOLE_PAGE", "adapter": "CONSOLE_ADAPTER"}
+    if env.get("CONSOLE_AUTH", "cloudflare") != "cloudflare":
+        # 1.47.0 (L7): a link-mode file. check() refuses any other CONSOLE_AUTH by name, and the Access keys
+        # if any were left in; only its own keys come back (install.sh renders the link unit from them).
+        a = check({k: env.get(v) for k, v in {**LINK_KEYS, **{k: keys[k] for k in CLOUDFLARE_ONLY}}.items()})
+        return {v: str(a[k]) for k, v in LINK_KEYS.items() if a.get(k) is not None}
     a = check({k: env.get(v) for k, v in keys.items()})
     # Only what was validated leaves this function, in its normalised form: an
     # unknown key in the file is ignored, never passed on to a unit file.
@@ -338,6 +498,8 @@ def verify(project: Path) -> list[tuple[str, str, str]]:
         results.append(("config", "fail", f"{e}"))
         return results
     results.append(("config", "ok", f"{env_path} parses as {env['CONSOLE_NAME']} on port {env['CONSOLE_PORT']}"))
+    if env.get("CONSOLE_AUTH") == "link":   # 1.47.0 (L7): no Cloudflare to check; the door itself is checked
+        return results + _verify_link(env)
 
     for binary in ("cloudflared", "curl"):
         if shutil.which(binary) is None:
@@ -393,8 +555,71 @@ def verify(project: Path) -> list[tuple[str, str, str]]:
     return results
 
 
+BOGUS_TOKEN = "ovi_" + "A" * 43   # the shape of an invite, made by nobody: GET /signin answers 410 for it
+
+
+def door_answer(host: str, port: int, path: str, timeout: float = 5.0) -> int | str:
+    """The HTTP status the owner door at host:port gives a bare GET of `path`, or why nothing answered. Its
+    Host header names host:port, as a browser's would (the --listen door checks it)."""
+    import http.client
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        conn.request("GET", path)
+        r = conn.getresponse()
+        r.read(1 << 16)
+        return r.status
+    except (OSError, http.client.HTTPException) as e:
+        return f"{type(e).__name__}: {e}"
+    finally:
+        conn.close()
+
+
+def _verify_link(env: dict) -> list[tuple[str, str, str]]:
+    """1.47.0 (L7): `verify` for a console with sign-in links. Cloudflare and the tunnel are "not used". The
+    door must answer on each address it is bound to (127.0.0.1, and CONSOLE_LISTEN when set) with the gate's
+    403, and GET /signin with a token nobody made must be 410 there: link mode is on, and nothing was spent
+    to learn it."""
+    port = int(env["CONSOLE_PORT"])
+    out = [("cloudflare", "skip", "not used: this console signs browsers in by link"),
+           ("tunnel", "skip", "not used: no Cloudflare tunnel in link mode")]
+    for host in ("127.0.0.1", *([env["CONSOLE_LISTEN"]] if env.get("CONSOLE_LISTEN") else [])):
+        step = "door" if host == "127.0.0.1" else f"door {host}"
+        got = door_answer(host, port, "/api/view")
+        if got == 403:
+            out.append((step, "ok", f"http://{host}:{port} answers, and refuses a request with no sign-in (403)"))
+        elif isinstance(got, int):
+            out.append((step, "fail", f"http://{host}:{port}/api/view answered {got}, not 403: is this the console?"))
+            continue
+        else:
+            out.append((step, "fail", f"nothing answers on http://{host}:{port} ({got}); start it: "
+                                      f"systemctl --user start {env['CONSOLE_NAME']}-console"
+                                      + ("" if host == "127.0.0.1" else " (is ZeroTier/Tailscale up?)")))
+            continue
+        got = door_answer(host, port, f"/signin?t={BOGUS_TOKEN}")
+        if got == 410:
+            out.append((f"sign-in links{'' if host == '127.0.0.1' else ' ' + host}", "ok",
+                        "on: a link nobody made is refused as used or expired (410)"))
+        else:
+            out.append((f"sign-in links{'' if host == '127.0.0.1' else ' ' + host}", "fail",
+                        f"GET /signin answered {got}, not 410: the server is not running with --auth link "
+                        f"(re-run install.sh --start)"))
+    return out
+
+
+def detect() -> dict:
+    """1.47.0 (L7): the ZeroTier and Tailscale addresses netif finds here, and each one's L17 overlap
+    warnings: what `onboard.py detect` prints and the console-onboard skill recommends from."""
+    _DV, NI = _kit_modules()
+    found = NI.overlays()
+    warnings = [w for _k, n, addr, p, u in found for w in NI.overlap_warnings(addr, (n, p, u))]
+    return {"overlays": [{"kind": k, "name": n, "address": a, "prefix": p, "up": u} for k, n, a, p, u in found],
+            "warnings": warnings, "linux": sys.platform.startswith("linux")}
+
+
 def tunnel(project: Path, tunnel_id: str, force: bool = False) -> str:
     env = read_env(project.resolve() / ".overture/console.env")
+    if env.get("CONSOLE_AUTH") == "link":   # 1.47.0
+        raise OnboardError("tunnel: this console signs browsers in by link (CONSOLE_AUTH=link): it has no tunnel")
     tid = tunnel_id.strip().lower()
     if not UUID.match(tid):
         raise OnboardError(f"id: {tunnel_id!r} is not a tunnel id (a UUID, as `cloudflared tunnel create` prints)")
@@ -414,9 +639,18 @@ def main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("write", help="validate the answers and write the project's config")
     w.add_argument("--project", type=Path, default=Path.cwd())
     w.add_argument("--name", required=True)
-    w.add_argument("--team-domain", required=True)
-    w.add_argument("--aud", required=True)
-    w.add_argument("--hostname", required=True)
+    # 1.47.0 (L7): the three Access values are required with --auth cloudflare (the default; checked below, in
+    # argparse's own words) and refused with --auth link, which takes --listen and --origin instead.
+    w.add_argument("--auth", choices=AUTHS, default=None,
+                   help="cloudflare (Access, the default) or link (sign-in links: no Cloudflare)")
+    w.add_argument("--team-domain")
+    w.add_argument("--aud")
+    w.add_argument("--hostname")
+    w.add_argument("--listen", help="--auth link: the ZeroTier or Tailscale address the console listens on "
+                                    "beside 127.0.0.1 (`onboard.py detect` lists them)")
+    w.add_argument("--origin", help="--auth link: the console's address as the browser sees it (default "
+                                    "http://LISTEN:PORT, else http://127.0.0.1:PORT; https://NAME behind "
+                                    "`tailscale serve`)")
     w.add_argument("--tunnel")
     w.add_argument("--port", type=int, default=4793)
     w.add_argument("--page")
@@ -435,11 +669,32 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--force", action="store_true")
     v = sub.add_parser("verify", help="check that this project's Overture is reachable end-to-end")
     v.add_argument("--project", type=Path, default=Path.cwd())
+    d = sub.add_parser("detect", help="list this machine's ZeroTier and Tailscale addresses (1.47), and any "
+                                      "network overlapping one")
+    d.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "write" and (a.auth or "cloudflare") == "cloudflare":
+        missing = [f for f, v in (("--team-domain", a.team_domain), ("--aud", a.aud), ("--hostname", a.hostname))
+                   if v is None]
+        if missing:
+            w.error(f"the following arguments are required: {', '.join(missing)}")
     try:
+        if a.cmd == "detect":
+            got = detect()
+            if a.json:
+                print(json.dumps(got))
+                return 0
+            for o in got["overlays"]:
+                print(f"{o['kind']} {o['name']} {o['address']}/{o['prefix']}" + ("" if o["up"] else " (down)"))
+            if not got["overlays"]:
+                print("no ZeroTier or Tailscale interface here" + ("" if got["linux"] else
+                      " (--listen comes with 1.48 on this system)"), file=sys.stderr)
+            for line in got["warnings"]:
+                print(line)
+            return 0
         if a.cmd == "write":
             answers = {k: v for k, v in vars(a).items()
-                       if k not in ("cmd", "project", "force", "no_port_check") and v is not None}
+                       if k not in ("cmd", "project", "force", "no_port_check", "json") and v is not None}
             for line in write(a.project, answers, a.force, not a.no_port_check):
                 print(line)
             print(next_steps(a.project, check(answers)))
@@ -448,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{k}={v}")
         elif a.cmd == "verify":
             results = verify(a.project)
-            glyph = {"ok": "✓", "warn": "!", "fail": "✗"}
+            glyph = {"ok": "✓", "warn": "!", "fail": "✗", "skip": "-"}   # 1.47.0: "skip", a check not used
             width = max((len(step) for step, _, _ in results), default=0)
             for step, status, detail in results:
                 print(f"  {glyph[status]} {step.ljust(width)}  {detail}")
@@ -459,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("\nOverture looks reachable but some checks could not run (see ! above).")
             else:
                 env = read_env(a.project.resolve() / ".overture/console.env")
-                print(f"\nOverture is reachable at https://{env['CONSOLE_HOSTNAME']}")
+                print(f"\nOverture is reachable at {env.get('CONSOLE_ORIGIN') or 'https://' + env['CONSOLE_HOSTNAME']}")
         else:
             print(tunnel(a.project, a.id, a.force))
     except OnboardError as e:

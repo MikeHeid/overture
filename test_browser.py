@@ -3739,6 +3739,96 @@ class SigninLinkBrowserTests(unittest.TestCase):
                 self.assertEqual(dialogs, [])
                 self.assertEqual(errors, [])
 
+    def test_people_in_link_mode_speaks_of_sign_in_links_and_the_log_reads_as_sentences(self):
+        # Catches (U4): link-mode People telling the owner about an "Access policy" and an "Access login" that a
+        # link console does not have, a panel titled "Inbox" on People, and a role log reading
+        # "agent.py invite invited bob@…" instead of a sentence.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve_link()
+                tok = self.DV.invite(self.cfg.devices_file, "owner@example.com", self.cfg.state)[0]
+                self.DV.invite(self.cfg.devices_file, "bob@example.com", self.cfg.state)
+                browser = getattr(self.pw, kind).launch()
+                self.addCleanup(browser.close)
+                page = browser.new_context().new_page()
+                page.goto(url + "signin?t=" + tok)
+                page.click("button:has-text('Sign this browser in')")
+                page.wait_for_url(url)
+                _wait_for(page, "document.querySelector('.ck-inbox-count') && "
+                                "document.querySelector('.ck-inbox-count').textContent !== '✉'")
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.wait_for_selector(".ck-people-off")
+                self.assertEqual(page.text_content(".ck-panel .ck-header .ck-title"), "People")
+                text = page.text_content(".ck-panel #ck-tabpanel")
+                self.assertIn("Everyone signed in with a sign-in link can do everything here.", text)
+                self.assertNotIn("Access", text)
+                rows = page.locator(".ck-people-log-row").all_text_contents()
+                self.assertTrue(any("bob@example.com was invited (from the terminal)" in r for r in rows), rows)
+                self.assertFalse(any("agent.py invite" in r for r in rows), rows)
+
+
+class ListenBrowserTests(unittest.TestCase):
+    """1.47.0 (--listen): a real browser signs in by link on the listen address (a loopback alias on a fake
+    ZeroTier interface, through netif's test hook) and the console loads there; a foreign Host is refused."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+
+    def test_sign_in_on_the_listen_address_loads_the_console_and_a_foreign_host_is_refused(self):
+        # Catches: the sign-in page's button failing on the overlay origin (the Origin check or the cookie taken
+        # from the loopback socket), the cookie set for another host, the console not loading on
+        # http://LISTEN:PORT on that cookie, and a request naming another Host answered (DNS rebinding).
+        import http.client
+        import tempfile
+        from unittest import mock
+        from overture import devices as DV
+        from overture import netif as NI
+        from overture import server as SV
+        from test_server import LISTEN, FAKE_IFACES, free_port, page_body
+        NI.set_fake(lambda: list(FAKE_IFACES), loopback_ok=True)
+        self.addCleanup(NI.set_fake, None)
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                td = tempfile.mkdtemp(prefix="ck-listen-")
+                self.addCleanup(lambda d=td: __import__("shutil").rmtree(d, ignore_errors=True))
+                env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(Path(td) / "cfg")})
+                env.start()
+                self.addCleanup(env.stop)
+                port, root = free_port(), Path(td)
+                cfg = SV.Config(root=root, page=None, state=root / "state", adapter=root / "unused.py",
+                                team_domain="", aud="", hostname="", port=port, project="listen-test", auth="link",
+                                origin=f"http://{LISTEN}:{port}", listen=LISTEN)
+                console = SV.Console(cfg, _LiveAdapter())
+                console.publish_page({"commit": console.push_page_snapshot(page_body(LIVE_HOST))["staged"]})
+                owner = SV.owner_server(console, SV.link_verifier(cfg), port)
+                threading.Thread(target=owner.serve_forever, daemon=True).start()
+                self.addCleanup(owner.server_close)
+                self.addCleanup(owner.shutdown)
+                url = f"http://{LISTEN}:{port}/"
+                tok = DV.invite(cfg.devices_file, "owner@example.com", cfg.state)[0]
+                browser = getattr(self.pw, kind).launch()
+                self.addCleanup(browser.close)
+                page = browser.new_context().new_page()
+                errors = []
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                page.goto(url + "signin?t=" + tok)
+                page.wait_for_selector("text=Sign this browser in as owner@example.com?")
+                page.click("button:has-text('Sign this browser in')")
+                page.wait_for_url(url)
+                _wait_for(page, "document.querySelector('.ck-inbox-count') && "
+                                "document.querySelector('.ck-inbox-count').textContent !== '✉'")
+                status = page.evaluate("fetch('/api/view', {credentials: 'same-origin'}).then(r => r.status)")
+                self.assertEqual(status, 200)
+                cookie = page.context.cookies()[0]
+                self.assertEqual((cookie["name"], cookie["domain"]), ("overture-device", LISTEN))
+                conn = http.client.HTTPConnection(LISTEN, port, timeout=10)
+                conn.request("GET", "/api/view", headers={"Host": f"rebind.example:{port}",
+                                                          "Cookie": f"overture-device={cookie['value']}"})
+                r = conn.getresponse()
+                self.assertEqual((r.status, json.loads(r.read())), (403, {"error": SV.NOT_SIGNED_IN}))
+                conn.close()
+                self.assertEqual(errors, [])
+
 
 class ScanUITests(unittest.TestCase):
     """CONSOLE-kit/Q40 (button_now) and Q41 (side file): scanning stale rulings for a resolve, on the page."""
@@ -3951,6 +4041,261 @@ class ScanUITests(unittest.TestCase):
                 self.open_inbox(page, 1280)
                 self.assertEqual(self.inbox_row(page, "LANE.1/Q1").count(), 1)
                 self.assertEqual(page.locator(".ck-cluster").count(), 0, "a stale ruling was grouped")
+
+
+# 1.47 (U4): the layout bugs the docs screenshots showed. Each test measures the thing the screenshot got wrong.
+BOX = "s => { const r = document.querySelector(s).getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; }"
+
+
+class LayoutFixTests(unittest.TestCase):
+    """1.47 (U4, U9): Operator Shift, the snooze menu, the panel title, the locked pill, the Triggers tab, the
+    impact graph, Portfolio's setup card and the Delegate bar, in a real browser on the real server."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+    serve = LiveConsoleTests.serve
+    agent_post = LiveConsoleTests.agent_post
+    ask = LiveConsoleTests.ask
+    bell = LiveConsoleTests.bell
+    page = LiveConsoleTests.page
+    open_inbox = LiveConsoleTests.open_inbox
+    answer = InboxUXTests.answer
+    lock = InboxUXTests.lock
+    open_item = InboxUXTests.open_item
+
+    def playbook(self, name="release-triage", description="Before a release: a heads-up while questions wait, "
+                 "then a tighten round on the lane", steps=None):
+        d = self.cfg.root / ".overture" / "playbooks"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.json").write_text(json.dumps({"description": description,
+                                                    "steps": steps or [{"kind": "chat", "text": "heads-up"}]}))
+
+    def triggers(self):
+        from overture import triggers as TR
+        self.playbook()
+        self.console.triggers.set_all({"pr-merged": TR.Trigger("pr-merged", "release-triage", "a" * 64, None)})
+        self.console.triggers.log("pr-merged", "webhook", "2026-10-16T09:00:00Z", 1, 0)
+
+    def test_operator_shift_is_one_dialog_with_its_parts_stacked(self):
+        # Catches (U4): the head, the text and the buttons laid out side by side as three loose boxes (a flex
+        # row), and a dialog that runs off a short screen with no way to reach its buttons.
+        for kind in BROWSERS:
+            for width in (1440, 375):
+                with self.subTest(browser=kind, width=width):
+                    url = self.serve()
+                    page = self.page(kind, width, url)
+                    page.keyboard.press("Control+k")
+                    page.fill(".ck-palette-input", "Operator shift")
+                    page.keyboard.press("Enter")
+                    page.wait_for_selector("#ck-shift .ck-shift-actions")
+                    head, body, acts = (page.evaluate(BOX, s) for s in
+                                        (".ck-shift-head", ".ck-shift-body", ".ck-shift-actions"))
+                    for box in (body, acts):
+                        self.assertAlmostEqual(box[0], head[0], delta=1)   # one left edge
+                        self.assertAlmostEqual(box[2], head[2], delta=1)   # one right edge
+                    self.assertLessEqual(head[3], body[1] + 1)
+                    self.assertLessEqual(body[3], acts[1] + 1)
+                    page.locator("#ck-shift .ck-shift-actions button", has_text="Close").scroll_into_view_if_needed()
+                    page.locator("#ck-shift .ck-shift-actions button", has_text="Close").click()
+                    _wait_for(page, "!document.getElementById('ck-shift')")
+
+    def test_the_snooze_menu_draws_over_the_next_ribbon_row(self):
+        # Catches (U4): the ⌛ menu clipped by its row's overflow, so the next ribbon row covered it and its
+        # presets could not be clicked.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                for n in (1, 2, 3):
+                    self.ask(n)
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.wait_for_selector(".ck-priority-row >> nth=2")
+                page.locator(".ck-priority-row >> nth=0").locator(".ck-snooze-btn").click()
+                page.wait_for_selector(".ck-snooze-menu:not([hidden])")
+                on_top = page.evaluate("""() => [...document.querySelectorAll('.ck-snooze-menu:not([hidden]) .ck-snooze-opt')]
+                  .map(o => { const r = o.getBoundingClientRect();
+                              return o.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); })""")
+                self.assertEqual(on_top, [True, True, True])
+                page.locator(".ck-snooze-menu:not([hidden]) .ck-snooze-opt >> nth=0").click()
+                _wait_for(page, "document.querySelectorAll('.ck-priority-row').length === 2")
+
+    def test_the_panel_title_names_the_tab_on_show(self):
+        # Catches (U4): a title that said "Inbox" on every tab.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                for tab, title in (("inbox", "Inbox"), ("feed", "Feed"), ("playbooks", "Playbooks"),
+                                   ("triggers", "Triggers"), ("portfolio", "Portfolio")):
+                    page.evaluate("t => ConsoleKit.openTab(t)", tab)
+                    _wait_for(page, "t => document.querySelector('.ck-panel .ck-header .ck-title').textContent === t",
+                              title)
+
+    def test_an_unrolled_locked_card_shows_one_locked_pill(self):
+        # Catches (U4): "locked" drawn twice on an opened locked card, once on its line and once in its header.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                self.answer("LANE.1/Q1")
+                self.lock("LANE.1/Q1")
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.click(".ck-question[data-qid='LANE.1/Q1'] .ck-q-line")
+                page.wait_for_selector(".ck-question[data-qid='LANE.1/Q1'] .ck-q-header")
+                self.assertEqual(page.locator(
+                    ".ck-question[data-qid='LANE.1/Q1'] .ck-q-state[data-state='locked']").count(), 1)
+
+    def test_the_triggers_tab_lists_its_firings_flat_and_the_fold_stays_on_the_inbox(self):
+        # Catches (U4, U9): a second collapsed "Triggers" fold inside the Triggers tab hiding its firings, and
+        # the Inbox's Triggers fold drawn on every other tab too.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.triggers()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('triggers')")
+                page.wait_for_selector(".ck-trigger-list")
+                self.assertEqual(page.locator(".ck-panel details.ck-triggers").count(), 0)
+                self.assertTrue(page.locator("#ck-tabpanel .ck-trigger-log-row")
+                                .first.is_visible())
+                for tab, folds in (("feed", 0), ("portfolio", 0), ("inbox", 1)):
+                    page.evaluate("t => ConsoleKit.openTab(t)", tab)
+                    _wait_for(page, "t => document.querySelector('.ck-panel .ck-header .ck-title').textContent === t",
+                              tab.capitalize())
+                    self.assertEqual(page.locator(".ck-panel details.ck-triggers").count(), folds, tab)
+
+    def test_the_impact_graph_frame_fits_its_graph(self):
+        # Catches (U9): a fixed 440px frame whose stage ran past its bottom (the filter bar wraps in a narrow
+        # column), cutting the lower nodes off, and a frame that never takes the graph's own height.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                for n in (1, 2):
+                    self.ask(n)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.click(".ck-impact-slot >> xpath=.. >> summary")
+                page.wait_for_selector(".ck-impact-slot iframe")
+                _wait_for(page, "document.querySelector('.ck-impact-slot iframe').style.height !== ''")
+                frame = page.frame_locator(".ck-impact-slot iframe")
+                frame.locator("#ck-cyto canvas").first.wait_for()
+                fits = page.frames[-1].evaluate("document.getElementById('ck-stage').getBoundingClientRect().bottom"
+                                                " <= innerHeight + 1")
+                self.assertTrue(fits)
+                slot = page.evaluate("() => { const s = document.querySelector('.ck-impact-slot');"
+                                     " return [s.clientHeight, parseFloat(getComputedStyle(s).maxHeight)]; }")
+                self.assertLessEqual(slot[0], slot[1])
+
+    def test_the_impact_graph_hint_sits_below_the_graph(self):
+        # Catches: the "Drag · wheel to zoom" hint drawn inside the stage, over the graph, where it covered the
+        # lowest node (a cited file in the docs screenshot).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.click(".ck-impact-slot >> xpath=.. >> summary")
+                page.wait_for_selector(".ck-impact-slot iframe")
+                page.frame_locator(".ck-impact-slot iframe").locator("#ck-cyto canvas").first.wait_for()
+                frame = next(f for f in page.frames if "/impact-graph?" in f.url)
+                stage, note = (frame.evaluate(BOX, s) for s in ("#ck-stage", ".ck-cyto-note"))
+                self.assertGreaterEqual(note[1], stage[3], (stage, note))
+                self.assertLessEqual(note[3], frame.evaluate("innerHeight") + 1)
+
+    def test_the_impact_graph_state_chips_read_as_words(self):
+        # Catches (1.47 docs): the state chips built from chart.py's ASCII badges glued to the word, so the
+        # locked chip read "olocked"; each now shows the console's glyph for its state, a space, then the word.
+        want = ["\u25d0 you", "\u25d1 unlocked", "\u25cb locked", "\u25cc stale"]
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.click(".ck-impact-slot >> xpath=.. >> summary")
+                page.wait_for_selector(".ck-impact-slot iframe")
+                page.frame_locator(".ck-impact-slot iframe").locator("#ck-cyto canvas").first.wait_for()
+                frame = next(f for f in page.frames if "/impact-graph?" in f.url)
+                chips = frame.evaluate("() => [...document.querySelectorAll('#ck-filters .ck-chip')]"
+                                       ".map(b => b.textContent)")
+                self.assertEqual(chips[5:9], want, chips)
+                self.assertNotIn("olocked", chips)
+
+    def test_only_the_impact_graph_frame_may_resize_itself(self):
+        # Catches: the ck-chart-size handler resizing ANY .ck-item-chart-frame (the status flowchart, the ticket
+        # graph), so a chart frame other than the impact graph could set its own height.
+        post = "h => parent.postMessage({type: 'ck-chart-size', height: h}, '*')"
+        height = "s => document.querySelector(s).style.height"
+        flow, impact = (".ck-item-chart-slot:not(.ck-impact-slot) > iframe.ck-item-chart-frame",
+                        ".ck-impact-slot > iframe.ck-item-chart-frame")
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                page = self.page(kind, 1280, url)
+                self.open_item(page)
+                page.locator("details.ck-item-chart > summary", has_text="Status flowchart").click()
+                page.click(".ck-impact-slot >> xpath=.. >> summary")
+                page.wait_for_selector(flow)
+                page.wait_for_selector(impact)
+                _wait_for(page, "s => document.querySelector(s).style.height !== ''", impact)   # its own ask
+                frames = {}
+                for _ in range(300):
+                    frames = {k: f for f in page.frames for k in ("/item-chart?", "/impact-graph?") if k in f.url}
+                    if len(frames) == 2:
+                        break
+                    time.sleep(0.1)
+                self.assertEqual(len(frames), 2, [f.url for f in page.frames])
+                frames["/item-chart?"].evaluate(post, 1234)
+                frames["/impact-graph?"].evaluate(post, 1357)
+                _wait_for(page, "s => document.querySelector(s).style.height === '1357px'", impact)
+                self.assertEqual(page.evaluate(height, flow), "", "the flowchart frame resized itself")
+
+    def test_portfolio_setup_links_the_guide_and_its_command_wraps(self):
+        # Catches (U4): "Setup guide" pointing at a README anchor that does not exist, and the command box cut
+        # off at the column's right edge. Catches (1.47 docs): the link landing at the page's top instead of the
+        # Portfolio section, and the box suggesting `/overture:portfolio-add`, a skill the plugin never shipped,
+        # instead of the real steps (`agent.py portfolio-token`).
+        guide = "https://github.com/MikeHeid/overture/blob/main/docs/features/dashboard-and-map.md"
+        section = Path(__file__).with_name("docs").joinpath("features", "dashboard-and-map.md").read_text()
+        self.assertIn("\n## Portfolio: your other consoles\n", section)
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('portfolio')")
+                page.wait_for_selector(".ck-portfolio-upgrade-code")
+                self.assertEqual(page.get_attribute(".ck-portfolio-upgrade-doc a", "href"),
+                                 guide + "#portfolio-your-other-consoles")
+                steps = page.text_content(".ck-portfolio-upgrade-code")
+                self.assertNotIn("portfolio-add", steps)
+                self.assertIn("agent.py portfolio-token", steps)
+                self.assertIn("portfolio-secrets/<peer>.json", steps)
+                self.assertIn(".overture/portfolio.json", steps)
+                self.assertTrue(page.evaluate("() => { const p = document.querySelector('.ck-portfolio-upgrade-code');"
+                                              " return p.scrollWidth <= p.clientWidth; }"))
+
+    def test_the_delegate_bar_in_playbook_mode_fits_and_hides_the_item_picker(self):
+        # Catches (U4): radio rows pushed past the bar's right edge by a long playbook <option>, and the "On item"
+        # picker left on show, greyed out, where it does not apply.
+        for kind in BROWSERS:
+            for width in (1280, 375):
+                with self.subTest(browser=kind, width=width):
+                    url = self.serve()
+                    self.playbook()
+                    page = self.page(kind, width, url)
+                    self.open_inbox(page, width)
+                    page.click(".ck-delegate-summary")
+                    page.check("input[name='ck-del-kind'][value='playbook']")
+                    self.assertFalse(page.is_visible("#ck-del-item"))
+                    over = page.evaluate("""() => { const b = document.querySelector('.ck-delegate-body').getBoundingClientRect();
+                      return [...document.querySelectorAll('.ck-delegate-body .ck-option, #ck-del-playbook')]
+                        .filter(e => e.getBoundingClientRect().right > b.right + 1).length; }""")
+                    self.assertEqual(over, 0)
+                    page.check("input[name='ck-del-kind'][value='round']")
+                    self.assertTrue(page.is_visible("#ck-del-item"))
 
 
 if __name__ == "__main__":

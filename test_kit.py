@@ -6799,5 +6799,598 @@ class ServerAuthTests(unittest.TestCase):
         self.assertEqual(self.cli("server", "auth", env={"CLAUDECODE": "1"}).returncode, 0)
 
 
+# -- 1.47.0: --listen (spec147, OPEN-DECISIONS.md "Without Cloudflare", L4 L13-L18) --------------------------------
+import contextlib  # noqa: E402
+import io  # noqa: E402
+import ipaddress  # noqa: E402
+import shutil  # noqa: E402
+import socket  # noqa: E402
+import struct  # noqa: E402
+import threading  # noqa: E402
+from unittest import mock  # noqa: E402
+
+ZT = ("ztexample0", "10.147.17.10", 16, True)        # ZeroTier's common default range (L9), as a fake: never a real one
+FAKE_NET = [("lo", "127.0.0.1", 8, True), ("eth0", "172.23.0.5", 20, True), ZT,
+            ("docker0", "172.17.0.1", 16, True), ("br-5a1f", "10.147.0.1", 16, False),
+            ("tailscale0", "100.101.102.103", 32, True), ("tailscale1", "10.9.9.9", 24, True),
+            ("tailscale2", "100.64.7.7", 32, True)]
+
+
+class _FakeNet:
+    def fake(self, ifaces=FAKE_NET, loopback_ok=False):
+        from overture import netif as NI
+        NI.set_fake(lambda: list(ifaces), loopback_ok=loopback_ok)
+        self.addCleanup(NI.set_fake, None)
+        return NI
+
+
+class NetifTests(_FakeNet, unittest.TestCase):
+    """netif.py: the one interface discovery, contract 1 (which address --listen takes), L16 and L17."""
+
+    def test_refused_by_name_before_any_interface_is_looked_at(self):
+        # Catches (contract 1): 0.0.0.0 bound (every interface), a loopback alias or a public address taken, IPv6
+        # or a hostname let through, and a non-canonical spelling (leading zeros) that a later compare misreads.
+        NI = self.fake()
+        cases = {"0.0.0.0": "every interface", "127.0.0.1": "loopback", "127.9.9.9": "loopback",
+                 "8.8.8.8": "public", "1.1.1.1": "public", "::1": "IPv6", "fe80::1": "IPv6",
+                 "box.example.com": "one IPv4 address", "": "one IPv4 address", "224.0.0.1": "public",
+                 "240.0.0.1": "no ZeroTier", "169.254.1.1": "no ZeroTier", None: "one IPv4 address"}
+        for addr, why in cases.items():
+            with self.subTest(addr=addr):
+                self.assertIn(why, NI.static_problem(addr))
+                with self.assertRaises(NI.ListenError):
+                    NI.check(addr)
+        for ok in ("10.147.17.10", "100.64.0.1", "100.127.255.254", "10.147.17.5", "192.168.191.2"):
+            self.assertIsNone(NI.static_problem(ok), ok)
+
+    def test_only_a_zerotier_or_tailscale_interface_carries_it(self):
+        # Catches (L14): an address on eth0, a Docker bridge or a non-100.64 tailscale* name accepted; ZeroTier
+        # or tailscale0 refused; an address on no interface refused at once instead of waited for (L16); a
+        # disallowed interface waited for instead of refused at once.
+        NI = self.fake()
+        self.assertEqual(NI.check("10.147.17.10"), ("ztexample0", 16, True))
+        self.assertEqual(NI.check("100.101.102.103"), ("tailscale0", 32, True))
+        self.assertEqual(NI.check("100.64.7.7"), ("tailscale2", 32, True))
+        for addr, iface in (("172.23.0.5", "eth0"), ("172.17.0.1", "docker0"), ("10.147.0.1", "br-5a1f"),
+                            ("10.9.9.9", "tailscale1")):
+            with self.subTest(addr=addr), self.assertRaisesRegex(NI.ListenError, f"it is on {iface},"):
+                NI.check(addr)
+        self.assertIsNone(NI.check("10.147.17.5"))   # on no interface yet: waited for
+        self.assertEqual([o[:2] for o in NI.overlays()], [("zerotier", "ztexample0"), ("tailscale", "tailscale0"),
+                                                         ("tailscale", "tailscale2")])
+
+    def test_a_loopback_alias_passes_only_through_the_test_hook(self):
+        # Catches: the loopback refusal bypassable by anything but code (a flag or an environment variable), or
+        # the hook's loopback_ok surviving set_fake(None).
+        NI = self.fake([("ztfake0", "127.0.0.2", 32, True)], loopback_ok=True)
+        self.assertEqual(NI.check("127.0.0.2"), ("ztfake0", 32, True))
+        NI.set_fake(lambda: [("ztfake0", "127.0.0.2", 32, True)])
+        self.assertIn("loopback", NI.problem("127.0.0.2"))
+        NI.set_fake(None)
+        # 1.47 (C6): through 1.47.0 this set two variables that nothing reads, which proved nothing. Now: the
+        # module reads no environment at all (it does not import os, and names no getenv/environ), and a fresh
+        # process given every variable a hook might be keyed on, plus the real `server listen` command line,
+        # still refuses the loopback alias by name.
+        src = Path(NI.__file__).read_text()
+        for word in ("import os", "os.environ", "getenv", "sys.argv"):
+            self.assertNotIn(word, src, word)
+        env = {**os.environ, "OVERTURE_LISTEN_LOOPBACK": "1", "OVERTURE_TEST": "1", "OVERTURE_FAKE_NET": "1",
+               "LISTEN_LOOPBACK_OK": "1"}
+        with tempfile.TemporaryDirectory() as td:
+            env["XDG_CONFIG_HOME"] = td
+            r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", td, "server", "listen",
+                                "127.0.0.2"], env={k: v for k, v in env.items() if k != "CLAUDECODE"},
+                               capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("loopback", r.stderr)
+
+    @staticmethod
+    def netlink(*addrs, done=True):
+        """Bytes as one recv of an RTM_GETADDR dump returns them: one RTM_NEWADDR per (index, ip, prefix)."""
+        import struct
+        out = b""
+        for index, ip, prefix in addrs:
+            attr = struct.pack("=HH", 8, 2) + socket.inet_aton(ip)   # IFA_LOCAL
+            body = struct.pack("=BBBBI", socket.AF_INET, prefix, 0, 0, index) + attr
+            out += struct.pack("=IHHII", 16 + len(body), 20, 2, 1, 0) + body
+        return out + (struct.pack("=IHHII", 20, 3, 2, 1, 0) + b"\0" * 4 if done else b"")
+
+    def test_every_address_of_an_interface_is_seen_secondaries_too(self):
+        # Catches (C3): discovery that sees only each interface's primary address (the 1.47.0 ioctls), so an
+        # owner who picks ZeroTier's second address waits 2 minutes and exits 1 every time; and a parser that
+        # stops at the first message of a recv, or reads a part dump as the end.
+        from overture import netif as NI
+        got, done = NI.parse_netlink(self.netlink((3, "10.147.17.10", 16), (3, "10.147.17.5", 24),
+                                                  (2, "172.23.0.5", 20)))
+        self.assertEqual((got, done), ([(3, "10.147.17.10", 16), (3, "10.147.17.5", 24),
+                                        (2, "172.23.0.5", 20)], True))
+        self.assertEqual(NI.parse_netlink(self.netlink((3, "10.147.17.5", 24), done=False))[1], False)
+        with mock.patch.object(NI, "_netlink_addresses", return_value=[(1, "127.0.0.1", 8), (1, "10.147.17.5", 24)]), \
+                mock.patch.object(NI.socket, "if_indextoname", return_value="ztsecond"), \
+                mock.patch.object(NI, "_ioctl", return_value=b"\0" * 16 + struct.pack("H", 0x41) + b"\0" * 22):
+            self.assertEqual(NI.check("10.147.17.5"), ("ztsecond", 24, True))
+            self.assertEqual(NI.seen_note(), "")
+        if sys.platform.startswith("linux") and shutil.which("ip"):   # the real machine: what `ip` lists, all of it
+            r = subprocess.run(["ip", "-4", "-o", "addr"], capture_output=True, text=True, timeout=30)
+            want = {(f.split()[1], f.split()[3]) for f in r.stdout.splitlines()}
+            self.assertEqual({(n, f"{a}/{p}") for n, a, p, _u in NI.interfaces()}, want)
+
+    @staticmethod
+    def parse_bounded(data: bytes, seconds: float = 5.0):
+        """parse_netlink(data) in a thread joined with a timeout: (still running, result, exception). A parser
+        that loops forever fails the test that calls this instead of hanging the suite."""
+        from overture import netif as NI
+        box: dict = {}
+
+        def go():
+            try:
+                box["ret"] = NI.parse_netlink(data)
+            except BaseException as e:   # noqa: BLE001 - the test inspects what was raised
+                box["exc"] = e
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        t.join(seconds)
+        return t.is_alive(), box.get("ret"), box.get("exc")
+
+    def test_a_malformed_netlink_message_raises_oserror_never_loops_or_reads_past_the_recv(self):
+        # Catches (ni-netlink-no-len-check): a message whose length is 0 (the offset never advances: the server
+        # spins forever at start) or shorter than its own header. Catches (ni-netlink-no-bounds): a message that
+        # claims more bytes than the recv holds, or was cut short, read past the buffer (struct.error, which
+        # interfaces() does not catch) or taken as a part dump, instead of the OSError that falls back to the
+        # ioctls. Each runs under a join timeout, so a regression fails here rather than hanging.
+        good = self.netlink((3, "10.147.17.10", 16), done=False)
+
+        def hdr(length, kind=20):
+            return struct.pack("=IHHII", length, kind, 2, 1, 0)
+        cases = {"zero length": hdr(0) + b"\0" * 16,
+                 "shorter than its header": hdr(8) + b"\0" * 16,
+                 "a length past the recv": hdr(200) + good[16:],
+                 "cut short mid-attribute": good[:-2],
+                 "a second message past the recv": good + hdr(64, 3)}
+        for why, data in cases.items():
+            with self.subTest(why):
+                alive, ret, exc = self.parse_bounded(data)
+                self.assertFalse(alive, "parse_netlink did not return: it loops on " + why)
+                self.assertIsInstance(exc, OSError, (why, ret, exc))
+                self.assertIn("malformed", str(exc))
+
+    def test_a_netlink_error_message_raises_so_discovery_falls_back(self):
+        # Catches (ni-netlink-error-ignored): an NLMSG_ERROR reply (the kernel refused the dump) skipped as an
+        # unknown message, so discovery saw no address at all and never fell back to the ioctls.
+        from overture import netif as NI
+        err = struct.pack("=IHHII", 36, 2, 0, 1, 0) + struct.pack("=i", -1) + struct.pack("=IHHII", 16, 22, 0, 1, 0)
+        alive, ret, exc = self.parse_bounded(err + self.netlink((3, "10.147.17.10", 16)))
+        self.assertFalse(alive)
+        self.assertIsInstance(exc, OSError, (ret, exc))
+        self.assertIn("refused", str(exc))
+        if sys.platform.startswith("linux"):
+            fallback = [("ztexample0", "10.147.17.10", 16, True)]
+            with mock.patch.object(NI, "_netlink_addresses", side_effect=lambda: NI.parse_netlink(err)), \
+                    mock.patch.object(NI, "_primary_only", return_value=fallback) as primary:
+                self.assertEqual(NI.interfaces(), fallback)
+                primary.assert_called_once_with()
+
+    def test_on_a_point_to_point_link_the_local_address_is_taken_not_the_peers(self):
+        # Catches (ni-netlink-peer-addr): IFA_ADDRESS read before IFA_LOCAL. On a point-to-point link the two
+        # differ and IFA_ADDRESS is the far end's, so --listen would be checked against the peer's address.
+        from overture import netif as NI
+        attrs = (struct.pack("=HH", 8, 1) + socket.inet_aton("10.147.17.99")      # IFA_ADDRESS: the peer
+                 + struct.pack("=HH", 8, 2) + socket.inet_aton("10.147.17.10"))   # IFA_LOCAL: this end
+        body = struct.pack("=BBBBI", socket.AF_INET, 32, 0, 0, 7) + attrs
+        msg = struct.pack("=IHHII", 16 + len(body), 20, 2, 1, 0) + body
+        self.assertEqual(NI.parse_netlink(msg), ([(7, "10.147.17.10", 32)], False))
+
+    def test_an_address_also_on_a_disallowed_interface_is_refused(self):
+        # Catches (S3): an address that is ZeroTier's and also an alias on eth0 (or a bridge) taken because one
+        # of its holders is an overlay; the refusal must name the other interface.
+        NI = self.fake([("ztabc", "10.147.17.5", 24, True), ("eth0", "10.147.17.5", 24, True)])
+        with self.assertRaisesRegex(NI.ListenError, "it is on eth0 as well as ztabc"):
+            NI.check("10.147.17.5")
+
+    def test_without_netlink_a_bad_netmask_is_skipped_and_the_wait_says_only_primaries_are_seen(self):
+        # Catches (C4): a non-contiguous netmask raising ValueError out of discovery (only OSError was caught);
+        # (C3) a fallback to the primary-only ioctls that leaves the wait line and its final error silent about it.
+        from overture import netif as NI
+        if not sys.platform.startswith("linux"):
+            self.skipTest("Linux only")
+
+        def ioctl(_s, request, name):
+            addr = {"eth9": "10.0.0.9", "ztok": "10.147.17.1"}[name]
+            mask = "255.0.255.0" if name == "eth9" else "255.255.255.0"
+            data = {NI.SIOCGIFADDR: socket.inet_aton(addr), NI.SIOCGIFNETMASK: socket.inet_aton(mask)}.get(request)
+            return (b"\0" * 20 + data + b"\0" * 16) if data else b"\0" * 16 + struct.pack("H", 0x41) + b"\0" * 22
+        with mock.patch.object(NI, "_netlink_addresses", side_effect=OSError("no netlink")), \
+                mock.patch.object(NI.socket, "if_nameindex", return_value=[(1, "eth9"), (2, "ztok")]), \
+                mock.patch.object(NI, "_ioctl", ioctl):
+            self.assertEqual(NI.interfaces(), [("ztok", "10.147.17.1", 24, True)])
+            self.assertIn("only each interface's primary address is seen", NI.waiting_line("10.147.17.5"))
+            now = [0.0]
+            with self.assertRaisesRegex(NI.ListenError, "only each interface's primary address is seen"):
+                NI.wait("10.147.17.5", lambda _l: None, sleep=lambda s: now.__setitem__(0, now[0] + s),
+                        clock=lambda: now[0])
+        with mock.patch.object(NI, "_netlink_addresses", return_value=[]):
+            NI.interfaces()
+        self.assertEqual(NI.seen_note(), "")   # netlink back: every address is seen again
+
+    def test_an_empty_netlink_read_falls_back_to_the_primaries_and_does_not_hang(self):
+        # Catches: recv() returning b"" mid-dump, which parse_netlink reads as ([], not done) and the timeout
+        # never fires on, so discovery spun forever instead of falling back to the primary-only ioctls.
+        import threading
+        from overture import netif as NI
+        if not sys.platform.startswith("linux"):
+            self.skipTest("Linux only")
+
+        class EmptySocket:
+            calls = 0
+            def __init__(self, *_a): pass
+            def __enter__(self): return self
+            def __exit__(self, *_a): return False
+            def settimeout(self, _t): pass
+            def bind(self, _a): pass
+            def sendto(self, _d, _a): pass
+            def recv(self, _n):
+                EmptySocket.calls += 1
+                if EmptySocket.calls > 50:
+                    raise AssertionError("the netlink loop kept reading an empty socket")
+                return b""
+        result: dict = {}
+
+        def run():
+            try:
+                with mock.patch.object(NI.socket, "socket", EmptySocket):
+                    result["netlink"] = NI._netlink_addresses()
+            except BaseException as e:   # noqa: BLE001 - the thread reports what it raised
+                result["netlink"] = e
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        th.join(5)
+        self.assertFalse(th.is_alive(), "the netlink read loop hung on an empty recv")
+        self.assertIsInstance(result["netlink"], OSError, result["netlink"])
+        self.assertEqual(EmptySocket.calls, 1)
+        EmptySocket.calls = 0
+        with mock.patch.object(NI.socket, "socket", EmptySocket), \
+                mock.patch.object(NI, "_primary_only", return_value=[("ztexample0", "10.147.17.10", 16, True)]):
+            self.assertEqual(NI.interfaces(), [("ztexample0", "10.147.17.10", 16, True)])
+
+    def test_off_linux_listen_is_refused_as_coming_with_1_48(self):
+        # Catches: --listen attempted on macOS (no SIOCGIFADDR there) instead of refused by name.
+        from overture import netif as NI
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertEqual(NI.interfaces(), [])
+            with self.assertRaisesRegex(NI.ListenError, "comes with 1.48"):
+                NI.check("10.147.17.10")
+
+    def test_the_real_discovery_returns_the_shape_and_starts_no_process(self):
+        # Catches: discovery through a subprocess (`ip`), which the one server's no-spawn rule forbids, and a
+        # shape other than [(name, ipv4, prefixlen, up)].
+        from overture import netif as NI
+        if not sys.platform.startswith("linux"):
+            self.skipTest("Linux only")
+        with mock.patch("subprocess.Popen", side_effect=AssertionError("a process was started")):
+            got = NI.interfaces()
+        self.assertIn(("lo", "127.0.0.1", 8), [g[:3] for g in got])
+        for name, addr, prefix, up in got:
+            self.assertIsInstance(name, str)
+            ipaddress.IPv4Address(addr)
+            self.assertTrue(0 <= prefix <= 32)
+            self.assertIsInstance(up, bool)
+
+    def test_the_wait_says_one_line_then_binds_or_gives_up_after_two_minutes(self):
+        # Catches (L16): a line per poll (or none), a poll interval other than 2 s, giving up before 120 s or
+        # never, the address present at once still announced as waited for, and an address that appears on a
+        # Docker bridge mid-wait waited past instead of refused at once.
+        now, lines, sleeps, net = [0.0], [], [], list(FAKE_NET)
+        NI = self.fake(net)
+
+        def sleep(s):
+            sleeps.append(s)
+            now[0] += s
+            if len(sleeps) == 3:
+                net.append(("ztabc", "10.147.17.5", 24, True))
+        got = NI.wait("10.147.17.5", lines.append, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual((got, sleeps, lines), (("ztabc", 24, True), [2, 2, 2],
+                                                ["overture: waiting for 10.147.17.5 on a ZeroTier or Tailscale "
+                                                 "interface (up to 2 minutes)"]))
+        lines.clear()
+        self.assertEqual(NI.wait("10.147.17.10", lines.append, sleep=sleep, clock=lambda: now[0])[0], "ztexample0")
+        self.assertEqual(lines, [])
+        sleeps.clear()
+        now[0] = 0.0
+        with self.assertRaisesRegex(NI.ListenError, "within 2 minutes"):
+            NI.wait("10.200.0.1", lines.append, sleep=lambda s: (sleeps.append(s), now.__setitem__(0, now[0] + s)),
+                    clock=lambda: now[0])
+        self.assertEqual((len(sleeps), now[0], len(lines)), (60, 120.0, 1))
+
+        def bridge(s):
+            now[0] += s
+            net.append(("br-late", "10.201.0.1", 16, True))
+        with self.assertRaisesRegex(NI.ListenError, "it is on br-late"):
+            NI.wait("10.201.0.1", lines.append, sleep=bridge, clock=lambda: now[0])
+
+    def test_an_overlapping_network_is_warned_of_by_name_down_ones_too(self):
+        # Catches (L17): a Docker bridge on the ZeroTier range left unsaid (it may take the route), one that is
+        # down skipped or not marked, a warning without both networks or the interface, and a warning for an
+        # interface that does not overlap (eth0, docker0) or for the listen interface itself.
+        NI = self.fake()
+        got = NI.overlap_warnings("10.147.17.10", NI.check("10.147.17.10"))
+        self.assertEqual(len(got), 1, got)
+        for part in ("br-5a1f (down)", "10.147.0.0/16", "ztexample0", "may shadow the ZeroTier route",
+                     "default-address-pools", "move the ZeroTier network"):
+            self.assertIn(part, got[0])
+        self.assertEqual(NI.overlap_warnings("100.101.102.103", NI.check("100.101.102.103")), [])
+
+
+class DevicesListenOriginTests(unittest.TestCase):
+    def test_the_one_extra_origin_is_the_consoles_own_listen_address_over_http(self):
+        # Catches (L15): ORIGIN relaxed globally (any IP over http), http on another IP than this console's
+        # --listen accepted, the listen form taken without a listen, and a loopback origin given as a --listen
+        # console's overlay origin (it would name the other socket).
+        from overture import devices as DV
+        L = "10.147.17.10"
+        for good in (f"http://{L}", f"http://{L}:4793", f"http://{L}:4793/", "https://box.tailnet.ts.net"):
+            self.assertIsNone(DV.origin_problem(good, L), good)
+        for bad in (f"http://{L}", f"http://{L}:4793"):
+            self.assertIsNotNone(DV.origin_problem(bad), bad)   # no listen: not taken
+        for bad in ("http://10.147.17.11:4793", "http://10.0.0.1", f"http://{L}:4793/x",
+                    f"http://{L}.evil.com", f"http://{L}:99999", "http://10.147.17.1000"):
+            self.assertIsNotNone(DV.origin_problem(bad, L), bad)
+        self.assertIsNone(DV.listen_origin_problem(f"http://{L}:4793", L))
+        # Catches (S1): an https origin (`tailscale serve`) taken with --listen, where the proxy reaches the
+        # loopback socket and every write and sign-in is a 403; it is refused by name, saying what to do.
+        why = DV.listen_origin_problem("https://box.tailnet.ts.net", L)
+        for part in ("is refused", "`tailscale serve` forwards to 127.0.0.1", f"http://{L}:PORT", "drop --listen"):
+            self.assertIn(part, why)
+        for loop in ("http://127.0.0.1:4793", "http://localhost:4793"):
+            self.assertIn("names loopback", DV.listen_origin_problem(loop, L))
+
+
+class RolesUtf8Tests(Tmp):
+    def test_a_roles_file_that_is_not_utf8_is_a_roles_error(self):
+        # Catches (L18 b): invalid UTF-8 in roles.json raising UnicodeDecodeError, which no reader catches as a
+        # RolesError, so the gate drops the connection instead of refusing cleanly (403/503).
+        from overture import roles as RO
+        state = self.dir
+        (state / RO.FILE).write_bytes(b'{"roles": {"a@example.com": {"role": "owner\xff"}}}')
+        for read in (RO.load, RO.two_key_areas):
+            with self.subTest(read=read.__name__), self.assertRaisesRegex(RO.RolesError, "not UTF-8"):
+                read(state)
+        # 1.47 (C6): through 1.47.0 the log was b'\xfe\n', which is "not JSON" whatever the decoding, so the
+        # assertion held even with no UTF-8 handling at all. Now a real role change, made by set_role, has one
+        # byte of its email made invalid: a lenient decode would still parse it as a well-formed line.
+        (state / RO.FILE).unlink()
+        RO.set_role(state, "bob@example.com", "owner")
+        good = (state / RO.LOG_FILE).read_bytes()
+        self.assertEqual(RO.history(state)[1], 1)   # the control: the untouched line is read
+        (state / RO.LOG_FILE).write_bytes(good.replace(b"bob@", b"bo\xffb@", 1))   # another size: no cached parse
+        with self.assertRaisesRegex(RO.RolesError, "not readable.*utf-8"):
+            RO.history(state)
+
+
+class ServerListenTests(_FakeNet, unittest.TestCase):
+    """1.47.0 (contract 9): server.json's top-level "listen", kept by every writer, and `agent.py server listen`."""
+
+    TEAM = ServerAddTests.TEAM
+    setUp, tearDown, add = ServerAddTests.setUp, ServerAddTests.tearDown, ServerAddTests.add
+    cli = ServerAuthTests.cli
+    L = "10.147.17.10"
+
+    def run_agent(self, *args, claude=False):
+        import agent as AG
+        out, err = io.StringIO(), io.StringIO()
+        env = {"XDG_CONFIG_HOME": str(self.cfg), **({"CLAUDECODE": "1"} if claude else {})}
+        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            if not claude:
+                os.environ.pop("CLAUDECODE", None)
+            rc = AG.main(["--state", str(self.state), *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def link_server(self):
+        self.assertEqual(self.add().returncode, 0)
+        self.assertEqual(self.cli("server", "auth", "link").returncode, 0)
+
+    def test_set_listen_refuses_the_wildcard_or_a_public_address_by_name_at_write_time(self):
+        # Catches (sf-set-listen-no-static-check): serverfile.set_listen writing 0.0.0.0 or a public address, left
+        # for the next start to refuse (or the next load to fail) instead of refused by name now, by any caller
+        # other than agent.py's own check; and the file changed by a refused write.
+        from overture import serverfile as SF
+        self.fake()
+        self.link_server()
+        before = self.sfile.read_bytes()
+        for addr, why in (("0.0.0.0", "every interface"), ("8.8.8.8", "public")):
+            with self.subTest(addr=addr):
+                with self.assertRaisesRegex(SF.ServerFileError, why):
+                    SF.set_listen(addr, path=self.sfile)
+                self.assertEqual(self.sfile.read_bytes(), before)
+
+    def test_listen_is_kept_by_every_writer(self):
+        # Catches: a writer (add, rotate, set_auth, set_listen) that drops "listen", so the next start takes every
+        # door off the overlay unseen; a file with no listen gaining the key; and --clear leaving it behind.
+        from overture import serverfile as SF
+        self.fake()
+        self.link_server()
+        self.assertNotIn("listen", json.loads(self.sfile.read_text()))
+        SF.set_listen(self.L, path=self.sfile)
+        writers = [lambda: SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile,
+                                  slugs=["x"]),
+                   lambda: SF.rotate("alpha", path=self.sfile, registry=self.reg),
+                   lambda: SF.set_auth("link", path=self.sfile),
+                   lambda: SF.set_listen(self.L, path=self.sfile)]
+        for w in writers:
+            w()
+            self.assertEqual(json.loads(self.sfile.read_text())["listen"], self.L)
+            self.assertEqual(SF.load(self.sfile)["listen"], self.L)
+        SF.set_listen(None, path=self.sfile)
+        self.assertNotIn("listen", json.loads(self.sfile.read_text()))
+
+    def test_listen_needs_link_mode_and_cloudflare_cannot_come_back_while_it_is_set(self):
+        # Catches (contract 2): listen set on a Cloudflare server, `server auth cloudflare` accepted while every
+        # door listens on the overlay, a hand-written listen read on a Cloudflare file or one refused by name
+        # (0.0.0.0) read at all, and an entry's loopback origin left to fight the overlay one.
+        from overture import serverfile as SF
+        self.fake()
+        self.assertEqual(self.add().returncode, 0)
+        with self.assertRaisesRegex(SF.ServerFileError, "Cloudflare Access, which listens on 127.0.0.1 only"):
+            SF.set_listen(self.L, path=self.sfile)
+        doc = json.loads(self.sfile.read_text())
+        self.sfile.write_text(json.dumps({**doc, "listen": self.L}))
+        with self.assertRaisesRegex(SF.ServerFileError, "link mode"):
+            SF.load(self.sfile)
+        self.sfile.write_text(json.dumps(doc))
+        SF.set_auth("link", path=self.sfile)
+        SF.set_listen(self.L, path=self.sfile)
+        with self.assertRaisesRegex(SF.ServerFileError, "server listen --clear"):
+            SF.set_auth("cloudflare", path=self.sfile)
+        doc = json.loads(self.sfile.read_text())
+        for bad in ("0.0.0.0", "8.8.8.8", "::1", 7):
+            self.sfile.write_text(json.dumps({**doc, "listen": bad}))
+            with self.subTest(bad=bad), self.assertRaises(SF.ServerFileError):
+                SF.load(self.sfile)
+        self.sfile.write_text(json.dumps(doc))
+        e = SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile,
+                   origin=f"http://{self.L}:4801")
+        self.assertEqual(SF.entry_problems("alpha", e, "link", self.L), [])
+        with self.assertRaisesRegex(SF.ServerFileError, "names loopback"):
+            SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile,
+                   origin="http://127.0.0.1:4801")
+        # 1.47 (C1): http://LISTEN:4801 would not survive the clear, so the entry drops its origin first
+        SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile)
+        SF.set_listen(None, path=self.sfile)
+        SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile,
+               origin="http://127.0.0.1:4801")
+        with self.assertRaisesRegex(SF.ServerFileError, "names loopback"):
+            SF.set_listen(self.L, path=self.sfile)
+
+    def test_changing_or_clearing_listen_rechecks_every_entrys_origin(self):
+        # Catches (C1): `server listen` changed or cleared while an entry still holds http://OLD:PORT, which the
+        # file kept and the next start refused, silently; and the refusal not naming the project or what to do.
+        from overture import serverfile as SF
+        self.fake()
+        self.link_server()
+        SF.set_listen(self.L, path=self.sfile)
+        SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile,
+               origin=f"http://{self.L}:4801")
+        for new, said in ((None, "clearing listen"), ("10.147.17.5", "listen 10.147.17.5")):
+            with self.subTest(new=new), self.assertRaisesRegex(
+                    SF.ServerFileError, f"^{said} would leave this project refused at the next start: alpha: "
+                                        f".*http://{self.L}:4801.*re-add each with its new --origin URL"):
+                SF.set_listen(new, path=self.sfile)
+            self.assertEqual(json.loads(self.sfile.read_text())["listen"], self.L)   # nothing was written
+        SF.set_listen(self.L, path=self.sfile)   # the control: the same address breaks nothing
+        SF.add("alpha", self.state, None, None, 4801, None, registry=self.reg, path=self.sfile)   # the way out
+        SF.set_listen(None, path=self.sfile)
+        self.assertNotIn("listen", json.loads(self.sfile.read_text()))
+
+    def test_server_listen_shows_sets_warns_refuses_and_clears(self):
+        # Catches (contract 9): `server listen` unable to set an address ZeroTier has not brought up yet (L16
+        # waits for it at start), no warning then, an address on a Docker bridge or eth0 accepted, the L17
+        # warning not printed, and --clear not clearing.
+        self.link_server()
+        net = [("ztexample0", self.L, 16, True), ("br-5a1f", "10.147.0.1", 16, False),
+               ("docker0", "172.17.0.1", 16, True)]
+        self.fake(net)
+        rc, out, _ = self.run_agent("server", "listen")
+        self.assertEqual((rc, out.strip()), (0, "server listen: none (every owner door on 127.0.0.1)"))
+        rc, out, err = self.run_agent("server", "listen", self.L)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("br-5a1f (down)", err)
+        self.assertIn(f"http://{self.L}:PORT", out)
+        self.assertEqual(json.loads(self.sfile.read_text())["listen"], self.L)
+        rc, out, err = self.run_agent("server", "listen", "10.147.17.5")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("no ZeroTier or Tailscale interface holds 10.147.17.5 now", err)
+        for bad, why in (("172.17.0.1", "it is on docker0"), ("0.0.0.0", "every interface"),
+                         ("127.0.0.1", "loopback")):
+            rc, _, err = self.run_agent("server", "listen", bad)
+            self.assertEqual(rc, 1, bad)
+            self.assertIn(why, err)
+            self.assertEqual(json.loads(self.sfile.read_text())["listen"], "10.147.17.5")
+        rc, out, _ = self.run_agent("server", "listen")
+        self.assertIn("server listen: 10.147.17.5", out)
+        rc, out, _ = self.run_agent("server", "listen", "--clear")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("listen", json.loads(self.sfile.read_text()))
+
+    def test_a_session_may_show_listen_but_not_set_or_clear_it(self):
+        # Catches: a Claude Code session able to put every console on a network address of its choosing.
+        self.link_server()
+        for args in (("server", "listen", self.L), ("server", "listen", "--clear")):
+            r = self.cli(*args, env={"CLAUDECODE": "1"})
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn("refused inside a Claude Code session", r.stderr)
+        self.assertNotIn("listen", json.loads(self.sfile.read_text()))
+        self.assertEqual(self.cli("server", "listen", env={"CLAUDECODE": "1"}).returncode, 0)
+
+    def test_an_invite_names_the_overlay_origin_with_listen_and_the_override_wins(self):
+        # Catches: `agent.py invite` printing http://127.0.0.1:PORT for a server whose browsers come over
+        # ZeroTier, its --origin refusing the console's own http://LISTEN:PORT, and an entry's explicit origin
+        # not winning over the default.
+        self.fake()
+        self.link_server()
+        from overture import serverfile as SF
+        SF.set_listen(self.L, path=self.sfile)
+        rc, out, err = self.run_agent("invite", "bob@example.com")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(f"http://{self.L}:4801/signin?t=ovi_", out)
+        rc, out, err = self.run_agent("invite", "bob@example.com", "--origin", f"http://{self.L}:4801")
+        self.assertEqual(rc, 0, err)
+        rc, out, _ = self.run_agent("invite", "bob@example.com", "--origin", "https://box.tailnet.ts.net")
+        self.assertIn("https://box.tailnet.ts.net/signin?t=ovi_", out)
+        rc, _, err = self.run_agent("invite", "bob@example.com", "--origin", "http://8.8.8.8:4801")
+        self.assertEqual(rc, 2, err)
+
+    def test_an_invite_takes_http_only_on_this_consoles_own_listen_address(self):
+        # Catches (S2): `invite --origin http://X` accepted for any X netif would take by name (a LAN address, a
+        # neighbour's ZeroTier address), printing a link to a console that is not there; and the single server's
+        # own --listen (CONSOLE_LISTEN in its console.env) refused.
+        self.fake()
+        self.link_server()
+        for lan in ("http://192.168.1.5:4801", f"http://{self.L}:4801", "http://10.147.17.5:4801"):
+            rc, out, err = self.run_agent("invite", "bob@example.com", "--origin", lan)
+            self.assertEqual((rc, out), (2, ""), lan)
+            self.assertIn("http is taken only on loopback and on this console's own --listen address (it has "
+                          "none)", err)
+        (self.root / ".overture").mkdir()
+        (self.root / ".overture" / "console.env").write_text("CONSOLE_AUTH=link\nCONSOLE_LISTEN=10.147.17.5\n")
+        rc, out, err = self.run_agent("invite", "bob@example.com", "--origin", "http://10.147.17.5:4801")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("http://10.147.17.5:4801/signin?t=ovi_", out)
+        rc, _, err = self.run_agent("invite", "bob@example.com", "--origin", "http://192.168.1.5:4801")
+        self.assertIn("(10.147.17.5)", err)
+        self.assertEqual(rc, 2)
+        rc, out, err = self.run_agent("invite", "bob@example.com", "--origin", "http://127.0.0.1:4801")
+        self.assertEqual(rc, 0, err)   # loopback stays
+
+
+from overture import playbooks as PB  # noqa: E402
+
+
+class PlaybookWhenWordsTests(unittest.TestCase):
+    """1.47 (U4): a `when` predicate in words, so a skipped step says what it waits for."""
+
+    def test_each_kind_and_its_negation_reads_as_a_sentence(self):
+        # Catches: "not(ok)" (a `not` echoing its inner reason, which is empty when the inner predicate holds),
+        # a `not` that wraps rather than negates ("not (… at least …)"), and "1 stale questions".
+        has = {"kind": "item_has_state", "item": "AB-2", "state": "awaiting_you", "min": 1}
+        cases = [
+            ({"kind": "item_exists", "item": "AB-2"}, "item AB-2 is in the item list"),
+            ({"kind": "has_section", "name": "api"}, "section 'api' is configured"),
+            (has, "AB-2 has at least 1 awaiting you question"),
+            ({"kind": "project_has_state", "state": "stale", "min": 3}, "the project has at least 3 stale questions"),
+            ({"kind": "not", "of": has}, "AB-2 has fewer than 1 awaiting you question"),
+            ({"kind": "not", "of": {"kind": "not", "of": {"kind": "has_section", "name": "api"}}},
+             "section 'api' is configured"),
+        ]
+        for when, words in cases:
+            with self.subTest(when=when):
+                self.assertEqual(PB.describe_when(when), words)
+
+    def test_a_failing_not_says_what_held(self):
+        # Catches (U4): the reason "not(ok)" for a `not` whose inner predicate held.
+        when = {"kind": "not", "of": {"kind": "item_exists", "item": "AB-2"}}
+        self.assertEqual(PB.evaluate_when(when, {}, {"AB-2": {}}),
+                         (False, "it runs only when item AB-2 is not in the item list"))
+        self.assertEqual(PB.evaluate_when(when, {}, {}), (True, ""))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

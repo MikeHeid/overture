@@ -118,13 +118,46 @@ def clean_origin(origin: str) -> str:
     return origin[:-1] if isinstance(origin, str) and origin.endswith("/") else origin
 
 
-def origin_problem(origin: object) -> str | None:
-    """Why `origin` is not a console origin for link mode, or None (after `clean_origin`)."""
+def origin_problem(origin: object, listen: str | None = None) -> str | None:
+    """Why `origin` is not a console origin for link mode, or None (after `clean_origin`).
+
+    1.47.0 (L15): `listen` is the --listen address of the console being configured, already accepted by
+    netif. It adds exactly one form, `http://<that address>[:PORT]` (ZeroTier encrypts end to end, so plain
+    http on it is the overlay's own); no other IP is taken over http, and ORIGIN itself is unchanged."""
+    if isinstance(origin, str) and isinstance(listen, str) and listen \
+            and re.fullmatch(rf"http://{re.escape(listen)}{_PORT}", clean_origin(origin)):
+        return None
     if not isinstance(origin, str) or not ORIGIN.match(clean_origin(origin)):
         return (f"origin {origin!r} is refused: use https://NAME[:PORT] (a bare DNS name, e.g. "
                 f"https://box.tailnet.ts.net) or http://127.0.0.1[:PORT] / http://localhost[:PORT], lowercase, "
-                f"with no path, query, fragment or user name")
+                f"with no path, query, fragment or user name"
+                + (f"; with --listen, http://{listen}[:PORT]" if isinstance(listen, str) and listen else ""))
     return None
+
+
+def listen_origin_problem(origin: str, listen: str) -> str | None:
+    """1.47.0 (contract 3 as amended by the owner): with --listen a console has two origins, one per socket.
+    Loopback's (http://127.0.0.1:PORT, http://localhost:PORT) is always there; the configured origin is the
+    LISTEN socket's, http://LISTEN:PORT. A loopback origin there would name the wrong socket, and an https one
+    (a proxy's, which reaches the loopback socket) cannot work (S1), so both are refused by name."""
+    if urlsplit_host(origin) in ("127.0.0.1", "localhost"):
+        return (f"origin {origin!r} names loopback, which a console with --listen {listen} already answers as "
+                f"http://127.0.0.1:PORT; --origin names the overlay address (http://{listen}:PORT, the default)")
+    # 1.47 (S1, architect default): an https origin is a proxy's (`tailscale serve`), and a proxy on this machine
+    # forwards to 127.0.0.1:PORT, the loopback socket, whose origins are http://127.0.0.1 and http://localhost
+    # only: every sign-in and write through it was a 403. The two sockets' origin sets stay disjoint, so the
+    # combination is refused by name.
+    if isinstance(origin, str) and origin.startswith("https://"):
+        return (f"origin {origin!r} with --listen {listen} is refused: `tailscale serve` forwards to 127.0.0.1, "
+                f"whose socket takes only loopback origins, so every sign-in and write through it would be "
+                f"refused (403). With --listen, the origin is http://{listen}:PORT; to use `tailscale serve`, "
+                f"drop --listen (the console stays on 127.0.0.1, which is what `tailscale serve` points at)")
+    return None
+
+
+def urlsplit_host(origin: str) -> str | None:
+    m = re.match(r"^[a-z]+://([^:/]+)", origin) if isinstance(origin, str) else None
+    return m.group(1) if m else None
 
 
 def _now(now: datetime | None) -> datetime:
