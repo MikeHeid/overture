@@ -2119,6 +2119,13 @@
     // Taken BEFORE the clear: once detached, getElementById no longer finds it, and from 1.30.1 to
     // 1.34.6 the lookup came after, so every repaint threw an open wizard away mid-sentence.
     const auxPaneEl = document.getElementById('ck-launch-pane');
+    // 1.46 (L12): a Settings box being typed in keeps its focus (and caret) through the redraw; its text is kept
+    // by settingsDraft. Other controls keep the focus rules they had (redrawKeepingPlace).
+    const act = document.activeElement;
+    const typingKey = act && panelEl.contains(act) && (act.getAttribute('data-focus-key') || '').startsWith('settings-')
+      ? act.getAttribute('data-focus-key') : null;
+    let caret = null;
+    try { caret = typingKey ? [act.selectionStart, act.selectionEnd] : null; } catch (e) { caret = null; }
     panelEl.textContent = '';
     pendingLive = false;
     // persistent chrome (status chip, dock handle, aux pane) was being wiped on every
@@ -2146,6 +2153,13 @@
     // closePanel() when the whole panel is dismissed.
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
     placeStatusChip();
+    if (typingKey) {
+      const twin = panelEl.querySelector('[data-focus-key="' + CSS.escape(typingKey) + '"]');
+      if (twin) {
+        twin.focus();
+        try { if (caret && caret[0] !== null) twin.setSelectionRange(caret[0], caret[1]); } catch (e) { /* number, time */ }
+      }
+    }
   }
   // The status chip sits IN the header's row, before the skin and theme toggles, so it takes its own
   // space. Through 1.31 it floated at a fixed offset from the right and covered those toggles.
@@ -3219,6 +3233,8 @@
     return el('div', { className: 'ck-offline' }, [
       el('div', { className: 'ck-offline-icon' }, ['⚠']),
       el('div', { className: 'ck-offline-text' }, [
+        // 1.46: this browser's own device was revoked from this page (People): it opens nothing any more.
+        signedOut ? 'This browser is signed out. Ask the console\'s owner for a new sign-in link to come back.' :
         cursor && cursor.last_error ? cursor.last_error :
         "Can't reach the console server — the machine may be asleep. Nothing you typed was lost."
       ])
@@ -4065,11 +4081,17 @@
     for (const e of log) {
       // by null: the owner's terminal (`agent.py access`, or `operator-name` for a short name); a limit or a
       // lane has no terminal command, so its null is a console sign-in that carried no email (a service token).
+      // 1.46: a sign-in link's life (devices.py): an invite is made in the terminal, a sign-in is by the
+      // browser's own login, and a revoke by an administrator here or `agent.py devices --revoke` there.
       const who = e.by ? (e.by === roles.me ? 'You' : e.by)
+        : e.device ? (e.device.action === 'invite' ? 'agent.py invite' : 'agent.py devices')
         : !e.setting ? 'agent.py access'
         : e.setting.key === 'operator_name' ? 'agent.py operator-name' : 'A sign-in with no email';
       const areaWords = a => (a && a.length ? a.join(', ') : 'none');   // 1.43: a change of the two-key areas
-      const what = e.setting ? describeSetting(e.setting)
+      const what = e.device ? (e.device.action === 'invite' ? ' invited ' + e.device.email
+          : e.device.action === 'signin' ? ' signed in a browser'
+          : ' revoked a browser of ' + e.device.email)
+        : e.setting ? describeSetting(e.setting)
         : e.two_key ? ' set the two-key areas to ' + areaWords(e.two_key.to) + ' (was ' +
           areaWords(e.two_key.from) + ')'
         : !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
@@ -4082,6 +4104,72 @@
     body.appendChild(ul);
     if (roles.log_total > log.length) body.appendChild(el('p', { className: 'ck-muted' }, [
       'The newest ' + log.length + ' of ' + roles.log_total + ' changes; STATE/roles-log.jsonl keeps them all.']));
+  }
+  // 1.46 (L2): the browsers signed in by link (a console with --auth link only). Revoke asks in the page, never
+  // a browser dialog; revoking the browser this page runs in says so, as the page is signed out with it.
+  let deviceAsk = null;     // the id whose Revoke is asking "are you sure?"
+  let deviceError = null;
+  let signedOut = false;    // this page revoked its own browser
+  async function revokeDevice(id, mine) {
+    const r = await apiPost('/device-revoke', { id }, 'device-revoke-' + id, { quiet: true, refresh: !mine });
+    deviceAsk = null;
+    deviceError = r && r.error ? r.error : null;
+    if (!deviceError) announce(mine ? 'This browser is signed out.' : 'Browser signed out.');
+    if (!deviceError && mine) {   // this page's own cookie no longer opens anything: say so, and stop asking
+      signedOut = true;
+      liveStopped = true;
+      if (liveAbort) liveAbort.abort();
+      view = null;
+    }
+    renderPanel();
+  }
+  function renderDevices(body, roles) {
+    if (roles.auth !== 'link') return;
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Signed-in browsers']));
+    body.appendChild(el('p', { className: 'ck-muted ck-devices-hint' }, [
+      'Invite someone: run ', el('code', {}, ['agent.py invite EMAIL']), ' in your terminal. The link works once, ' +
+      'within a day; the browser that opens it stays signed in until you revoke it here.']));
+    if (roles.devices_problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [roles.devices_problem]));
+    if (deviceError) body.appendChild(el('p', { className: 'ck-error-msg', role: 'alert' }, [deviceError]));
+    const devices = Array.isArray(roles.devices) ? roles.devices : [];
+    if (!devices.length) {
+      body.appendChild(el('p', { className: 'ck-muted' }, ['No browser is signed in here yet.']));
+      return;
+    }
+    const ul = el('ul', { className: 'ck-people-list ck-devices' });
+    for (const d of devices) {
+      const mine = !!roles.this_device && d.id === roles.this_device;
+      const row = el('li', { className: 'ck-people-row ck-device-row', dataDevice: d.id });
+      row.appendChild(el('span', { className: 'ck-device-what' }, [
+        d.label + ' · signed in ',
+        el('span', { title: new Date(d.created).toLocaleString() }, [relTime(d.created)]),
+        ' · ' + d.email + (mine ? ' (this browser)' : '')]));
+      if (deviceAsk === d.id) {
+        row.appendChild(el('span', { className: 'ck-device-ask', role: 'status' }, [
+          mine ? 'Revoke this browser? You are using it: this page signs out at once.'
+            : 'Revoke this browser? Its next request is refused.']));
+        const yes = el('button', { className: 'ck-btn ck-btn-danger ck-device-confirm', type: 'button',
+          'data-focus-key': 'device-confirm-' + d.id }, ['Revoke']);
+        yes.addEventListener('click', () => revokeDevice(d.id, mine));
+        const no = el('button', { className: 'ck-btn ck-btn-quiet ck-device-cancel', type: 'button' }, ['Keep it']);
+        no.addEventListener('click', () => { deviceAsk = null; renderPanel(); });
+        row.appendChild(yes);
+        row.appendChild(no);
+      } else {
+        const b = el('button', { className: 'ck-btn ck-btn-quiet ck-device-revoke', type: 'button',
+          'aria-label': 'Revoke ' + d.label + ' of ' + d.email }, ['Revoke']);
+        b.addEventListener('click', () => {
+          deviceAsk = d.id;
+          deviceError = null;
+          renderPanel();
+          const c = panelEl.querySelector('[data-focus-key="device-confirm-' + d.id + '"]');
+          if (c) c.focus();
+        });
+        row.appendChild(b);
+      }
+      ul.appendChild(row);
+    }
+    body.appendChild(ul);
   }
   function renderPeopleTab(body) {
     const roles = view && view.roles;
@@ -4115,6 +4203,7 @@
           'Open the console with your own Access login.']));
       }
       body.appendChild(box);
+      renderDevices(body, roles);
       renderRoleLog(body, roles);
       return;
     }
@@ -4166,6 +4255,7 @@
     body.appendChild(add);
     // 1.44: the two-key areas moved to Settings, where a director sets them too.
     body.appendChild(el('p', { className: 'ck-muted' }, ['Two-key areas, limits, lanes and short names are under Settings.']));
+    renderDevices(body, roles);
     renderRoleLog(body, roles);
   }
 
@@ -4173,10 +4263,28 @@
   // Values live beside the project on the console's machine (STATE/settings.json), override the defaults,
   // apply at once and are logged; the server re-checks every value and who sent it.
   let settingsError = null;
-  async function postSettings(endpoint, body, done) {
+  // 1.46 (L12): what is typed in a Settings box and not saved yet, by field. A redraw (a live change, or a Save
+  // on another row) builds every box afresh from the server's values; through 1.45 that dropped the typing.
+  // A field's draft goes when its own Save (or Reset) succeeds, and stays when the server refuses it.
+  const settingsDraft = {};
+  function draftField(input, key, saved) {
+    if (Object.prototype.hasOwnProperty.call(settingsDraft, key)) input.value = settingsDraft[key];
+    input.setAttribute('data-focus-key', 'settings-' + key);   // renderPanel puts focus back on its twin
+    const keep = () => {
+      if (input.value === String(saved === null || saved === undefined ? '' : saved)) delete settingsDraft[key];
+      else settingsDraft[key] = input.value;
+    };
+    input.addEventListener('input', keep);
+    input.addEventListener('change', keep);
+    return input;
+  }
+  async function postSettings(endpoint, body, done, drafts) {
     const r = await apiPost(endpoint, body, 'settings-' + JSON.stringify(body), { quiet: true });
     settingsError = r && r.error ? r.error : null;
-    if (!settingsError) announce(done);
+    if (!settingsError) {
+      for (const k of drafts || []) delete settingsDraft[k];
+      announce(done);
+    }
     renderPanel();
   }
   function settingsButton(label, onClick, quiet) {
@@ -4190,8 +4298,8 @@
     for (const key of Object.keys(s.limits)) {
       const lim = s.limits[key];
       const id = 'ck-setting-' + key;
-      const input = el('input', { type: 'number', className: 'ck-input ck-settings-number', id,
-        min: String(lim.min), max: String(lim.max), step: '1', value: String(s.values[key]) });
+      const input = draftField(el('input', { type: 'number', className: 'ck-input ck-settings-number', id,
+        min: String(lim.min), max: String(lim.max), step: '1', value: String(s.values[key]) }), key, s.values[key]);
       const here = Object.prototype.hasOwnProperty.call(s.set, key);
       const row = el('li', { className: 'ck-settings-row', dataKey: key }, [
         el('label', { className: 'ck-settings-label', for: id }, [lim.label]), input,
@@ -4202,10 +4310,10 @@
             renderPanel();
             return;
           }
-          postSettings('/settings', { key, value: n }, lim.label + ': ' + n);
+          postSettings('/settings', { key, value: n }, lim.label + ': ' + n, [key]);
         }),
         here ? settingsButton('Reset', () => postSettings('/settings', { key, value: null },
-          lim.label + ': back to ' + s.defaults[key]), true) : null,
+          lim.label + ': back to ' + s.defaults[key], [key]), true) : null,
         el('span', { className: 'ck-muted ck-settings-note' }, [
           here ? 'set here; the default is ' + s.defaults[key] : 'the default (' + lim.min + ' to ' + lim.max + ')'])]);
       ul.appendChild(row);
@@ -4225,14 +4333,15 @@
     const ul = el('ul', { className: 'ck-settings-list' });
     const rows = [];
     for (const lane of Array.from(all).sort()) {
-      const label = el('input', { type: 'text', className: 'ck-input ck-settings-lane-label', maxlength: '40',
+      const label = draftField(el('input', { type: 'text', className: 'ck-input ck-settings-lane-label', maxlength: '40',
         value: (mine[lane] && mine[lane].label) || '', placeholder: (repo[lane] && repo[lane].label) || 'no label',
-        'aria-label': 'Label for ' + lane, autocomplete: 'off' });
+        'aria-label': 'Label for ' + lane, autocomplete: 'off' }), 'lane-label:' + lane, (mine[lane] && mine[lane].label) || '');
       const color = el('select', { className: 'ck-input ck-settings-lane-color', 'aria-label': 'Colour for ' + lane });
       const repoColor = repo[lane] && repo[lane].color;
       color.appendChild(el('option', { value: '' }, [repoColor ? 'project\'s (' + repoColor + ')' : 'automatic']));
       for (const c of s.lane_colors) color.appendChild(el('option', { value: c }, [c]));
       color.value = (mine[lane] && mine[lane].color) || '';
+      draftField(color, 'lane-color:' + lane, color.value);
       rows.push([lane, label, color]);
       ul.appendChild(el('li', { className: 'ck-settings-row', dataLane: lane }, [el('code', {}, [lane]), label, color]));
     }
@@ -4245,7 +4354,8 @@
         if (color.value) o.color = color.value;
         if (Object.keys(o).length) value[lane] = o;
       }
-      postSettings('/settings', { key: 'lanes', value: Object.keys(value).length ? value : null }, 'Lanes saved');
+      postSettings('/settings', { key: 'lanes', value: Object.keys(value).length ? value : null }, 'Lanes saved',
+        rows.flatMap(([lane]) => ['lane-label:' + lane, 'lane-color:' + lane]));
     });
     body.appendChild(el('div', { className: 'ck-settings-actions' }, [save]));
   }
@@ -4271,8 +4381,9 @@
     ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_on' }, [on,
       el('label', { for: 'ck-setting-notify_on' }, ['Send notifications'])]));
     const [lo, hi] = n.every || [5, 1440];
-    const every = el('input', { type: 'number', className: 'ck-input ck-settings-number', id: 'ck-setting-notify_every',
-      min: String(lo), max: String(hi), step: '1', value: String(s.values.notify_every) });
+    const every = draftField(el('input', { type: 'number', className: 'ck-input ck-settings-number', id: 'ck-setting-notify_every',
+      min: String(lo), max: String(hi), step: '1', value: String(s.values.notify_every) }), 'notify_every',
+      s.values.notify_every);
     const everyHere = Object.prototype.hasOwnProperty.call(s.set, 'notify_every');
     ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_every' }, [
       el('label', { className: 'ck-settings-label', for: 'ck-setting-notify_every' }, ['At most one message every (minutes)']),
@@ -4284,20 +4395,24 @@
           renderPanel();
           return;
         }
-        postSettings('/settings', { key: 'notify_every', value: v }, 'At most one message every ' + v + ' minutes');
+        postSettings('/settings', { key: 'notify_every', value: v }, 'At most one message every ' + v + ' minutes',
+          ['notify_every']);
       }),
       everyHere ? settingsButton('Reset', () => postSettings('/settings', { key: 'notify_every', value: null },
-        'Notifications: back to the default'), true) : null]));
+        'Notifications: back to the default', ['notify_every']), true) : null]));
     const q = s.values.notify_quiet;
-    const from = el('input', { type: 'time', className: 'ck-input', value: q ? q.from : '22:00', 'aria-label': 'Quiet from' });
-    const to = el('input', { type: 'time', className: 'ck-input', value: q ? q.to : '07:00', 'aria-label': 'Quiet until' });
+    const from = draftField(el('input', { type: 'time', className: 'ck-input', value: q ? q.from : '22:00',
+      'aria-label': 'Quiet from' }), 'quiet-from', q ? q.from : '22:00');
+    const to = draftField(el('input', { type: 'time', className: 'ck-input', value: q ? q.to : '07:00',
+      'aria-label': 'Quiet until' }), 'quiet-to', q ? q.to : '07:00');
     ul.appendChild(el('li', { className: 'ck-settings-row', dataKey: 'notify_quiet' }, [
       el('span', { className: 'ck-settings-label' }, ['Quiet hours (this console\'s clock)' + (q ? '' : ': none')]),
       from, to,
       settingsButton('Save', () => postSettings('/settings',
-        { key: 'notify_quiet', value: { from: from.value, to: to.value } }, 'Quiet ' + from.value + '–' + to.value)),
+        { key: 'notify_quiet', value: { from: from.value, to: to.value } }, 'Quiet ' + from.value + '–' + to.value,
+        ['quiet-from', 'quiet-to'])),
       q ? settingsButton('No quiet hours', () => postSettings('/settings', { key: 'notify_quiet', value: null },
-        'No quiet hours'), true) : null]));
+        'No quiet hours', ['quiet-from', 'quiet-to']), true) : null]));
     body.appendChild(ul);
     if (n.last_error) body.appendChild(el('p', { className: 'ck-error-msg' }, ['The last message failed: ' + n.last_error +
       '. It is tried again next time.']));
@@ -4310,15 +4425,24 @@
     body.appendChild(el('p', { className: 'ck-muted' }, [
       'In these areas (an item and everything under it) a lock counts once a second person confirms it: ' +
       'another administrator, or a member of that area. Leave it empty for none.']));
+    // 1.46 (L10, amends S1): a director sees them and cannot change them; the server refuses one who tries.
+    if (!s.two_key_editable) {
+      body.appendChild(el('p', { className: 'ck-two-key-readonly' }, [
+        (s.two_key || []).length ? 'Two-key areas: ' + s.two_key.join(', ') + '.' : 'No two-key areas.',
+        ' Only an administrator changes these.']));
+      return;
+    }
     const tk = el('form', { className: 'ck-people-add ck-two-key-form', 'aria-label': 'Two-key areas' });
-    const tkAreas = areasInput((s.two_key || []).join(' '), 'ck-two-key-areas');
+    const tkAreas = draftField(areasInput((s.two_key || []).join(' '), 'ck-two-key-areas'), 'two-key',
+      (s.two_key || []).join(' '));
     tkAreas.setAttribute('aria-label', 'Two-key areas');
     tk.appendChild(tkAreas);
     tk.appendChild(el('button', { className: 'ck-btn', type: 'submit' }, ['Save']));
     tk.addEventListener('submit', e => {
       e.preventDefault();
       const areas = parseAreas(tkAreas.value);
-      postSettings('/two-key', { areas }, areas.length ? 'Two-key areas: ' + areas.join(', ') : 'No two-key areas');
+      postSettings('/two-key', { areas }, areas.length ? 'Two-key areas: ' + areas.join(', ') : 'No two-key areas',
+        ['two-key']);
     });
     body.appendChild(tk);
   }
@@ -4329,11 +4453,13 @@
       'The email itself stays in this console.']));
     const ul = el('ul', { className: 'ck-settings-list' });
     const nameRow = (email, value) => {
-      const input = el('input', { type: 'text', className: 'ck-input ck-settings-name', value: value || '',
-        maxlength: '40', placeholder: 'none', 'aria-label': 'Short name for ' + email, autocomplete: 'off' });
+      const input = draftField(el('input', { type: 'text', className: 'ck-input ck-settings-name', value: value || '',
+        maxlength: '40', placeholder: 'none', 'aria-label': 'Short name for ' + email, autocomplete: 'off' }),
+        'name:' + email, value || '');
       return [input, settingsButton('Save', () => {
         const name = input.value.trim() || null;
-        postSettings('/operator-name', { email, name }, name ? email + ' is ' + name : email + ': no short name');
+        postSettings('/operator-name', { email, name }, name ? email + ' is ' + name : email + ': no short name',
+          ['name:' + email]);
       })];
     };
     for (const email of s.operators || []) {
@@ -4342,17 +4468,17 @@
     }
     body.appendChild(ul);
     const add = el('form', { className: 'ck-people-add ck-settings-name-add', 'aria-label': 'Add a short name' });
-    const email = el('input', { type: 'email', className: 'ck-input', required: true, autocomplete: 'off',
-      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email' });
-    const name = el('input', { type: 'text', className: 'ck-input', required: true, maxlength: '40',
-      placeholder: 'short name', 'aria-label': 'Short name', autocomplete: 'off' });
+    const email = draftField(el('input', { type: 'email', className: 'ck-input', required: true, autocomplete: 'off',
+      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email' }), 'name-add-email', '');
+    const name = draftField(el('input', { type: 'text', className: 'ck-input', required: true, maxlength: '40',
+      placeholder: 'short name', 'aria-label': 'Short name', autocomplete: 'off' }), 'name-add-name', '');
     add.appendChild(email);
     add.appendChild(name);
     add.appendChild(el('button', { className: 'ck-btn', type: 'submit' }, ['Add']));
     add.addEventListener('submit', e => {
       e.preventDefault();
       postSettings('/operator-name', { email: email.value.trim(), name: name.value.trim() },
-        email.value.trim() + ' is ' + name.value.trim());
+        email.value.trim() + ' is ' + name.value.trim(), ['name-add-email', 'name-add-name']);
     });
     body.appendChild(add);
   }
@@ -9772,6 +9898,9 @@
         if (!resp.ok) { await backoff(); continue; }
         let data;
         try { data = await resp.json(); } catch (e) { await backoff(); continue; }
+        // 1.46: this page may have revoked its own browser while the wait was out (revokeDevice stops the loop
+        // and clears `view`); a wait that had already answered still lands here, and must not read view.seq.
+        if (liveStopped || !view) break;
         liveBackoff = 0;
         const verChanged = liveVer !== null && data.ver !== liveVer;
         liveVer = data.ver;

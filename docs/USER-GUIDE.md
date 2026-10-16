@@ -93,6 +93,15 @@ real items and folds land in your decision record:
   loopback answering **403** is the healthy answer.
 - Cloudflare Tunnel carries the hostname to that port, and Access puts a login
   in front of it: [CLOUDFLARE.md](../plugin/kit/docs/CLOUDFLARE.md).
+- **Without Cloudflare (1.46):** start the server with `--auth link` and run
+  `agent.py --state <state> invite you@example.com` in your terminal. It prints
+  a sign-in link that works once, within 24 hours; the browser that opens it
+  stays signed in until revoked under People. With `--auth link`, a request
+  without that browser's cookie is refused, loopback included. A sign-in link
+  opens the project it was made from, plus every project whose roles list that
+  email; with roles off, only the projects it was invited from. See the README,
+  "Install without Cloudflare" (this machine, or Tailscale through
+  `tailscale serve`).
 - Agents never go through Access. They talk to `<state>/agent.sock`, a socket
   only your user can open.
 - Health, from any shell: `python3 <kit>/agent.py --state <state> health`

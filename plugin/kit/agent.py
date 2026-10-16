@@ -88,6 +88,16 @@
                                                 who may do what in the console: no roles file, every login is
                                                 the owner; with one, an unlisted login only reads (1.39; you
                                                 run this, never a session)
+    agent.py --state DIR invite EMAIL [--origin URL]
+                                                a sign-in link for a console with --auth link (1.46): it works
+                                                once, within 24 hours, and is printed once, never stored (you
+                                                run this, never a session)
+    agent.py --state DIR devices [--revoke ID]
+                                                the browsers signed in by link on this machine, or sign one
+                                                out at once (1.46; revoking is yours, never a session's)
+    agent.py --state DIR server auth [cloudflare | link]
+                                                show or set how the one server's owner doors sign browsers in
+                                                (1.46; in force at its next start)
 
 **Slim reads (K1).** JSON goes out compact when stdout is not a terminal.
 `todo`, `view` and `answers` refuse a read over 64 KiB unless given --full:
@@ -159,6 +169,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from overture import bundle as B  # noqa: E402
+from overture import devices as DV  # noqa: E402
 from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
 from overture import names as N  # noqa: E402
@@ -1558,6 +1569,17 @@ def main(argv=None) -> int:
                    "the last one listed, roles are off again")
     s.add_argument("--director", action="store_true", help="a member or viewer whose Inbox opens on everything "
                    "(1.41); it decides no more than its role allows")
+    s = sub.add_parser("invite", description="Make a sign-in link for a console that runs with --auth link "
+                       "(1.46): no Cloudflare. The link works once and lapses after 24 hours; the browser that "
+                       "opens it stays signed in until revoked (People, or `agent.py devices --revoke`). Only its "
+                       "hash is kept, so it is printed once, here. You run this, never a session.")
+    s.add_argument("email", help="who the link signs in, e.g. bob@example.com; their role in this project decides "
+                   "what they may do")
+    s.add_argument("--origin", help="the console's address as the browser sees it, e.g. "
+                   "https://box.tailnet.ts.net (default: from server.json, else the link's path only)")
+    s = sub.add_parser("devices", description="List the browsers signed in by link on this machine (1.46), or "
+                       "sign one out: its next request is refused. Revoking is yours, never a session's.")
+    s.add_argument("--revoke", metavar="ID", help="the device id to sign out (12 hex digits, from the list)")
     s = sub.add_parser("steward", description="Show, set or clear this console's steward in your own registry "
                        "(0.8.3). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
@@ -1681,10 +1703,14 @@ def main(argv=None) -> int:
     ss = s.add_subparsers(dest="server_cmd", required=True)
     s = ss.add_parser("add")
     s.add_argument("project_name", metavar="NAME", help="the project's name, e.g. myproject (the agent-name shape)")
-    s.add_argument("--hostname", required=True, help="the project console's public hostname, a bare DNS name")
-    s.add_argument("--aud", required=True, help="the project's Access application AUD tag")
+    # 1.46.0: the three Access values are required behind Cloudflare (checked in _run, by the server's mode) and
+    # optional on a server in link mode (`server auth link`), which takes --origin instead.
+    s.add_argument("--hostname", help="the project console's public hostname, a bare DNS name (Cloudflare)")
+    s.add_argument("--aud", help="the project's Access application AUD tag (Cloudflare)")
     s.add_argument("--port", type=int, required=True, help="the project's owner-door loopback port")
-    s.add_argument("--team-domain", required=True, help="e.g. yourteam.cloudflareaccess.com")
+    s.add_argument("--team-domain", help="e.g. yourteam.cloudflareaccess.com (Cloudflare)")
+    s.add_argument("--origin", help="sign-in links: the console's address as the browser sees it (default "
+                   "http://127.0.0.1:PORT; https://NAME behind `tailscale serve`)")
     s.add_argument("--root", type=Path, help="the main root, when several are registered on --state")
     s.add_argument("--page", default="index.html", help="the host page, a path under the root")
     s.add_argument("--slug", action="append", dest="slugs", metavar="SLUG",
@@ -1694,6 +1720,10 @@ def main(argv=None) -> int:
                       "printed.")
     s.add_argument("token_cmd", choices=("rotate",))
     s.add_argument("project_name", metavar="NAME")
+    s = ss.add_parser("auth", description="Show or set how every owner door of the one server signs a browser in "
+                      "(1.46, L5 L6): cloudflare (Access, the default) or link (sign-in links from `agent.py "
+                      "invite`, no Cloudflare). In force at the server's next start. You run this, never a session.")
+    s.add_argument("mode", nargs="?", choices=("cloudflare", "link"))
     a = ap.parse_args(argv)
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
     # an empty variable counts as unset.
@@ -1726,7 +1756,7 @@ def main(argv=None) -> int:
 
 
 USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access",
-                 "notify-url")
+                 "notify-url", "invite", "devices")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -1868,7 +1898,140 @@ def _access(state: Path, email: str | None, role: str | None, areas: list[str], 
     return 0
 
 
+SESSION_REFUSAL = "refused inside a Claude Code session: {what} by you, in your own terminal"
+
+
+def _link_origin(state: Path) -> tuple[str | None, str]:
+    """(the console's origin for a link, where it came from) from server.json when the one server hosts this
+    console in link mode: the entry's origin, else http://127.0.0.1:PORT. (None, why) otherwise."""
+    from overture import serverfile as SF
+    try:
+        doc = SF.load()
+    except (SF.ServerFileError, R.RegistryError, OSError) as e:
+        return None, f"server.json cannot be read ({e})"
+    s = os.path.realpath(state)
+    for name, e in sorted(doc["projects"].items()):
+        if isinstance(e, dict) and e.get("state") == s:
+            if doc["auth"] != "link":
+                return None, "the one server signs in through Cloudflare (`agent.py server auth`)"
+            port = e.get("port")
+            return (e.get("origin") or (f"http://127.0.0.1:{port}" if isinstance(port, int) else None)), name
+    return None, "server.json hosts no project on this console"
+
+
+def _invite(state: Path, email: str, origin: str | None) -> int:
+    """`invite` (1.46): a sign-in link, printed once. Only the token's hash is kept (devices.py)."""
+    if os.environ.get("CLAUDECODE"):
+        # As `access`: a session that could mint a link could sign a browser of its choosing in as anyone the
+        # roles name, the owner included. A guardrail between the owner's own sessions, as ask_guard is.
+        print("agent.py: invite: " + SESSION_REFUSAL.format(what="sign-in links are made"), file=sys.stderr)
+        return 2
+    why = OP.email_problem(email) or (origin is not None and DV.origin_problem(origin))
+    if why:
+        print(f"agent.py: invite: {why}; nothing was written", file=sys.stderr)
+        return 2
+    where = None
+    if origin is None:
+        origin, where = _link_origin(state)
+    try:
+        roles = RO.load(state)
+        _token, _ident = DV.invite(DV.location(), email, state)
+    except (OSError, DV.DevicesError, RO.RolesError) as e:
+        print(f"agent.py: invite: {e}; nothing was written", file=sys.stderr)
+        return 2
+    expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=DV.INVITE_HOURS)).strftime("%Y-%m-%d %H:%M UTC")
+    path = f"/signin?t={_token}"
+    print(f"A sign-in link for {email.lower()}. It works once, until {expires} (24 hours), and is shown only now:")
+    print(f"  {DV.clean_origin(origin) + path if origin else path}")
+    if not origin:   # no origin known here: the path, to open on the console's own address
+        print(f"Open it on your console's address, e.g. http://127.0.0.1:PORT/signin?t=… ({where}; or pass "
+              f"--origin).")
+    print("The browser that opens it stays signed in until revoked (People, or agent.py devices --revoke ID).")
+    if roles is not None and email.lower() not in roles:
+        print(f"agent.py: invite: {email} has no role here, so it will only read until you give it a role: "
+              f"agent.py access {email} ROLE", file=sys.stderr)
+    return 0
+
+
+def _devices(state: Path, revoke: str | None) -> int:
+    """`devices` (1.46): the browsers signed in by link on this machine, or revoke one (logged, by the terminal)."""
+    try:
+        if revoke is not None:
+            if os.environ.get("CLAUDECODE"):
+                print("agent.py: devices: " + SESSION_REFUSAL.format(what="browsers are signed out"),
+                      file=sys.stderr)
+                return 2
+            gone = DV.revoke(DV.location(), revoke, state, by=None)
+            if gone is None:
+                print(f"agent.py: devices: no signed-in browser has the id {revoke!r}; nothing was written",
+                      file=sys.stderr)
+                return 1
+            print(f"{revoke}: signed out (it was {gone}'s); its next request is refused")
+            return 0
+        rows = DV.listing(DV.location())
+    except (OSError, DV.DevicesError, RO.RolesError) as e:
+        print(f"agent.py: devices: {e}", file=sys.stderr)
+        return 2
+    show = _masked if os.environ.get("CLAUDECODE") else str   # as `access`'s listing
+    # Every device on the machine (the terminal is the machine's owner), with the projects it was invited from by
+    # their state folder's name; a project whose roles list the email lets it in too (devices.admitted).
+    print("\n".join(f"{d['id']}  {d['label']} · signed in {d['created']} · {show(d['email'])} · invited from "
+                    f"{', '.join(os.path.basename(p) or p for p in d['projects'])}" for d in rows)
+          if rows else "no browser is signed in by link on this machine")
+    return 0
+
+
+def _server_add(a) -> int:
+    from overture import serverfile as SF
+    try:
+        auth = SF.load()["auth"]
+    except (SF.ServerFileError, R.RegistryError) as err:
+        print(f"refused, nothing written: {err}", file=sys.stderr)
+        return 1
+    if auth == "cloudflare":
+        missing = [f for f, v in (("--hostname", a.hostname), ("--aud", a.aud), ("--team-domain", a.team_domain))
+                   if v is None]
+        if missing:
+            print(f"refused, nothing written: {', '.join(missing)} required: the one server signs in through "
+                  f"Cloudflare Access (`agent.py server auth link` switches it to sign-in links)", file=sys.stderr)
+            return 1
+    try:   # the name is the user's word on this command line, never a key of the repository's config
+        e = SF.add(a.project_name, a.state, a.hostname, a.aud, a.port, a.team_domain, root=a.root,
+                   page=a.page, slugs=a.slugs, origin=a.origin)
+    except SF.ServerFileError as err:
+        print(f"refused, nothing written: {err}", file=sys.stderr)
+        return 1
+    where = e.get("hostname") or e.get("origin") or f"http://127.0.0.1:{e['port']}"
+    print(f"server: project {a.project_name} on port {e['port']} ({where}), state {e['state']}, "
+          f"root {e['root']} in {SF.location()}; its agents' token is in {SF.token_file(a.project_name)} "
+          f"(mode 0600)")
+    return 0
+
+
+def _server_auth(mode: str | None) -> int:
+    from overture import serverfile as SF
+    try:
+        if mode is None:
+            now = SF.load()["auth"]
+            print(f"server auth: {now}" + (" (sign-in links: agent.py invite EMAIL)" if now == "link" else
+                                           " (Cloudflare Access)"))
+            return 0
+        if os.environ.get("CLAUDECODE"):
+            print("agent.py: server auth: " + SESSION_REFUSAL.format(what="the way in is chosen"), file=sys.stderr)
+            return 2
+        SF.set_auth(mode)
+    except (SF.ServerFileError, R.RegistryError, OSError) as err:
+        print(f"refused, nothing written: {err}", file=sys.stderr)
+        return 1
+    print(f"server auth: {mode}, in {SF.location()}; restart the server for it to take effect")
+    return 0
+
+
 def _run(a, bell: Path) -> int:
+    if a.cmd == "invite":
+        return _invite(a.state, a.email, a.origin)
+    if a.cmd == "devices":
+        return _devices(a.state, a.revoke)
     if a.cmd == "register":
         e = R.register(a.project, a.state, Path(__file__).resolve().parent, steward=a.steward)
         print(f"registered {Path(a.project).resolve()}: state {e['state']}, kit {e['kit']}"
@@ -1967,18 +2130,10 @@ def _run(a, bell: Path) -> int:
         print(f"server: project {a.project_name} has a new token in {f} (mode 0600); the old one is refused from "
               f"the next request, and agent.py reads the new one on its next call")
         return 0
+    if a.cmd == "server" and a.server_cmd == "auth":
+        return _server_auth(a.mode)
     if a.cmd == "server":
-        from overture import serverfile as SF
-        try:   # the name is the user's word on this command line, never a key of the repository's config
-            e = SF.add(a.project_name, a.state, a.hostname, a.aud, a.port, a.team_domain, root=a.root,
-                       page=a.page, slugs=a.slugs)
-        except SF.ServerFileError as err:
-            print(f"refused, nothing written: {err}", file=sys.stderr)
-            return 1
-        print(f"server: project {a.project_name} on port {e['port']} ({e['hostname']}), state {e['state']}, "
-              f"root {e['root']} in {SF.location()}; its agents' token is in {SF.token_file(a.project_name)} "
-              f"(mode 0600)")
-        return 0
+        return _server_add(a)
     if a.cmd in ("watch", "synced"):
         why = steward_refusal(a.state, a.agent, f"`{a.cmd}`")
         if why:

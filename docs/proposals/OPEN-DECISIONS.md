@@ -149,7 +149,7 @@ choice, and is asked again before 1.47.
 | L3 | HTTPS | **A**, *architect default*: Tailscale through `tailscale serve` (HTTPS, the console stays on 127.0.0.1); ZeroTier on plain HTTP over its encrypted network. |
 | L4 | Listening beyond 127.0.0.1 | **A**, *architect default*: `--listen` takes only an address on a Tailscale (100.64/10) or ZeroTier interface; `0.0.0.0` and public addresses are refused. |
 | L5 | Cloudflare | **A**, *architect default*: one way in per console, `--auth cloudflare` (the default, unchanged) or `--auth link`. |
-| L6 | `server.py --all` | **A**, *architect default*: one mode per server; a sign-in covers every project the login has a role in. |
+| L6 | `server.py --all` | **A**, *architect default*: one mode per server; a sign-in covers every project the login has a role in. *Architect default, security review 2026-10-15:* and the project the link was made from; a project with roles off admits only browsers invited from it (an invite never opens another project to its holder). |
 | L7 | Setup | **A**, *architect default*: `onboard.py` asks Cloudflare / Tailscale / ZeroTier / this machine only, and prints the first invite. |
 | L8 | Order | **A**, *architect default*: 1.46 sign-in links, devices and a this-machine-only mode; 1.47 `--listen` for Tailscale and ZeroTier, and onboarding; 1.48 the launchd service (D2) and a Dockerfile. |
 | L10 | Directors and the two-key areas | **A**, *architect default*: owners only; directors see them but cannot change them. **Amends S1.** |
