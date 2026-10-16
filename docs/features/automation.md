@@ -61,7 +61,7 @@ with `_` or `-`).
   characters; at most 128 playbooks are read. A malformed file is
   skipped, so one bad playbook never hides the rest.
 
-The **Playbooks** tab (`g y`, under More) lists each playbook with its
+The **Playbooks** tab (`g y`, in the Automation section) lists each playbook with its
 description and step count, **Preview** and **Run now**. The command
 palette lists them too; Enter runs one.
 
@@ -128,7 +128,7 @@ once in that minute, even if the clock jumps back.
 
 ### The trigger log and Replay
 
-The **Triggers** tab (`g t`, under More) lists each trigger with its
+The **Triggers** tab (`g t`, in the Automation section) lists each trigger with its
 playbook and kinds, and the most recent firings: when, which trigger,
 webhook, cron or replay, how many steps ran and were skipped, and any
 error. While triggers exist, a **Triggers** fold on the Inbox tab shows

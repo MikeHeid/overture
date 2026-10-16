@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.47.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.48.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1164-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1206-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -103,7 +103,8 @@ Each area links to its own page, with the full reference and screenshots.
 | **Dashboard** | Scaffolds `docs/console/page.html` · syncs an `items-tree` block · numbered refs · stages via `page-snapshot` · publishes on **Use this page** | [Dashboard and map](docs/features/dashboard-and-map.md) |
 | **Project map** | Tree of every item, coloured by state, boxed by lane · chip filters · lane colours published to the host page's CSS | [Dashboard and map](docs/features/dashboard-and-map.md#project-map-lanes-and-the-dashboard) |
 | **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item · Portfolio · Operator Shift report · themes and skins | [Finding your way around](docs/features/navigation.md) |
-| **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `j`/`k` row walk · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
+| **Sections and phones** (1.48) | Work, Automation, Projects and Team, each with its own tabs, on a rail · a badge per section · full screen on a phone with a bottom bar · motion that respects reduced motion | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
+| **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` row walk · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
 | **Security** | Cloudflare Access or sign-in links · per-request CSP nonce · CSRF double-submit · atomic state writes · sandboxed iframes · parser-based HTML allowlist | [Trust](#trust) |
@@ -200,7 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.47.0
+      - uses: MikeHeid/overture@v1.48.0
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
@@ -250,10 +251,13 @@ other consoles.
 
 ### Finding your way around
 
-The page updates itself. The Feed, PRs (with Merge), Chat, Favorite and
-Portfolio tabs sit beside the Inbox, and the panel's title names the tab you
-are on. **Ctrl+K** searches everything, `?` lists the shortcuts, and
-**Operator Shift** reports the week as Markdown.
+The page updates itself. The tabs sit in four sections on a rail (1.48):
+**Work** (Inbox, Feed, Tickets, PRs with Merge), **Automation** (Playbooks,
+Triggers), **Projects** (Portfolio, Favorite) and **Team** (People, Chat,
+Settings), and `g 1`–`g 4` jump between them. On a phone the console takes
+the whole screen, with the sections in a bottom bar. **Ctrl+K** searches
+everything, `?` lists the shortcuts, and **Operator Shift** reports the week
+as Markdown.
 
 <img src="docs/screenshots/feature-palette.png" alt="The command palette with retry typed: the matching item and questions" width="400">
 

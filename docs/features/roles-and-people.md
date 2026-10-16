@@ -35,7 +35,7 @@ store itself is unchanged, so an older kit still starts on it.
 
 With no roles set, everyone your Access policy lets in is the owner.
 To share a console, first make yourself the **administrator** (the
-owner role): open **People** (under More) and press **Make me the
+owner role): open **People** (in the Team section) and press **Make me the
 administrator**. It takes the login you are signed in with, so you type
 no email. Then add each person there with their role, and change or
 remove them later the same way. Only an administrator sees the People

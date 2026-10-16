@@ -1035,6 +1035,71 @@ class PublishTests(unittest.TestCase):
         acted = [shapes[s] for s in ("awaiting_you", "unlocked", "locked", "stale")]
         self.assertEqual(len(set(acted)), len(acted))
 
+    def test_the_sections_hold_every_tab_once_and_more_is_gone(self):
+        # 1.48 (U1, amends D14): four sections hold the eleven tabs, each exactly once, in the owner's grouping.
+        # Catches: a tab added to TABS but to no section (it would have no strip to sit in, reachable only by g or
+        # a link); a tab in two sections (sectionOf would pick one, the other strip would show it as never
+        # selected); Chat moved out of Team (U9); a section icon missing from the bundle (the rail draws nothing);
+        # and "More ▾" or TABS_PRIMARY_IDS left behind beside the rail.
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        tabs = re.findall(r"^    \['([a-z]+)', '[A-Za-z]+'\]", re.search(r"const TABS = \[(.*?)\];", js, re.S).group(1), re.M)
+        block = re.search(r"const SECTIONS = \[(.*?)\n  \];", js, re.S).group(1)
+        sections = re.findall(r"\['([a-z]+)', '([A-Za-z]+)', '([a-z-]+)', \[([^\]]*)\]\]", block)
+        grouped = {sid: re.findall(r"'([a-z]+)'", ids) for sid, _label, _icon, ids in sections}
+        self.assertEqual(grouped, {"work": ["inbox", "feed", "tickets", "prs"], "automation": ["playbooks", "triggers"],
+                                   "projects": ["portfolio", "favorite"], "team": ["people", "chat", "settings"]})
+        flat = [t for ids in grouped.values() for t in ids]
+        self.assertEqual(sorted(flat), sorted(tabs))
+        self.assertEqual(flat, tabs)   # TABS runs in section order, so a strip reads as the rail does
+        bundled = set(re.findall(r"^    '([a-z-]+)':", re.search(r"const ICONS = \{\n(.*?)\n  \};", js, re.S).group(1), re.M))
+        self.assertLessEqual({icon for _sid, _label, icon, _ids in sections}, bundled)
+        for gone in ("TABS_PRIMARY_IDS", "ck-tab-more", "openMoreMenu", "More tabs"):
+            self.assertNotIn(gone, js)
+            self.assertNotIn(gone, css)
+
+    def test_go_tab_takes_only_a_known_tab(self):
+        # Catches (C5, 1.48 review): goTab, the one way to a tab, setting currentTab to an id that is not in TABS (a
+        # new caller passing a typo or a value from a link): sectionOf would file it under Work, whose strip then has
+        # no selected tab, and the address would carry the bad id. ConsoleKit.openTab already refused one.
+        js = (KIT / "overture" / "console.js").read_text()
+        body = re.search(r"\n  function goTab\(id, focus\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        first = body.strip().splitlines()[0]
+        self.assertTrue(first.startswith("if (!TABS.some(t => t[0] === id)) id = 'inbox';"), first)
+        self.assertLess(body.index("TABS.some"), body.index("currentTab = id"))
+
+    def test_section_motion_is_keyed_and_off_under_reduced_motion(self):
+        # 1.48 (U9): the rail's and the body's motion sit only inside prefers-reduced-motion: no-preference, and
+        # .ck-body carries no animation of its own. Catches: an animation rule written outside the no-preference
+        # wrapper (it would run for a viewer who asked for less), and the 1.47 fade on .ck-body coming back (it
+        # replayed on every long-poll redraw, since each redraw builds a new body).
+        css = (KIT / "overture" / "console.css").read_text()
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        outside, i, depth, start, head = [], 0, 0, 0, ""
+        for i, ch in enumerate(css):
+            if ch == "{":
+                if depth == 0:
+                    head = css[start:i]
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    if "no-preference" not in head:
+                        outside.append(css[start:i + 1])
+                    start = i + 1
+        for chunk in outside:
+            for rule in re.findall(r"([^{}]*)\{([^{}]*)\}", chunk):
+                sel, body = rule
+                if re.search(r"\banimation(-name)?\s*:", body) and re.search(r"ck-enter-|ck-rail", sel):
+                    self.fail("motion outside no-preference: " + sel.strip())
+                if re.search(r"\banimation\s*:", body):
+                    self.assertNotRegex(sel.strip(), r"^\.ck-panel \.ck-body$")
+        motion = "".join(c for c in re.findall(r"@media \(prefers-reduced-motion: no-preference\)[^{]*\{.*?\n\}", css, re.S))
+        for cls in ("ck-enter-section", "ck-enter-tab", "ck-rail-moved"):
+            self.assertIn(cls, motion)
+        for ms in re.findall(r"ck-(?:section-in|subtab-in|rail-mark-[xy]) (\d+)ms", motion):
+            self.assertTrue(100 <= int(ms) <= 180, ms)
+
     def test_lane_palette_is_one_list_and_readable_in_both_themes(self):
         # D10: the console and the config parser agree on the palette, and every lane colour is
         # at least 3:1 against the surfaces it sits on (WCAG 1.4.11), in light and in dark.
@@ -1106,10 +1171,28 @@ class PublishTests(unittest.TestCase):
     def test_docked_column_fits_its_tab_row(self):
         # D9: the docked column is never narrower than its tab row, so tabs
         # keep icon and label on one line instead of wrapping or clipping.
+        # 1.48 (U1): the rail sits beside the strip, so both draws pass it and its width counts. Catches: a draw
+        # that measures the strip alone, leaving the column a rail's width too narrow for its tabs.
         js = (KIT / "overture" / "console.js").read_text()
-        self.assertIn("function fitDockToTabs(bar)", js)
+        self.assertIn("function fitDockToTabs(bar, rail)", js)
+        self.assertIn("let w = rail ? rail.getBoundingClientRect().width : 0;", js)
         self.assertIn("return Math.max(DOCK_W_MIN, dockTabsW);", js)
         self.assertEqual(js.count("fitDockToTabs("), 3)  # the definition and both draws
+        self.assertEqual(js.count("fitDockToTabs(tabBar, rail)") + js.count("fitDockToTabs(bar, panelEl.querySelector('.ck-rail'))"), 2)
+
+    def test_phone_breakpoint_is_one_number_in_js_and_css(self):
+        # 1.48 (U2): console.js locks the host page's scroll from PHONE_QUERY; console.css turns the rail into the
+        # bottom bar and the panel into the whole screen under its own max-width. Catches: the two drifting, so a
+        # width between them gets a full-screen console with the page still scrolling under it, or the reverse.
+        js = (KIT / "overture" / "console.js").read_text()
+        css = (KIT / "overture" / "console.css").read_text()
+        m = re.search(r"PHONE_QUERY = '\(max-width: (\d+)px\)'", js)
+        self.assertIsNotNone(m, "console.js no longer declares PHONE_QUERY")
+        self.assertIn("html.ck-phone-open, html.ck-phone-open body { overflow: hidden !important;", css)
+        rail = css[css.index("/* ========= Sections:"):]
+        self.assertIn(f"@media (max-width: {m.group(1)}px) {{\n  .ck-sections {{ flex-direction: column; }}", rail)
+        lock = css[:css.index("html.ck-phone-open, html.ck-phone-open body")]
+        self.assertEqual(lock[lock.rindex("@media"):].split("{")[0].strip(), f"@media (max-width: {m.group(1)}px)")
 
     def test_dock_breakpoint_is_one_number_in_js_and_css(self):
         # AB-2/Q2: console.js decides docked-or-overlay from DOCK_QUERY and
@@ -1126,7 +1209,8 @@ class PublishTests(unittest.TestCase):
         # strip and priority rows fit (the drag handle persists per-project
         # overrides to localStorage). One custom property still, read by the column, the
         # page's margin and the Reload bar's inset — the invariant the test guards.
-        self.assertIn(":root { --ck-col: 480px; }", css)
+        # 1.48 (U1): 576px, so the content beside the section rail keeps 1.47's room.
+        self.assertIn(":root { --ck-col: 576px; }", css)
         self.assertIn("html.ck-dock-open body { margin-right: var(--ck-col); }", css)
         self.assertIn("width: var(--ck-col);", css)
         self.assertIn("html.ck-dock-open .ck-board-stale { right: calc(var(--ck-col) + 16px); }", css)
