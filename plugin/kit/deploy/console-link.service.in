@@ -1,0 +1,30 @@
+# systemd USER unit for one project's owner console server that signs browsers in by link (1.47.0, L7): no
+# Cloudflare, no tunnel. Rendered by deploy/install.sh when console.env says CONSOLE_AUTH=link: @PROJECT@ is the
+# project's root, @KIT@ the installed kit, @PYTHON@ the kit's venv interpreter, @NAME@ the project name, and
+# @LINK_ARGS@ " --listen ADDR" (when set) and " --origin URL", as `onboard.py show` validated them.
+# With --listen the server waits up to 2 minutes for ZeroTier/Tailscale, then exits 1 (L16); such starts are
+# >= 125 s apart, so at most one falls in any 120 s window and a slow boot never reaches the burst of 5.
+[Unit]
+Description=@NAME@ owner console (sign-in links; no Cloudflare)
+After=network-online.target
+# 1.47 (C2): a server that fails at once (a bad flag, --listen given an eth0 address) stops retrying after 5
+# starts within 120 s, as the one server's unit does; systemd's default (5 within 10 s) never caught a failure
+# restarted every RestartSec=5, so it looped forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=@PROJECT@/.overture/console.env
+WorkingDirectory=@PROJECT@
+ExecStart=@PYTHON@ @KIT@/server.py \
+  --root @PROJECT@ \
+  --state %h/.local/state/overture/@NAME@ \
+  --auth link \
+  --port ${CONSOLE_PORT} \
+  --project @NAME@@LINK_ARGS@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

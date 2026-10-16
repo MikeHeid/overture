@@ -410,6 +410,244 @@ class CliTests(Base):
                 self.assertFalse((self.project / ".overture/console.env").exists())
 
 
+ZT = "10.147.17.10"
+FAKE = [("lo", "127.0.0.1", 8, True), ("eth0", "172.23.0.5", 20, True), ("ztexample0", ZT, 16, True),
+        ("docker0", "172.17.0.1", 16, True), ("br-5a1f", "10.147.0.1", 16, False),
+        ("tailscale0", "100.101.102.103", 32, True)]
+
+
+class LinkModeTests(Base):
+    """1.47.0 (L7): onboarding a console that signs in by link: write, show, detect, verify, next steps."""
+
+    def setUp(self):
+        super().setUp()
+        sys.path.insert(0, str(Path(O.__file__).parent))
+        from overture import netif as NI
+        self.NI = NI
+        NI.set_fake(lambda: list(FAKE))
+        self.addCleanup(NI.set_fake, None)
+
+    def link(self, **over):
+        return O.write(self.project, {"name": "acme", "auth": "link", **over}, check_port=False)
+
+    def env(self):
+        return (self.project / ".overture/console.env").read_text()
+
+    def test_link_mode_needs_no_access_values_and_writes_its_own_keys(self):
+        # Catches (L7): link mode still demanding --team-domain/--aud/--hostname/--tunnel, one of them written
+        # (and forgotten) anyway, CONSOLE_AUTH/ORIGIN/LISTEN missing, an origin default other than
+        # http://LISTEN:PORT (else http://127.0.0.1:PORT), and a Cloudflare console.env changed by any of it.
+        self.link()
+        env = self.env()
+        for line in ("CONSOLE_NAME=acme", "CONSOLE_AUTH=link", "CONSOLE_ORIGIN=http://127.0.0.1:4793",
+                     "CONSOLE_PORT=4793"):
+            self.assertIn(line + "\n", env)
+        for absent in ("CONSOLE_LISTEN", "CONSOLE_AUD", "CONSOLE_HOSTNAME", "CONSOLE_TUNNEL", "CONSOLE_TEAM"):
+            self.assertNotIn(absent, env)
+        self.link(listen=ZT, port=4800)
+        self.assertIn(f"CONSOLE_LISTEN={ZT}\nCONSOLE_ORIGIN=http://{ZT}:4800\n", self.env())
+        # Catches (1.47, S1): --listen with an https origin written, a console whose `tailscale serve` proxy would
+        # get 403 on every write; it is refused by name, and without --listen the same origin is written.
+        with self.assertRaisesRegex(O.OnboardError, "^origin: .*`tailscale serve` forwards to 127.0.0.1"):
+            self.link(listen=ZT, origin="https://box.tailnet.ts.net/")
+        self.link(origin="https://box.tailnet.ts.net/")
+        self.assertIn("CONSOLE_ORIGIN=https://box.tailnet.ts.net\n", self.env())
+        for key, value in (("aud", AUD), ("hostname", "acme.example.com"), ("team_domain", GOOD["team_domain"]),
+                           ("tunnel", "acme-console")):
+            with self.subTest(key=key), self.assertRaisesRegex(O.OnboardError, f"^{key}: is for --auth cloudflare"):
+                self.link(**{key: value})
+        shutil.rmtree(self.project)
+        self.project.mkdir()
+        self.write()
+        self.assertNotIn("CONSOLE_AUTH", self.env())   # Cloudflare: 1.46's file, byte for byte
+        self.assertEqual(O.env_text(O.check(GOOD)), self.env())
+        with self.assertRaisesRegex(O.OnboardError, "^listen: is for --auth link"):
+            O.check({**GOOD, "listen": ZT})
+
+    def test_listen_and_origin_are_checked_by_name_before_anything_is_written(self):
+        # Catches (contract 1, L15, L17): a refused --listen (0.0.0.0, public, loopback, IPv6, an address on
+        # docker0) or an origin that is http on another IP, or loopback beside --listen, written; an address no
+        # interface holds yet refused (the server waits for it) or left unsaid; and the overlap warning missing.
+        for listen, why in (("0.0.0.0", "every interface"), ("8.8.8.8", "public"), ("127.0.0.1", "loopback"),
+                            ("::1", "IPv6"), ("172.17.0.1", "it is on docker0")):
+            with self.subTest(listen=listen), self.assertRaisesRegex(O.OnboardError, f"^listen: .*{why}"):
+                self.link(listen=listen)
+        for listen, origin in ((None, f"http://{ZT}:4793"), (ZT, "http://10.0.0.1:4793"),
+                               (ZT, "http://127.0.0.1:4793")):
+            with self.subTest(origin=origin), self.assertRaisesRegex(O.OnboardError, "^origin:"):
+                self.link(listen=listen, origin=origin)
+        self.assertEqual(list(self.project.iterdir()), [])
+        out = self.link(listen="10.147.17.5")
+        self.assertTrue(any(l.startswith("NOTE") and "waits up to 2 minutes" in l for l in out), out)
+        out = self.link(listen=ZT)
+        self.assertEqual([l for l in out if "warning" in l and "br-5a1f (down)" in l and "10.147.0.0/16" in l
+                          ], [l for l in out if "warning" in l])
+        self.assertEqual(len([l for l in out if "warning" in l]), 1, out)
+
+    def test_show_carries_the_link_keys_through_and_refuses_a_hand_edit(self):
+        # Catches: `show` (which install.sh reads) dropping CONSOLE_AUTH/LISTEN/ORIGIN (the unit would start
+        # behind Cloudflare it does not have), an unknown CONSOLE_AUTH read as Cloudflare, an Access key left in a
+        # link file passed on, and a hand-edited listen passed on unchecked.
+        self.link(listen=ZT)
+        env = self.project / ".overture/console.env"
+        got = O.read_env(env)
+        self.assertEqual(got, {"CONSOLE_NAME": "acme", "CONSOLE_AUTH": "link", "CONSOLE_LISTEN": ZT,
+                               "CONSOLE_ORIGIN": f"http://{ZT}:4793", "CONSOLE_PORT": "4793",
+                               "CONSOLE_PAGE": ".overture/page.html", "CONSOLE_ADAPTER": ".overture/adapter.py"})
+        text = env.read_text()
+        for bad, why in (("CONSOLE_AUTH=link", "CONSOLE_AUTH=Link"), (f"CONSOLE_LISTEN={ZT}", "CONSOLE_LISTEN=0.0.0.0"),
+                         ("CONSOLE_NAME=acme", f"CONSOLE_NAME=acme\nCONSOLE_AUD={AUD}")):
+            env.write_text(text.replace(bad, why))
+            with self.subTest(why=why), self.assertRaises(O.OnboardError):
+                O.read_env(env)
+        env.write_text(text)
+        with self.assertRaisesRegex(O.OnboardError, "no tunnel"):
+            O.tunnel(self.project, TID)
+
+    def test_detect_lists_the_overlay_addresses_and_their_overlaps(self):
+        # Catches (L7, L17): detect missing an overlay (or listing eth0/docker0), the line shape the skill reads,
+        # no overlap warning for a bridge on the ZeroTier range, and --json not the same facts.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(O.main(["detect"]), 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[:2], [f"zerotier ztexample0 {ZT}/16", "tailscale tailscale0 100.101.102.103/32"])
+        self.assertEqual(len(lines), 3)
+        self.assertIn("br-5a1f (down)", lines[2])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            O.main(["detect", "--json"])
+        doc = json.loads(out.getvalue())
+        self.assertEqual([(o["kind"], o["name"], o["address"], o["prefix"]) for o in doc["overlays"]],
+                         [("zerotier", "ztexample0", ZT, 16), ("tailscale", "tailscale0", "100.101.102.103", 32)])
+        self.assertEqual(len(doc["warnings"]), 1)
+
+    def test_next_steps_print_the_owners_commands_for_each_way_in(self):
+        # Catches (L7): link-mode steps still sending the owner to Cloudflare, no `invite` step (or one that a
+        # session would run), no `tailscale serve` line for Tailscale without --listen, no http://ADDR:PORT for
+        # ZeroTier, and no "sign in once per address" note.
+        for over, want in (({"listen": ZT}, f"open http://{ZT}:4793 on any device joined to this ZeroTier"),
+                           ({"listen": "100.101.102.103"}, "on your tailnet"),
+                           ({"origin": "https://box.tailnet.ts.net"}, "tailscale serve --bg http://127.0.0.1:4793"),
+                           ({}, "open http://127.0.0.1:4793 on this machine")):
+            with self.subTest(over=over):
+                steps = O.next_steps(self.project, O.check({"name": "acme", "auth": "link", **over}))
+                self.assertIn(want, steps)
+                self.assertIn("install.sh", steps)
+                self.assertIn("invite YOU@EXAMPLE.COM --origin", steps)
+                self.assertIn("a Claude session is refused", steps)
+                self.assertIn("Sign in once per address", steps)
+                for cf in ("cloudflared", "Access application", "route dns"):
+                    self.assertNotIn(cf, steps)
+
+    def test_verify_skips_cloudflare_and_checks_the_door_and_link_mode_on_each_address(self):
+        # Catches (L7): verify in link mode failing on cloudflared/the tunnel, not checking the door on its
+        # addresses, reading a 403 as link mode (a Cloudflare console 403s too), and spending anything to learn
+        # it (a real invite: the bogus token has the shape but no invite).
+        self.link(listen=ZT)
+        answers = {("127.0.0.1", "/api/view"): 403, ("127.0.0.1", f"/signin?t={O.BOGUS_TOKEN}"): 410,
+                   (ZT, "/api/view"): 403, (ZT, f"/signin?t={O.BOGUS_TOKEN}"): 403}
+        with mock.patch.object(O, "door_answer", lambda h, p, path: answers[(h, path)]):
+            got = {step: status for step, status, _ in O.verify(self.project)}
+        self.assertEqual(got, {"config": "ok", "cloudflare": "skip", "tunnel": "skip", "door": "ok",
+                               "sign-in links": "ok", f"door {ZT}": "ok", f"sign-in links {ZT}": "fail"})
+        with mock.patch.object(O, "door_answer", lambda h, p, path: "ConnectionRefusedError: refused"):
+            got = O.verify(self.project)
+        self.assertIn("nothing answers on http://127.0.0.1:4793", got[3][2])
+        self.assertTrue(O.BOGUS_TOKEN.startswith("ovi_") and len(O.BOGUS_TOKEN) == 47)
+
+    def test_verify_answers_410_from_a_real_link_mode_door(self):
+        # Catches: the bogus token not the shape the server parses (a 400 or 403 instead of 410), so verify
+        # could never pass against a real console.
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import threading
+        from overture import server as SV
+        import test_server as TS
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": td}):
+            d = Path(td)
+            cfg = SV.Config(root=d, page=None, state=d / "s", adapter=d / "u.py", team_domain="", aud="",
+                            hostname="", port=0, auth="link", origin="http://127.0.0.1:1")
+            console = SV.Console(cfg, TS.FakeAdapter())
+            srv = SV.owner_server(console, SV.link_verifier(cfg), 0)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                port = srv.server_address[1]
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(O.door_answer("127.0.0.1", port, "/api/view"), 403)
+                    self.assertEqual(O.door_answer("127.0.0.1", port, f"/signin?t={O.BOGUS_TOKEN}"), 410)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+
+    def test_the_cli_takes_auth_link_without_access_flags_and_cloudflare_still_needs_them(self):
+        # Catches: the parser still requiring --team-domain/--aud/--hostname with --auth link, and Cloudflare
+        # (the default) no longer requiring them in argparse's own words.
+        rc, out, err = CliTests.run_main(self, "write", "--project", str(self.project), "--name", "acme", "--auth",
+                                         "link", "--listen", ZT, "--no-port-check")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(f"http://{ZT}:4793", out)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as e:
+            O.main(["write", "--project", str(self.project), "--name", "acme", "--aud", AUD])
+        self.assertEqual(e.exception.code, 2)
+        self.assertIn("the following arguments are required: --team-domain, --hostname", err.getvalue())
+
+
+@unittest.skipUnless(shutil.which("bash") and shutil.which("python3"), "no bash")
+class InstallLinkTests(Base):
+    """install.sh renders a link-mode unit from `onboard.py show` (1.47.0, L7)."""
+
+    def test_a_link_console_gets_the_link_unit_with_its_flags_and_no_tunnel(self):
+        # Catches: install.sh rendering the Cloudflare unit (--team-domain ...) for a link console, dropping
+        # --listen/--origin, writing a tunnel unit there is no tunnel for, and a flag the server does not define.
+        O.write(self.project, {"name": "acme", "auth": "link", "origin": "https://box.tailnet.ts.net"},
+                check_port=False)
+        r = self.install()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        units = self.home / "cfg" / "systemd" / "user"
+        self.assertEqual(sorted(p.name for p in units.iterdir()), ["acme-console.service"])
+        unit = (units / "acme-console.service").read_text()
+        self.assertIn("--auth link", unit)
+        self.assertIn("--project acme --origin https://box.tailnet.ts.net\n", unit)
+        self.assertNotIn("--team-domain", unit)
+        self.assertNotIn("@", unit.split("ExecStart=", 1)[1].split("\n[Install]")[0])
+
+    def test_start_with_listen_says_the_server_may_still_be_waiting_rather_than_none(self):
+        # Catches (1.47, C5): `install.sh --start` printing "loopback ... answers none (want 403)" while a --listen
+        # server is still in its L16 wait for ZeroTier (it binds nothing until then), which reads as a fault;
+        # and the control: a console that answers 403 still gets the plain check line.
+        O.write(self.project, {"name": "acme", "auth": "link", "listen": "10.147.17.10"}, check_port=False)
+        r = self.install("--start", curl="exit 7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("check: no answer on loopback yet (none): the server may still be waiting for "
+                      "10.147.17.10 on ZeroTier or Tailscale (up to 2 minutes)", r.stdout)
+        self.assertNotIn("want 403)\n", r.stdout)
+        r = self.install("--start", curl="printf 403")
+        self.assertIn("check: loopback without a token answers 403 (want 403)", r.stdout)
+
+    def install(self, *extra, curl="exit 0"):
+        bindir = self.root / "bin"
+        bindir.mkdir(exist_ok=True)
+        for tool, body in (("systemctl", "exit 0"), ("curl", curl), ("sleep", "exit 0")):
+            (bindir / tool).write_text(f"#!/bin/sh\n{body}\n")
+            (bindir / tool).chmod(0o755)
+        kit = Path(O.__file__).parent
+        share = self.home / "share" / "overture"
+        (share / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+        # The venv's interpreter: its one `-c` (the PyJWT version check) answered here, so no network install.
+        (share / "venv" / "bin" / "python").write_text(f'#!/bin/sh\n[ "$1" = -c ] && exit 0\nexec {sys.executable} "$@"\n')
+        (share / "venv" / "bin" / "python").chmod(0o755)
+        (share / "venv" / "bin" / "pip").write_text("#!/bin/sh\nexit 0\n")
+        (share / "venv" / "bin" / "pip").chmod(0o755)
+        env = {**os.environ, "HOME": str(self.home), "XDG_DATA_HOME": str(self.home / "share"),
+               "XDG_CONFIG_HOME": str(self.home / "cfg"), "XDG_STATE_HOME": str(self.home / "st"),
+               "PATH": f"{bindir}:{os.environ.get('PATH', '')}"}
+        return subprocess.run(["bash", str(kit / "deploy/install.sh"), "--project", str(self.project), *extra],
+                              env=env, capture_output=True, text=True, timeout=120)
+
+
 class InstallNoticeTests(unittest.TestCase):
     """The one-time banner after installing or upgrading the plugin (plugin/hooks/install_notice.py).
 

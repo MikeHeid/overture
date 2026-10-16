@@ -1,0 +1,172 @@
+# The inbox and rulings
+
+[← Back to README](../../README.md)
+
+Answer what your agents ask, lock it into a ruling, and keep each ruling honest as the code moves.
+
+## The inbox loop — answer, lock, round
+
+- **Answer and lock.** Each question shows its options, the ★ and whose
+  recommendation it is, and evidence rows. Evidence shows the cited lines
+  as they are now, and says whether they changed since the question was
+  asked. Your own words on an answer travel with it. Locking turns an
+  answer into a ruling. A round's questions open as one form: ←/→ move,
+  1–9 pick, **Lock all & process**.
+
+  <img src="../screenshots/feature-answer.png" alt="A question card: options with descriptions, the recommended pick starred, cited file, a box for your own words" width="400">
+
+- **One-tap lock.** **Lock this answer** sends the lock immediately. If
+  the server refuses (e.g. a condition is no longer true), the card shows
+  the reason and the Lock button comes back.
+- **Lock several at once.** When an item has more than one answered,
+  unlocked question, **Lock all N answers…** shows every answer it is
+  about to lock, locks them in order, and stops at the first refusal,
+  naming it.
+
+  <img src="../screenshots/anim-lock-all.gif" alt="Lock all 2 answers: the confirmation lists both answers, then both lock" width="400">
+
+- **A round moves on by itself.** Pick a single-choice option and the
+  form moves to the next question still without a pick, saying so. It
+  stays put for multiple choice, for a question you are writing words
+  on, and for ↑/↓ through the options. It never moves onto the Lock page.
+
+  <img src="../screenshots/anim-round.gif" alt="Answering a three-question round from the keyboard: press 1 for each, review, Lock all and process" width="400">
+
+- **Answer these together.** Loose questions on one item, asked by one
+  named agent session within five minutes of each other, are grouped in
+  the inbox and open as one form. Unnamed sessions are never grouped,
+  because nothing shows they are one agent's.
+- **Send to agent.** Once you have answered something, a bar under the
+  panel header shows "N answered · M left" and sends the agent the same
+  "process them" signal as before. It goes once sent and comes back with
+  the next answer.
+
+  <img src="../screenshots/feature-send.png" alt="The Send to agent bar: 1 answered, 0 left" width="400">
+
+- **Locked questions roll up** to one line (question, pick, state). Click
+  or press Enter to open one. Open and stale questions stay whole. The
+  slides and fades run only when your system does not ask for reduced
+  motion.
+
+  <img src="../screenshots/feature-locked.png" alt="An item whose locked question has rolled up to a single line" width="400">
+
+## Around the Inbox
+
+<img src="../screenshots/feature-inbox-top.png" alt="The top of the Inbox: the Living ruling badge, the Priority ribbon, the four filter chips and the project map fold" width="400">
+
+- **Filter chips (1.1).** A row of four chips sits above the Inbox's
+  sections: **you** (waiting on you), **unlocked** (answered, not yet
+  locked), **stale** and **locked** (the "Recently answered" lines under
+  each item). Each chip turns its kind on or off. All are on to start.
+  The choice is kept in this browser, for this project, and never
+  reaches the server.
+- **Living rulings badge (1.25).** When a ruling has gone stale, a badge
+  at the top of the Inbox counts them: "1 Living ruling needs review".
+  Press it and the chips narrow to stale, and the first stale ruling
+  scrolls into view. The stale banner on the card itself is tagged
+  **Living ruling**.
+- **Snooze (0.26).** Each row of the Priority ribbon has a ⌛ button
+  with three choices: **1h**, **til tmrw** (9:00 tomorrow, local time)
+  and **1w**. A snoozed question leaves the ribbon at once and comes back
+  when its time is up. **Snoozed · N** at the bottom of the Inbox lists
+  every snooze, when it wakes, and an **Unsnooze** button. Snoozes live
+  in this browser only, so another browser or a private window does not
+  see them.
+
+  <img src="../screenshots/feature-snooze.png" alt="The Priority ribbon with a snooze menu open on one row: 1h, til tmrw, 1w" width="400">
+
+- **Links to one place (0.25).** The address bar follows you: `#item=ID`
+  opens an item, `#qid=ID/Q3` opens the item that owns the question, and
+  a tab's name (`#feed`, `#prs`, `#chat`, …) opens that tab. A link you
+  bookmark or send opens exactly there. In the command palette,
+  **Alt+Enter** on a row copies its link. Only this console reads the
+  link; anyone you send it to still needs their own way in.
+- **Drafts follow you (1.19).** What you type and have not sent (an
+  answer, a chat message, a visual brief, a Launch Idea pitch) is saved
+  to the console's machine a moment after you stop typing, and appears
+  in your other browsers. Text you have not yet saved is never replaced
+  by an older copy. Since 1.41 each login has its own drafts.
+- **Export today's rulings (0.28).** **⤓ Export today** on the Feed tab
+  opens every ruling locked since midnight as Markdown, grouped by item,
+  with **Copy**. It is built in your browser from the Feed; nothing is
+  sent anywhere.
+
+  <img src="../screenshots/feature-export-today.png" alt="Today's rulings as Markdown in a dialog, with Copy and Close" width="720">
+
+## Keep rulings honest as the code moves
+
+A question says what must stay true for its answer to stand (`valid_if`):
+cited text (an `excerpt`), a whole file (`file_sha256`), or an item's
+status. When that stops holding, the answer reads **stale** and **What
+changed?** names which check failed, with a diff of the cited text against
+the file as it is now.
+
+<img src="../screenshots/anim-stale.gif" alt="A stale ruling: What changed? shows the cited line was edited from automated to manual" width="400">
+
+- **Still holds: re-lock…** keeps your answer and re-checks it against the
+  files as they are now.
+- **`agent.py reanchor`** (the steward runs it, `--dry-run` first) turns a
+  stale whole-file hash into an excerpt only with evidence: the question
+  names a line range in that file, the steward's pushed history holds the
+  version it was locked against, and those lines are still in the file
+  exactly once. Anything else stays stale, with the reason listed.
+- **Withdraw…**: the ruling no longer applies, and you give a reason.
+- **Keep, stop checking…**: the ruling stands, but is no longer checked
+  against the files.
+- **Confirm a proposed anchor.** The steward proposes new lines for the
+  ruling to rest on, the server reads them itself, and nothing changes
+  until you press Confirm.
+- **Replace.** A new question is linked to the stale one. The old ruling
+  stands until you lock the new answer.
+- **Scan for a resolve (0.8.17).** Every stale answer has a **Scan for a
+  resolve** button, and the Inbox has **Scan all stale (N)**. A scan asks
+  the steward to find out whether each ruling still applies, and it answers
+  each one way: a proposed new anchor, a replacement question, or advice
+  (a ★ on Withdraw or Keep, with its evidence) shown beside your own
+  buttons. Nothing changes until you press one. One scan runs at a time,
+  and it is done once every ruling in it was answered or settled.
+
+Only the owner can do any of these, and only on a stale answer. Nothing is
+deleted: each act is recorded in a file beside the store, and the fold
+records the outcome in your project. New questions are refused a whole-file
+hash where an excerpt fits, which is what made most rulings go stale.
+
+<img src="../screenshots/feature-stale.png" alt="A stale ruling with What changed? open: the cited line and the file as it is now" width="400">
+
+## Lessons: what you settled stays settled (1.33–1.34)
+
+When you **Withdraw…** a ruling or **Keep, stop checking…** it, the reason
+you give becomes a **lesson**. Lessons are how the project remembers *why*
+something was dropped, so the next agent doesn't bring it back.
+
+- **Every new session is told.** The SessionStart hook adds one line when
+  lessons exist: how many, and the command to read them. It is silent when
+  there are none.
+- **Related past rulings on the question card.** When an agent asks
+  something that looks like a ruling you already withdrew or stopped
+  checking *on the same item*, the card shows **📎 N related past rulings —
+  read before answering**. Open it to see the date, the ruling's id,
+  whether you withdrew it or stopped checking, and the start of your
+  reason. Questions you have already settled never show it.
+- **Agents can check before they ask.** `agent.py lesson-match "TEXT"
+  --item ITEM` prints the matching lessons and exits 0 (matches), 1
+  (none) or 2 (the lessons file cannot be read), so a session can
+  rephrase, or cite your reason, before it posts.
+- **Read or commit them.** `agent.py lessons` prints every lesson as
+  Markdown, newest first; `--fold PATH` writes the file atomically into
+  your project so it travels with the code.
+
+Matching is local and simple (shared three-letter fragments, accents and
+case ignored), so it catches close rewordings, not every paraphrase. A
+lesson's text never leaves your machine: the page receives at most a
+400-character preview, and peers never see it.
+
+<img src="../screenshots/feature-lesson-chip.png" alt="An open question with 1 related past ruling open: the date, the withdrawn ruling's id and the owner's reason" width="400">
+
+## Direction
+
+- **Direction stays visible.** Each item in the Inbox carries a
+  collapsible "N answered on this item" under its open questions, showing
+  the last few locked rulings. Items whose questions are all locked
+  within the last day stay on the list under **Recently answered**, so
+  you can see what was asked and answered without leaving the Inbox.

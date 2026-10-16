@@ -6,6 +6,9 @@
                              "hostname": "<bare DNS name>", "aud": "<Access AUD>", "port": N,
                              "slugs": ["<one directory name>", ...],
                              "token_sha256": "<64 hex: SHA-256 of the project's agent token>"}}}
+    1.46.0: "auth": "link" (absent: Access); 1.47.0: "listen": "<a ZeroTier or Tailscale IPv4>" (absent:
+    every owner door on 127.0.0.1 only; set: on 127.0.0.1 AND that address, same port), link mode only, kept
+    by every writer.
 
 It sits beside the user's registry and, like it, is written only by a command
 the user runs (`agent.py server add`), never by a session and never from a
@@ -48,6 +51,7 @@ from pathlib import Path
 
 from . import devices as DV
 from . import names as N
+from . import netif as NI
 from . import registry as R
 
 FILE = "server.json"
@@ -238,15 +242,54 @@ def _rotate(name: str, p: Path, registry: Path | None) -> Path:
         raise ServerFileError(f"server.json hosts no project {name!r}; run `agent.py --state DIR server add` first")
     e = {**e, TOKEN_KEY: _write_token(name, p, registry)}
     doc["projects"][name] = e
-    _write(p, _out(doc["team_domain"], doc["projects"], doc["auth"]))
+    _write(p, _out(doc["team_domain"], doc["projects"], doc["auth"], doc["listen"]))
     return token_file(name, p)
 
 
-def _out(team_domain: str | None, projects: dict, auth: str) -> dict:
+def _out(team_domain: str | None, projects: dict, auth: str, listen: str | None = None) -> dict:
     """The file as every writer writes it. 1.46.0: `auth` is kept whatever the writer changed (a rotate or an
     add that dropped it would switch a link-mode server back to Cloudflare at its next start); a cloudflare
-    server's file stays byte for byte what 1.45 wrote."""
-    return {"team_domain": team_domain, "projects": projects, **({"auth": auth} if auth != "cloudflare" else {})}
+    server's file stays byte for byte what 1.45 wrote. 1.47.0: `listen` likewise (a writer that dropped it
+    would take every owner door off the overlay, unseen, at the next start); absent when there is none."""
+    return {"team_domain": team_domain, "projects": projects, **({"auth": auth} if auth != "cloudflare" else {}),
+            **({"listen": listen} if listen else {})}
+
+
+def _listen_conflicts(projects: dict, listen: str) -> list[str]:
+    """1.47.0: the entries whose `origin` names loopback, which with `listen` is the other socket's origin."""
+    return [f"{name}: {DV.listen_origin_problem(e['origin'], listen)}" for name, e in sorted(projects.items())
+            if isinstance(e, dict) and isinstance(e.get("origin"), str)
+            and DV.listen_origin_problem(e["origin"], listen)]
+
+
+def set_listen(listen: str | None, path: Path | None = None) -> str | None:
+    """`agent.py server listen ADDR | --clear` (1.47.0, L4 L14): the one address every owner door of the one
+    server binds besides loopback (same port); None clears it. Link mode only (contract 2). Checked here by name
+    (netif.static_problem); whether an interface holds it is the caller's to say, since the server waits for it
+    at start (L16). In force at the server's next start."""
+    p = Path(path or location())
+    with _writing(p):
+        doc = load(p)
+        if listen is not None:
+            if doc["auth"] != "link":
+                raise ServerFileError("--listen is for sign-in links: the one server signs in through Cloudflare "
+                                      "Access, which listens on 127.0.0.1 only (`agent.py server auth link` first)")
+            why = NI.static_problem(listen) or "; ".join(_listen_conflicts(doc["projects"], listen))
+            if why:
+                raise ServerFileError(why)
+        # 1.47 (C1): every entry is re-checked against the new address (or none). An origin of http://OLD:PORT
+        # stayed in the file after a change or a clear, and that project was refused, silently, at the next
+        # start. Only what the change itself breaks is refused; an entry already broken is the server's to say.
+        before = {x for n, e in doc["projects"].items() for x in entry_problems(n, e, doc["auth"], doc["listen"])}
+        broken = [x for n, e in sorted(doc["projects"].items()) for x in entry_problems(n, e, doc["auth"], listen)
+                  if x not in before]
+        if broken:
+            raise ServerFileError(f"{'clearing listen' if listen is None else f'listen {listen}'} would leave "
+                                  f"{'this project' if len(broken) == 1 else 'these projects'} refused at the next "
+                                  f"start: {'; '.join(broken)}; first re-add each with its new --origin URL, or "
+                                  f"with none for the default (`agent.py server add NAME ...`)")
+        _write(p, _out(doc["team_domain"], doc["projects"], doc["auth"], listen))
+    return listen
 
 
 def set_auth(auth: str, path: Path | None = None) -> str:
@@ -257,13 +300,16 @@ def set_auth(auth: str, path: Path | None = None) -> str:
     p = Path(path or location())
     with _writing(p):
         doc = load(p)
+        if auth == "cloudflare" and doc["listen"]:   # 1.47.0 (contract 2): Access never listens beyond loopback
+            raise ServerFileError(f"the one server listens on {doc['listen']} (`server listen`), and Cloudflare "
+                                  f"Access listens on 127.0.0.1 only: `agent.py server listen --clear` first")
         if auth == "cloudflare":
             bad = [x for name, e in sorted(doc["projects"].items()) for x in entry_problems(name, e, auth)]
             if bad or not doc["team_domain"]:
                 raise ServerFileError("behind Cloudflare every project needs a hostname and an AUD, and the server "
                                       "a team domain: " + ("; ".join(bad) or "no team domain is set") + "; re-run "
                                       "`agent.py server add` with --hostname, --aud and --team-domain")
-        _write(p, _out(doc["team_domain"], doc["projects"], auth))
+        _write(p, _out(doc["team_domain"], doc["projects"], auth, doc["listen"]))
     return auth
 
 
@@ -275,11 +321,12 @@ def _page_problem(page: object) -> str | None:
     return None
 
 
-def entry_problems(name: object, e: object, auth: str = "cloudflare") -> list[str]:
+def entry_problems(name: object, e: object, auth: str = "cloudflare", listen: str | None = None) -> list[str]:
     """Why a hosted project's entry is unusable; [] when it is well formed. Unknown keys are ignored.
 
     1.46.0: by the server's mode. Behind Cloudflare a `hostname` and an `aud` are required, as before. With
-    sign-in links neither is (each is still checked when present), and an entry may name its `origin`."""
+    sign-in links neither is (each is still checked when present), and an entry may name its `origin`.
+    1.47.0: with the server's `listen`, that origin may be http://LISTEN[:PORT] (L15), and must name LISTEN."""
     if N.problem(name):
         return [f"project name: {N.problem(name)}"]
     if not isinstance(e, dict):
@@ -297,7 +344,8 @@ def entry_problems(name: object, e: object, auth: str = "cloudflare") -> list[st
     if (not link or "aud" in e) and not (isinstance(e.get("aud"), str) and AUD.match(e["aud"])):
         out.append(f"{name}: aud is not an Access AUD tag")
     if "origin" in e:
-        why = DV.origin_problem(e["origin"]) if link else "origin is for a server in link mode (`server auth`)"
+        why = (DV.origin_problem(e["origin"], listen) or (listen and DV.listen_origin_problem(e["origin"], listen))
+               if link else "origin is for a server in link mode (`server auth`)")
         if why or (link and DV.clean_origin(e["origin"]) != e["origin"]):
             out.append(f"{name}: {why or 'origin ends in /: write it without'}")
     port = e.get("port")
@@ -312,12 +360,14 @@ def entry_problems(name: object, e: object, auth: str = "cloudflare") -> list[st
 
 
 def load(path: Path | None = None) -> dict:
-    """The whole file as {"team_domain": str | None, "projects": {...}, "auth": "cloudflare" | "link"}; empty when
-    absent. Raises on bad JSON, and (1.46.0) on an `auth` that is neither: a typo must not mean Cloudflare."""
+    """The whole file as {"team_domain": str | None, "projects": {...}, "auth": "cloudflare" | "link",
+    "listen": str | None}; empty when absent. Raises on bad JSON, and (1.46.0) on an `auth` that is neither: a
+    typo must not mean Cloudflare. 1.47.0: and on a `listen` refused by name (netif.static_problem), or set
+    with Cloudflare (contract 2): a hand edit never widens a door, it stops the server by name."""
     p = path or location()
     raw = R.read_regular(p, MAX_FILE)
     if raw is None:
-        return {"team_domain": None, "projects": {}, "auth": "cloudflare"}
+        return {"team_domain": None, "projects": {}, "auth": "cloudflare", "listen": None}
     try:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as e:
@@ -331,7 +381,13 @@ def load(path: Path | None = None) -> dict:
     auth = doc.get("auth", "cloudflare")
     if auth not in AUTHS:
         raise ServerFileError(f"{p}: auth {auth!r} is not one of {', '.join(AUTHS)}")
-    return {"team_domain": team if isinstance(team, str) else None, "projects": projects, "auth": auth}
+    listen = doc.get("listen")
+    if "listen" in doc:
+        why = NI.static_problem(listen) or (None if auth == "link" else "listen is for a server in link mode")
+        if why:
+            raise ServerFileError(f"{p}: listen: {why}")
+    return {"team_domain": team if isinstance(team, str) else None, "projects": projects, "auth": auth,
+            "listen": listen}
 
 
 def slugs_for_state(state: str, path: Path | None = None) -> list[str]:
@@ -439,7 +495,7 @@ def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, regis
         e.setdefault("aud", aud)
     if not (isinstance(e.get(TOKEN_KEY), str) and TOKEN_HASH.match(e[TOKEN_KEY])):
         e.pop(TOKEN_KEY, None)   # a hand-broken hash is replaced by a fresh token below, never kept
-    problems += [x for x in entry_problems(name, e, auth)
+    problems += [x for x in entry_problems(name, e, auth, doc["listen"])
                  if not x.startswith("project name:") and not (not r and " root " in x)]
     if team_domain is not None and doc["team_domain"] not in (None, team_domain):
         problems.append(f"the server's team domain is {doc['team_domain']}; one server serves one Access team")
@@ -463,5 +519,6 @@ def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, regis
             and os.path.lexists(token_file(name, p))):
         e[TOKEN_KEY] = _write_token(name, p, registry)
     doc["projects"][name] = e
-    _write(p, _out(team_domain if team_domain is not None else doc["team_domain"], doc["projects"], auth))
+    _write(p, _out(team_domain if team_domain is not None else doc["team_domain"], doc["projects"], auth,
+                   doc["listen"]))
     return e

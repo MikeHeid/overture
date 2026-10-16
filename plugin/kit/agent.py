@@ -98,6 +98,9 @@
     agent.py --state DIR server auth [cloudflare | link]
                                                 show or set how the one server's owner doors sign browsers in
                                                 (1.46; in force at its next start)
+    agent.py --state DIR server listen [ADDR | --clear]
+                                                show or set the one ZeroTier or Tailscale address every owner
+                                                door listens on beside 127.0.0.1 (1.47; link mode only)
 
 **Slim reads (K1).** JSON goes out compact when stdout is not a terminal.
 `todo`, `view` and `answers` refuse a read over 64 KiB unless given --full:
@@ -173,6 +176,7 @@ from overture import devices as DV  # noqa: E402
 from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
 from overture import names as N  # noqa: E402
+from overture import playbooks as PB  # noqa: E402
 from overture import notify as NT  # noqa: E402
 from overture import operators as OP  # noqa: E402
 from overture import roles as RO  # noqa: E402
@@ -849,24 +853,11 @@ def _item_move(a) -> int:
 
 
 def _playbook_run(a) -> int:
-    """0.18.0: run a named playbook via the agent socket. Returns {records, skipped} from the server."""
-    import time as _t
-    door = _door(a.state)
-    if door.project is None and not door.sock.is_socket():
-        print(f"no console server answers for {a.state}: no {door.sock}, and server.json hosts no project "
-              f"there", file=sys.stderr)
-        return 2
-    body = {"name": a.name, "nonce": f"pb-{a.name}-{int(_t.time())}"}
-    try:
-        code, out = door.request("POST", "/playbook", body, agent=a.agent)
-    except OSError as e:
-        print(f"the console server is not answering on {door.sock}: {e}", file=sys.stderr)
-        return 2
-    if code != 200:
-        print(f"refused ({code}): {out.get('error')}", file=sys.stderr)
-        return 1
-    sys.stdout.write(_json(out))
-    return 0
+    """0.18.0, 1.47 (U7, owner): a playbook's steps are the owner's (every intent is owner-only since 1.30.1), so
+    a session cannot run one. Say so before anything runs (no request reaches the server) and exit non-zero;
+    through 1.46 this sent each step into a refusal and printed `{records: [], skipped: [...]}`."""
+    print(f"not run: {a.name}: {PB.OWNER_ONLY}", file=sys.stderr)
+    return 1
 
 
 REVIEWED_FALLBACK = "origin/main"   # Q28: used when origin/HEAD does not resolve
@@ -1607,9 +1598,9 @@ def main(argv=None) -> int:
     s = sub.add_parser("portfolio", description="0.13.0: list every project registered on this machine with "
                        "its open-question backlog read from each STATE directly. Read-only; no HTTP calls.")
     s.add_argument("--json", action="store_true", help="emit JSON instead of a table")
-    s = sub.add_parser("playbook", description="0.18.0: run a named playbook (.overture/playbooks/<name>.json) "
-                       "through this console's agent socket. Each step lands as an owner message write; the "
-                       "steward's watch picks them up as it does any delegation.")
+    s = sub.add_parser("playbook", description="0.18.0; 1.47 (U7): refuses, and says why. A playbook's steps are "
+                       "the owner's, so playbooks run from the console's Playbooks tab, not from a session. "
+                       "Nothing runs and the exit code is 1.")
     s.add_argument("name", help="the playbook's slug (file basename without .json)")
     s = sub.add_parser("item-move", description="1.17.0: record the owner's intent to re-parent an item. "
                        "Writes a `message` with intent 'move' to the item's thread; the project's adapter "
@@ -1724,6 +1715,14 @@ def main(argv=None) -> int:
                       "(1.46, L5 L6): cloudflare (Access, the default) or link (sign-in links from `agent.py "
                       "invite`, no Cloudflare). In force at the server's next start. You run this, never a session.")
     s.add_argument("mode", nargs="?", choices=("cloudflare", "link"))
+    s = ss.add_parser("listen", description="Show, set or clear the one address every owner door of the one "
+                      "server listens on beside 127.0.0.1 (same port) (1.47, L4 L14): a ZeroTier (zt…) or Tailscale "
+                      "(tailscale0, 100.64/10) address, with sign-in links only. Set while ZeroTier is down, it is "
+                      "waited for at start (up to 2 minutes). In force at the server's next start. You run this, "
+                      "never a session.")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("address", nargs="?", metavar="ADDR")
+    g.add_argument("--clear", action="store_true", help="every owner door on 127.0.0.1 only")
     a = ap.parse_args(argv)
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
     # an empty variable counts as unset.
@@ -1903,7 +1902,8 @@ SESSION_REFUSAL = "refused inside a Claude Code session: {what} by you, in your 
 
 def _link_origin(state: Path) -> tuple[str | None, str]:
     """(the console's origin for a link, where it came from) from server.json when the one server hosts this
-    console in link mode: the entry's origin, else http://127.0.0.1:PORT. (None, why) otherwise."""
+    console in link mode: the entry's origin, else http://127.0.0.1:PORT (1.47.0: http://LISTEN:PORT when the
+    server has `server listen`, the one address its doors are on). (None, why) otherwise."""
     from overture import serverfile as SF
     try:
         doc = SF.load()
@@ -1915,8 +1915,51 @@ def _link_origin(state: Path) -> tuple[str | None, str]:
             if doc["auth"] != "link":
                 return None, "the one server signs in through Cloudflare (`agent.py server auth`)"
             port = e.get("port")
-            return (e.get("origin") or (f"http://127.0.0.1:{port}" if isinstance(port, int) else None)), name
+            host = doc["listen"] or "127.0.0.1"
+            return (e.get("origin") or (f"http://{host}:{port}" if isinstance(port, int) else None)), name
     return None, "server.json hosts no project on this console"
+
+
+def _console_listens(state: Path) -> set[str]:
+    """1.47 (S2): the --listen address(es) of the console on `state`: server.json's `listen` when the one server
+    hosts it, and CONSOLE_LISTEN in the .overture/console.env of each project registered on that state (a
+    single server's unit passes it as --listen). Unreadable files say nothing; an empty set means none known."""
+    from overture import serverfile as SF
+    s, out = os.path.realpath(state), set()
+    try:
+        doc = SF.load()
+        if doc["listen"] and any(isinstance(e, dict) and e.get("state") == s for e in doc["projects"].values()):
+            out.add(doc["listen"])
+    except (SF.ServerFileError, R.RegistryError, OSError):
+        pass
+    try:
+        roots = [r for r, e in R.load().items() if isinstance(e, dict) and e.get("state") == s]
+    except (R.RegistryError, OSError):
+        roots = []
+    for root in roots:
+        try:
+            raw = R.read_regular(Path(root) / ".overture" / "console.env", 1 << 16)
+        except (R.RegistryError, OSError, ValueError):
+            continue
+        for line in (raw or b"").decode("utf-8", "replace").splitlines():
+            k, _, v = line.partition("=")
+            if k.strip() == "CONSOLE_LISTEN" and v.strip():
+                out.add(v.strip())
+    return out
+
+
+def _invite_origin_problem(origin: str, state: Path) -> str | None:
+    """1.47.0 (L15): an invite's --origin may also be http://ADDR[:PORT]. 1.47 (S2): only when ADDR is this
+    console's own --listen address (`_console_listens`); through 1.47.0 any address netif would take by name
+    passed, a LAN one included. It is only printed into the link; the console's own Origin and Host checks
+    decide what a browser may do there."""
+    host = DV.urlsplit_host(origin)
+    listens = _console_listens(state)
+    if isinstance(origin, str) and origin.startswith("http://") and host not in ("127.0.0.1", "localhost") \
+            and host not in listens:
+        return (f"--origin {origin} is refused: http is taken only on loopback and on this console's own --listen "
+                f"address ({', '.join(sorted(listens)) or 'it has none'}); give https://NAME, or the listen address")
+    return DV.origin_problem(origin, host if host in listens else None)
 
 
 def _invite(state: Path, email: str, origin: str | None) -> int:
@@ -1926,7 +1969,7 @@ def _invite(state: Path, email: str, origin: str | None) -> int:
         # roles name, the owner included. A guardrail between the owner's own sessions, as ask_guard is.
         print("agent.py: invite: " + SESSION_REFUSAL.format(what="sign-in links are made"), file=sys.stderr)
         return 2
-    why = OP.email_problem(email) or (origin is not None and DV.origin_problem(origin))
+    why = OP.email_problem(email) or (origin is not None and _invite_origin_problem(origin, state))
     if why:
         print(f"agent.py: invite: {why}; nothing was written", file=sys.stderr)
         return 2
@@ -1984,7 +2027,8 @@ def _devices(state: Path, revoke: str | None) -> int:
 def _server_add(a) -> int:
     from overture import serverfile as SF
     try:
-        auth = SF.load()["auth"]
+        doc = SF.load()
+        auth = doc["auth"]
     except (SF.ServerFileError, R.RegistryError) as err:
         print(f"refused, nothing written: {err}", file=sys.stderr)
         return 1
@@ -2001,7 +2045,8 @@ def _server_add(a) -> int:
     except SF.ServerFileError as err:
         print(f"refused, nothing written: {err}", file=sys.stderr)
         return 1
-    where = e.get("hostname") or e.get("origin") or f"http://127.0.0.1:{e['port']}"
+    # 1.47.0: with `server listen`, the default origin is the overlay one.
+    where = e.get("hostname") or e.get("origin") or f"http://{doc['listen'] or '127.0.0.1'}:{e['port']}"
     print(f"server: project {a.project_name} on port {e['port']} ({where}), state {e['state']}, "
           f"root {e['root']} in {SF.location()}; its agents' token is in {SF.token_file(a.project_name)} "
           f"(mode 0600)")
@@ -2024,6 +2069,48 @@ def _server_auth(mode: str | None) -> int:
         print(f"refused, nothing written: {err}", file=sys.stderr)
         return 1
     print(f"server auth: {mode}, in {SF.location()}; restart the server for it to take effect")
+    return 0
+
+
+def _server_listen(address: str | None, clear: bool) -> int:
+    """`server listen [ADDR | --clear]` (1.47.0, L4 L14): show, set or clear server.json's "listen". Setting or
+    clearing is refused in a session, as `server auth` is: it decides who on which network can reach every
+    console. Contract 1 by name (netif) and link mode (serverfile.set_listen); an address no interface holds
+    yet is set with a warning (L16 waits for it at start), one on any other interface is refused."""
+    from overture import netif as NI
+    from overture import serverfile as SF
+    try:
+        if address is None and not clear:
+            now = SF.load()["listen"]
+            print(f"server listen: {now} (every owner door on 127.0.0.1 and that address)" if now else
+                  "server listen: none (every owner door on 127.0.0.1)")
+            return 0
+        if os.environ.get("CLAUDECODE"):
+            print("agent.py: server listen: " + SESSION_REFUSAL.format(what="the address the console listens on is "
+                                                                       "chosen"), file=sys.stderr)
+            return 2
+        note = None
+        if address is not None:
+            got = NI.check(address)   # ListenError: refused by name, or on a non-overlay interface: nothing written
+            note = (None if got else f"no ZeroTier or Tailscale interface holds {address} now; the server waits up "
+                                     f"to 2 minutes for it when it starts")
+            warnings = NI.overlap_warnings(address, got) if got else []
+        SF.set_listen(None if clear else address)
+    except NI.ListenError as err:
+        print(f"refused, nothing written: {err}", file=sys.stderr)
+        return 1
+    except (SF.ServerFileError, R.RegistryError, OSError) as err:
+        print(f"refused, nothing written: {err}", file=sys.stderr)
+        return 1
+    if clear:
+        print(f"server listen: cleared, in {SF.location()}; every owner door is on 127.0.0.1 only from the "
+              f"server's next "
+              f"start")
+        return 0
+    print(f"server listen: {address}, in {SF.location()}; restart the server for it to take effect. A project "
+          f"with no --origin is then at http://{address}:PORT")
+    for line in ([f"agent.py: server listen: warning: {note}"] if note else []) + warnings:
+        print(line, file=sys.stderr)
     return 0
 
 
@@ -2132,6 +2219,8 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "server" and a.server_cmd == "auth":
         return _server_auth(a.mode)
+    if a.cmd == "server" and a.server_cmd == "listen":   # 1.47.0
+        return _server_listen(a.address, a.clear)
     if a.cmd == "server":
         return _server_add(a)
     if a.cmd in ("watch", "synced"):
