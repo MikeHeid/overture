@@ -135,6 +135,33 @@ Weighed and not chosen: SMTP email (N1 B), the URL set from Settings (N2 A),
 question text in messages (N3 B), a message per question (N4 A), and the
 steward session sending (N5 B).
 
+## Without Cloudflare (decided 2026-10-15)
+
+Wave 2's "install without Cloudflare", on the owner's networks (Tailscale and
+ZeroTier). The owner answered "Defaults", so every row is an *architect
+default*. L9 (where ZeroTier runs: Windows or inside WSL) is a fact, not a
+choice, and is asked again before 1.47.
+
+| # | Decision | Outcome |
+|---|---|---|
+| L1 | What proves who is at the browser | **A**, *architect default*: Overture's own sign-in links. The network (Tailscale, ZeroTier, LAN or loopback) only decides who can reach the console; a local process cannot forge a sign-in. |
+| L2 | How sign-in works | **A**, *architect default*: an owner runs `agent.py invite EMAIL` (refused in a Claude Code session). The link works once and expires after 24 hours; the browser stays signed in until revoked. People lists each login's devices with Revoke; invites, sign-ins and revokes go in the role log. Only an owner invites. |
+| L3 | HTTPS | **A**, *architect default*: Tailscale through `tailscale serve` (HTTPS, the console stays on 127.0.0.1); ZeroTier on plain HTTP over its encrypted network. |
+| L4 | Listening beyond 127.0.0.1 | **A**, *architect default*: `--listen` takes only an address on a Tailscale (100.64/10) or ZeroTier interface; `0.0.0.0` and public addresses are refused. |
+| L5 | Cloudflare | **A**, *architect default*: one way in per console, `--auth cloudflare` (the default, unchanged) or `--auth link`. |
+| L6 | `server.py --all` | **A**, *architect default*: one mode per server; a sign-in covers every project the login has a role in. |
+| L7 | Setup | **A**, *architect default*: `onboard.py` asks Cloudflare / Tailscale / ZeroTier / this machine only, and prints the first invite. |
+| L8 | Order | **A**, *architect default*: 1.46 sign-in links, devices and a this-machine-only mode; 1.47 `--listen` for Tailscale and ZeroTier, and onboarding; 1.48 the launchd service (D2) and a Dockerfile. |
+| L10 | Directors and the two-key areas | **A**, *architect default*: owners only; directors see them but cannot change them. **Amends S1.** |
+| L11 | Notifications through `HTTPS_PROXY` | **A**, *architect default*: honoured, and documented. |
+| L12 | The two 1.45 LOWs (a repeated send error not logged again; unsaved Settings text lost on redraw) | **A**, *architect default*: fixed in 1.46. |
+
+Weighed and not chosen: identity from the network itself (L1 B, C), devices
+that sign in again every 30 days (L2 B), directors inviting (L2 C), the
+console serving its own certificate (L3 B), any listen address (L4 B), both
+ways in on one console (L5 B), a mode per project (L6 B), flags only (L7 B),
+and one large release (L8 C).
+
 ---
 
 ## Server hosting
