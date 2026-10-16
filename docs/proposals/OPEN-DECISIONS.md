@@ -139,8 +139,8 @@ steward session sending (N5 B).
 
 Wave 2's "install without Cloudflare", on the owner's networks (Tailscale and
 ZeroTier). The owner answered "Defaults", so every row is an *architect
-default*. L9 (where ZeroTier runs: Windows or inside WSL) is a fact, not a
-choice, and is asked again before 1.47.
+default*. L9 (where ZeroTier runs) was a fact, answered before 1.47; L13–L18
+(1.47) the owner picked one by one from a menu.
 
 | # | Decision | Outcome |
 |---|---|---|
@@ -152,6 +152,13 @@ choice, and is asked again before 1.47.
 | L6 | `server.py --all` | **A**, *architect default*: one mode per server; a sign-in covers every project the login has a role in. *Architect default, security review 2026-10-15:* and the project the link was made from; a project with roles off admits only browsers invited from it (an invite never opens another project to its holder). |
 | L7 | Setup | **A**, *architect default*: `onboard.py` asks Cloudflare / Tailscale / ZeroTier / this machine only, and prints the first invite. |
 | L8 | Order | **A**, *architect default*: 1.46 sign-in links, devices and a this-machine-only mode; 1.47 `--listen` for Tailscale and ZeroTier, and onboarding; 1.48 the launchd service (D2) and a Dockerfile. |
+| L9 | Where ZeroTier runs | **Fact** (owner, 2026-10-15): "inside wsl usually, but also on windows". WSL is in NAT mode; its ZeroTier interface is `zt…` (a 172.22/16 network, beside Docker's 172.17–28 bridges). |
+| L13 | Which ZeroTier the console listens on (1.47) | **A** (owner, menu, 2026-10-15): WSL's own ZeroTier node (`--listen <its zt address>`); nothing set up on Windows. Not a Windows portproxy (breaks when WSL's NAT address changes), not mirrored networking. |
+| L14 | How `--listen` recognises an allowed address | **A** (owner): by interface: the address must be on a `zt*` (ZeroTier) or `tailscale0` / 100.64/10 (Tailscale) interface; refines L4. |
+| L15 | HTTP over the overlay | **A** (owner): Tailscale keeps HTTPS through `tailscale serve`; a ZeroTier console's origin may be `http://<its exact --listen address>[:port]` (ZeroTier encrypts end to end); refines L3. |
+| L16 | Starting before ZeroTier is up | **A** (owner): wait for the address up to 2 minutes with one log line, then exit non-zero so the service restarts it. |
+| L17 | Another network overlapping the listen network (Docker) | **A** (owner): warn at startup and in onboarding, naming the overlapping interface. |
+| L18 | The two 1.46 review LOWs (a percent-encoded token to a wrong path not redacted; invalid UTF-8 in roles.json drops the connection) | **A** (owner): fixed in 1.47. |
 | L10 | Directors and the two-key areas | **A**, *architect default*: owners only; directors see them but cannot change them. **Amends S1.** |
 | L11 | Notifications through `HTTPS_PROXY` | **A**, *architect default*: honoured, and documented. |
 | L12 | The two 1.45 LOWs (a repeated send error not logged again; unsaved Settings text lost on redraw) | **A**, *architect default*: fixed in 1.46. |
@@ -160,7 +167,11 @@ Weighed and not chosen: identity from the network itself (L1 B, C), devices
 that sign in again every 30 days (L2 B), directors inviting (L2 C), the
 console serving its own certificate (L3 B), any listen address (L4 B), both
 ways in on one console (L5 B), a mode per project (L6 B), flags only (L7 B),
-and one large release (L8 C).
+and one large release (L8 C). For 1.47: Windows' ZeroTier through a portproxy,
+mirrored networking or both (L13 B–D), an owner-listed range or any private
+address (L14 B, C), HTTPS through a private CA or Tailscale only (L15 B, C),
+failing at once or falling back to loopback (L16 B, C), docs only (L17 B), and
+leaving the LOWs (L18 B).
 
 ---
 
