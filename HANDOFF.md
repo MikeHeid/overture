@@ -7,6 +7,9 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.46.0 released — sign-in links, run without Cloudflare** (PR #173, `1bb1a33`, zip sha 3807a9d9…b765): owner "Defaults" (L1–L12) + Z1 approve.
+  `--auth link`: `agent.py invite EMAIL` one-use 24 h link → device cookie; People → Signed-in browsers + Revoke; devices.py, machine-level devices.json.
+  Security review F1–F10 cleared (sign-ins scoped per project). Next: 1.47 ZeroTier on WSL, decided Z2–Z7 (L13–L18).
 - **v1.45.0 released — notifications** (PR #172, `7212504`, zip sha afb241ef…9775): owner "go" (N1a N2b N3a N4b N5a, OPEN-DECISIONS "Notifications").
   A digest of waiting questions to a Slack-style webhook (notify.py); URL set only via `agent.py notify-url` (host shown only);
   Settings → Notifications for on/off, window, quiet hours. README gained five team-feature screenshots.
@@ -134,7 +137,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.45.0 (PR #172), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.46.0 (PR #173), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
