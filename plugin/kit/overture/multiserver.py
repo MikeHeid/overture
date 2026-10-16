@@ -47,6 +47,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 
+from . import devices as DV
 from . import gitseam as G
 from .items import (ITEM_FIELDS, ITEMS, MAX_ITEM_COUNT, MAX_ITEMS, SnapshotAdapter,  # noqa: F401 (MS.<name>)
                     snapshot_problem)
@@ -136,7 +137,14 @@ class ProjectConsole(SV.Console):
         return super().board()
 
 
-def open_project(name: str, entry: dict, team_domain: str, registry: dict | str) -> Hosted:
+def entry_origin(entry: dict, auth: str) -> str:
+    """1.46.0: a project's console origin in link mode (its `origin`, else http://127.0.0.1:PORT); "" behind
+    Cloudflare, where Config makes it https://HOSTNAME as before."""
+    return (entry.get("origin") or f"http://127.0.0.1:{entry['port']}") if auth == "link" else ""
+
+
+def open_project(name: str, entry: dict, team_domain: str, registry: dict | str, auth: str = "cloudflare",
+                 devices: Path | None = None) -> Hosted:
     """Open one project's console, or return it refused with the reason. Never raises for a project fault.
 
     `registry` is the user's registry as `R.load` read it (or why it could not
@@ -145,7 +153,7 @@ def open_project(name: str, entry: dict, team_domain: str, registry: dict | str)
     a root the user never registered on that state.
     """
     h = Hosted(name, entry)
-    problems = SF.entry_problems(name, entry)
+    problems = SF.entry_problems(name, entry, auth)
     if problems:
         h.fault = "; ".join(problems)
         return h
@@ -179,8 +187,8 @@ def open_project(name: str, entry: dict, team_domain: str, registry: dict | str)
         h.close()
         return h
     cfg = SV.Config(root=root, page=None, state=state, adapter=Path(os.devnull),   # Q28: no page is read here
-                    team_domain=team_domain, aud=entry["aud"], hostname=entry["hostname"], port=entry["port"],
-                    project=name)
+                    team_domain=team_domain, aud=entry.get("aud", ""), hostname=entry.get("hostname", ""),
+                    port=entry["port"], project=name, auth=auth, origin=entry_origin(entry, auth), devices=devices)
     try:
         h.console = ProjectConsole(cfg, SnapshotAdapter(state))
         h.console.seed()
@@ -195,7 +203,7 @@ def open_project(name: str, entry: dict, team_domain: str, registry: dict | str)
 class MultiServer:
     """Every project in server.json, each opened independently."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, devices: Path | None = None) -> None:
         path = Path(path or SF.location())
         self.path = path
         self._hash_lock = threading.Lock()
@@ -203,13 +211,19 @@ class MultiServer:
         self._hashes: dict[str, str] = {}
         doc = SF.load(path)
         self.team_domain = doc["team_domain"] or ""
+        self.auth = doc["auth"]   # 1.46.0 (L6): one way in for every project this server hosts
+        # The machine's sign-ins: devices.location(), the very file `agent.py invite` writes and server.py's
+        # Config reads (security review of 1.46: `path.parent / FILE` differed from it under a custom
+        # --server-file, and no invite ever worked). `devices` is a test's override only.
+        self.devices = Path(devices) if devices is not None else DV.location()
         try:   # the registry beside server.json: the pair always travels together
             registry: dict | str = R.load(path.parent / R.FILE)
         except (R.RegistryError, OSError) as e:
             registry = str(e)
         self.projects: dict[str, Hosted] = {}
         for name in sorted(doc["projects"]):
-            self.projects[name] = open_project(name, doc["projects"][name], self.team_domain, registry)
+            self.projects[name] = open_project(name, doc["projects"][name], self.team_domain, registry, self.auth,
+                                               self.devices)
 
     def token_hash(self, project: str) -> str | None:
         """The token hash server.json holds for `project` NOW: re-read whenever the file changes (K4, AC4.3).
@@ -314,23 +328,35 @@ class MultiOwnerHandler(SV.OwnerHandler):
 FAULT_BODY = {"error": "this project is not being served right now; the console server's log names why"}
 
 
-class FaultOwnerHandler(SV._Handler):
+class FaultOwnerHandler(SV.SigninDoor, SV._Handler):
     """A refused project's owner door: past the same Access gate, every request is 503.
 
     The body is the same for every refused project and names no path: the
     reason (a lock file, a state dir) is the operator's, so it goes to the
     server's log (at start, and once per refused request here), never to the
     browser, even past the gate.
+
+    1.46.0: in link mode `/signin` works here too (a browser need not wait
+    for this project to be fixed to take up its link; the device then opens
+    the projects devices.admitted names); its line goes to this project's
+    role log, and a sign-in whose line cannot be written is refused, never
+    left unlogged. Its gate is this project's own device_verifier.
     """
 
     verify: Callable[[str | None], dict]
     fault: str
+    signin_where: tuple | None = None   # (devices file, origin, STATE) in link mode
+
+    def _signin_where(self):
+        return self.signin_where
 
     def _dispatch(self) -> None:
+        if self._signin():
+            return
         try:
-            self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))
+            self.verify(self._credential())
         except SV.AuthError as e:
-            return self._send(403, {"error": str(e)})
+            return self._refuse(e)
         sys.stderr.write(f"console-server: refused request on a refused project: {self.fault}\n")
         self._send(503, FAULT_BODY)
 
@@ -403,7 +429,17 @@ def start(server_file: Path | None = None, sock: Path | None = None,
     RF.confine()   # and every read of a project's tree starts from its held root, following no symlink
     sf = Path(server_file or SF.location())
     ms = MultiServer(sf)
-    verify_for = verify_for or (lambda aud: SV.access_verifier(ms.team_domain, aud))
+    # 1.46.0 (L6): one way in for the whole server: every project's door checks Access, or every one a device,
+    # and a device only where devices.admitted lets it in, so each door's verifier is its own project's (F1).
+    if verify_for is None and ms.auth == "link":
+        def door_verify(h: Hosted):
+            return SV.device_verifier(ms.devices, Path(h.entry["state"]))
+    else:
+        if verify_for is None:
+            verify_for = lambda aud: SV.access_verifier(ms.team_domain, aud)   # noqa: E731
+
+        def door_verify(h: Hosted):
+            return verify_for(h.entry.get("aud"))
     port_for = port_for or (lambda h: h.entry["port"])
     path = Path(sock or socket_path(sf))
     agent = _agent_server(ms, path)
@@ -411,15 +447,18 @@ def start(server_file: Path | None = None, sock: Path | None = None,
     owners = {}
     try:
         for name, h in ms.projects.items():
-            if not isinstance(h.entry, dict) or SF.entry_problems(name, h.entry):
+            if not isinstance(h.entry, dict) or SF.entry_problems(name, h.entry, ms.auth):
                 continue   # no port or gate can be trusted from an entry this broken; its refusal is on the agent door
-            verify = verify_for(h.entry["aud"])
+            verify = door_verify(h)
             if h.console is not None:
                 handler = type("BoundMultiOwnerHandler", (MultiOwnerHandler,),
                                {"console": h.console, "verify": staticmethod(verify)})
             else:
+                where = ((ms.devices, entry_origin(h.entry, ms.auth), Path(h.entry["state"]))
+                         if ms.auth == "link" else None)
                 handler = type("BoundFaultOwnerHandler", (FaultOwnerHandler,),
-                               {"verify": staticmethod(verify), "fault": f"{name}: {h.fault}"})
+                               {"verify": staticmethod(verify), "fault": f"{name}: {h.fault}",
+                                "signin_where": where})
             try:
                 srv = ThreadingHTTPServer((SV.HOST, port_for(h)), handler)
             except OSError as e:   # a port in use is this project's fault, never the server's (§3.10)
@@ -448,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--socket", type=Path, help="the agent socket (default: server.sock beside server.json)")
     a = ap.parse_args(argv)
     r = start(a.server_file, a.socket)
+    sys.stderr.write(f"console-server: every owner door signs in through "
+                     f"{'sign-in links (auth link)' if r.ms.auth == 'link' else 'Cloudflare Access (auth cloudflare)'}\n")
     for name, h in r.ms.projects.items():
         line = f"serving on port {r.ports().get(name)}" if h.fault is None else f"REFUSED: {h.fault}"
         sys.stderr.write(f"console-server: {name}: {line}\n")

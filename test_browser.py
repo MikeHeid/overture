@@ -3328,10 +3328,11 @@ class InboxUXTests(unittest.TestCase):
                 self.assertGreater(page.locator(".ck-more-item").count(), 0)
                 self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
 
-    def test_a_director_sets_a_limit_the_two_key_areas_and_a_short_name_in_settings(self):
+    def test_a_director_sets_a_limit_and_a_short_name_and_sees_the_two_key_areas_read_only(self):
         # Catches (1.44.0): the Settings tab never shown to a director (or shown to any viewer), a Save posting
-        # nothing or the text "3", the two-key form left behind in People (which a director never sees), the
-        # short-name form wired to nothing, and the changes not drawn with "You".
+        # nothing or the text "3", the short-name form wired to nothing, and the changes not drawn with "You".
+        # (1.46.0, L10 amends S1) a director offered the two-key form, which the server now refuses: they see
+        # the areas and who changes them instead.
         from overture import operators as OP
         from overture import roles as RO
         from overture import settings as SET
@@ -3349,10 +3350,9 @@ class InboxUXTests(unittest.TestCase):
                 page.click(".ck-settings-row[data-key='chat_per_minute'] button:has-text('Save')")
                 page.wait_for_selector(".ck-settings-row[data-key='chat_per_minute'] >> text=set here; the default is 6")
                 self.assertEqual(SET.load(self.cfg.state), {"chat_per_minute": 3})
-                page.fill("#ck-two-key-areas", "LANE")
-                page.click(".ck-two-key-form button[type='submit']")
-                _wait_for(page, "() => document.querySelector('.ck-live').textContent.includes('Two-key areas: LANE')")
-                self.assertEqual(RO.two_key_areas(self.cfg.state), ["LANE"])
+                self.assertEqual(page.locator(".ck-two-key-form").count(), 0)
+                self.assertEqual(page.locator(".ck-two-key-readonly").text_content(),
+                                 "No two-key areas. Only an administrator changes these.")
                 page.fill(".ck-settings-name-add input[type='email']", "bob@example.com")
                 page.fill(".ck-settings-name-add input[type='text']", "bob")
                 page.click(".ck-settings-name-add button[type='submit']")
@@ -3620,6 +3620,124 @@ class InboxUXTests(unittest.TestCase):
                     page.wait_for_selector(".ck-send-bar", timeout=6000)
                     name = page.evaluate("getComputedStyle(document.querySelector('.ck-send-bar')).animationName")
                     self.assertEqual(name, "none" if reduced else "ck-slide-down")
+
+    def test_settings_keeps_unsaved_typing_and_focus_through_a_redraw(self):
+        # Catches (1.46.0, L12, a 1.45 LOW): a Settings redraw (a live change, or a Save on another row) building
+        # every box from the server's values, so a number typed and not yet saved is lost, and the focus with it;
+        # and a draft kept past its own Save or Reset (the box then lies about what is set).
+        from overture import roles as RO
+        from overture import settings as SET
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                minute = page.locator("#ck-setting-chat_per_minute")
+                minute.fill("4")                                   # typed, not saved
+                page.fill("#ck-setting-chat_per_hour", "50")
+                page.click(".ck-settings-row[data-key='chat_per_hour'] button:has-text('Save')")
+                page.wait_for_selector(".ck-settings-row[data-key='chat_per_hour'] >> text=set here; the default is 60")
+                self.assertEqual(SET.load(self.cfg.state), {"chat_per_hour": 50})
+                self.assertEqual(minute.input_value(), "4")
+                minute.fill("42")                                  # still in the box when the page redraws
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "() => document.activeElement && document.activeElement.id === 'ck-setting-chat_per_minute'")
+                self.assertEqual(minute.input_value(), "42")
+                minute.fill("5")
+                page.click(".ck-settings-row[data-key='chat_per_minute'] button:has-text('Save')")
+                page.wait_for_selector(".ck-settings-row[data-key='chat_per_minute'] >> text=set here; the default is 6")
+                page.click(".ck-settings-row[data-key='chat_per_minute'] button:has-text('Reset')")
+                page.wait_for_selector(".ck-settings-row[data-key='chat_per_minute'] >> text=the default (1 to 60)")
+                self.assertEqual(minute.input_value(), "6")        # the draft went with its own Save
+                # An administrator (roles off: every login) still has the two-key form, and its typing is kept too.
+                RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                page.fill("#ck-two-key-areas", "LANE")
+                page.evaluate("ConsoleKit.refresh()")
+                self.assertEqual(page.locator("#ck-two-key-areas").input_value(), "LANE")
+                page.click(".ck-two-key-form button[type='submit']")
+                _wait_for(page, "() => document.querySelector('.ck-live').textContent.includes('Two-key areas: LANE')")
+                self.assertEqual(RO.two_key_areas(self.cfg.state), ["LANE"])
+
+
+class SigninLinkBrowserTests(unittest.TestCase):
+    """1.46.0 (L1 L2): a console with --auth link, in a real browser, with no Access anywhere."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+
+    def serve_link(self):
+        import socket
+        import tempfile
+        from unittest import mock
+        from overture import devices as DV
+        from overture import server as SV
+        from test_server import page_body
+        td = tempfile.mkdtemp(prefix="ck-link-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(td, ignore_errors=True))
+        env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(Path(td) / "cfg")})
+        env.start()
+        self.addCleanup(env.stop)
+        with socket.socket() as s:   # the console's origin names its port, so pick one first
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        root = Path(td)
+        cfg = SV.Config(root=root, page=None, state=root / "state", adapter=root / "unused.py", team_domain="",
+                        aud="", hostname="", port=port, project="link-test", auth="link",
+                        origin=f"http://127.0.0.1:{port}")
+        console = SV.Console(cfg, _LiveAdapter())
+        console.publish_page({"commit": console.push_page_snapshot(page_body(LIVE_HOST))["staged"]})
+        owner = SV.owner_server(console, SV.link_verifier(cfg), port)
+        threading.Thread(target=owner.serve_forever, daemon=True).start()
+        self.addCleanup(owner.server_close)
+        self.addCleanup(owner.shutdown)
+        self.DV, self.cfg = DV, cfg
+        return f"http://127.0.0.1:{port}/"
+
+    def test_sign_in_by_link_then_people_lists_the_browser_and_revoke_signs_it_out(self):
+        # Catches: a link page whose button does not sign the browser in (the cookie never set, or set on a path
+        # the console does not send it to), a console that does not load on the cookie, People with no Devices
+        # section or no hint how to invite, a Revoke that goes without an in-page confirm (or with a browser
+        # dialog), a confirm that does not warn this page signs out, and a revoked browser still let in.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve_link()
+                tok = self.DV.invite(self.cfg.devices_file, "owner@example.com", self.cfg.state)[0]
+                other = self.DV.invite(self.cfg.devices_file, "bob@example.com", self.cfg.state)[0]
+                self.DV.redeem(self.cfg.devices_file, other, "Chrome on Android", self.cfg.state)
+                browser = getattr(self.pw, kind).launch()
+                self.addCleanup(browser.close)
+                page = browser.new_context().new_page()
+                errors, dialogs = [], []
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+                page.goto(url)
+                page.wait_for_selector("text=This browser is not signed in to this console.")
+                page.goto(url + "signin?t=" + tok)
+                page.wait_for_selector("text=Sign this browser in as owner@example.com?")
+                page.click("button:has-text('Sign this browser in')")
+                page.wait_for_url(url)
+                _wait_for(page, "document.querySelector('.ck-inbox-count') && "
+                                "document.querySelector('.ck-inbox-count').textContent !== '✉'")
+                page.evaluate("ConsoleKit.openTab('people')")
+                page.wait_for_selector(".ck-devices-hint >> text=agent.py invite EMAIL")
+                rows = page.locator(".ck-device-row")
+                self.assertEqual(rows.count(), 2)
+                mine = page.locator(".ck-device-row", has_text="(this browser)")
+                self.assertIn("owner@example.com", mine.text_content())
+                self.assertIn(" · signed in ", mine.text_content())
+                self.assertIn("Chrome on Android", page.locator(".ck-device-row", has_text="bob@").text_content())
+                mine.locator(".ck-device-revoke").click()
+                page.wait_for_selector(".ck-device-ask >> text=You are using it: this page signs out at once.")
+                self.assertEqual(len(self.DV.listing(self.cfg.devices_file)), 2)   # asked, not yet done
+                page.click(".ck-device-confirm")
+                page.wait_for_selector("text=This browser is signed out.")
+                self.assertEqual([d["email"] for d in self.DV.listing(self.cfg.devices_file)], ["bob@example.com"])
+                status = page.evaluate("fetch('/api/view', {credentials: 'same-origin'}).then(r => r.status)")
+                self.assertEqual(status, 403)
+                self.assertEqual(dialogs, [])
+                self.assertEqual(errors, [])
 
 
 class ScanUITests(unittest.TestCase):

@@ -116,7 +116,7 @@ server: [docs/JOIN.md](docs/JOIN.md).
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~35%: CI ruling check (1.36) |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~50%: CI ruling check (1.36), sign-in links without Cloudflare (1.46) |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
@@ -174,6 +174,53 @@ A one-liner for scripts, including other Claude sessions:
       unzip -q /tmp/overture-*.zip -d ~ && rm /tmp/overture-*.zip
 
 Then run the two `/plugin` commands above and restart the session.
+
+### Install without Cloudflare (1.46)
+
+Cloudflare Access is one way in; sign-in links are the other. A console
+runs one or the other, never both. With links, the network decides who can
+reach the console and the console itself decides who is at the browser:
+
+    # one project's server, on this machine only
+    <py> <kit>/server.py --root DIR --state STATE --auth link --port 4793
+    # or the one server, for every project in server.json
+    agent.py --state STATE server auth link
+    agent.py --state STATE server add NAME --port 4793    # no --hostname/--aud/--team-domain
+
+    agent.py --state STATE invite you@example.com --origin http://127.0.0.1:4793
+
+`invite` prints a link once. It works once, within 24 hours, and you run
+it, never a session. Open it in the browser you want signed in and press
+**Sign this browser in**. That browser stays signed in until you revoke it
+under **People**, or with `agent.py devices --revoke ID`. Invites,
+sign-ins and revokes go in the role log. A sign-in link opens the project
+it was made from, plus every project whose roles list that email; with
+roles off, only the projects it was invited from. Opening another
+project's link in the same browser adds that project to the same sign-in.
+Each project's roles still decide what that login may do. Taking away
+someone's role leaves them reading a project they were invited from; to
+shut them out, revoke their browser.
+
+- **The cookie goes to every port of the host:** browsers send cookies per
+  host name, not per port, so any other program served on the same name
+  (a dev server on another `127.0.0.1` port, another service on the
+  tailnet name) receives the `overture-device` cookie whenever that
+  browser visits it, for its 400 days. Prefer the Tailscale https name
+  (`tailscale serve`) for the console, don't browse untrusted local dev
+  servers on the same host name in that browser profile, and if in doubt
+  revoke the browser under **People** and sign in again.
+
+- **This machine only:** the console listens on 127.0.0.1, as always. Open
+  `http://127.0.0.1:PORT` on the same machine.
+- **Tailscale:** `tailscale serve --bg https / http://127.0.0.1:PORT` puts
+  the console on your tailnet over HTTPS, and the console stays on
+  127.0.0.1. Start it with `--origin https://MACHINE.TAILNET.ts.net` (or
+  `server add ... --origin` for the one server) so links and the
+  same-origin checks use that address.
+- **ZeroTier**, and listening on a Tailscale or ZeroTier address directly
+  (`--listen`), come in 1.47.
+- External triggers (`/api/trigger/...`) need a signed-in browser in link
+  mode, so a webhook cannot call them; keep them behind Cloudflare.
 
 ### Upgrade the agent server on each onboarded project
 
@@ -613,7 +660,8 @@ its host:
 
 Then an administrator or a director turns notifications on under
 **Settings → Notifications** and sets how often and the quiet hours.
-The first message lists every question already waiting.
+The first message lists every question already waiting. If HTTPS_PROXY
+is set, the webhook is reached through it.
 
 <img src="docs/screenshots/feature-notify.png" alt="Settings, Notifications: posting to hooks.slack.com, Send notifications ticked, at most one message every 30 minutes, quiet hours 22:00 to 07:00" width="400">
 
@@ -1131,6 +1179,8 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 Highlights of the 1.x arc:
 
+- **1.46 — Sign-in links**: run a console with no Cloudflare: `agent.py
+  invite EMAIL` makes a one-time link, People lists and revokes browsers.
 - **1.45 — Notifications**: a digest of waiting questions to your team's
   Slack-style channel, with quiet hours; never a question's text.
 - **1.44 — Settings**: administrators and directors set the limits, lane

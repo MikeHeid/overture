@@ -9662,23 +9662,50 @@ class SettingsTests(_Live, unittest.TestCase):
         self.assertEqual(self.RO.history(self.cfg.state)[0][0]["setting"]["to"], None)
         self.assertEqual(status(), SV.CHAT_PER_MINUTE)   # (review) the per-request cache sees the file go
 
-    def test_a_director_sets_settings_but_never_roles_nor_sees_the_roster(self):
-        # Catches: the director's door opened wider than settings (People is the administrator's), and the
-        # two-key answer handing a director the roster (every login's email) it was never shown.
+    def test_a_director_sets_settings_but_never_roles_two_key_areas_nor_sees_the_roster(self):
+        # Catches: the director's door opened wider than settings (People is the administrator's), and
+        # (1.46.0, L10 amends S1) a director still able to set the two-key areas, whose refusal must name why and
+        # carry no roster; the page must say the areas are read-only for a director and editable for an owner.
         self.assertEqual(self.put("working_per_item", 3, email=self.DIRECTOR)[0], 200)
         code, out = self.req("POST", "/api/two-key", {"areas": ["LANE"]}, tok=token(email=self.DIRECTOR))
-        self.assertEqual(code, 200, out)
-        self.assertNotIn("roles", out)
-        self.assertEqual(out["settings"]["two_key"], ["LANE"])
+        self.assertEqual(code, 403, out)
+        self.assertEqual(out["error"], "you are signed in as a viewer: this console is read-only for you")
         self.assertNotIn(self.VIEWER, json.dumps(out))
+        self.assertEqual(self.RO.two_key_areas(self.cfg.state), [])
         code, out = self.req("POST", "/api/roles", {"email": self.VIEWER, "role": "owner", "areas": []},
                              tok=token(email=self.DIRECTOR))
         self.assertEqual(code, 403, out)
         v = self.view(self.DIRECTOR)
         self.assertIn("settings", v)
+        self.assertIs(v["settings"]["two_key_editable"], False)
+        self.assertIs(self.view(self.OWNER)["settings"]["two_key_editable"], True)
         self.assertNotIn("roles", v)
         self.assertNotIn(self.VIEWER, json.dumps(v["settings"]))
         self.assertEqual(self.RO.history(self.cfg.state)[0][0]["by"], self.DIRECTOR)
+
+    def test_two_key_areas_are_re_checked_as_an_administrator_s_under_the_lock(self):
+        # Catches (1.46.0, L10): set_two_key re-checking with _may_configure (a director passing the re-check
+        # if role_gate ever let one through), and an owner demoted between the gate and the lock still landing.
+        real = self.RO.load
+        calls = []
+
+        def late(state):
+            calls.append(1)
+            got = real(state)
+            if len(calls) > 1:   # role_gate passes the owner; the re-check under the lock sees a director
+                got = {**got, self.OWNER: {"role": "viewer", "director": True}}
+            return got
+        from unittest import mock
+        with mock.patch.object(self.RO, "load", late):
+            code, out = self.req("POST", "/api/two-key", {"areas": ["LANE"]}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 403, out)
+        self.assertEqual(out["error"], "only an administrator changes the two-key areas; reload the console")
+        self.assertEqual(self.RO.two_key_areas(self.cfg.state), [])
+        self.assertNotIn(SV.OWNER_TWO_KEY, SV.DIRECTOR_ROUTES)
+        code, out = self.req("POST", "/api/two-key", {"areas": ["LANE"]}, tok=token(email=self.OWNER))
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["settings"]["two_key"], ["LANE"])
+        self.assertIn("roles", out)
 
     def test_a_member_or_viewer_who_is_not_a_director_sets_nothing_and_sees_no_settings(self):
         # Catches: role_gate's director door opened to every member or viewer, and the settings (with the
@@ -10170,6 +10197,863 @@ class NotifyTests(_Live, unittest.TestCase):
         self.assertIn("and 5 more items", text)
         self.assertIn("(20 waiting in all)", text)
         self.assertTrue(text.endswith("<https://c.example/|Open the console>"))
+
+    def test_a_send_that_went_through_lets_the_same_error_be_logged_again(self):
+        # Catches (1.46.0, L12, a 1.45 LOW): the dedup of notify errors never reset, so a webhook that failed,
+        # recovered, and failed again the same way leaves no line in the log for the second outage.
+        import io
+        from unittest import mock
+        self.turn_on(notify_every=5)
+
+        def down(url, text):
+            raise self.NT.NotifyError("the webhook answered HTTP 500")
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.console._notify_post = down
+            self.assertEqual(self.tick(), "failed")
+            self.ask(8)
+            self.assertEqual(self.tick(6), "failed")   # the same error again: logged once
+            self.console._notify_post = lambda url, text: self.sent.append((url, text))
+            self.assertEqual(self.tick(12), "sent")
+            self.ask(9)
+            self.console._notify_post = down
+            self.assertEqual(self.tick(18), "failed")   # after a good send: news again
+        self.assertEqual(err.getvalue().count("console notify: the webhook answered HTTP 500"), 2, err.getvalue())
+
+
+class SigninLinkTests(unittest.TestCase):
+    """1.46.0 (OPEN-DECISIONS.md "Without Cloudflare", L1 L2 L5 L6): a console with `--auth link`.
+
+    The single-project server, in process, its gate for real: a device cookie from a real sign-in, through the
+    real GET and POST /signin. Each numbered line of the spec's security contract has a test here.
+    """
+
+    ORIGIN = "https://box.tailnet.ts.net"   # what `tailscale serve` gives: HTTPS, proxied to 127.0.0.1
+    OWNER, BOB, CAROL = "owner@example.com", "bob@example.com", "carol@example.com"
+    UA = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0"
+
+    def setUp(self):
+        from unittest import mock
+        from overture import devices as DV
+        from overture import roles as RO
+        self.DV, self.RO = DV, RO
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        # The CLI's devices file is the machine's (beside the registry): point the config home at this test.
+        env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(d / "cfg")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.cfg = SV.Config(root=d, page=None, state=d / "state", adapter=d / "unused.py", team_domain="",
+                             aud="", hostname="", port=0, project="secretproject", auth="link", origin=self.ORIGIN)
+        self.assertEqual(self.cfg.devices_file, DV.location())
+        self.console = SV.Console(self.cfg, FakeAdapter())
+        self.console.seed()
+        self.owner = SV.owner_server(self.console, SV.link_verifier(self.cfg), 0)
+        self.port = self.owner.server_address[1]
+        threading.Thread(target=self.owner.serve_forever, daemon=True).start()
+        self.agent = SV.agent_server(self.console)
+        threading.Thread(target=self.agent.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.owner.shutdown()
+        self.owner.server_close()
+        self.agent.shutdown()
+        self.agent.server_close()
+        self.tmp.cleanup()
+
+    # -- helpers ----------------------------------------------------------------------------------
+
+    def raw(self, method, path, body=None, headers=None, port=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port or self.port, timeout=10)
+        conn.request(method, path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read().decode("utf-8", "replace")
+        conn.close()
+        return r.status, r.headers, data
+
+    def invite(self, email, state=None):
+        return self.DV.invite(self.cfg.devices_file, email, state or self.cfg.state)[0]
+
+    def elsewhere(self):
+        """Another project's STATE on this machine: a link made there is not one made here (F1)."""
+        s = Path(self.tmp.name) / "other-state"
+        s.mkdir(exist_ok=True)
+        return s
+
+    def post_signin(self, token, origin=None, ctype="application/x-www-form-urlencoded", body=None, extra=None):
+        data = (body if body is not None else f"t={token}").encode()
+        h = {"Content-Type": ctype, "Content-Length": str(len(data)), "User-Agent": self.UA, **(extra or {})}
+        if origin is not False:
+            h["Origin"] = origin or self.ORIGIN
+        return self.raw("POST", "/signin", data, h)
+
+    def sign_in(self, email, state=None, cookie=None):
+        """A browser's whole sign-in: the link's page, its button. Returns the cookie value it was given. With
+        `state` (another project's), the sign-in happens at THAT console, so it is done through devices.redeem
+        with that state (F10: this console's door refuses another project's invite)."""
+        if state is not None:
+            return self.DV.redeem(self.cfg.devices_file, self.invite(email, state), "Firefox on Linux", state,
+                                  current=cookie)[1]
+        tok = self.invite(email, state)
+        code, _, page = self.raw("GET", f"/signin?t={tok}")
+        self.assertEqual(code, 200, page)
+        code, h, _ = self.post_signin(tok, extra={"Cookie": f"overture-device={cookie}"} if cookie else None)
+        self.assertEqual(code, 303)
+        m = re.match(r"overture-device=([^;]+);", h["Set-Cookie"])
+        return m.group(1)
+
+    def as_device(self, method, path, value, body=None, origin=None, csrf=True):
+        h = {"Cookie": f"theme=dark; overture-device={value}"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            h.update({"Content-Type": "application/json", "Origin": origin or self.ORIGIN})
+            if csrf:
+                h["X-Overture-CSRF"] = self.console._csrf
+        code, headers, text = self.raw(method, path, data, h)
+        try:
+            return code, json.loads(text)
+        except ValueError:
+            return code, text
+
+    # -- 2, 10: nothing passes without a device, but GET and POST /signin ------------------------------
+
+    def test_without_a_device_every_path_and_method_meets_the_gate(self):
+        # Catches (contract 2, 10): a route answered before the gate in link mode, /signin's exemption matched
+        # as a prefix (/signin/x, /signinx), the 403 page for a browser naming the project, an email or a path,
+        # and a refused request other than GET / answered with that page instead of today's JSON.
+        code, h, page = self.raw("GET", "/")
+        self.assertEqual(code, 403)
+        self.assertTrue(h["Content-Type"].startswith("text/html"))
+        self.assertIn(SV.NOT_SIGNED_IN_PAGE, page)
+        for leak in ("secretproject", str(self.cfg.state), "<script", "/api/"):
+            self.assertNotIn(leak, page)
+        self.assertNotRegex(page, r"[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.")   # no email (the CSS has "@media")
+        for method, path in (("GET", "/api/view"), ("GET", "/api/status"), ("POST", "/api/message"),
+                             ("GET", "/signin/x"), ("GET", "/signinx?t=x"), ("POST", "/signin?t=x"),
+                             ("PUT", "/signin"), ("DELETE", "/signin"), ("PATCH", "/"), ("OPTIONS", "/signin"),
+                             ("GET", "/health"), ("POST", "/api/trigger/nightly")):
+            with self.subTest(method=method, path=path):
+                code, h, text = self.raw(method, path, b"{}" if method != "GET" else None,
+                                         {"Content-Type": "application/json", "Origin": self.ORIGIN})
+                self.assertEqual(code, 403, text)
+                self.assertEqual(json.loads(text), {"error": SV.NOT_SIGNED_IN})
+        self.assertEqual(self.raw("HEAD", "/signin")[0], 403)
+
+    def test_access_headers_are_never_trusted_in_link_mode(self):
+        # Catches (contract 3): a link-mode gate that still accepts a valid Access JWT, or the email header
+        # Cloudflare adds, so anything able to set a header on a loopback request could be anyone.
+        for h in ({"Cf-Access-Jwt-Assertion": token()}, {"Cf-Access-Authenticated-User-Email": self.OWNER}):
+            self.assertEqual(self.raw("GET", "/api/view", headers=h)[0], 403)
+
+    def test_cloudflare_mode_has_no_signin_and_ignores_device_cookies(self):
+        # Catches (contract 3): /signin answered before the gate behind Cloudflare (an open door on a console
+        # that never asked for one), or a device cookie accepted there instead of an Access token.
+        value = self.sign_in(self.OWNER)
+        d = Path(self.tmp.name)
+        cfg = SV.Config(root=d, page=None, state=d / "cf-state", adapter=d / "unused.py", team_domain=TEAM, aud=AUD,
+                        hostname=HOSTNAME, port=0, project="cf", devices=self.cfg.devices_file)
+        console = SV.Console(cfg, FakeAdapter())
+        cf = SV.owner_server(console, SV.access_verifier(TEAM, AUD, key_for=lambda _t: KEY.public_key()), 0)
+        threading.Thread(target=cf.serve_forever, daemon=True).start()
+        self.addCleanup(cf.server_close)
+        self.addCleanup(cf.shutdown)
+        port = cf.server_address[1]
+        tok = self.invite(self.BOB)
+        self.assertEqual(self.raw("GET", f"/signin?t={tok}", port=port)[0], 403)
+        self.assertEqual(self.raw("GET", f"/signin?t={tok}", headers={"Cf-Access-Jwt-Assertion": token()},
+                                  port=port)[0], 404)
+        self.assertEqual(self.raw("GET", "/api/view", headers={"Cookie": f"overture-device={value}"}, port=port)[0],
+                         403)
+        code, h, page = self.raw("GET", "/", port=port)
+        self.assertEqual((code, h["Content-Type"]), (403, "application/json; charset=utf-8"))   # 1.45's answer
+        self.assertNotIn('"auth"', self.raw("GET", "/", headers={"Cf-Access-Jwt-Assertion": token()}, port=port)[2])
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, self.cfg.state), self.BOB)   # nothing there spent it
+
+    # -- 4, 5, 6, 7, 8: the link, its page, its POST, the cookie ---------------------------------------
+
+    def test_get_asks_and_spends_nothing_and_post_spends_the_invite_once(self):
+        # Catches (contract 5, 6): a GET that signs in (a link previewer or a mail scanner would burn the
+        # invite, or worse sign itself in), a page with a script, a form that does not post the token back, and
+        # a second POST of the same token signing in a second browser.
+        tok = self.invite(self.BOB)
+        for _ in range(3):
+            code, h, page = self.raw("GET", f"/signin?t={tok}")
+            self.assertEqual(code, 200, page)
+            self.assertNotIn("Set-Cookie", h)
+        self.assertIn(f"Sign this browser in as <strong>{self.BOB}</strong>?", page)
+        self.assertIn('<form method="post" action="/signin">', page)
+        self.assertIn(f'<input type="hidden" name="t" value="{tok}">', page)
+        self.assertNotIn("<script", page)
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, self.cfg.state), self.BOB)
+        code, h, _ = self.post_signin(tok)
+        self.assertEqual((code, h["Location"]), (303, "/"))
+        code, h, page = self.post_signin(tok)
+        self.assertEqual(code, 410)
+        self.assertNotIn("Set-Cookie", h)
+        self.assertIn(SV.SIGNIN_USED, page)
+        code, _, page = self.raw("GET", f"/signin?t={tok}")
+        self.assertEqual(code, 410)
+        self.assertIn("This link has expired or was already used. Ask the console's owner for a new one "
+                      "(agent.py invite).", page)
+        self.assertEqual(len(self.DV.listing(self.cfg.devices_file)), 1)
+        for bad in ("/signin", "/signin?t=", "/signin?t=ovi_nope", f"/signin?t={tok}&t={tok}", f"/signin?x={tok}"):
+            self.assertEqual(self.raw("GET", bad)[0], 410, bad)
+
+    def test_the_cookie_is_httponly_lax_root_400_days_secure_on_https_and_slides_on_open(self):
+        # Catches (contract 7): a cookie a page script could read (no HttpOnly), Strict (dropped when the console
+        # is opened from a notification), sent over plain http only (no Secure on an https origin), short-lived,
+        # and GET / not re-sending it, so "signed in until revoked" ends after 400 days anyway.
+        tok = self.invite(self.OWNER)
+        self.raw("GET", f"/signin?t={tok}")
+        code, h, _ = self.post_signin(tok)
+        value = re.match(r"overture-device=([0-9a-f]{12}\.[A-Za-z0-9_-]{43});", h["Set-Cookie"]).group(1)
+        self.assertEqual(h["Set-Cookie"], f"overture-device={value}; HttpOnly; SameSite=Lax; Path=/; "
+                                          f"Max-Age=34560000; Secure")
+        code, h, page = self.raw("GET", "/", headers={"Cookie": f"overture-device={value}"})
+        self.assertEqual(code, 200, page)
+        self.assertEqual(h["Set-Cookie"], f"overture-device={value}; HttpOnly; SameSite=Lax; Path=/; "
+                                          f"Max-Age=34560000; Secure")
+        self.assertIn('"auth": "link"', page)   # the page's config: People shows the browsers
+        code, h, _ = self.raw("GET", "/api/view", headers={"Cookie": f"overture-device={value}"})
+        self.assertEqual(code, 200)
+        self.assertNotIn("Set-Cookie", h)   # only the page itself slides it
+
+    def test_every_signin_answer_carries_no_store_no_referrer_and_a_csp_that_runs_nothing(self):
+        # Catches (contract 8): a sign-in page cached (a shared machine's back button shows the token's form),
+        # the token leaking in a Referer to another site, or a CSP that lets a script or a form elsewhere run.
+        # The form's own page is "same-origin", not "no-referrer": a browser sends `Origin: null` on a POST
+        # from a no-referrer page, and its button would then never pass contract 6's Origin check (the browser
+        # test signs in for real); "same-origin" still sends nothing to any other site.
+        tok = self.invite(self.BOB)
+        answers = [self.raw("GET", f"/signin?t={tok}"), self.raw("GET", "/signin?t=ovi_nope"),
+                   self.post_signin(tok, origin="https://evil.example"), self.post_signin(tok, ctype="text/plain"),
+                   self.post_signin(tok), self.post_signin(tok)]
+        self.assertEqual([a[0] for a in answers], [200, 410, 403, 415, 303, 410])
+        for n, (code, h, page) in enumerate(answers):
+            with self.subTest(code=code):
+                self.assertEqual(h["Cache-Control"], "no-store")
+                want = "same-origin" if n == 0 else "no-referrer"
+                self.assertEqual(h["Referrer-Policy"], want)
+                self.assertEqual(len(h.get_all("Referrer-Policy")), 1)
+                self.assertIn(f'<meta name="referrer" content="{want}">', page)
+                self.assertEqual(h["Content-Security-Policy"], SV.SIGNIN_CSP)
+                self.assertEqual(SV.SIGNIN_CSP, "default-src 'none'; style-src 'unsafe-inline'; form-action "
+                                                "'self'; frame-ancestors 'none'; base-uri 'none'")
+                self.assertEqual(h["X-Content-Type-Options"], "nosniff")
+                self.assertEqual(len(h.get_all("Content-Security-Policy")), 1)
+
+    def test_a_signin_post_from_anywhere_but_the_console_or_off_shape_spends_nothing(self):
+        # Catches (contract 6): login CSRF (a page elsewhere posting ITS owner's token signs this browser in as
+        # them), a missing Origin read as trusted, the old https://HOSTNAME accepted, a JSON or oversized body
+        # read, and any refusal that still spends the invite.
+        tok = self.invite(self.BOB)
+        refused = [
+            (403, self.post_signin(tok, origin=False)),
+            (403, self.post_signin(tok, origin="https://evil.example")),
+            (403, self.post_signin(tok, origin=self.ORIGIN + ".evil.example")),
+            (403, self.post_signin(tok, origin="http://127.0.0.1")),
+            (415, self.post_signin(tok, ctype="application/json")),
+            (413, self.post_signin(tok, body="t=" + tok + "&pad=" + "x" * 1100)),
+            (400, self.post_signin(tok, body=f"t={tok}&u=1")),
+            (400, self.post_signin(tok, body=f"t={tok}&t={tok}")),
+            (400, self.raw("POST", "/signin", f"t={tok}".encode(), {"Origin": self.ORIGIN, "Content-Length": "x",
+                                                                     "Content-Type": "application/x-www-form-urlencoded"})),
+        ]
+        for want, (code, h, _) in refused:
+            self.assertEqual(code, want)
+            self.assertNotIn("Set-Cookie", h)
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, self.cfg.state), self.BOB)
+        self.assertEqual(self.post_signin(tok)[0], 303)
+
+    def test_two_posts_of_one_link_at_once_sign_in_exactly_one_browser(self):
+        # Catches (contract 6): the invite read and spent outside one lock, so two presses (a double click, or a
+        # thief racing the owner) both get a device.
+        tok = self.invite(self.BOB)
+        got, barrier = [], threading.Barrier(6)
+
+        def press():
+            barrier.wait()
+            got.append(self.post_signin(tok)[0])
+        threads = [threading.Thread(target=press) for _ in range(6)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(sorted(got), [303] + [410] * 5)
+        self.assertEqual(len(self.DV.listing(self.cfg.devices_file)), 1)
+
+    def test_a_lapsed_invite_opens_nothing(self):
+        # Catches (contract 4): an invite older than 24 hours still asked about or spent.
+        import datetime as dt
+        tok, _ = self.DV.invite(self.cfg.devices_file, self.BOB, self.cfg.state,
+                                now=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24, seconds=1))
+        self.assertEqual(self.raw("GET", f"/signin?t={tok}")[0], 410)
+        self.assertEqual(self.post_signin(tok)[0], 410)
+        self.assertEqual(self.DV.listing(self.cfg.devices_file), [])
+
+    def test_the_log_never_carries_the_token(self):
+        # Catches (contract 4, 9): the request line `GET /signin?t=ovi_…` written to the server's log as is
+        # (journald keeps it, and anyone who reads it can sign in with a link not yet used).
+        import io
+        from unittest import mock
+        tok = self.invite(self.BOB)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.raw("GET", f"/signin?t={tok}")
+            self.raw("GET", f"/api/view?x=1&t={tok}")
+            self.post_signin(tok)
+        log = err.getvalue()
+        self.assertIn("GET /signin?… HTTP/1.1", log)   # F3: a /signin target loses its whole query
+        self.assertIn("&t=…", log)
+        self.assertNotIn(tok, log)
+        self.assertNotIn(tok[4:20], log)
+
+    def test_the_log_never_carries_the_token_however_the_query_is_spelled(self):
+        # Catches (F3, contract 9): `/signin?%74=ovi_…` (t= to parse_qs, not to a `t=` regex) or a second
+        # parameter name reaching the log whole, a doubled leading slash or an encoded path dodging the /signin
+        # rule, and a token left in some other line (a 400's "Bad request syntax ('…')", a query under any name).
+        import io
+        from unittest import mock
+        tok = self.invite(self.BOB)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            for target in (f"/signin?%74={tok}", f"/signin?x=1&%74={tok}", f"//signin?t={tok}",
+                           f"/%73ignin?t={tok}", f"/api/view?token={tok}", f"/signin?t={tok}#frag"):
+                self.raw("GET", target)
+            # A request line http.server refuses outright: logged by log_error, through log_message.
+            with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
+                s.sendall(f"GET /x?q={tok} HTTP/1.1 extra\r\n\r\n".encode())
+                s.recv(4096)
+        log = err.getvalue()
+        self.assertNotIn(tok[4:], log)
+        self.assertNotIn(tok[4:20], log)
+        self.assertIn("GET /signin?… HTTP/1.1", log)
+        self.assertIn("GET //signin?… HTTP/1.1", log)
+        self.assertIn("ovi_…", log)   # the literal rule, for the targets no other rule names
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, self.cfg.state), self.BOB)   # and nothing spent it
+
+    # -- 11, 12, 13: who the device is, what it may do, and revoking it ---------------------------------
+
+    def test_the_device_names_the_request_and_roles_decide_and_writes_check_the_console_origin(self):
+        # Catches (contract 12, 13): a device's email not reaching act_as (writes unnamed), an invited login with
+        # no role allowed to write, the Origin check still on https://HOSTNAME (every link-mode write refused, or
+        # a write from that other origin let through), and the CSRF check dropped in link mode.
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        owner, bob = self.sign_in(self.OWNER), self.sign_in(self.BOB)
+        code, out = self.as_device("GET", "/api/view", bob)
+        self.assertEqual(code, 200)
+        self.assertEqual(out["view"]["you"]["role"], "viewer")
+        msg = {"item": "LANE.1", "text": "hello", "nonce": "linkmsg0001"}
+        code, out = self.as_device("POST", "/api/message", bob, msg)
+        self.assertEqual((code, out["error"]), (403, "you are signed in as a viewer: this console is read-only "
+                                                     "for you"))
+        self.assertEqual(self.as_device("POST", "/api/message", owner, msg, origin=f"https://{HOSTNAME}")[0], 403)
+        self.assertEqual(self.as_device("POST", "/api/message", owner, msg, csrf=False)[0], 403)
+        code, out = self.as_device("POST", "/api/message", owner, msg)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(self.console.operators.mapping()[out["record"]["id"]], self.OWNER)
+
+    def test_people_lists_the_devices_it_names_and_a_revoke_holds_from_the_next_request(self):
+        # Catches (contract 11, L2, F1): a revoked browser still let in until a restart (the file read once),
+        # People listing a device this console does not let in (or not marking this page's own), a revoke of one
+        # it does not list, a member or a director revoking at all, and the revoke missing from People's log.
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        self.RO.set_role(self.cfg.state, self.BOB, "member", ["LANE"])
+        self.RO.set_role(self.cfg.state, "dee@example.com", "viewer", director=True)
+        owner, bob = self.sign_in(self.OWNER), self.sign_in(self.BOB)
+        carol = self.sign_in(self.CAROL, state=self.elsewhere())   # another project's login, unlisted here
+        dee = self.sign_in("dee@example.com", state=self.elsewhere())   # listed here, invited elsewhere
+        roles = self.as_device("GET", "/api/view", owner)[1]["view"]["roles"]
+        self.assertEqual(roles["auth"], "link")
+        self.assertEqual(sorted(d["email"] for d in roles["devices"]), [self.BOB, "dee@example.com", self.OWNER])
+        self.assertEqual(roles["this_device"], owner.split(".")[0])
+        self.assertEqual(set(roles["devices"][0]), {"id", "email", "created", "label"})
+        self.assertEqual({d["label"] for d in roles["devices"]}, {"Firefox on Linux"})
+        carol_id, bob_id = carol.split(".")[0], bob.split(".")[0]
+        code, out = self.as_device("POST", "/api/device-revoke", owner, {"id": carol_id})
+        self.assertEqual((code, out["error"]), (404, "no such signed-in browser here; reload the console"))
+        self.assertEqual(self.as_device("GET", "/api/view", carol)[0], 403)   # not let in here either (F1)
+        self.assertEqual(self.DV.who(self.cfg.devices_file, carol), self.CAROL)   # and still signed in elsewhere
+        for who in (bob, dee):   # a member, a director: not theirs
+            self.assertEqual(self.as_device("POST", "/api/device-revoke", who, {"id": bob_id})[0], 403)
+        self.assertEqual(self.as_device("POST", "/api/device-revoke", owner, {"id": "zz"})[0], 400)
+        self.assertEqual(self.as_device("GET", "/api/view", bob)[0], 200)
+        code, out = self.as_device("POST", "/api/device-revoke", owner, {"id": bob_id, "nonce": "rv1"})
+        self.assertEqual(code, 200, out)
+        self.assertNotIn(bob_id, [d["id"] for d in out["roles"]["devices"]])
+        code, out = self.as_device("GET", "/api/view", bob)
+        self.assertEqual((code, out), (403, {"error": SV.NOT_SIGNED_IN}))
+        log = self.as_device("GET", "/api/view", owner)[1]["view"]["roles"]["log"]
+        self.assertEqual(log[0], {**log[0], "by": self.OWNER, "device": {"action": "revoke", "email": self.BOB,
+                                                                          "id": bob_id}})
+        kinds = [(r["device"]["action"], r["device"]["email"]) for r in log if "device" in r]
+        self.assertIn(("invite", self.BOB), kinds)
+        self.assertIn(("signin", self.BOB), kinds)
+        settings_log = self.as_device("GET", "/api/view", owner)[1]["view"]["settings"]["log"]
+        self.assertFalse([r for r in settings_log if "device" in r])
+        # The CLI revokes too, refused in a session, logged by the terminal.
+        rc, out, err = self.cli("devices", "--revoke", dee.split(".")[0], claude=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("refused inside a Claude Code session", err)
+        rc, out, err = self.cli("devices", "--revoke", dee.split(".")[0])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.as_device("GET", "/api/view", dee)[0], 403)
+        self.assertIsNone(self.RO.history(self.cfg.state)[0][0]["by"])
+
+    def test_an_owner_demoted_since_the_page_loaded_revokes_nothing(self):
+        # Catches: revoke_device trusting role_gate's earlier read and not re-checking the owner under the lock,
+        # so an administrator demoted between the gate and the lock still signs a browser out.
+        import sys
+        from unittest import mock
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        self.RO.set_role(self.cfg.state, self.BOB, "member", ["LANE"])
+        owner, bob = self.sign_in(self.OWNER), self.sign_in(self.BOB)
+        real = self.RO.load
+
+        def late(state):
+            got = real(state)
+            if sys._getframe(1).f_code.co_name == "revoke_device":   # only the re-check under the lock
+                got = {**got, self.OWNER: {"role": "member", "lanes": ["LANE"]}}
+            return got
+        before = self.cfg.devices_file.read_bytes()
+        with mock.patch.object(self.RO, "load", late):
+            code, out = self.as_device("POST", "/api/device-revoke", owner, {"id": bob.split(".")[0]})
+        self.assertEqual((code, out.get("error")),
+                         (403, "you are no longer an administrator here; reload the console"))
+        self.assertEqual(self.cfg.devices_file.read_bytes(), before)
+        self.assertEqual(self.as_device("GET", "/api/view", bob)[0], 200)
+
+    def test_a_damaged_devices_file_signs_nobody_in_and_is_logged_once(self):
+        # Catches (fail closed): a devices file that fails its check read past or treated as "no devices, let
+        # everyone in", and its problem written to the log on every request rather than once.
+        import io
+        from unittest import mock
+        owner = self.sign_in(self.OWNER)
+        good = self.cfg.devices_file.read_bytes()
+        self.cfg.devices_file.write_text('{"invites": [], "devices": "everyone"}')
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            for _ in range(3):
+                self.assertEqual(self.as_device("GET", "/api/view", owner)[0], 403)
+        self.assertEqual(err.getvalue().count("console devices:"), 1, err.getvalue())
+        self.assertIn("no browser is signed in until it is fixed", err.getvalue())
+        self.cfg.devices_file.write_bytes(good)
+        self.assertEqual(self.as_device("GET", "/api/view", owner)[0], 200)
+
+    # -- F1 (security review of 1.46): a sign-in opens the project it was made from, plus the ones listing it ------
+
+    def test_a_browser_invited_to_another_project_is_refused_here_unless_these_roles_list_it(self):
+        # Catches (F1): the machine-wide devices file read as "any device opens any console": a browser invited
+        # to project B let into A, as A's owner when A's roles are off (writes, revokes); an unlisted login let in
+        # where roles are on; a listed one refused; a role removed but the door still open; and an unreadable
+        # roles file read as "roles off" (everyone invited here let in as owner) instead of refusing.
+        other = self.sign_in(self.BOB, state=self.elsewhere())
+        here = self.sign_in(self.CAROL)
+        msg = {"item": "LANE.1", "text": "hello", "nonce": "f1msg0001"}
+        # Roles off here: only a browser invited from here.
+        self.assertEqual(self.as_device("GET", "/api/view", other), (403, {"error": SV.NOT_SIGNED_IN}))
+        self.assertEqual(self.as_device("POST", "/api/message", other, msg)[0], 403)
+        self.assertEqual(self.as_device("GET", "/api/view", here)[0], 200)
+        # Roles on, not listing bob: still refused; listing bob: let in, as what his role says.
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        self.assertEqual(self.as_device("GET", "/api/view", other)[0], 403)
+        self.RO.set_role(self.cfg.state, self.BOB, "viewer")
+        code, out = self.as_device("GET", "/api/view", other)
+        self.assertEqual((code, out["view"]["you"]["role"]), (200, "viewer"))
+        self.RO.set_role(self.cfg.state, self.BOB, None)
+        self.assertEqual(self.as_device("GET", "/api/view", other)[0], 403)   # the very next request
+        self.assertEqual(self.as_device("GET", "/api/view", here)[0], 200)    # invited here: roles do not matter
+        (self.cfg.state / self.RO.FILE).write_text("{not json")
+        with mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(self.as_device("GET", "/api/view", here)[0], 403)
+
+    def test_a_second_link_in_a_signed_in_browser_adds_this_project_to_its_device(self):
+        # Catches (F1): a second project's link for the same login making a second device (or a second cookie
+        # the browser then juggles), the device not gaining this project (the browser still refused here after
+        # signing in), and a cookie of another login extended by this login's link.
+        bob = self.sign_in(self.BOB, state=self.elsewhere())
+        self.assertEqual(self.as_device("GET", "/api/view", bob)[0], 403)
+        again = self.sign_in(self.BOB, cookie=bob)
+        self.assertEqual(again, bob)   # the same cookie, sent again
+        self.assertEqual(len(self.DV.listing(self.cfg.devices_file)), 1)
+        self.assertEqual(self.as_device("GET", "/api/view", bob)[0], 200)
+        carol = self.sign_in(self.CAROL, cookie=bob)
+        self.assertNotEqual(carol.split(".")[0], bob.split(".")[0])
+        self.assertEqual(len(self.DV.listing(self.cfg.devices_file)), 2)
+
+    def test_peoples_listing_and_its_revoke_are_exactly_the_devices_the_gate_lets_in(self):
+        # Catches (F1): People and its Revoke keeping their own rule (1.46's `only=set(roles)`, None with roles
+        # off: every browser on the machine listed and revocable by any console's owner), so the listing, the
+        # revoke filter and the gate can disagree about one device.
+        far = self.elsewhere()
+        owner = self.sign_in(self.OWNER)
+        devices = {"here": self.sign_in(self.BOB), "far-listed": self.sign_in("dee@example.com", state=far),
+                   "far-unlisted": self.sign_in(self.CAROL, state=far)}
+        for roles_on in (False, True):
+            with self.subTest(roles_on=roles_on):
+                if roles_on:
+                    self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+                    self.RO.set_role(self.cfg.state, "dee@example.com", "viewer")
+                listed = {d["id"] for d in self.as_device("GET", "/api/view", owner)[1]["view"]["roles"]["devices"]}
+                for name, value in devices.items():
+                    gate = self.as_device("GET", "/api/view", value)[0] == 200
+                    self.assertEqual(value.split(".")[0] in listed, gate, name)
+                    self.assertEqual(gate, name == "here" or (roles_on and name == "far-listed"), name)
+        before = self.cfg.devices_file.read_bytes()
+        code, _ = self.as_device("POST", "/api/device-revoke", owner, {"id": devices["far-unlisted"].split(".")[0]})
+        self.assertEqual(code, 404)
+        self.assertEqual(self.cfg.devices_file.read_bytes(), before)
+        code, _ = self.as_device("POST", "/api/device-revoke", owner, {"id": devices["far-listed"].split(".")[0]})
+        self.assertEqual(code, 200)
+
+    def test_an_invite_is_spent_only_at_the_console_it_was_made_from(self):
+        # Catches (F10): another project's invite asked about on this port naming its email (a link pasted to the
+        # wrong console tells whoever holds it which login it is for), spent here (written, logged in THIS
+        # project's role log, and then useless where it was meant to work), or not working afterwards at home.
+        far = self.elsewhere()
+        tok = self.invite(self.BOB, state=far)
+        before = self.cfg.devices_file.read_bytes()
+        log = self.cfg.state / self.RO.LOG_FILE
+        log_before = log.read_bytes() if log.exists() else b""
+        code, _, page = self.raw("GET", f"/signin?t={tok}")
+        self.assertEqual(code, 410)
+        self.assertIn(SV.SIGNIN_USED, page)
+        self.assertNotIn(self.BOB, page)
+        code, h, page = self.post_signin(tok)
+        self.assertEqual(code, 410)
+        self.assertIn(SV.SIGNIN_USED, page)
+        self.assertNotIn("Set-Cookie", h)
+        self.assertEqual(self.cfg.devices_file.read_bytes(), before)
+        self.assertEqual(log.read_bytes() if log.exists() else b"", log_before)
+        # At home it still works.
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, far), self.BOB)
+        got = self.DV.redeem(self.cfg.devices_file, tok, "Firefox on Linux", far)
+        self.assertIsNotNone(got)
+        self.assertEqual(got[2], self.BOB)
+
+    # -- F2, F5: a damaged devices file is a clean refusal, never a dropped connection ---------------------------
+
+    def test_a_damaged_date_answers_cleanly_and_signs_nobody_in(self):
+        # Catches (F2, F5): a date that matches the regex but is no date (month 13) raising a bare ValueError in
+        # GET or POST /signin or in Revoke, which drops the socket (the browser shows a network error, the
+        # owner cannot revoke anything), and such a file letting anyone in.
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        owner, bob = self.sign_in(self.OWNER), self.sign_in(self.BOB)
+        tok = self.invite(self.CAROL)
+        good = json.loads(self.cfg.devices_file.read_text())
+        bad = {**good, "invites": [{**good["invites"][0], "expires": "2099-13-45T99:99:99Z"}]}
+        self.cfg.devices_file.write_text(json.dumps(bad))
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            code, h, page = self.raw("GET", f"/signin?t={tok}")
+            self.assertEqual(code, 410, page)
+            code, h, page = self.post_signin(tok)
+            self.assertEqual(code, 503, page)
+            self.assertIn("Sign-in unavailable", page)
+            self.assertNotIn("Set-Cookie", h)
+            self.assertEqual(self.as_device("GET", "/api/view", owner)[0], 403)
+        self.assertIn("not a UTC time", err.getvalue())
+        # Revoke: the owner's page is refused at the gate too, so drive revoke_device itself, as the route does.
+        self.console.act_as(self.OWNER)
+        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SV.RequestError) as cm:
+            self.console.revoke_device({"id": bob.split(".")[0]})
+        self.assertEqual(cm.exception.code, 503)
+        self.console.act_as(None)
+        self.assertEqual(json.loads(self.cfg.devices_file.read_text()), bad)
+
+    def test_a_damaged_devices_file_during_a_signin_post_is_a_503_page(self):
+        # Catches (F5): POST /signin on a devices file that cannot be read (bad JSON) or written dropping the
+        # connection, or answering anything but the "Sign-in unavailable" page.
+        tok = self.invite(self.BOB)
+        self.cfg.devices_file.write_text("{not json")
+        with mock.patch("sys.stderr", new_callable=io.StringIO):
+            code, h, page = self.post_signin(tok)
+        self.assertEqual(code, 503)
+        self.assertIn("Sign-in unavailable", page)
+        self.assertEqual(h["Cache-Control"], "no-store")
+
+    # -- F8: in link mode only the Cookie is a credential --------------------------------------------------------
+
+    def test_link_mode_never_reads_an_access_header_even_one_shaped_like_a_device_cookie(self):
+        # Catches (F8, contract 3): link mode's credential falling back to Cf-Access-Jwt-Assertion when there is
+        # no cookie (`credential(headers) or headers.get("Cf-Access-Jwt-Assertion")`): anything that can set a
+        # header on a loopback request, with a device's value in hand, would get in without the browser's cookie
+        # store; and a request carrying both decided by the header rather than the cookie.
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        self.RO.set_role(self.cfg.state, self.BOB, "viewer")
+        value = self.sign_in(self.OWNER)
+        other = self.sign_in(self.BOB)
+        self.assertEqual(self.as_device("GET", "/api/view", value)[0], 200)
+        # The real gate, the real file: the device's own value in the Access header alone is refused.
+        code, _, text = self.raw("GET", "/api/view", headers={"Cf-Access-Jwt-Assertion": value})
+        self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+        # And the verifier never sees the header's value, with or without a cookie beside it.
+        seen = []
+        real = self.owner.RequestHandlerClass.verify
+
+        def recording(tok):
+            seen.append(tok)
+            return real(tok)
+        with mock.patch.object(self.owner.RequestHandlerClass, "verify", staticmethod(recording)):
+            self.assertEqual(self.raw("GET", "/api/view", headers={"Cf-Access-Jwt-Assertion": value})[0], 403)
+            code, _, text = self.raw("GET", "/api/view", headers={"Cf-Access-Jwt-Assertion": other,
+                                                                   "Cookie": f"overture-device={value}"})
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(text)["view"]["you"]["role"], "owner")   # the cookie's login, not bob's
+            code, _, _ = self.raw("GET", "/api/view", headers={"Cf-Access-Jwt-Assertion": value,
+                                                                "Cookie": "overture-device=" + "0" * 12 + "." + "A" * 43})
+            self.assertEqual(code, 403)
+        self.assertEqual(seen, [None, value, "0" * 12 + "." + "A" * 43])
+
+    # -- F9: a Cloudflare console has no browsers to revoke -----------------------------------------------------
+
+    def test_a_cloudflare_console_cannot_revoke_the_machines_link_browsers(self):
+        # Catches (F9): revoke_device without its link-mode check: the owner of a console behind Cloudflare signs
+        # out a browser of the machine's link-mode consoles, because its email is listed in this project's roles
+        # (devices.admitted would let it through).
+        bob = self.sign_in(self.BOB)
+        d = Path(self.tmp.name)
+        cfg = SV.Config(root=d, page=None, state=d / "cf-state", adapter=d / "unused.py", team_domain=TEAM, aud=AUD,
+                        hostname=HOSTNAME, port=0, project="cf", devices=self.cfg.devices_file)
+        console = SV.Console(cfg, FakeAdapter())
+        console.seed()
+        self.RO.set_role(cfg.state, self.OWNER, "owner")
+        self.RO.set_role(cfg.state, self.BOB, "viewer")
+        cf = SV.owner_server(console, SV.access_verifier(TEAM, AUD, key_for=lambda _t: KEY.public_key()), 0)
+        threading.Thread(target=cf.serve_forever, daemon=True).start()
+        self.addCleanup(cf.server_close)
+        self.addCleanup(cf.shutdown)
+        before = self.cfg.devices_file.read_bytes()
+        data = json.dumps({"id": bob.split(".")[0]}).encode()
+        code, _, text = self.raw("POST", "/api/device-revoke", data, {
+            "Cf-Access-Jwt-Assertion": token(), "Content-Type": "application/json", "Origin": f"https://{HOSTNAME}",
+            "X-Overture-CSRF": console._csrf}, port=cf.server_address[1])
+        self.assertEqual(code, 409, text)
+        self.assertEqual(self.cfg.devices_file.read_bytes(), before)
+        self.assertEqual(self.DV.who(self.cfg.devices_file, bob), self.BOB)
+
+    def test_an_external_trigger_meets_the_gate_in_link_mode(self):
+        # Catches (contract 14): /api/trigger/ answered before the gate because it skips the Origin check (a
+        # webhook has no browser), so anything that reaches the port could run a playbook.
+        code, _, text = self.raw("POST", "/api/trigger/nightly", b"{}", {"Content-Type": "application/json",
+                                                                         "Authorization": "Bearer x"})
+        self.assertEqual((code, json.loads(text)), (403, {"error": SV.NOT_SIGNED_IN}))
+
+    def test_the_notification_link_is_the_console_origin(self):
+        # Catches: the digest's "Open the console" still built as https://HOSTNAME, which in link mode is
+        # "https:///" (no hostname): a dead link in the team's channel.
+        from overture import notify as NT
+        from overture import settings as SET
+        sent = []
+        self.console._notify_post = lambda url, text: sent.append(text)
+        NT.set_url(self.cfg.state, "https://hooks.example.com/services/T/B/x")
+        SET.put(self.cfg.state, "notify_on", True, by=None)
+        import datetime as dt
+        self.assertEqual(self.console.notify_tick(dt.datetime(2026, 10, 15, 12, 0)), "sent")
+        self.assertTrue(sent[0].endswith(f"<{self.ORIGIN}/|Open the console>"), sent)
+
+    # -- agent.py invite / devices ---------------------------------------------------------------------
+
+    def cli(self, *args, claude=False):
+        import contextlib
+        import io
+        import agent as AG
+        from unittest import mock
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        if claude:
+            env["CLAUDECODE"] = "1"
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            rc = AG.main(["--state", str(self.cfg.state), *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_invite_prints_the_link_once_and_a_session_may_not_make_one(self):
+        # Catches: a session able to mint a link (it could sign a browser it controls in as the owner), the
+        # token kept anywhere but in the one print, no word of the 24 hours, the link built on the wrong origin,
+        # and no warning for a login with no role (it would only read, to everyone's surprise).
+        rc, out, err = self.cli("invite", self.BOB, claude=True)
+        self.assertEqual(rc, 2)
+        self.assertEqual(err.strip(), "agent.py: invite: refused inside a Claude Code session: sign-in links are "
+                                      "made by you, in your own terminal")
+        self.assertFalse(self.cfg.devices_file.exists())
+        self.RO.set_role(self.cfg.state, self.OWNER, "owner")
+        rc, out, err = self.cli("invite", self.BOB, "--origin", self.ORIGIN + "/")
+        self.assertEqual(rc, 0, err)
+        m = re.search(r"  (https://box\.tailnet\.ts\.net/signin\?t=(ovi_[A-Za-z0-9_-]{43}))\n", out)
+        self.assertIsNotNone(m, out)
+        self.assertIn("(24 hours)", out)
+        self.assertIn(f"it will only read until you give it a role: agent.py access {self.BOB} ROLE", err)
+        tok = m.group(2)
+        self.assertEqual(out.count(tok), 1)
+        for f in (self.cfg.devices_file, self.cfg.state / self.RO.LOG_FILE):
+            self.assertNotIn(tok, f.read_text())
+        self.assertEqual(self.DV.peek(self.cfg.devices_file, tok, self.cfg.state), self.BOB)
+        rc, out, err = self.cli("invite", self.OWNER)   # no --origin, no server.json: the path, and where
+        self.assertEqual(rc, 0, err)
+        self.assertRegex(out, r"\n  /signin\?t=ovi_[A-Za-z0-9_-]{43}\n")
+        self.assertIn("Open it on your console's address", out)
+        self.assertEqual(err, "")   # listed: no warning
+        self.assertEqual(self.cli("invite", "not-an-email")[0], 2)
+        self.assertEqual(self.cli("invite", self.BOB, "--origin", "http://box.example.com")[0], 2)
+
+    def test_devices_lists_masked_in_a_session_and_whole_in_the_terminal(self):
+        # Catches: a session's `devices` printing every login's email (the agent side never sees one whole),
+        # and a list that names no device id to revoke by.
+        bob = self.sign_in(self.BOB)
+        rc, out, _ = self.cli("devices")
+        self.assertEqual(rc, 0)
+        self.assertIn(f"{bob.split('.')[0]}  Firefox on Linux · signed in ", out)
+        self.assertIn(self.BOB, out)
+        rc, out, _ = self.cli("devices", claude=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("b…@example.com", out)
+        self.assertNotIn(self.BOB, out)
+        self.assertNotIn(bob.split(".")[1], out)   # never the secret
+
+    def test_the_server_main_takes_auth_link_without_access_values_and_cloudflare_still_needs_them(self):
+        # Catches (L5): --auth link still demanding --team-domain/--aud/--hostname, its origin default not
+        # http://127.0.0.1:PORT, a bad --origin accepted, and --auth cloudflare (the default) losing a requirement.
+        import contextlib
+        import io
+        from unittest import mock
+        got = []
+        base = ["--root", self.tmp.name, "--state", str(self.cfg.state)]
+        with mock.patch.object(SV, "serve", lambda cfg: got.append(cfg)):
+            self.assertEqual(SV.main(base + ["--auth", "link", "--port", "4877"]), 0)
+            self.assertEqual(SV.main(base + ["--auth", "link", "--origin", self.ORIGIN + "/"]), 0)
+            for bad in (["--auth", "link", "--origin", "https://Box.example.com"], [],
+                        ["--team-domain", TEAM, "--aud", AUD], ["--origin", self.ORIGIN, "--team-domain", TEAM,
+                                                                "--aud", AUD, "--hostname", HOSTNAME]):
+                with self.subTest(bad=bad), self.assertRaises(SystemExit), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    SV.main(base + bad)
+            self.assertEqual(SV.main(base + ["--team-domain", TEAM, "--aud", AUD, "--hostname", HOSTNAME]), 0)
+        self.assertEqual([(c.auth, c.console_origin) for c in got],
+                         [("link", "http://127.0.0.1:4877"), ("link", self.ORIGIN),
+                          ("cloudflare", f"https://{HOSTNAME}")])
+
+
+class OneServerLinkTests(_OneServer, unittest.TestCase):
+    """1.46.0 (L6): the one server in link mode: one way in for every project, /signin on every owner port."""
+
+    def setUp(self):
+        _OneServer.setUp(self)
+        from overture import devices as DV
+        from overture import roles as RO
+        self.DV, self.RO = DV, RO
+        self.SF.set_auth("link", path=self.sfile)
+        self.devices = self.sfile.parent / DV.FILE
+
+    def link_spawn(self):
+        # The same server process, with the default verify: a device verifier, as `server.py --all` runs.
+        return self.spawn(ONE_SERVER.replace("verify_for=lambda aud:", "verify_for=None if True else lambda aud:"))
+
+    def door(self, name, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.info["ports"][name], timeout=30)
+        conn.request(method, path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read().decode("utf-8", "replace")
+        conn.close()
+        return r.status, r.headers, data
+
+    def sign_in(self, name, email):
+        tok = self.DV.invite(self.devices, email, self.p[name]["state"])[0]
+        origin = f"http://127.0.0.1:{4901 + sorted(self.p).index(name)}"
+        body = f"t={tok}".encode()
+        code, h, page = self.door(name, "POST", "/signin", body, {
+            "Origin": origin, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+        self.assertEqual(code, 303, page)
+        return re.match(r"overture-device=([^;]+);", h["Set-Cookie"]).group(1)
+
+    def test_every_project_signs_in_by_link_and_a_sign_in_opens_its_project_and_those_listing_it(self):
+        # Catches (L6, F1): the one server still checking Access on a link-mode project, /signin missing on a
+        # project's port, the Origin of a link-mode entry still https://HOSTNAME, an Access JWT still let in, and
+        # (F1) one door's verifier shared by every project, so a browser invited to alpha opens beta, as beta's
+        # owner while beta's roles are off; and beta's roles listing it NOT opening beta.
+        self.link_spawn()
+        value = self.sign_in("alpha", "owner@example.com")
+        cookie = {"Cookie": f"overture-device={value}"}
+        self.assertEqual(self.door("alpha", "GET", "/api/view", headers=cookie)[0], 200)
+        self.assertEqual(self.door("beta", "GET", "/api/view", headers=cookie)[0], 403)   # roles off in beta
+        self.RO.set_role(self.p["beta"]["state"], "carol@example.com", "owner")
+        self.assertEqual(self.door("beta", "GET", "/api/view", headers=cookie)[0], 403)   # on, not listed
+        self.RO.set_role(self.p["beta"]["state"], "owner@example.com", "viewer")
+        self.assertEqual(self.door("beta", "GET", "/api/view", headers=cookie)[0], 200)   # on, listed
+        for name in ("alpha", "beta"):
+            with self.subTest(name=name):
+                self.assertEqual(self.door(name, "GET", "/api/view",
+                                           headers={"Cf-Access-Jwt-Assertion": token()})[0], 403)
+        line = self.RO.history(self.p["alpha"]["state"])[0][0]
+        self.assertEqual(line["device"]["action"], "signin")   # logged in the project that signed it in
+        self.assertFalse([r for r in self.RO.history(self.p["beta"]["state"])[0] if "device" in r])
+
+    def test_beta_s_link_in_alpha_s_browser_extends_its_device_on_the_one_server(self):
+        # Catches (F1, the one server): beta's own link, opened in a browser alpha signed in, making a second
+        # device or leaving beta shut (MultiOwnerHandler's /signin not passing the browser's cookie to redeem).
+        self.link_spawn()
+        value = self.sign_in("alpha", "owner@example.com")
+        tok = self.DV.invite(self.devices, "owner@example.com", self.p["beta"]["state"])[0]
+        body = f"t={tok}".encode()
+        code, h, page = self.door("beta", "POST", "/signin", body, {
+            "Origin": f"http://127.0.0.1:{4901 + sorted(self.p).index('beta')}", "Cookie": f"overture-device={value}",
+            "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+        self.assertEqual(code, 303, page)
+        self.assertIn(f"overture-device={value};", h["Set-Cookie"])
+        self.assertEqual(len(self.DV.listing(self.devices)), 1)
+        for name in ("alpha", "beta"):
+            self.assertEqual(self.door(name, "GET", "/api/view", headers={"Cookie": f"overture-device={value}"}
+                                       )[0], 200, name)
+
+    def test_alpha_s_invite_on_beta_s_door_is_unknown_there_and_still_works_on_alpha_s(self):
+        # Catches (F10, the one server): beta's door showing alpha's invite's email or spending it (every door
+        # shares one devices file), and the invite then dead on alpha's own door.
+        self.link_spawn()
+        tok = self.DV.invite(self.devices, "owner@example.com", self.p["alpha"]["state"])[0]
+        before = self.devices.read_bytes()
+        code, _, page = self.door("beta", "GET", f"/signin?t={tok}")
+        self.assertEqual(code, 410)
+        self.assertNotIn("owner@example.com", page)
+        body = f"t={tok}".encode()
+        code, h, _ = self.door("beta", "POST", "/signin", body, {
+            "Origin": f"http://127.0.0.1:{4901 + sorted(self.p).index('beta')}",
+            "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+        self.assertEqual(code, 410)
+        self.assertNotIn("Set-Cookie", h)
+        self.assertEqual(self.devices.read_bytes(), before)
+        self.assertFalse([r for r in self.RO.history(self.p["beta"]["state"])[0] if "device" in r])
+        self.assertIn("owner@example.com", self.door("alpha", "GET", f"/signin?t={tok}")[2])
+        code, h, _ = self.door("alpha", "POST", "/signin", body, {
+            "Origin": f"http://127.0.0.1:{4901 + sorted(self.p).index('alpha')}",
+            "Content-Type": "application/x-www-form-urlencoded", "Content-Length": str(len(body))})
+        self.assertEqual(code, 303)
+
+    def test_server_json_elsewhere_still_uses_the_machines_devices_file(self):
+        # Catches (F4): the one server finding devices.json beside server.json (`path.parent / FILE`) while
+        # `agent.py invite` and server.py write devices.location(): with a custom --server-file no invite the CLI
+        # made ever signed anyone in.
+        elsewhere = self.t / "elsewhere" / "server.json"
+        elsewhere.parent.mkdir()
+        elsewhere.write_text(self.sfile.read_text())
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.cfg)}):
+            ms = MS.MultiServer(elsewhere)
+            try:
+                self.assertEqual(ms.devices, self.DV.location())
+                cfg = SV.Config(root=self.t, page=None, state=self.t, adapter=self.t, team_domain="", aud="",
+                                hostname="")
+                self.assertEqual(cfg.devices_file, ms.devices)   # server.py's default, the same file
+            finally:
+                ms.close()
+        self.assertNotEqual(ms.devices, elsewhere.parent / self.DV.FILE)
+
+    def test_a_refused_project_still_signs_in_and_answers_503_past_the_gate(self):
+        # Catches: FaultOwnerHandler still reading the Access header in link mode (every request 403, /signin
+        # gone), and its 503 answered before the gate.
+        (self.p["beta"]["state"] / "store.jsonl").write_text('{"not": "a record"}\n')
+        info = self.link_spawn()
+        self.assertIn("beta", info["refused"])
+        self.assertEqual(self.door("beta", "GET", "/")[0], 403)
+        value = self.sign_in("beta", "owner@example.com")
+        code, _, text = self.door("beta", "GET", "/api/view", headers={"Cookie": f"overture-device={value}"})
+        self.assertEqual((code, json.loads(text)), (503, MS.FAULT_BODY))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

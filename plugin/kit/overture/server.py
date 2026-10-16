@@ -47,6 +47,13 @@ clears only the caller's bucket.
 when `--health-port` asks for one. It is NEVER answered on the owner's door
 without the Access token: that door keeps its rule that no path skips the
 gate. See `HealthHandler` for why the health door is safe to leave ungated.
+
+1.46.0 (`--auth link`, devices.py): a console with no Cloudflare in front of
+it. The gate then wants a signed-in browser's device cookie instead of an
+Access token, and never reads a Cf-Access header; the only two requests it
+answers before the gate are `GET /signin` (which asks, and spends nothing)
+and `POST /signin` (which spends an invite, from the console's own origin).
+The default, `--auth cloudflare`, is byte for byte 1.45's door.
 """
 
 from __future__ import annotations
@@ -74,13 +81,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from html import escape as _esc
 from typing import Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from . import anchors as A
 from . import atfile as AF   # cursor + working now use atfile.write_at
 from . import chart as CH
+from . import devices as DV   # 1.46.0: sign-in links, the console's own way in without Cloudflare
 from . import doorbell as D
 from . import favorites as FV
 from . import gitseam as G
@@ -122,12 +131,14 @@ OWNER_ROUTES = {"/api/message": "message", "/api/answer": "answer", "/api/lock":
 # (intent, move_to, pr, step, about_qid...) asks an agent for something or points elsewhere: the owner's.
 MEMBER_ROUTES = frozenset(OWNER_ROUTES)
 OWNER_ROLES = "/api/roles"   # 1.40.0: the People tab sets a login's role; an owner's alone, as every non-member route
-OWNER_TWO_KEY = "/api/two-key"   # 1.43.0 (W6): two-key areas; 1.44.0: an owner's or a director's
+OWNER_TWO_KEY = "/api/two-key"   # 1.43.0 (W6): two-key areas; 1.46.0 (L10): an administrator's alone again
 OWNER_SETTINGS = "/api/settings"            # 1.44.0: the Settings tab (settings.py)
 OWNER_OPERATOR_NAME = "/api/operator-name"  # 1.44.0: the short names ruling exports carry (operators.py)
+OWNER_DEVICE_REVOKE = "/api/device-revoke"  # 1.46.0 (L2): People signs a browser out; an administrator's alone
 # 1.44.0 (owner, 2026-10-15): what a director may change, besides an administrator. People (who has which role)
-# stays the administrator's alone, so no director can raise anyone, themselves included.
-DIRECTOR_ROUTES = frozenset({OWNER_TWO_KEY, OWNER_SETTINGS, OWNER_OPERATOR_NAME})
+# stays the administrator's alone, so no director can raise anyone, themselves included. 1.46.0 (L10, amends
+# S1): the two-key areas left this set: a director sees them and cannot change them.
+DIRECTOR_ROUTES = frozenset({OWNER_SETTINGS, OWNER_OPERATOR_NAME})
 MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 # 0.8.19: starred visuals and items. A side-route (not a store kind): toggles are owner-only, idempotent, cheap.
 OWNER_FAVORITE = "/api/favorite"
@@ -802,6 +813,44 @@ def access_verifier(team_domain: str, aud: str,
     return verify
 
 
+NOT_SIGNED_IN = "this browser is not signed in to this console; ask its owner for a sign-in link"
+
+
+def _devices_log(what: str) -> None:
+    # devices.load calls this once per change of a refused file, so a broken file is named once, not per request.
+    sys.stderr.write(f"console devices: {what}; no browser is signed in until it is fixed\n")
+
+
+def device_verifier(path: Path, state: Path) -> Callable[[str | None], dict]:
+    """1.46.0, link mode: the verify for an owner door (OwnerHandler, MultiOwnerHandler, FaultOwnerHandler) of
+    the project at `state`. The credential is the `overture-device` cookie's value (devices.credential); it maps
+    to {"email": ...} through devices.device, re-read when the file changes, so a revoke is refused from the very
+    next request, and only when devices.admitted lets that device in HERE: invited from this project, or listed
+    in its roles (security review of 1.46: the machine-wide file let a browser invited to project B into A, as
+    its owner when A's roles were off). The roles are read per request, so removing a login's role closes the
+    door at once to a device let in by its role; one invited from this project stays in until it is revoked
+    (People, or agent.py devices --revoke). Anything else, a damaged devices file or an unreadable roles file included, is AuthError."""
+    project = DV.project_key(state)   # once: the same key the invite recorded (devices.project_key)
+
+    def verify(token: str | None) -> dict:
+        try:
+            dev = DV.device(path, token, log=_devices_log) if token else None
+            ok = dev is not None and DV.admitted(dev, project, RO.load(state))
+        except DV.DevicesError:
+            ok = False   # fail closed: logged once by load()
+        except RolesError as e:
+            sys.stderr.write(f"console roles: {e}; no browser is let in until it is fixed\n")
+            ok = False   # fail closed: an unreadable roles file is not "roles off"
+        if not ok:
+            raise AuthError(NOT_SIGNED_IN)
+        return {"email": dev["email"]}
+    return verify
+
+
+def link_verifier(cfg: "Config") -> Callable[[str | None], dict]:
+    return device_verifier(cfg.devices_file, cfg.state)
+
+
 @dataclass(frozen=True)
 class Config:
     root: Path          # the project checkout: valid_if paths resolve against it
@@ -816,6 +865,22 @@ class Config:
     health_port: int = 0  # 0: no health port; /health is still on the agent socket
     usage_file: Path | None = None    # 0.8.6: a status line's usage snapshot, read for the footer
     account_file: Path | None = None  # 0.8.6: Claude Code's settings file; only the account email is read
+    # 1.46.0 (L5, L6): how a browser proves who it is. "cloudflare" (the default, byte for byte what 1.45 did): an
+    # Access token on every request. "link": a device cookie from a sign-in link (devices.py), and Access headers
+    # are never read. `origin` is the console's own origin in link mode; `devices` the devices file (None: the
+    # machine's, beside the registry).
+    auth: str = "cloudflare"
+    origin: str = ""
+    devices: Path | None = None
+
+    @property
+    def console_origin(self) -> str:
+        """The origin the console's own pages come from: what a write's Origin must be, and what a link names."""
+        return self.origin or f"https://{self.hostname}"
+
+    @property
+    def devices_file(self) -> Path:
+        return self.devices or DV.location()
 
     @property
     def store(self) -> Path:
@@ -1083,9 +1148,11 @@ class Console:
         return V.feed(self.store, self.items(), kinds=kinds, item=item, before=before, limit=limit,
                       names=self.names.mapping(), operators=self.operators.mapping())
 
-    def act_as(self, email: str | None) -> None:
-        """Who this thread's owner request is (1.38.0): the verified Access email, or None."""
+    def act_as(self, email: str | None, device: str | None = None) -> None:
+        """Who this thread's owner request is (1.38.0): the verified Access email, or None. 1.46.0: in link mode,
+        also which signed-in browser it came from, so People can say which device is this one."""
         self._acting.email = email
+        self._acting.device = device
 
     def you(self) -> dict:
         """This thread's login's role entry (roles.py, 1.39.0). An unreadable roles file is a viewer's."""
@@ -1145,10 +1212,12 @@ class Console:
         "Make me the administrator" names: the Access login itself, never an address anyone typed.
         """
         me = getattr(self._acting, "email", None)
+        unreadable = False
         try:
             got = RO.load(self.cfg.state)
         except RolesError:
             got = None   # page_payload's `you` already says the file cannot be read; writes are refused
+            unreadable = True
         people = [{"email": e, **r} for e, r in sorted((got or {}).items())]
         out = {"on": got is not None, "me": me.lower() if isinstance(me, str) else None, "people": people}
         try:
@@ -1158,12 +1227,68 @@ class Console:
         # 1.42.0 (W5): who changed whose role, newest first; kept with roles off too (removing everyone is a change).
         try:
             # 1.44.0: role changes only; settings, short names and two-key areas are listed under Settings.
-            out["log"], out["log_total"] = RO.history(self.cfg.state, where=RO.role_line)
+            # 1.46.0: and sign-in links' invites, sign-ins and revokes (devices.py), which are about people too.
+            out["log"], out["log_total"] = RO.history(self.cfg.state,
+                                                      where=lambda r: RO.role_line(r) or RO.device_line(r))
         except RolesError as e:
             sys.stderr.write(f"console roles: {e}\n")   # the path stays in the log, never on the page
             out["log"], out["log_total"] = [], 0
             out["log_problem"] = "the role log cannot be read; see the server log"
+        # 1.46.0 (L2): in link mode, the signed-in browsers this console lets in (devices.admitted: invited from
+        # here, or listed in its roles), for People's Revoke; and which one this page is, so revoking it can say
+        # the page signs out. A cloudflare console's People data is unchanged.
+        if self.cfg.auth == "link":
+            out["auth"] = "link"
+            out["devices"], out["this_device"] = [], getattr(self._acting, "device", None)
+            try:
+                # An unreadable roles file is not "roles off": it lists nobody's browsers rather than everyone's.
+                out["devices"] = [] if unreadable else self._visible_devices(got)
+            except DV.DevicesError:
+                out["devices_problem"] = "the signed-in browsers cannot be read; see the server log"
         return out
+
+    def _visible_devices(self, roles: dict | None) -> list[dict]:
+        """The devices People lists here: exactly those the gate lets in (devices.admitted, with this project's
+        key and roles), without their projects: those are paths, which stay in the log, never on the page."""
+        project = DV.project_key(self.cfg.state)
+        return [{k: d[k] for k in ("id", "email", "created", "label")}
+                for d in DV.listing(self.cfg.devices_file, log=_devices_log) if DV.admitted(d, project, roles)]
+
+    def revoke_device(self, body: object) -> dict:
+        """POST /api/device-revoke {"id"} (1.46.0, L2): sign one browser out, logged. An administrator's alone
+        (role_gate: neither a member's nor a director's route), re-checked under the lock as set_role does, and
+        only a device People lists here: a console cannot revoke a browser of a login it does not name."""
+        if not isinstance(body, dict) or set(body) - {"id", "nonce"} or not isinstance(body.get("id"), str) \
+                or not DV.DEVICE_ID.match(body["id"]):
+            raise RequestError(400, '/api/device-revoke takes {"id": DEVICE_ID, "nonce"?}')
+        if self.cfg.auth != "link":
+            raise RequestError(409, "this console signs in through Cloudflare Access: it has no browsers to revoke")
+        me = getattr(self._acting, "email", None)
+        with self._lock:
+            try:
+                current = RO.load(self.cfg.state)
+            except RolesError as e:
+                sys.stderr.write(f"console roles: {e}\n")
+                raise RequestError(503, "the roles file cannot be read; see the server log") from None
+            if current is not None and RO.role_of(current, me)["role"] != "owner":
+                raise RequestError(403, "you are no longer an administrator here; reload the console")
+            # Only a device the gate lets in here (devices.admitted, the same rule and the same roles): with roles
+            # off that is the browsers invited from this project, never every browser on the machine.
+            try:
+                gone = DV.revoke(self.cfg.devices_file, body["id"], self.cfg.state,
+                                 by=me if isinstance(me, str) else None,
+                                 here=(DV.project_key(self.cfg.state), current))
+            except (DV.DevicesError, RolesError, ValueError) as e:   # ValueError: never a dropped connection
+                sys.stderr.write(f"console devices: {e}\n")
+                raise RequestError(503, "the signed-in browsers cannot be changed just now; see the server log") \
+                    from None
+            except OSError as e:
+                sys.stderr.write(f"console devices: write failed: {type(e).__name__}: {e}\n")
+                raise RequestError(500, "could not write the signed-in browsers; see the server log") from None
+        if gone is None:
+            raise RequestError(404, "no such signed-in browser here; reload the console")
+        self._bump()
+        return {"roles": self.roles_view()}
 
     def set_role(self, body: object) -> dict:
         """POST /api/roles (1.40.0): set or clear one login's role, as `agent.py access` does (roles.py).
@@ -1212,7 +1337,8 @@ class Console:
 
     def set_two_key(self, body: object) -> dict:
         """POST /api/two-key (1.43.0, W6): the areas where a lock needs a second person. Owner only (role_gate),
-        re-checked under the lock as set_role does."""
+        re-checked under the lock as set_role does. 1.46.0 (L10, amends S1): an administrator's alone again; a
+        director sees them under Settings and cannot change them, as a second key is a guard on decisions."""
         if (not isinstance(body, dict) or set(body) - {"areas", "nonce"} or not isinstance(body.get("areas"), list)
                 or not all(isinstance(a, str) for a in body["areas"])):
             raise RequestError(400, '/api/two-key takes {"areas": [ITEM_ID, ...], "nonce"?}; [] clears them')
@@ -1223,8 +1349,8 @@ class Console:
             except RolesError as e:
                 sys.stderr.write(f"console roles: {e}\n")
                 raise RequestError(503, "the roles file cannot be read; see the server log") from None
-            if current is not None and not self._may_configure(RO.role_of(current, me)):
-                raise RequestError(403, "you are no longer an administrator or a director here; reload the console")
+            if current is not None and RO.role_of(current, me)["role"] != "owner":
+                raise RequestError(403, "only an administrator changes the two-key areas; reload the console")
             # (security review) An area the register does not know would look set and guard nothing.
             unknown = [a for a in body["areas"] if a not in self.items()]
             if unknown:
@@ -1241,7 +1367,7 @@ class Console:
                 sys.stderr.write(f"console roles: write failed: {type(e).__name__}: {e}\n")
                 raise RequestError(500, "could not write the roles file; see the server log") from None
         self._bump()   # every open page shows the new two-key marks
-        # 1.44.0: a director sets these too, and the roster (every login's email) is an administrator's alone.
+        # 1.44.0: the roster (every login's email) is an administrator's alone; 1.46.0 only one reaches here.
         out = {"settings": self.settings_view()}
         if self.you()["role"] == "owner":
             out["roles"] = self.roles_view()
@@ -1304,7 +1430,10 @@ class Console:
             log, log_total = RO.history(self.cfg.state, where=RO.settings_line)
         except RolesError:
             log, log_total = [], 0
-        return {"values": got, "set": set_here, "problem": "the settings file cannot be read, so the defaults "
+        # 1.46.0 (L10): whether this login may change the two-key areas (an administrator, or anyone with roles
+        # off); a director's page shows them read-only. The server re-checks it on every POST /api/two-key.
+        two_key_editable = self.you()["role"] == "owner"   # an unreadable roles file reads as a viewer: False
+        return {"two_key_editable": two_key_editable, "values": got, "set": set_here, "problem": "the settings file cannot be read, so the defaults "
                 "apply; see the server log" if bad else None,
                 "defaults": {k: v[2] for k, v in SET.LIMITS.items()}, "lanes_repo": self.project.lanes,
                 "limits": {k: {"min": v[0], "max": v[1], "label": v[3]} for k, v in SET.LIMITS.items()},
@@ -2095,14 +2224,18 @@ class Console:
         waiting = {qid: (q.get("question") or {}).get("item") or qid.split("/")[0]
                    for qid, q in (view.get("questions") or {}).items() if q.get("state") == "awaiting_you"}
         try:
+            # 1.46.0: the console's own origin (link mode has no hostname of its own: `--origin`).
             done = NT.tick(self.cfg.state, now, waiting, cfg, self.cfg.project,
-                           f"https://{self.cfg.hostname}/", post=self._notify_post)
+                           f"{self.cfg.console_origin}/", post=self._notify_post)
         except NT.NotifyError as e:
             self._notify_hold = (now, timedelta(minutes=cfg["notify_every"]))
             self._notify_log(str(e))
             return None
         if done == "failed":
             self._notify_log(NT.status(self.cfg.state)["last_error"] or "the last send failed")
+        elif done == "sent":
+            # 1.46.0 (L12): a send went through, so the same error coming back later is news again and is logged.
+            self._notify_said = None
         if done:
             self._bump()   # the Settings tab shows how the last send went
         return done
@@ -3170,8 +3303,10 @@ class Console:
         # `version` is the running kit's, the value /health reports: the footer shows it (owner, 2026-10-01).
         # carry the CSRF token so the browser can send it on every POST as X-Overture-CSRF.
         block = P.console_block(
+            # 1.46.0: link mode says so (People shows the signed-in browsers); a cloudflare page is unchanged.
             json.dumps({"api": "/api", "project": self.cfg.project,
-                        "version": __version__, "csrf": self._csrf}),
+                        "version": __version__, "csrf": self._csrf,
+                        **({"auth": "link"} if self.cfg.auth == "link" else {})}),
             nonce=nonce,
         )
         html, hashes = PS.render_with_hashes(self.cfg.state, block)
@@ -4152,6 +4287,14 @@ class _Handler(BaseHTTPRequestHandler):
     def _body(self) -> object:
         if not (self.headers.get("Content-Type") or "").split(";")[0].strip() == "application/json":
             raise RequestError(415, "send application/json")
+        data = self._raw_body()
+        try:
+            return json.loads(data or b"null")
+        except (ValueError, RecursionError):   # bad JSON, bad UTF-8, or nesting deeper than the decoder recurses
+            raise RequestError(400, "the body is not JSON") from None
+
+    def _raw_body(self) -> bytes:
+        """The body's bytes under the Content-Length rules every route keeps (1.46.0: shared with /signin's form)."""
         raw = self.headers.get("Content-Length")
         if raw is None:
             raise RequestError(411, "send a Content-Length")
@@ -4166,17 +4309,199 @@ class _Handler(BaseHTTPRequestHandler):
         data = self._read_within(n, BODY_SECONDS)
         if data is None:   # the connection is closed after this answer, so the unread rest never matters
             raise RequestError(408, f"the body did not arrive within {BODY_SECONDS:g} seconds")
-        try:
-            return json.loads(data or b"null")
-        except (ValueError, RecursionError):   # bad JSON, bad UTF-8, or nesting deeper than the decoder recurses
-            raise RequestError(400, "the body is not JSON") from None
+        return data
 
     def log_message(self, fmt: str, *args) -> None:  # the request line only: never a header, so never a token
-        sys.stderr.write(f"overture {self.address_string()} {fmt % args}\n")
+        # 1.46.0: and never an invite either. A sign-in link's token rides in its query (`/signin?t=ovi_…`), so
+        # (security review of 1.46) a /signin target loses its WHOLE query, as it is parsed (`?%74=ovi_…` is
+        # t= to parse_qs but not to a `t=` regex); every other line loses the value of each `t=`; and any literal
+        # token left anywhere (a 400's "Bad request syntax ('…')") is cut too. The line still names the route.
+        line = _OVI.sub("ovi_…", _T_PARAM.sub(r"\1…", _TARGET.sub(_signin_target, fmt % args)))
+        sys.stderr.write(f"overture {self.address_string()} {line}\n")
 
 
-class OwnerHandler(_Handler):
+_T_PARAM = re.compile(r"([?&;]t=)[^&;\s\"]*")
+_TARGET = re.compile(r"(?<=[\s'\"(])(/[^\s\"'?]*)\?[^\s\"']*")   # a request target with a query, in a log line
+_OVI = re.compile(r"ovi_[A-Za-z0-9_-]+")
+
+
+def _signin_target(m: "re.Match") -> str:
+    """`/signin?…` (leading slashes collapsed, percent-decoded as the router and parse_qs see it) → `/signin?…`
+    with the query replaced by "…"; any other target as it was."""
+    return m.group(1) + "?…" if re.sub(r"^/+", "/", unquote(m.group(1))) == "/signin" else m.group(0)
+
+
+# -- 1.46.0: sign-in links (devices.py; OPEN-DECISIONS.md "Without Cloudflare", L1 L2 L5 L6) ----------------------
+# In link mode the owner's door answers exactly two requests before its gate, GET /signin and POST /signin; every
+# other path and every other method meets the gate first, as D5 has it. Their pages hold no script, load nothing
+# and post only to the console itself.
+SIGNIN_CSP = ("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; "
+              "base-uri 'none'")
+SIGNIN_MAX_BODY = 1024   # one hidden field holding one token: far above it
+SIGNIN_STYLE = ("body{font:16px/1.5 system-ui,sans-serif;margin:0;padding:2rem 1rem;color:#1f2328;background:#fff}"
+                "main{max-width:32rem;margin:0 auto}h1{font-size:1.25rem}"
+                "button{font:inherit;padding:.5rem 1rem;border-radius:6px;border:1px solid #0969da;"
+                "background:#0969da;color:#fff;cursor:pointer}.note{color:#59636e;font-size:.9rem}"
+                "@media (prefers-color-scheme: dark){body{background:#0d1117;color:#e6edf3}.note{color:#9198a1}"
+                "button{background:#1f6feb;border-color:#1f6feb}}")
+SIGNIN_USED = ("This link has expired or was already used. Ask the console's owner for a new one "
+               "(agent.py invite).")
+NOT_SIGNED_IN_PAGE = ("This browser is not signed in to this console. Ask its owner for a sign-in link: "
+                      "agent.py invite EMAIL")
+
+
+# The page holding the form is the one answer that is not "no-referrer": a browser sends `Origin: null` on a POST
+# from a no-referrer page (the Fetch standard), so its button could never pass the Origin check below. Under
+# "same-origin" the link's URL, token and all, goes in a Referer to this console only, which logs no header.
+FORM_REFERRER = "same-origin"
+
+
+def _signin_html(title: str, *body: str, referrer: str = "no-referrer") -> bytes:
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"<meta name=\"referrer\" content=\"{referrer}\">"
+            f"<title>{_esc(title)}</title><style>{SIGNIN_STYLE}</style></head><body><main>"
+            + "".join(body) + "</main></body></html>\n").encode("utf-8")
+
+
+def credential_for(auth: str, headers) -> str | None:
+    """What a request presents as proof, by the console's mode: an Access JWT, or (link) the device cookie. The
+    other kind is never read: in link mode a Cf-Access header proves nothing, in cloudflare mode a cookie."""
+    return DV.credential(headers) if auth == "link" else headers.get("Cf-Access-Jwt-Assertion")
+
+
+class SigninDoor:
+    """GET and POST /signin, and the link-mode refusal page, for an owner door (`OwnerHandler`, and the one
+    server's `FaultOwnerHandler` for a refused project). `_signin_where()` names (devices file, the console's own
+    origin, the STATE whose role log takes the line) in link mode, and None in cloudflare mode, where /signin
+    does not exist: the gate runs and the answer is 404, as for any other unknown path."""
+
+    def _signin_where(self) -> tuple[Path, str, Path] | None:
+        raise NotImplementedError
+
+    def _auth(self) -> str:
+        return "link" if self._signin_where() is not None else "cloudflare"
+
+    def _credential(self) -> str | None:
+        return credential_for(self._auth(), self.headers)
+
+    def _send_page(self, code: int, page: bytes, extra: tuple[tuple[str, str], ...] = (),
+                   referrer: str = "no-referrer") -> None:
+        """A sign-in page: no-store, no referrer (but the form's, FORM_REFERRER), a CSP that runs nothing; the
+        shared headers where they agree."""
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            for k, v in SECURITY_HEADERS:
+                if k not in ("Content-Security-Policy", "Referrer-Policy"):
+                    self.send_header(k, v)
+            self.send_header("Referrer-Policy", referrer)
+            self.send_header("Content-Security-Policy", SIGNIN_CSP)
+            for k, v in extra:
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(page)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _refuse(self, e: "AuthError") -> None:
+        """The gate's 403. In link mode a browser opening the console unsigned gets a page that says what to do,
+        naming no project, email or path; every other refused request gets today's JSON."""
+        if self._auth() == "link" and self.command == "GET" and self.path in ("/", "/index.html"):
+            return self._send_page(403, _signin_html("Not signed in", "<h1>Not signed in</h1>"
+                                                     f"<p>{_esc(NOT_SIGNED_IN_PAGE, quote=False)}</p>"))
+        self._send(403, {"error": str(e)})
+
+    def _signin(self) -> bool:
+        """Answer GET or POST /signin when this is one (link mode only): True when answered, False otherwise."""
+        where = self._signin_where()
+        if where is None or not (self.path == "/signin" or (self.command == "GET" and self.path.startswith("/signin?"))):
+            return False
+        if self.command == "GET":
+            self._signin_get(where)
+            return True
+        if self.command == "POST":
+            self._signin_post(where)
+            return True
+        return False
+
+    def _used_page(self, code: int) -> None:
+        self._send_page(code, _signin_html("Sign-in link", f"<h1>Sign-in link</h1><p>{_esc(SIGNIN_USED, quote=False)}"
+                                                           "</p>"))
+
+    def _signin_get(self, where: tuple[Path, str, Path]) -> None:
+        """Never spends the invite: a link previewer or a mail scanner GETs every link. It only asks."""
+        devices, _origin, state = where
+        q = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=4)
+        tok = q.get("t", [None])
+        email = None
+        if set(q) == {"t"} and len(tok) == 1:
+            try:
+                email = DV.peek(devices, tok[0], state, log=_devices_log)   # only an invite made HERE (F10)
+            except DV.DevicesError:
+                email = None   # fail closed; load() named it in the log once
+        if email is None:
+            return self._used_page(410)
+        self._send_page(200, _signin_html(
+            "Sign in", "<h1>Sign in to this console</h1>",
+            f"<p>Sign this browser in as <strong>{_esc(email)}</strong>?</p>",
+            f"<form method=\"post\" action=\"/signin\"><input type=\"hidden\" name=\"t\" value=\"{_esc(tok[0])}\">"
+            "<button type=\"submit\">Sign this browser in</button></form>",
+            "<p class=\"note\">The link works once. This browser then stays signed in until it is revoked under "
+            "People.</p>", referrer=FORM_REFERRER), referrer=FORM_REFERRER)
+
+    def _signin_post(self, where: tuple[Path, str, Path]) -> None:
+        devices, origin, state = where
+        # Login CSRF: a page elsewhere could post a token of ITS owner's and sign this browser in as them. A
+        # browser sends Origin on every POST, so a missing one is refused too.
+        if self.headers.get("Origin") != origin:
+            return self._send_page(403, _signin_html("Sign-in refused", "<h1>Sign-in refused</h1><p>A sign-in "
+                                                     "is accepted only from this console's own page.</p>"))
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/x-www-form-urlencoded":
+            return self._send_page(415, _signin_html("Sign-in refused", "<h1>Sign-in refused</h1><p>Send the "
+                                                     "sign-in form.</p>"))
+        self.max_body = SIGNIN_MAX_BODY   # per instance: HTTP/1.0, one request per handler (as /history-blob)
+        try:
+            raw = self._raw_body()
+            form = parse_qs(raw.decode("ascii"), strict_parsing=True, max_num_fields=4)
+        except RequestError as e:
+            return self._send_page(e.code, _signin_html("Sign-in refused", f"<h1>Sign-in refused</h1><p>"
+                                                        f"{_esc(str(e))}</p>"))
+        except (UnicodeDecodeError, ValueError):
+            form = {}
+        tok = form.get("t", [])
+        if set(form) != {"t"} or len(tok) != 1 or not DV.TOKEN.match(tok[0]):
+            return self._used_page(400 if set(form) != {"t"} or len(tok) != 1 else 410)
+        try:
+            # The browser's own device cookie, if it has one: a second project's link for the same email adds that
+            # project to this device (same cookie) rather than making another (devices.redeem, F1).
+            got = DV.redeem(devices, tok[0], DV.label(self.headers.get("User-Agent")), state,
+                            current=DV.credential(self.headers))
+        except (DV.DevicesError, RolesError, ValueError) as e:   # ValueError: a clean page, never a dropped socket
+            sys.stderr.write(f"console devices: sign-in refused: {e}\n")
+            return self._send_page(503, _signin_html("Sign-in unavailable", "<h1>Sign-in unavailable</h1><p>This "
+                                                     "console cannot sign anyone in just now; its log says why."
+                                                     "</p>"))
+        except OSError as e:
+            sys.stderr.write(f"console devices: sign-in write failed: {type(e).__name__}: {e}\n")
+            return self._send_page(500, _signin_html("Sign-in unavailable", "<h1>Sign-in unavailable</h1><p>This "
+                                                     "console could not record the sign-in; its log says why.</p>"))
+        if got is None:
+            return self._used_page(410)
+        _ident, value, _email = got
+        self._send_page(303, _signin_html("Signed in", "<h1>Signed in</h1><p><a href=\"/\">Open the console</a>"
+                                          "</p>"),
+                        (("Location", "/"), ("Set-Cookie", DV.cookie_header(value, origin))))
+
+
+class OwnerHandler(SigninDoor, _Handler):
     verify: Callable[[str | None], dict]
+    _device_cookie: str | None = None   # 1.46.0: this request's verified device cookie (link mode), for GET /
+
+    def _signin_where(self) -> tuple[Path, str, Path] | None:
+        cfg = self.console.cfg
+        return (cfg.devices_file, cfg.console_origin, cfg.state) if cfg.auth == "link" else None
 
     def _send(self, code: int, body: object, ctype: str = "application/json") -> None:
         try:
@@ -4197,18 +4522,25 @@ class OwnerHandler(_Handler):
     def _gate(self) -> bool:
         # Cleared first: a kept-alive connection reuses this thread, and a refused request names no one.
         self.console.act_as(None)
+        # 1.46.0: the credential by the console's mode (credential_for), one at a time; `verify` keeps its shape.
+        cred = self._credential()
         try:
-            claims = self.verify(self.headers.get("Cf-Access-Jwt-Assertion"))
+            claims = self.verify(cred)
         except AuthError as e:
-            self._send(403, {"error": str(e)})
+            self._refuse(e)
             return False
         # 1.38.0: the verified login's email names the owner writes this request makes. A service
         # token carries none, and a malformed one is not kept: either writes as before, unnamed.
         email = claims.get("email") if isinstance(claims, dict) else None
-        self.console.act_as(email if OP.email_problem(email) is None else None)
+        link = self._auth() == "link"
+        self._device_cookie = cred if link else None
+        self.console.act_as(email if OP.email_problem(email) is None else None,
+                            device=cred.split(".")[0] if link and cred else None)
         return True
 
     def do_GET(self) -> None:
+        if self._signin():   # 1.46.0: link mode's GET /signin, the one GET before the gate (it spends nothing)
+            return
         if not self._gate():
             return
         if self.path in ("/", "/index.html"):
@@ -4237,6 +4569,10 @@ class OwnerHandler(_Handler):
                 "frame-src 'self'; img-src 'self' data:; connect-src 'self'; "
                 f"script-src 'nonce-{nonce}'" + "".join(" " + h for h in hashes),
             )
+            if self._device_cookie:
+                # 1.46.0 (L2): "signed in until revoked". The browser keeps a cookie at most 400 days, so each
+                # opening of the console sends the same one back, and the 400 days start again.
+                self.send_header("Set-Cookie", DV.cookie_header(self._device_cookie, self.console.cfg.console_origin))
             self.end_headers()
             self.wfile.write(data)
             return
@@ -4513,11 +4849,15 @@ class OwnerHandler(_Handler):
     do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _other_method
 
     def do_POST(self) -> None:
+        if self._signin():   # 1.46.0: link mode's POST /signin, which spends an invite (its own Origin check)
+            return
         if not self._gate():
             return
         # 0.12.0: external-webhook triggers. The path's suffix names the trigger; the bearer token is the
         # per-trigger acceptor. Access service tokens handle the perimeter (configured on the Access app),
         # so the regular Origin check is skipped — a cron.io or GitHub Worker call has no browser Origin.
+        # 1.46.0: in link mode the gate above wants a signed-in browser's cookie, which no webhook has: an
+        # external trigger is refused there (README, "Install without Cloudflare").
         if self.path.startswith("/api/trigger/"):
             return self._fire_trigger(self.path[len("/api/trigger/"):])
         kind = OWNER_ROUTES.get(self.path)
@@ -4526,11 +4866,13 @@ class OwnerHandler(_Handler):
                                               OWNER_TRIGGER_REPLAY, OWNER_ITEM_MOVE, OWNER_DRAFT,
                                               OWNER_TICKET_CREATE, OWNER_TICKET_UPDATE, OWNER_TICKET_CLOSE,
                                               OWNER_CSRF_ROTATE, OWNER_ASSET_DELETE, OWNER_ASSET_UPLOAD,
-                                              OWNER_ROLES, OWNER_TWO_KEY, OWNER_SETTINGS, OWNER_OPERATOR_NAME):
+                                              OWNER_ROLES, OWNER_TWO_KEY, OWNER_SETTINGS, OWNER_OPERATOR_NAME,
+                                              OWNER_DEVICE_REVOKE):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
-        # an absent header must not read as "trusted".
-        if self.headers.get("Origin") != f"https://{self.console.cfg.hostname}":
+        # an absent header must not read as "trusted". 1.46.0: the console's own origin (`console_origin`):
+        # https://HOSTNAME behind Cloudflare, the `--origin` in link mode.
+        if self.headers.get("Origin") != self.console.cfg.console_origin:
             return self._send(403, {"error": "a write from another site, or with no Origin, is refused"})
         # CSRF double-submit — the HTML carried the boot's CSRF token in its config block;
         # every POST must echo it in X-Overture-CSRF. Belt-and-braces with the Origin check; also
@@ -4582,6 +4924,8 @@ class OwnerHandler(_Handler):
                 return self._send(200, self.console.put_setting(body))
             if self.path == OWNER_OPERATOR_NAME:  # 1.44.0: short names for committed rulings
                 return self._send(200, self.console.put_operator_name(body))
+            if self.path == OWNER_DEVICE_REVOKE:  # 1.46.0: People's Revoke on a signed-in browser
+                return self._send(200, self.console.revoke_device(body))
             if self.path == "/api/lock":         # 1.43.0: write() for a lock, but two keys in a two-key area
                 return self._send(200, self.console.lock(body))
             if self.path == OWNER_CSRF_ROTATE:   # rotate the CSRF token without a restart
@@ -4846,8 +5190,12 @@ def serve(cfg: Config, verify: Callable[[str | None], dict] | None = None) -> No
     if health is not None:
         threading.Thread(target=health.serve_forever, daemon=True).start()
         sys.stderr.write(f"console: health door http://{HOST}:{cfg.health_port}/health (loopback, no proxy)\n")
-    owner = owner_server(console, verify or access_verifier(cfg.team_domain, cfg.aud), cfg.port)
-    sys.stderr.write(f"console: owner door http://{HOST}:{cfg.port}, agent door {cfg.socket}\n")
+    if verify is None:   # 1.46.0: one way in per console (L5)
+        verify = link_verifier(cfg) if cfg.auth == "link" else access_verifier(cfg.team_domain, cfg.aud)
+    owner = owner_server(console, verify, cfg.port)
+    how = (f"sign-in links (--auth link), its origin {cfg.console_origin}, devices in {cfg.devices_file}"
+           if cfg.auth == "link" else f"Cloudflare Access (--auth cloudflare), {cfg.console_origin}")
+    sys.stderr.write(f"console: owner door http://{HOST}:{cfg.port} through {how}; agent door {cfg.socket}\n")
     try:
         owner.serve_forever()
     finally:
@@ -4903,9 +5251,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--adapter", type=Path, default=None,
                     help="IGNORED since Q24: the server never runs the adapter; the steward pushes items "
                          "(agent.py items-push). Still accepted so an existing unit starts")
-    ap.add_argument("--team-domain", required=True, help="e.g. yourteam.cloudflareaccess.com")
-    ap.add_argument("--aud", required=True, help="the Access application's AUD tag")
-    ap.add_argument("--hostname", required=True, help="the public hostname, e.g. console.example.com")
+    # 1.46.0 (L5): one way in per console. cloudflare (the default) needs the three Access values, as before;
+    # link signs browsers in with `agent.py invite` links (devices.py) and needs none of them.
+    ap.add_argument("--auth", choices=("cloudflare", "link"), default="cloudflare",
+                    help="how a browser proves who it is: cloudflare (Access, the default) or link (sign-in links "
+                         "made with agent.py invite; no Cloudflare)")
+    ap.add_argument("--team-domain", help="e.g. yourteam.cloudflareaccess.com (required with --auth cloudflare)")
+    ap.add_argument("--aud", help="the Access application's AUD tag (required with --auth cloudflare)")
+    ap.add_argument("--hostname", help="the public hostname, e.g. console.example.com (required with --auth "
+                                       "cloudflare)")
+    ap.add_argument("--origin", help="--auth link: the console's own origin as the browser sees it (default "
+                                     "http://127.0.0.1:PORT; https://NAME behind `tailscale serve`)")
     ap.add_argument("--port", type=int, default=4793)
     ap.add_argument("--project", default="")
     ap.add_argument("--health-port", type=int, default=0,
@@ -4918,6 +5274,19 @@ def main(argv: list[str] | None = None) -> int:
                     help="Claude Code's settings file; the footer shows its account email and nothing "
                          "else is read from it (default: off)")
     a = ap.parse_args(argv)
+    origin = ""
+    if a.auth == "cloudflare":
+        missing = [f for f, v in (("--team-domain", a.team_domain), ("--aud", a.aud), ("--hostname", a.hostname))
+                   if not v]
+        if missing:
+            ap.error(f"the following arguments are required with --auth cloudflare: {', '.join(missing)}")
+        if a.origin is not None:
+            ap.error("--origin is for --auth link: behind Cloudflare the console's origin is https://HOSTNAME")
+    else:
+        origin = DV.clean_origin(a.origin if a.origin is not None else f"http://127.0.0.1:{a.port}")
+        why = DV.origin_problem(origin)
+        if why:
+            ap.error(f"--origin: {why}")
     if not 0 <= a.health_port <= 65535:
         ap.error("--health-port takes 0 (off) or a port number")
     if a.health_port and a.health_port == a.port:
@@ -4929,7 +5298,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("console: --adapter is ignored: this server never runs the adapter; items arrive when "
                          "the steward runs `agent.py items-push`\n")
     serve(Config(root=a.root, page=a.page, state=a.state, adapter=a.adapter or Path(os.devnull),
-                 team_domain=a.team_domain,
-                 aud=a.aud, hostname=a.hostname, port=a.port, project=a.project, health_port=a.health_port,
-                 usage_file=a.usage_file, account_file=a.account_file))
+                 team_domain=a.team_domain or "",
+                 aud=a.aud or "", hostname=a.hostname or "", port=a.port, project=a.project,
+                 health_port=a.health_port, usage_file=a.usage_file, account_file=a.account_file,
+                 auth=a.auth, origin=origin))
     return 0

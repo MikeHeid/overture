@@ -46,10 +46,12 @@ import stat
 import tempfile
 from pathlib import Path
 
+from . import devices as DV
 from . import names as N
 from . import registry as R
 
 FILE = "server.json"
+AUTHS = ("cloudflare", "link")   # 1.46.0 (L5, L6): the server's one way in; "cloudflare" when the key is absent
 MAX_FILE = 1 << 20
 SLUG = re.compile(r"^[A-Za-z0-9-]{1,255}\Z")   # one directory name: never "/", "." or ".."
 # A bare DNS name: lowercase labels of letters, digits and inner hyphens, dot-separated. No scheme, port,
@@ -236,8 +238,33 @@ def _rotate(name: str, p: Path, registry: Path | None) -> Path:
         raise ServerFileError(f"server.json hosts no project {name!r}; run `agent.py --state DIR server add` first")
     e = {**e, TOKEN_KEY: _write_token(name, p, registry)}
     doc["projects"][name] = e
-    _write(p, {"team_domain": doc["team_domain"], "projects": doc["projects"]})
+    _write(p, _out(doc["team_domain"], doc["projects"], doc["auth"]))
     return token_file(name, p)
+
+
+def _out(team_domain: str | None, projects: dict, auth: str) -> dict:
+    """The file as every writer writes it. 1.46.0: `auth` is kept whatever the writer changed (a rotate or an
+    add that dropped it would switch a link-mode server back to Cloudflare at its next start); a cloudflare
+    server's file stays byte for byte what 1.45 wrote."""
+    return {"team_domain": team_domain, "projects": projects, **({"auth": auth} if auth != "cloudflare" else {})}
+
+
+def set_auth(auth: str, path: Path | None = None) -> str:
+    """`agent.py server auth cloudflare|link` (1.46.0): the one server's way in, for every project it hosts (L6).
+    In force at the server's next start. Refuses link-mode entries a cloudflare server could not serve."""
+    if auth not in AUTHS:
+        raise ServerFileError(f"auth is one of {', '.join(AUTHS)}")
+    p = Path(path or location())
+    with _writing(p):
+        doc = load(p)
+        if auth == "cloudflare":
+            bad = [x for name, e in sorted(doc["projects"].items()) for x in entry_problems(name, e, auth)]
+            if bad or not doc["team_domain"]:
+                raise ServerFileError("behind Cloudflare every project needs a hostname and an AUD, and the server "
+                                      "a team domain: " + ("; ".join(bad) or "no team domain is set") + "; re-run "
+                                      "`agent.py server add` with --hostname, --aud and --team-domain")
+        _write(p, _out(doc["team_domain"], doc["projects"], auth))
+    return auth
 
 
 def _page_problem(page: object) -> str | None:
@@ -248,8 +275,11 @@ def _page_problem(page: object) -> str | None:
     return None
 
 
-def entry_problems(name: object, e: object) -> list[str]:
-    """Why a hosted project's entry is unusable; [] when it is well formed. Unknown keys are ignored."""
+def entry_problems(name: object, e: object, auth: str = "cloudflare") -> list[str]:
+    """Why a hosted project's entry is unusable; [] when it is well formed. Unknown keys are ignored.
+
+    1.46.0: by the server's mode. Behind Cloudflare a `hostname` and an `aud` are required, as before. With
+    sign-in links neither is (each is still checked when present), and an entry may name its `origin`."""
     if N.problem(name):
         return [f"project name: {N.problem(name)}"]
     if not isinstance(e, dict):
@@ -261,10 +291,15 @@ def entry_problems(name: object, e: object) -> list[str]:
     why = _page_problem(e.get("page"))
     if why:
         out.append(f"{name}: {why}")
-    if not (isinstance(e.get("hostname"), str) and HOSTNAME.match(e["hostname"])):
+    link = auth == "link"
+    if (not link or "hostname" in e) and not (isinstance(e.get("hostname"), str) and HOSTNAME.match(e["hostname"])):
         out.append(f"{name}: hostname {e.get('hostname')!r} is not a bare DNS name")
-    if not (isinstance(e.get("aud"), str) and AUD.match(e["aud"])):
+    if (not link or "aud" in e) and not (isinstance(e.get("aud"), str) and AUD.match(e["aud"])):
         out.append(f"{name}: aud is not an Access AUD tag")
+    if "origin" in e:
+        why = DV.origin_problem(e["origin"]) if link else "origin is for a server in link mode (`server auth`)"
+        if why or (link and DV.clean_origin(e["origin"]) != e["origin"]):
+            out.append(f"{name}: {why or 'origin ends in /: write it without'}")
     port = e.get("port")
     if not (isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535):
         out.append(f"{name}: port {port!r} is not 1-65535")
@@ -277,11 +312,12 @@ def entry_problems(name: object, e: object) -> list[str]:
 
 
 def load(path: Path | None = None) -> dict:
-    """The whole file as {"team_domain": str | None, "projects": {...}}; empty when absent. Raises on bad JSON."""
+    """The whole file as {"team_domain": str | None, "projects": {...}, "auth": "cloudflare" | "link"}; empty when
+    absent. Raises on bad JSON, and (1.46.0) on an `auth` that is neither: a typo must not mean Cloudflare."""
     p = path or location()
     raw = R.read_regular(p, MAX_FILE)
     if raw is None:
-        return {"team_domain": None, "projects": {}}
+        return {"team_domain": None, "projects": {}, "auth": "cloudflare"}
     try:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as e:
@@ -292,7 +328,10 @@ def load(path: Path | None = None) -> dict:
     if not isinstance(projects, dict):
         raise ServerFileError(f"{p} needs a \"projects\" object")
     team = doc.get("team_domain")
-    return {"team_domain": team if isinstance(team, str) else None, "projects": projects}
+    auth = doc.get("auth", "cloudflare")
+    if auth not in AUTHS:
+        raise ServerFileError(f"{p}: auth {auth!r} is not one of {', '.join(AUTHS)}")
+    return {"team_domain": team if isinstance(team, str) else None, "projects": projects, "auth": auth}
 
 
 def slugs_for_state(state: str, path: Path | None = None) -> list[str]:
@@ -333,9 +372,9 @@ def registered_roots(state: str | Path, projects: dict) -> list[str]:
     return sorted(r for r, e in projects.items() if isinstance(e, dict) and e.get("state") == s)
 
 
-def add(name: str, state: Path, hostname: str, aud: str, port: int, team_domain: str,
+def add(name: str, state: Path, hostname: str | None, aud: str | None, port: int, team_domain: str | None,
         root: Path | None = None, page: str = "index.html", slugs: list[str] | None = None,
-        registry: Path | None = None, path: Path | None = None) -> dict:
+        registry: Path | None = None, path: Path | None = None, origin: str | None = None) -> dict:
     """Host `name` on the one server. Only the user runs this. Writes server.json; never the registry.
 
     Refuses: a name not in the name shape; a state no registry entry names; a
@@ -348,15 +387,20 @@ def add(name: str, state: Path, hostname: str, aud: str, port: int, team_domain:
     token (see `rotate`); one that has both keeps them, so re-adding never
     cuts off a running agent. The tokens directory inside a registered root
     is refused before anything is written.
+
+    1.46.0: on a server in link mode (`set_auth`), hostname, aud and team_domain may be None (each is checked
+    when given) and `origin` names the console's origin (default, at the server: http://127.0.0.1:PORT).
+    Behind Cloudflare the three stay required and `origin` is refused.
     """
     p = Path(path or location())
     with _writing(p):
         _check_tokens_dir(p, registry)
         _sweep(p)
-        return _add(name, state, hostname, aud, port, team_domain, root, page, slugs, registry, p)
+        return _add(name, state, hostname, aud, port, team_domain, root, page, slugs, registry, p, origin)
 
 
-def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, registry, p: Path) -> dict:
+def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, registry, p: Path,
+         origin: str | None = None) -> dict:
     problems = []
     if N.problem(name):
         problems.append(f"project name: {N.problem(name)}")
@@ -375,17 +419,29 @@ def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, regis
                         f"({', '.join(roots)})")
     else:
         r = roots[0]
-    if not (isinstance(team_domain, str) and TEAM.match(team_domain)):
-        problems.append(f"team domain {team_domain!r} is not a bare DNS name")
     doc = load(p)
+    auth = doc["auth"]
+    link = auth == "link"
+    if (not link or team_domain is not None) and not (isinstance(team_domain, str) and TEAM.match(team_domain)):
+        problems.append(f"team domain {team_domain!r} is not a bare DNS name")
     old = doc["projects"].get(name) if isinstance(doc["projects"].get(name), dict) else {}
-    e = {**old, "state": s, "root": r, "page": page, "hostname": hostname, "aud": aud, "port": port,
+    e = {**old, "state": s, "root": r, "page": page, "port": port,
          "slugs": list(slugs) if slugs is not None else list(old.get("slugs", []))}
+    # 1.46.0: what is given replaces; what a link-mode add leaves out is dropped rather than kept stale, except
+    # that behind Cloudflare all three are given (the CLI requires them there).
+    for k, v in (("hostname", hostname), ("aud", aud), ("origin", DV.clean_origin(origin) if origin else None)):
+        if v is not None:
+            e[k] = v
+        else:
+            e.pop(k, None)
+    if not link:
+        e.setdefault("hostname", hostname)
+        e.setdefault("aud", aud)
     if not (isinstance(e.get(TOKEN_KEY), str) and TOKEN_HASH.match(e[TOKEN_KEY])):
         e.pop(TOKEN_KEY, None)   # a hand-broken hash is replaced by a fresh token below, never kept
-    problems += [x for x in entry_problems(name, e)
+    problems += [x for x in entry_problems(name, e, auth)
                  if not x.startswith("project name:") and not (not r and " root " in x)]
-    if doc["team_domain"] not in (None, team_domain):
+    if team_domain is not None and doc["team_domain"] not in (None, team_domain):
         problems.append(f"the server's team domain is {doc['team_domain']}; one server serves one Access team")
     for other, oe in doc["projects"].items():
         if other == name or not isinstance(oe, dict):
@@ -394,7 +450,7 @@ def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, regis
             problems.append(f"project {other} already holds the console at {s}")
         if oe.get("port") == port:
             problems.append(f"project {other} already holds port {port}")
-        if oe.get("hostname") == hostname:
+        if hostname is not None and oe.get("hostname") == hostname:
             problems.append(f"project {other} already holds hostname {hostname}")
     if not problems:
         inside = _inside_a_root(tokens_dir(p), registry)
@@ -407,5 +463,5 @@ def _add(name, state, hostname, aud, port, team_domain, root, page, slugs, regis
             and os.path.lexists(token_file(name, p))):
         e[TOKEN_KEY] = _write_token(name, p, registry)
     doc["projects"][name] = e
-    _write(p, {"team_domain": team_domain, "projects": doc["projects"]})
+    _write(p, _out(team_domain if team_domain is not None else doc["team_domain"], doc["projects"], auth))
     return e

@@ -344,9 +344,20 @@ def _line_problem(rec: object) -> str | None:
     # A role change, or (1.43.0) a change of the two-key areas: {"at", "by", "two_key": {"from", "to"}}, or
     # (1.44.0) of a setting: {"at", "by", "setting": {"key", "from", "to", "email"?}} (settings.py; operator
     # names carry the email they name). Its values are settings.py's to judge; the shape is checked here.
+    # (1.46.0) or a sign-in link's life (devices.py): {"at", "by", "device": {"action", "email", "id"}}. A 1.45 kit
+    # refuses a log holding one by its shape, so its People log says "cannot be read" (CHANGELOG, going back).
     if not isinstance(rec, dict) or set(rec) not in ({"at", "by", "email", "from", "to"}, {"at", "by", "two_key"},
-                                                     {"at", "by", "setting"}):
-        return 'a line is exactly {"at", "by", "email", "from", "to"}, {"at", "by", "two_key"} or {"at", "by", "setting"}'
+                                                     {"at", "by", "setting"}, {"at", "by", "device"}):
+        return ('a line is exactly {"at", "by", "email", "from", "to"}, {"at", "by", "two_key"}, '
+                '{"at", "by", "setting"} or {"at", "by", "device"}')
+    if "device" in rec:
+        dv = rec["device"]
+        # An invite's id is 8 hex digits, a device's (signed in, revoked) 12: devices.py makes them so.
+        if not isinstance(dv, dict) or set(dv) != {"action", "email", "id"} \
+                or dv["action"] not in ("invite", "signin", "revoke") or OP.email_problem(dv["email"]) \
+                or not isinstance(dv["id"], str) \
+                or not re.fullmatch(r"[0-9a-f]{8}" if dv["action"] == "invite" else r"[0-9a-f]{12}", dv["id"]):
+            return 'device is exactly {"action": "invite"|"signin"|"revoke", "email": EMAIL, "id": ID}'
     if "setting" in rec:
         st = rec["setting"]
         if not isinstance(st, dict) or not {"key", "from", "to"} <= set(st) <= {"key", "from", "to", "email"} \
@@ -363,7 +374,7 @@ def _line_problem(rec: object) -> str | None:
             return 'two_key is exactly {"from": [ITEM_ID, ...], "to": [ITEM_ID, ...]}'
         return next((f"two_key {k}: {_areas_problem(tk[k])}" for k in ("from", "to")
                      if tk[k] != [] and _areas_problem(tk[k])), None)
-    if "setting" in rec:
+    if "setting" in rec or "device" in rec:
         return None   # its shape was checked above; at and by just now
     if rec["from"] is None and rec["to"] is None:
         return "a change has a from or a to"
@@ -372,8 +383,14 @@ def _line_problem(rec: object) -> str | None:
 
 
 def role_line(rec: dict) -> bool:
-    """A change of someone's role (People's "Role changes"), not of the two-key areas or a setting."""
-    return "setting" not in rec and "two_key" not in rec
+    """A change of someone's role (People's "Role changes"), not of the two-key areas, a setting or (1.46.0) a
+    sign-in link's invite, sign-in or revoke."""
+    return "setting" not in rec and "two_key" not in rec and "device" not in rec
+
+
+def device_line(rec: dict) -> bool:
+    """1.46.0: an invite, a browser signed in by link, or a browser revoked (devices.py); People lists these."""
+    return "device" in rec
 
 
 def settings_line(rec: dict) -> bool:

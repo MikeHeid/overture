@@ -431,7 +431,8 @@ def _print(doc: dict, as_json: bool) -> None:
     if doc.get("started_at"):
         print(f"started: {doc['started_at']}")
     for n, p in doc["projects"].items():
-        print(f"  {n}: port {p['port']} {'open' if p['port_open'] else 'closed'} ({p['hostname']})")
+        # 1.46.0: a link-mode project may have no hostname (it is reached on its --origin, by sign-in link).
+        print(f"  {n}: port {p['port']} {'open' if p['port_open'] else 'closed'} ({p['hostname'] or 'sign-in links'})")
     if not doc["projects"]:
         print("  no projects in server.json")
     for k in ("version", "linger"):
