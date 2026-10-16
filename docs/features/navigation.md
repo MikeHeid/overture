@@ -146,16 +146,21 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   <img src="../screenshots/feature-sections.png" alt="The section rail: Work with its Inbox count, Automation chosen with its Playbooks and Triggers tabs, Projects and Team" width="400">
 
 - **A section's badge** is the most urgent of its tabs' counts, not their
-  sum: questions waiting for you (Work shows the Inbox count), then an
+  sum: the questions open in the Inbox (Work shows the Inbox tab's count:
+  those waiting for an answer, answered and not locked, or stale), then an
   agent waiting on the chat (●), then questions waiting in your other
-  projects, then new Feed events. Counts of things that are simply there
-  (tickets, playbooks, triggers, favorites) stay on their tab.
+  projects (Projects counts only those, so with no other project connected
+  it stays dark rather than repeat Work's count), then new Feed events.
+  Counts of things that are simply there (tickets, playbooks, triggers,
+  favorites) stay on their tab. The Priority list's "of N awaiting you"
+  counts only the questions not yet answered, so it can be smaller.
 - **With a keyboard or a screen reader.** The rail is one Tab stop: the
   arrow keys (and Home, End) move along it and Enter or Space opens a
   section, which puts focus on that section's selected tab. In a strip the
   arrow keys move between its tabs and stop at the section's ends. Each
-  rail button is a named button ("Work, 3 waiting for you"), the section
-  on show is marked as the current page, and every button has a tooltip.
+  rail button is a named button ("Work, 3 questions open in the Inbox"),
+  the section on show is marked as the current page, and every button has
+  a tooltip.
 - **Motion.** A new section fades in, a new tab slides in, and the rail's
   marker slides to its section, each in under a fifth of a second. None of
   it runs if your system asks for reduced motion, and a live update never
@@ -167,8 +172,13 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   beside it returns to the board.
 - **Links.** The address follows you: `#feed&section=work`. A tab's name
   alone works as a link too (`#playbooks`, `#people`, as before 1.48), and
-  so do `#tab=feed` and `#section=team` (a section's first tab);
-  `#item=ID` opens an item and `#qid=ID/Qn` the item a question is on.
+  so do `#tab=feed` and `#section=team` (a section's first tab you can
+  see, worked out again once the page has loaded if the link came first);
+  `#item=ID` opens an item and `#qid=ID/Qn` the item a question is on. A
+  link to a tab you do not see (`#people` for anyone but an
+  administrator) opens its section's first tab you do, and says why; so
+  does a tab you lose while it is open (made a viewer, say). A value the
+  address cannot decode is ignored, and the rest of the link still works.
 
   <img src="../screenshots/feature-footer-keys.png" alt="The console with the shortcuts sheet opened from the footer's Shortcuts button" width="720">
 
@@ -237,11 +247,13 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   you close the console. The sections are a bottom bar of four buttons,
   each at least 48 px and clear of the home indicator; the section's tabs
   are a strip at the top that scrolls sideways; Back and × stay in the
-  header. Below 400 px the bar shows icons only, each with its name for a
-  screen reader and a tooltip. Every control is at least 36 px tall, and
-  the Portfolio cards and dialogs stack to fit. In the Inbox's Priority
+  header. The section on show has its icon in a filled pill, as well as
+  the line above it. Below 400 px the bar shows icons only, each with its
+  name for a screen reader and a tooltip, and a count sits on the corner
+  of its icon. Every control is at least 36 px tall, and the Portfolio
+  cards and dialogs stack to fit. In the Inbox's Priority
   list each row is two lines: which item, with its ⌛, then the question
-  and how long it has waited.
+  (with no "·" before it) and how long it has waited.
 
   <img src="../screenshots/feature-phone.png" alt="The Inbox on a 390 px phone, full screen: the Work tabs at the top, Priority rows of two lines, and the bottom bar of four section icons" width="300">
 - **Toasts and visible confirmations (1.23).** Every confirmation and

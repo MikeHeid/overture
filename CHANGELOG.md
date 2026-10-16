@@ -3011,9 +3011,11 @@ Inbox by lane (U5) and its outline with `j`/`k` (U6) are 1.49.
   an administrator or a director. A section none of whose tabs a login sees
   is not shown; Chat keeps Team for everyone.
 - **A section's badge** shows the most urgent of its tabs' counts, not their
-  sum: questions waiting for you (so Work shows the Inbox count), an agent
-  waiting on the chat (the ● "More" carried), questions waiting in other
-  projects, new Feed events. Counts of things that merely exist (tickets,
+  sum: the questions open in the Inbox (so Work shows the Inbox tab's
+  count), an agent waiting on the chat (the ● "More" carried), questions
+  waiting in other projects, new Feed events. Projects counts only the
+  other projects' questions: with none connected it stays dark instead of
+  repeating Work's count. Counts of things that merely exist (tickets,
   playbooks, triggers, favorites) stay on their own tab.
 - **Shortcuts:** every `g` shortcut still opens its tab, and now its section
   too. New: `g 1` Work, `g 2` Automation, `g 3` Projects, `g 4` Team, each on
@@ -3021,29 +3023,42 @@ Inbox by lane (U5) and its outline with `j`/`k` (U6) are 1.49.
   footer's Shortcuts button say so.
 - **Keyboard and screen readers:** the rail is one Tab stop; the arrow keys
   (and Home, End) move between its buttons, and Enter or Space opens the
-  section. Opening a section puts focus on its selected tab, so the arrow
-  keys work at once and a screen reader names where you are. A tab strip's
-  arrows stay within its section. Each rail button is named with its count
-  ("Work, 3 waiting for you"), and has a tooltip.
+  section; its focus ring sits inside the button, clear of the section
+  marker, on a band of the rail's colour. Opening a section puts focus on
+  its selected tab, so the arrow keys work at once and a screen reader
+  names where you are. A tab strip's arrows stay within its section. Each rail button is named with its count
+  ("Work, 3 questions open in the Inbox": every open question, so more
+  than the Priority list's "awaiting you", which counts only the
+  unanswered), and has a tooltip.
 - **Links:** the address names the tab and the section, `#feed&section=work`.
   A 1.47 link (`#feed`) opens the same view, and so do `#tab=feed` and
-  `#section=team` (a section's first tab). `#item=` and `#qid=` are
-  unchanged. The panel title names the tab alone: the rail already says the
-  section, and on a phone "Automation · Playbooks" would not fit.
+  `#section=team` (a section's first tab you can see; a link that arrives
+  before the page has loaded is worked out again when it has, so an owner
+  lands on People, not Chat). `#item=` and `#qid=` are unchanged. A tab
+  you do not see (`#people` for a viewer), or one you lose while it is open
+  (an administrator made a viewer), falls back to its section's first tab
+  you do, with a note saying why (1.47 drew a page that said only that).
+  The panel title names the tab alone: the rail already says the section,
+  and on a phone "Automation · Playbooks" would not fit.
 - **Phones** (U2): below 640px, an open console is the whole screen, whatever
   the host page does; a page wider than the phone no longer pushes it 164px in
   and cuts it off. The page underneath neither scrolls nor takes taps until
   you close it. The sections are a bottom bar of four buttons, each at least
   48px and clear of the home indicator; the tabs are a strip at the top that
-  scrolls sideways. Back and close stay in the header. 640px is where the
+  scrolls sideways. The section on show has its icon in a filled pill (in
+  the marker's colour, 3:1 or better against the bar on every theme and
+  skin) besides the line above it: the tinted ground alone was too faint
+  to tell. Back and close stay in the header. 640px is where the
   console's phone layout already began; a second breakpoint at 600px would
   have left 600–640px half done.
 - **Narrowest widths** (U8): below 400px the rail shows icons only, with a
   tooltip, and the label stays each button's name for a screen reader; from
-  400px up, icon and label as D9 requires.
+  400px up, icon and label as D9 requires. A badge there sits on the corner
+  of its icon's pill, never over the icon.
 - **A calmer Inbox row on a phone:** a Priority row is two lines, which item
   and its ⌛ above, the question and its age below. It was three at 390px,
-  the ⌛ alone on the middle one.
+  the ⌛ alone on the middle one. The "·" that separates the question on
+  the one-line row does not lead the second line.
 - **Motion** (U9): a new section crossfades (160 ms), a new tab slides in
   (140 ms), and the rail's marker slides to its section (180 ms). All of it is
   CSS, and none of it runs under `prefers-reduced-motion`. A live update never
@@ -3054,7 +3069,9 @@ Inbox by lane (U5) and its outline with `j`/`k` (U6) are 1.49.
   accent drawn a little toward the text colour, as plain accent falls under
   3:1 on Solarized and Nord light.
 - **Fixed:** two quick moves (`g 2`, then `g f`) left the address on the first
-  tab; every move now updates it.
+  tab; every move now updates it. A link with a value the address cannot
+  decode (`#item=%E0%A4%A`) threw an error and opened nothing; the bad value
+  is now ignored and the rest of the link works.
 - **Documentation and screenshots:** `docs/features/navigation.md` and the
   README describe the sections; the screenshots were rendered again, with
   `feature-sections.png` (the rail) and `feature-phone.png` (the Inbox on a

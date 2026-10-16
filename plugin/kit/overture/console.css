@@ -3487,6 +3487,9 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   .ck-priority-row > .ck-snooze { grid-column: 6; grid-row: 1; }
   .ck-priority-text { grid-column: 2 / 6; grid-row: 2; }
   .ck-priority-when { grid-column: 6; grid-row: 2; }
+  /* X2: the question starts line two here, so its separator would lead the line as a stray "·". The one-line row
+     (wider than 640px) keeps it. */
+  .ck-priority-text > .ck-priority-sep { display: none; }
 
   /* Inbox-item rows: wrap the ref pill + id + title so long titles don't push off-screen. */
   .ck-inbox-item { flex-wrap: wrap; row-gap: 2px; }
@@ -3793,14 +3796,21 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px;
   border-radius: 0 3px 3px 0; background: var(--ck-rail-mark);
 }
-.ck-rail-btn:focus-visible { outline: 2px solid var(--ck-rail-mark); outline-offset: -3px; }
+/* X6: the focus ring sits inside the button (the desktop rail clips sideways, so a ring outside would be cut) and
+   clear of the 3px indicator, with a band of the rail's own colour between them: before the 1.48 review the ring was drawn
+   1-3px in, on the indicator itself, in the indicator's colour, and that side of it vanished. The ring is
+   --ck-rail-mark, 3:1 or better on the band and on the tinted ground (test_browser checks every theme and skin). */
+.ck-rail-btn:focus-visible {
+  outline: 2px solid var(--ck-rail-mark); outline-offset: -7px; box-shadow: inset 0 0 0 5px var(--c-surface);
+}
 .ck-rail-badge {
   position: absolute; top: 4px; right: 6px; box-sizing: border-box; min-width: 18px; padding: 0 5px;
   border-radius: 9px; background: var(--ck-rail-mark); color: var(--c-surface);
   font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center;
 }
 @media (forced-colors: active) {
-  .ck-rail-btn[aria-current="page"]::before, .ck-rail-badge { background: Highlight; color: HighlightText; }
+  .ck-rail-btn[aria-current="page"]::before, .ck-rail-badge,
+  .ck-rail-btn[aria-current="page"] .ck-rail-icon { background: Highlight; color: HighlightText; }
 }
 
 /* U2: a phone (the 640px phone block above). The rail becomes the bottom bar: four equal buttons, each at least 48px
@@ -3817,7 +3827,15 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   .ck-rail-btn[aria-current="page"]::before {
     left: 12%; right: 12%; top: 0; bottom: auto; width: auto; height: 3px; border-radius: 0 0 3px 3px;
   }
-  .ck-rail-badge { right: calc(50% - 26px); }
+  /* X1: on the bottom bar the section on show was told only by the 3px line and the faint --c-surface-alt ground,
+     which is under 1.3:1 against the bar. Its icon now sits in a filled pill of --ck-rail-mark, the icon in
+     --c-surface: the badge's own pair, 4.5:1 or better on every theme and skin, and the pill 3:1 or better against
+     the bar (test_browser). Every icon has the pill's padding, so the current one is no taller than the rest and
+     nothing moves at a switch. */
+  .ck-rail-btn .ck-rail-icon { box-sizing: content-box; padding: 4px 12px; border-radius: 999px; }
+  .ck-rail-btn[aria-current="page"] .ck-rail-icon { background: var(--ck-rail-mark); color: var(--c-surface); }
+  /* A badge on the pill's corner is ringed in the bar's colour, so the two never run together. */
+  .ck-rail-badge { right: calc(50% - 30px); box-shadow: 0 0 0 2px var(--c-surface); }
 }
 /* U8 (amends D9): below 400px, icons only. The label is hidden visually but not from a screen reader (aria-label and
    title also carry it), so each button keeps its name. */
@@ -3827,6 +3845,11 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
     clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
   }
   .ck-rail-btn .ck-rail-icon { width: 22px; height: 22px; }
+  /* X5: with no label the icon (and its pill, 30px high) is centred in the button, and the badge is centred on the
+     pill's top-right corner: a one-digit badge exactly, a longer one growing to the right, away from the icon. The
+     pill is 46px wide (22 + 2 × 12), so its corner is 23px right of and 15px above the button's centre; the badge is
+     18px wide at least and 16px high. Before the 1.48 review it hung from the button's top edge and covered the icon's top. */
+  .ck-rail-badge { right: auto; left: calc(50% + 23px - 9px); top: calc(50% - 15px - 8px); }
 }
 
 /* U9: motion, only where the viewer has not asked for less, and only on the classes markMotion() sets for a real

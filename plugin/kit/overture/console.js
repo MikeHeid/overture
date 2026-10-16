@@ -973,6 +973,7 @@
       const data = await resp.json();
       view = data.view;
       items = data.items;
+      if (pendingSection) resolvePendingSection();
       if (liveVer === null && typeof data.ver === 'string') liveVer = data.ver;  // Q24: the first wait has a baseline
       checkPromise = null; // a new view: "why stale" is checked afresh
       cursor = data.cursor;
@@ -2159,6 +2160,7 @@
     if (dockHandle) panelEl.appendChild(dockHandle);
     pendingLive = false;
     if (currentMode === 'inbox') {
+      clampTab();
       renderInbox();
       markSeen();
       updateInboxButton();
@@ -2364,20 +2366,26 @@
   // waiting on the chat (the ● "More" used to carry), questions waiting in other projects (Portfolio), new Feed
   // events. Counts of things that merely exist (tickets, playbooks, triggers, favorites) stay on their own sub-tab and
   // never light a section. So Work shows the Inbox count, as the spec asks.
+  // X3 (1.48 review): Projects counts only the questions waiting in OTHER projects. The Portfolio tab's own note adds
+  // this project's in, so with no other project connected it repeated Work's count on a second badge.
   const SECTION_BADGE_RANK = ['inbox', 'chat', 'portfolio', 'feed'];
   function sectionBadge(secId) {
     const ids = sectionTabs(secId).map(([id]) => id);
     for (const id of SECTION_BADGE_RANK) {
       if (ids.indexOf(id) < 0) continue;
-      const note = tabNote(id);
+      const others = id === 'portfolio' ? portfolioOthersAwaiting() : 0;
+      const note = id === 'portfolio' ? (others ? String(others) : '') : tabNote(id);
       if (note) return { tab: id, note };
     }
     return null;
   }
+  // X4 (1.48 review): Work's count is the Inbox tab's own, every open question (awaiting an answer, answered and not
+  // locked, or stale), so the name says "open in the Inbox". The Priority ribbon's "of N awaiting you" counts only
+  // the ones not yet answered, a smaller number; "waiting for you" beside it read as the same set.
   function sectionBadgeWords(b) {
     if (!b) return '';
     if (b.tab === 'chat') return 'an agent is waiting on the chat';
-    if (b.tab === 'inbox') return b.note + ' waiting for you';
+    if (b.tab === 'inbox') return b.note + (b.note === '1' ? ' question' : ' questions') + ' open in the Inbox';
     if (b.tab === 'portfolio') return b.note + ' waiting in other projects';
     return b.note + ' in the feed';
   }
@@ -2486,6 +2494,8 @@
   // the sub-tab remembered for it and the URL fragment are set in one place. `focus`: put focus on the tab's button
   // afterwards; it also happens when the redraw took focus away from inside the panel.
   function goTab(id, focus) {
+    if (!TABS.some(t => t[0] === id)) id = 'inbox';   // as ConsoleKit.openTab: an unknown id is the Inbox
+    pendingSection = null;   // a move of the owner's own outranks a section link still waiting for the view
     const a = document.activeElement;
     const wasInside = !!(a && a !== document.body && panelEl.contains(a));
     currentTab = id;
@@ -2496,11 +2506,44 @@
     }
     currentMode = 'inbox';
     renderPanel();
-    syncLocationHash(tabHash(id));
+    // currentTab, not id: the draw moves a tab this login may not see to one it may (clampTab).
+    syncLocationHash(tabHash(currentTab));
     if (focus || (wasInside && !panelEl.contains(document.activeElement))) {
-      const t = panelEl.querySelector('#ck-tab-' + CSS.escape(id));
+      const t = panelEl.querySelector('#ck-tab-' + CSS.escape(currentTab));
       if (t) t.focus();
     }
+  }
+  // A section link that came before the first view (`#section=team`): resolved again once the view says which tabs
+  // this login sees. Cleared by any move to a tab.
+  let pendingSection = null;
+  function resolvePendingSection() {
+    const s = pendingSection;
+    pendingSection = null;
+    if (!s || !view || currentMode !== 'inbox' || sectionOf(currentTab) !== s) return;
+    delete lastTabInSection[s];   // remembered only because the link itself went there
+    const t = sectionEntryTab(s);
+    if (t) moveTabQuietly(t);
+  }
+  // The tab is changed under a redraw, not by the owner: the section's memory and the address follow, and the
+  // motion does not run (U9: a redraw never animates), so the view drawn last is taken to be this one already.
+  function moveTabQuietly(t) {
+    const was = currentTab;
+    currentTab = t;
+    lastTabInSection[sectionOf(t)] = t;
+    if (drawnView && drawnView.key === 'tab:' + was) drawnView = { key: 'tab:' + t, sec: sectionOf(t) };
+    if (panelEl.getAttribute('data-open') === 'true' && currentMode === 'inbox') syncLocationHash(tabHash(t));
+  }
+  // C1 (1.48 review): a tab this login no longer sees (a demotion, or a sign-in as someone else, mid-session; or a
+  // link to People or Settings from a login without them) falls back to its section's first visible tab, else the
+  // Inbox. Before the 1.48 review the body still drew the hidden tab while its strip had no selected tab, and the panel's
+  // aria-labelledby named a button that was not there. Before the first view nothing is known, so nothing moves.
+  const TAB_NOT_YOURS = { people: 'Only an administrator manages people.',
+    settings: 'Only an administrator or a director changes settings.' };
+  function clampTab() {
+    if (!view || visibleTabs().some(([id]) => id === currentTab)) return;
+    const was = currentTab;
+    moveTabQuietly(sectionEntryTab(sectionOf(was)) || 'inbox');
+    if (TAB_NOT_YOURS[was]) announce(TAB_NOT_YOURS[was]);
   }
 
   // pop-up menus share one slot, so opening one closes another; Esc and an outside click close it.
@@ -9055,7 +9098,13 @@
   function portfolioAwaitingTotal() {
     const d = portfolioState.data;
     if (!d) return 0;
-    let n = Number((d.self && d.self.awaiting_you) || 0);
+    return Number((d.self && d.self.awaiting_you) || 0) + portfolioOthersAwaiting();
+  }
+  // The same across the other projects alone: what the Projects section's badge counts (X3).
+  function portfolioOthersAwaiting() {
+    const d = portfolioState.data;
+    if (!d) return 0;
+    let n = 0;
     for (const p of (d.peers || [])) if (p && p.ok) n += Number(p.awaiting_you || 0);
     return n;
   }
@@ -9570,7 +9619,10 @@
         el('span', { className: 'ck-priority-project' }, [r.project]),
         el('span', { className: 'ck-priority-qid' }, [' · ' + r.qid]),
         r.isSelf !== false ? renderLaneChip(r.item || qidItem(r.qid)) : null,
-        r.text ? el('span', { className: 'ck-priority-text' }, [' · ' + r.text]) : null,
+        // X2: the separator in its own span, which the two-line phone row hides (console.css): there the question
+        // starts a line, and a leading "·" read as a stray mark.
+        r.text ? el('span', { className: 'ck-priority-text' },
+          [el('span', { className: 'ck-priority-sep' }, [' · ']), r.text]) : null,
         el('span', { className: 'ck-priority-when ck-muted' }, [' · ' + relTime(r.ts)]),
         renderSnoozeMenu(r.project, r.qid)
       ].filter(Boolean));
@@ -10523,16 +10575,25 @@
     let kv = {};
     for (const p of parts) {
       const i = p.indexOf('=');
-      if (i < 0) kv[p] = true; else kv[p.slice(0, i)] = decodeURIComponent(p.slice(i + 1));
+      if (i < 0) { kv[p] = true; continue; }
+      // A malformed escape (#item=%E0%A4%A) makes decodeURIComponent throw a URIError, which escaped the hashchange
+      // handler (and out of the first load) before the 1.48 review. Such a value names nothing, so it is dropped
+      // and the rest of the fragment stands.
+      try { kv[p.slice(0, i)] = decodeURIComponent(p.slice(i + 1)); } catch (e) { /* ignored: not a valid value */ }
     }
     const bare = parts[0] && parts[0].indexOf('=') < 0 ? parts[0] : null;
     let tab = bare && TABS.some(t => t[0] === bare) ? bare
       : (typeof kv.tab === 'string' && TABS.some(t => t[0] === kv.tab) ? kv.tab : null);
+    let sectionOnly = null;
     if (!tab && typeof kv.section === 'string' && SECTIONS.some(sec => sec[0] === kv.section)) {
       tab = sectionEntryTab(kv.section);
+      sectionOnly = kv.section;
     }
     if (tab) {
       goTab(tab, false);
+      // Before the first view, People and Settings are hidden from every login, so `#section=team` resolved to
+      // Chat even for an owner. The section is resolved again when the view lands (fetchView).
+      if (sectionOnly && !view) pendingSection = sectionOnly;
       return true;
     }
     if (kv.item) {

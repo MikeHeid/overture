@@ -1058,6 +1058,16 @@ class PublishTests(unittest.TestCase):
             self.assertNotIn(gone, js)
             self.assertNotIn(gone, css)
 
+    def test_go_tab_takes_only_a_known_tab(self):
+        # Catches (C5, 1.48 review): goTab, the one way to a tab, setting currentTab to an id that is not in TABS (a
+        # new caller passing a typo or a value from a link): sectionOf would file it under Work, whose strip then has
+        # no selected tab, and the address would carry the bad id. ConsoleKit.openTab already refused one.
+        js = (KIT / "overture" / "console.js").read_text()
+        body = re.search(r"\n  function goTab\(id, focus\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        first = body.strip().splitlines()[0]
+        self.assertTrue(first.startswith("if (!TABS.some(t => t[0] === id)) id = 'inbox';"), first)
+        self.assertLess(body.index("TABS.some"), body.index("currentTab = id"))
+
     def test_section_motion_is_keyed_and_off_under_reduced_motion(self):
         # 1.48 (U9): the rail's and the body's motion sit only inside prefers-reduced-motion: no-preference, and
         # .ck-body carries no animation of its own. Catches: an animation rule written outside the no-preference
