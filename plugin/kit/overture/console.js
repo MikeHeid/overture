@@ -10640,6 +10640,7 @@
     // 0.7.0: open the inbox on a tab ('inbox', 'feed', 'chat'), or a round's form.
     openTab: function(tab) {
       currentTab = TABS.some(t => t[0] === tab) ? tab : 'inbox';
+      pendingSection = null;   // as goTab: a host's own call outranks a section link still waiting for the view
       lastTabInSection[sectionOf(currentTab)] = currentTab;
       openPanel(null, 'inbox');
     },

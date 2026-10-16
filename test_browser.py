@@ -1795,7 +1795,8 @@ class LiveConsoleTests(unittest.TestCase):
         p = self.cfg.inbox
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
-    def page(self, kind, width, url, reduced=False, block_live=False, init=None, mobile=False, height=900):
+    def page(self, kind, width, url, reduced=False, block_live=False, init=None, mobile=False, height=900,
+             ready=True):
         browser = getattr(self.pw, kind).launch()
         self.addCleanup(browser.close)
         # `mobile` (1.48): a phone's layout viewport, which grows to a host page wider than the screen (uxshot 02).
@@ -1833,7 +1834,8 @@ class LiveConsoleTests(unittest.TestCase):
         if block_live:  # routes run newest first: every long poll fails, so the page never updates itself
             page.route("**/api/wait*", lambda route: route.abort())
         page.goto(url)
-        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
+        if ready:   # `ready=False`: a test that holds the first view back and acts before it lands
+            _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")  # 1.24.0: the pre-load glyph
         page.evaluate("window.__notReloaded = true")
         return page
 
@@ -4903,6 +4905,339 @@ class SectionTests(unittest.TestCase):
                         for pair, what in (([got[0], got[1]], "pill"), ([got[2], got[0]], "icon")):
                             ratio = page.evaluate(CONTRAST_JS, pair)
                             self.assertGreaterEqual(ratio, 3.0, f"{skin or 'primer'} {theme} {what} {pair}")
+
+    # -- 1.48 test-gap closers (J09-J57, C03, C05, R1, R2) ----------------------------------------
+
+    def hold_unseen(self, page):
+        # The open panel marks everything seen once the window is visible; a hidden one keeps what arrived unread, so
+        # the rail is drawn with the Feed's "N new" beside the Inbox's count, the way it is on a panel just opened.
+        page.evaluate("Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true })")
+
+    def test_work_badge_ranks_the_inbox_count_over_new_feed_events(self):
+        # Catches (J09): the badge rank putting the Feed's "1 new" before the Inbox's count, so Work lit for what merely
+        # arrived while questions waiting for an answer went unmarked (the spec: Work shows the Inbox count).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.ask(1)
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
+                          timeout=10000)
+                self.hold_unseen(page)
+                self.open_inbox(page, 1280)
+                self.assertEqual(page.text_content("#ck-tab-feed .ck-tab-note").strip(), "1 new")   # the rival is there
+                self.assertEqual(page.text_content(".ck-rail-btn[data-section='work'] .ck-rail-badge"), "1")
+                self.assertEqual(page.locator(".ck-rail-btn[data-section='work']").get_attribute("aria-label"),
+                                 "Work, 1 question open in the Inbox")
+
+    def test_work_badge_falls_back_to_new_feed_events_when_the_inbox_is_empty(self):
+        # Catches (J10): the Feed dropped from the badge rank, so an agent's note arriving with no question waiting lit
+        # nothing on the rail at all; and its name not saying where the news is ("in the feed").
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.agent_post("/message", {"item": "LANE.1", "text": "FYI: build is green.", "nonce": "feednote0001"})
+                _wait_for(page, "document.querySelector('.ck-dock-strip .ck-new-count').textContent === '1 new'",
+                          timeout=10000)
+                self.hold_unseen(page)
+                self.open_inbox(page, 1280)
+                self.assertEqual(page.locator("#ck-tab-inbox .ck-tab-note").count(), 0)   # no question open
+                self.assertEqual(page.text_content(".ck-rail-btn[data-section='work'] .ck-rail-badge"), "1 new")
+                self.assertEqual(page.locator(".ck-rail-btn[data-section='work']").get_attribute("aria-label"),
+                                 "Work, 1 new in the feed")
+
+    def test_projects_badge_counts_questions_waiting_in_reachable_other_projects_only(self):
+        # Catches (J12, J13): the Projects badge adding a failed peer's last-known `awaiting_you` (a console that cannot
+        # be reached is not a question waiting), or counting peers with something waiting instead of the questions.
+        roll_up = {"self": {"project": "live-test", "awaiting_you": 0},
+                   "peers": [{"name": "alpha", "project": "Alpha", "ok": True, "awaiting_you": 3},
+                             {"name": "beta", "project": "Beta", "ok": False, "awaiting_you": 5,
+                              "error": "unreachable"}]}
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.route("**/api/portfolio*", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                                    body=json.dumps(roll_up)))
+                self.open_inbox(page, 1280)
+                page.click(".ck-rail-btn[data-section='projects']")
+                _wait_for(page, "!!document.querySelector('.ck-rail-btn[data-section=\"projects\"] .ck-rail-badge')")
+                self.assertEqual(page.text_content(".ck-rail-btn[data-section='projects'] .ck-rail-badge"), "3")
+                self.assertEqual(page.locator(".ck-rail-btn[data-section='projects']").get_attribute("aria-label"),
+                                 "Projects, 3 waiting in other projects")
+
+    def test_arrow_and_end_keys_on_the_rail_do_not_scroll_the_page(self):
+        # Catches (J21): the rail's keydown handler moving focus without preventDefault, so the same ArrowDown or End
+        # also scrolled the host page under the console (the key's default action on a focused button).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.evaluate("document.body.style.minHeight = '4000px'")
+                page.focus(".ck-rail-btn[data-section='work']")
+                handled = page.evaluate("""() => ['ArrowDown', 'End'].map(key => {
+                  const e = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+                  document.activeElement.dispatchEvent(e); return e.defaultPrevented; })""")
+                self.assertEqual(handled, [True, True])
+                page.focus(".ck-rail-btn[data-section='work']")
+                for key in ("ArrowDown", "End"):
+                    page.keyboard.press(key)
+                    page.wait_for_timeout(150)
+                    self.assertEqual(page.evaluate("window.scrollY"), 0, key)
+
+    def test_home_on_a_sub_tab_selects_the_sections_first_tab(self):
+        # Catches (J25): Home dropped from the sub-tab strip (the rail has its own Home), so on the last tab of Work
+        # it did nothing instead of selecting and focusing the Inbox.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.focus("#ck-tab-prs")
+                page.keyboard.press("Home")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-inbox'")
+                self.assertEqual(page.evaluate("document.activeElement.getAttribute('aria-selected')"), "true")
+                self.assertEqual(page.evaluate(CURRENT), ["work", "inbox"])
+
+    # The first /view fails (so the console opens the fragment's tab with no view, as when the first fetch fails) and
+    # every one after is held until window.__release(): the first view "has not come" while the test acts.
+    HOLD_VIEW = r"""(() => { const f = window.fetch; window.__hold = true; window.__held = []; let first = true;
+      window.fetch = function () { const args = arguments, self = this;
+        if (first && /\/view$/.test(String(args[0]))) { first = false; return Promise.reject(new TypeError('offline')); }
+        if (window.__hold && /\/view$/.test(String(args[0])))
+          return new Promise(res => window.__held.push(() => res(f.apply(self, args))));
+        return f.apply(self, args); };
+      window.__release = () => { window.__hold = false; window.__held.splice(0).forEach(x => x()); }; })();"""
+
+    def held_page(self, kind, url):
+        # An owner, a `#section=team` link, and a first view that has not landed.
+        from overture import roles as RO
+        RO.set_role(self.cfg.state, "owner@example.com", "owner")
+        page = self.page(kind, 1280, url + "#section=team", init=self.HOLD_VIEW, ready=False)
+        page.wait_for_selector(".ck-panel[data-open='true'] .ck-tabs")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        return page
+
+    def land_view(self, page):
+        page.evaluate("window.__release()")
+        _wait_for(page, "document.querySelector('.ck-inbox-count').textContent !== '✉'")
+        page.evaluate("ConsoleKit.refresh()")   # redraw the panel on what the view now says
+
+    def test_a_g_shortcut_before_the_first_view_outranks_a_pending_section_link(self):
+        # Catches (J29): goTab not clearing the section link still waiting for the view, so `#section=team` then
+        # `g c` (Chat) was undone when the view landed and an owner was moved on to People against what they chose.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.held_page(kind, url)
+                self.g(page, "c")
+                _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                          ["team", "chat"])
+                self.land_view(page)
+                self.assertEqual(page.evaluate("document.querySelector('#ck-tab-people') !== null"), True)   # view landed
+                self.assertEqual(page.evaluate(CURRENT), ["team", "chat"])
+                self.assertEqual(page.evaluate("location.hash"), "#chat&section=team")
+
+    def test_a_host_opening_a_tab_before_the_first_view_outranks_a_pending_section_link(self):
+        # Catches (J34, R1): resolvePendingSection moving a tab the host chose, in another section (Feed, after
+        # `#section=team`) to Team's entry tab when the view landed; and ConsoleKit.openTab not clearing the pending
+        # link as goTab does, so openTab('chat') in the same section was moved on to People.
+        for kind in BROWSERS:
+            for tab, sec in (("feed", "work"), ("chat", "team")):
+                with self.subTest(browser=kind, tab=tab):
+                    url = self.serve()
+                    page = self.held_page(kind, url)
+                    page.evaluate("t => ConsoleKit.openTab(t)", tab)
+                    self.land_view(page)
+                    self.assertEqual(page.evaluate("document.querySelector('#ck-tab-' + %s) !== null"
+                                                   % json.dumps(tab)), True)
+                    self.assertEqual(page.evaluate(CURRENT), [sec, tab])
+                    self.assertEqual(page.evaluate("location.hash"), f"#{tab}&section={sec}")
+
+    def test_a_people_link_for_a_viewer_lands_on_chat_with_the_address_to_match(self):
+        # Catches (J31): goTab writing the tab it was asked for to the address (#people) instead of the one the redraw
+        # clamped it to, so a viewer following a People link sat on Chat with an address naming a tab they cannot see.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer")
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.evaluate("location.hash = '#people'")
+                _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                          ["team", "chat"])
+                _wait_for(page, "location.hash === '#chat&section=team'")
+
+    def test_g_to_a_tab_in_the_same_section_keeps_focus_on_the_tab_strip(self):
+        # Catches (J32): the redraw `g f` causes throwing away the focused sub-tab and focus falling to <body> (the
+        # next Tab then starts from the top of the page); focus must land on the new tab's button.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.focus("#ck-tab-inbox")
+                self.g(page, "f")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-feed'")
+
+    def test_a_tab_clamped_away_is_not_remembered_when_the_login_is_promoted_again(self):
+        # Catches (J37): moveTabQuietly leaving People as Team's remembered tab after a demotion, so after the owner
+        # was promoted back `g 4` jumped to People, a tab they had not chosen since (Chat is where the fall-back put them).
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('people')")
+                _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                          ["team", "people"])
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer")
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                          ["team", "chat"])
+                RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "document.querySelector('#ck-tab-people') !== null")
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                self.g(page, "1")
+                _wait_for(page, "(%s)()[0] === 'work'" % CURRENT)
+                self.g(page, "4")
+                _wait_for(page, "(%s)()[0] === 'team'" % CURRENT)
+                self.assertEqual(page.evaluate(CURRENT), ["team", "chat"])
+
+    def test_a_fragment_naming_nothing_leaves_the_console_closed(self):
+        # Catches (J48): a bare unknown fragment (#nonsense, any page anchor) opening the Inbox, so following a host
+        # page's own in-page link popped the console open over it.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url + "#nonsense")
+                page.wait_for_timeout(300)
+                self.assertTrue(page.evaluate("() => { const p = document.querySelector('.ck-panel');"
+                                              " return !p || p.dataset.open !== 'true'; }"))
+                self.assertEqual(page.evaluate("location.hash"), "#nonsense")
+
+    def test_the_rail_marker_slides_from_the_section_it_left(self):
+        # Catches (J53): --ck-rail-from signed the wrong way, so the marker slid in from the far side: Work to Projects
+        # (two buttons down) starts 2 buttons above its place (-2), and Projects back to Work starts 2 below (2).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                from_var = "document.querySelector('.ck-rail').style.getPropertyValue('--ck-rail-from')"
+                page.click(".ck-rail-btn[data-section='projects']")
+                _wait_for(page, "(%s)()[0] === 'projects'" % CURRENT)
+                self.assertEqual(page.evaluate(from_var), "-2")
+                page.click(".ck-rail-btn[data-section='work']")
+                _wait_for(page, "(%s)()[0] === 'work'" % CURRENT)
+                self.assertEqual(page.evaluate(from_var), "2")
+
+    def test_opening_another_item_fades_the_new_one_in(self):
+        # Catches (J54): the motion key ignoring which item is open, so going from one item to another drew the new
+        # one with no fade (only a change of mode did).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-panel[data-open='true'] .ck-body")
+                page.wait_for_timeout(300)
+                page.evaluate("window.__body = document.querySelector('.ck-body')")
+                page.evaluate("ConsoleKit.open('LANE')")
+                _wait_for(page, "document.querySelector('.ck-body') !== window.__body")
+                self.assertIn("ck-enter-view", page.get_attribute(".ck-body", "class"))
+
+    def test_the_phone_console_is_pinned_to_the_left_edge_of_a_wider_page(self):
+        # Catches (C03): the phone panel without left: 0 / right: auto, so on a phone whose layout viewport grows to a
+        # host page 554px wide it kept the desktop's right-edge anchor and its left edge sat 164px in, the cut-off
+        # console of uxshot 02. Playwright's phone does not widen the layout viewport, so the panel lands at 0 either
+        # way there; the pin is checked where it is written (the phone rule), and the place it takes in the emulation.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(page=PHONE_HOST)
+                page = self.page(kind, 390, url, mobile=True, height=844)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-panel[data-open='true'] .ck-rail")
+                page.wait_for_timeout(400)   # the slide-in
+                pin = page.evaluate("""() => { const hit = [];
+                  const walk = rules => { for (const r of rules) {
+                    if (r.media) walk(r.cssRules);
+                    else if (r.selectorText === '.ck-panel' && r.parentRule && r.parentRule.media
+                             && /max-width:\\s*640px/.test(r.parentRule.media.mediaText)) hit.push([r.style.left, r.style.right]);
+                  } };
+                  for (const sheet of document.styleSheets) { try { walk(sheet.cssRules); } catch (e) { /* cross-origin */ } }
+                  return hit; }""")
+                self.assertIn(["0px", "auto"], pin)
+                self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.ck-panel')).left"), "0px")
+                self.assertAlmostEqual(page.evaluate("document.querySelector('.ck-panel').getBoundingClientRect().left"),
+                                       0, delta=1)
+
+    def test_a_closed_phone_console_is_hidden_and_takes_no_taps_on_a_wider_page(self):
+        # Catches (C05): the closed phone panel left merely off-screen with no visibility: hidden, so in the part of
+        # a host page wider than the phone it still sat over the page and took taps meant for the host.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(page=PHONE_HOST)
+                page = self.page(kind, 390, url, mobile=True, height=844)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-panel[data-open='true'] .ck-rail")
+                page.click(".ck-header .ck-close-btn")
+                _wait_for(page, "document.querySelector('.ck-panel').dataset.open === 'false'")
+                page.wait_for_timeout(400)   # the slide-out
+                self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.ck-panel')).visibility"),
+                                 "hidden")
+                hits = page.evaluate("""() => { const p = document.querySelector('.ck-panel'); let n = 0;
+                  for (let x = 2; x < Math.min(document.documentElement.scrollWidth, innerWidth); x += 24)
+                    for (const y of [2, 200, 420, 640, 842]) if (p.contains(document.elementFromPoint(x, y))) n++;
+                  return n; }""")
+                self.assertEqual(hits, 0)
+
+    def test_people_link_for_a_login_without_people_lands_on_chat_and_says_why(self):
+        # Catches (R2): a `#people` link followed by a member or a viewer (People is the administrator's) landing on
+        # People's empty draw, or on Chat without the live region saying why.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            for role in ("member", "viewer"):
+                with self.subTest(browser=kind, role=role):
+                    url = self.serve()
+                    RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                    if role == "member":
+                        RO.set_role(self.cfg.state, "owner@example.com", "member", ["LANE"])
+                    else:
+                        RO.set_role(self.cfg.state, "owner@example.com", "viewer")
+                    page = self.page(kind, 1280, url + "#people")
+                    _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                              ["team", "chat"])
+                    _wait_for(page, "document.querySelector('.ck-live').textContent === 'Only an administrator manages people.'")
+                    self.assertEqual(page.evaluate("location.hash"), "#chat&section=team")
+
+    def test_a_director_stays_on_settings_across_a_refetch_and_a_live_tick(self):
+        # Catches (R2): the clamp treating Settings as hidden for a director (who may change settings), so the next
+        # forced refetch or the redraw an agent's question sets off moved them to Chat out from under their edit.
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                RO.set_role(self.cfg.state, "owner@example.com", "viewer", director=True)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('settings')")
+                _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT,
+                          ["team", "settings"])
+                page.evaluate("ConsoleKit.refresh()")
+                self.ask(1)   # the live loop's tick redraws the open panel
+                _wait_for(page, "document.querySelector('.ck-inbox-count').textContent === '1'", timeout=15000)
+                page.wait_for_timeout(300)
+                self.assertEqual(page.evaluate(CURRENT), ["team", "settings"])
+                self.assertEqual(page.evaluate("location.hash"), "#settings&section=team")
+                self.assertNotIn("administrator", page.evaluate("document.querySelector('.ck-live').textContent"))
 
 
 if __name__ == "__main__":
