@@ -1,6 +1,6 @@
 ---
 name: console-onboard
-description: Use when the user wants to set up the owner console for the current project (onboard, install, connect it to Cloudflare), or asks how to get the console running. Asks for the project name and the Cloudflare values, writes the project's non-secret config with the kit's onboard.py, and hands the user the commands only they may run.
+description: Use when the user wants to set up the owner console for the current project (onboard, install, connect it to Cloudflare, Tailscale or ZeroTier), or asks how to get the console running. Asks how the console will be reached, then for the project name and the Cloudflare values (or none, with sign-in links), writes the project's non-secret config with the kit's onboard.py, and hands the user the commands only they may run.
 ---
 
 # Onboard this project onto the owner console
@@ -22,7 +22,10 @@ script run, and a short list of commands **the user runs themselves**.
   session to trust this project's console. The tunnel and DNS make it
   reachable from the internet. They are the user's decisions, so you print
   them and the user runs them. The same goes for `agent.py access`, which
-  sets who may decide in the console.
+  sets who may decide in the console, and for `agent.py invite` and
+  `agent.py server listen` (1.47): a sign-in link signs a browser in as
+  someone, and `--listen` decides which network reaches the console. Both
+  refuse inside a Claude session anyway.
 - **Never pass `--force`** unless the user has seen the file it would replace
   and said to. **Never delete or replace a symbolic link** that `onboard.py`
   refused; tell the user what it points at instead.
@@ -40,7 +43,25 @@ Call that folder `KIT`.
 `KIT/onboard.py` must exist. If it does not, stop and say the plugin is
 incomplete.
 
-## 2. Ask for the values
+## 1b. Ask how the console will be reached (1.47)
+
+Run `python3 "KIT/onboard.py" detect` first (read-only). It prints one line
+per overlay address it finds (`zerotier ztexample0 10.147.17.10/16`,
+`tailscale tailscale0 100.x.y.z/32`) and any overlap warning. Then ask, with
+AskUserQuestion:
+
+> How will you reach the console?
+> **A** Cloudflare (as today) · **B** Tailscale · **C** ZeroTier · **D** this machine only
+
+Put ★ on the one `detect` points at: **C** when it found a `zerotier` line,
+else **B** when it found a `tailscale` line, else **A** (or **D** when the user
+said they have no Cloudflare account). Show every overlap warning `detect`
+printed, word for word: a Docker bridge on the ZeroTier range can take its
+route.
+
+- **A**: sections 2 to 4 below, unchanged.
+- **B, C, D**: sign-in links, no Cloudflare: section 5.
+
 
 Ask with AskUserQuestion where it helps, and in plain text otherwise. Offer
 these defaults, and let the user change every one:
@@ -115,6 +136,37 @@ the user's own terminal (it refuses inside a Claude session anyway).
 Point them at `KIT/docs/CLOUDFLARE.md` for the Cloudflare screens. Offer to
 explain any step. Offer, too, to replace the starter page and adapter with the
 project's own (`KIT/docs/ADAPTER.md`).
+
+## 5. Without Cloudflare: sign-in links (1.47)
+
+Ask only for the project name, the port, and (optional) the master agent, as
+in section 2. No team domain, AUD tag, hostname or tunnel: `onboard.py`
+refuses them with `--auth link`. Then run, from the project root:
+
+    # B, Tailscale: preferred through `tailscale serve` (HTTPS); ask the user for
+    #    their machine's tailnet name, never guess it
+    python3 "KIT/onboard.py" write --project . --name NAME --auth link \
+        --origin https://MACHINE.TAILNET.ts.net --port PORT [--steward STEWARD]
+    #    or, on the tailnet address itself (plain http on the tailnet):
+    python3 "KIT/onboard.py" write --project . --name NAME --auth link \
+        --listen 100.X.Y.Z --port PORT [--steward STEWARD]
+    # C, ZeroTier: the zerotier address `detect` printed
+    python3 "KIT/onboard.py" write --project . --name NAME --auth link \
+        --listen ZT_ADDRESS --port PORT [--steward STEWARD]
+    # D, this machine only
+    python3 "KIT/onboard.py" write --project . --name NAME --auth link --port PORT [--steward STEWARD]
+
+The refusals and `REVIEW` lines are handled as in section 3. Show any
+`warning` or `NOTE` line too: a NOTE means the address is on no interface
+yet, and the server will wait for it up to 2 minutes when it starts.
+
+Hand over the printed next steps **verbatim and in order**, each the user's
+to run: `install.sh --start`, `agent.py register`, how to reach the console
+(the `tailscale serve` line, or `http://ADDR:PORT`), `agent.py invite
+YOU@EXAMPLE.COM --origin ...` **in their own terminal** (it prints a link that
+works once; a session is refused), `onboard.py verify`, and "Make me the
+administrator". Say that a browser signs in once per address it uses.
+**Never run `invite` and never ask for the email it takes.**
 
 When they have run step 2, the SessionStart note and the `console-process`
 skill work in this project from the next session.

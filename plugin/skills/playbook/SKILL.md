@@ -1,9 +1,9 @@
 ---
 name: playbook
-description: Use when the user wants to run a named playbook on this project's console — a codified multi-step delegation (round, visual, chat). The playbook files live under .overture/playbooks/<slug>.json. This skill lists what is available, confirms which to run, and dispatches it through the console's agent socket; each step then arrives in the owner's inbox like any other delegation.
+description: Use when the user asks to run a named playbook (.overture/playbooks/<slug>.json) from this Claude session. A session cannot run one - a playbook's steps are the owner's - so this skill explains that, lists what is available, and points the user to the console's Playbooks tab, where they press Run now themselves.
 ---
 
-# Run a named playbook
+# Playbooks run from the console, not from a session
 
 A playbook is a short JSON file at `.overture/playbooks/<slug>.json`
 that lists steps the owner wants fired as one:
@@ -12,11 +12,47 @@ that lists steps the owner wants fired as one:
 - `visual` — ask the agent to draw a diagram or mock.
 - `chat` — a free-text message in the chat thread.
 
-A step may also carry an optional **`when`** predicate (0.20.0) that
-gates it at run time. The server evaluates `when` against the current
-view + item register before firing; a step whose `when` is false is
-skipped with `{index, why: "when:<reason>"}` and the rest still run.
-The predicate kinds are closed-set:
+**Every one of those steps is written as the owner.** Since 1.30.1 a
+Claude session may not write as the owner (an agent that could author a
+playbook file could otherwise forge the owner's rounds and visuals). So
+since 1.47 (U7, owner's decision) a session does not run playbooks at
+all, and says so instead of silently doing nothing:
+
+- `agent.py playbook <slug>` prints why on stderr, runs nothing, and
+  exits 1.
+- The agent door's `/playbook` answers 403 with the same sentence,
+  before any step runs.
+
+## Flow
+
+1. **Say it plainly.** Tell the user that playbooks run from the
+   console's **Playbooks** tab (or the Inbox's **Delegate → Run a
+   playbook**), because their steps are the owner's.
+2. **Help them find it.** If they named a slug, check that
+   `.overture/playbooks/<slug>.json` exists, and say what its steps
+   are (count and kinds), so they know what they are about to approve.
+   If they did not, list the files under `.overture/playbooks/` with
+   each one's `description` (at most 10).
+3. **Point at Preview.** The tab's **Preview** shows which steps would
+   run now and which would be skipped, with the reason in words (for
+   example "skipped: it runs only when API-1 has at least 1 stale
+   question (it has 0)").
+
+## What you must never do here
+
+- **Never try another route** to make the steps happen: no
+  `agent.py items-push`, no hand-written `message` records, no edits
+  to the playbook to make it "agent-runnable". The refusal is the
+  security fix working.
+- **Never write or edit a playbook file** in session. A playbook is a
+  project-code change the owner reviews and commits.
+
+## `when` predicates (for reading a playbook)
+
+A step may carry a `when` (0.20.0) that gates it at run time. The
+console evaluates it against the current view and item list; a step
+whose `when` is false is skipped with a reason in words, and the rest
+still run. The kinds are closed-set:
 
 - `{"kind": "project_has_state", "state": "awaiting_you|unlocked|locked|stale", "min": N}`
 - `{"kind": "item_has_state", "item": "<id>", "state": "...", "min": N}`
@@ -24,60 +60,5 @@ The predicate kinds are closed-set:
 - `{"kind": "has_section", "name": "<slug>"}`
 - `{"kind": "not", "of": {<predicate>}}`
 
-A playbook with a bad `when` (unknown kind, wrong field, out-of-range
-`min`) is refused at load time, so a firing never surfaces a schema
-error.
-
-The console serves `view.playbooks` with every playbook's name, one-line
-description, and the number of steps. This skill reads that list, asks
-the user which one to run, and dispatches it through
-`agent.py playbook <name>`. The server fans each step out as an owner
-message write; the watching steward picks them up like any other
-delegation and the Inbox shows the firing under **Triggers → Recent
-firings**.
-
-## What you must never do here
-
-- **Never post** `agent.py items-push`, `prs-push`, `page-snapshot` or
-  any other owner-privileged write "to help the playbook along". A
-  playbook is a complete, named unit; running it is one tap, and the
-  server fans the steps out itself.
-- **Never run a playbook that is not already a file.** If a slug the
-  user names has no file under `.overture/playbooks/`, say so and
-  stop. Writing a new playbook file is a project-code change the owner
-  reviews and commits, not an in-session move.
-- **Never retry a failing playbook automatically.** Each playbook run
-  mints a nonce from the slug and the second; a retry under the same
-  second is intentionally idempotent (the server dedupes). Tell the
-  user what the server reported (`records`, `skipped`, any `error`)
-  and let them decide.
-
-## Flow
-
-1. **Confirm the slug.** If the user named one, use it; otherwise read
-   `view.playbooks` and offer the names + descriptions. Show at most 10
-   and let the user pick.
-2. **Confirm the run.** Say the playbook's step count and the kinds in
-   it so the user knows what fan-out they're approving.
-3. **Dispatch.** Run:
-       python3 ~/.local/share/overture/kit/agent.py --state <STATE> playbook <slug>
-   `<STATE>` is the registry's state path for this project; the
-   SessionStart banner names it. The agent flag (`--as`) is this
-   session's name if one was given.
-4. **Report the result.** The server returns `{records, skipped}`.
-   Each `records[i]` is one step's `message` record; each `skipped[i]`
-   names the step index and why. Tell the user:
-   - how many steps landed,
-   - any skips (usually an item id that isn't in the register),
-   - that the Inbox now shows the firing under **Triggers → Recent
-     firings** and each step as an inbox row.
-
-## Who writes what
-
-- **This skill** reads `view.playbooks`, dispatches, reports the
-  result. Nothing else.
-- **The server** writes each step's `message` record as the owner,
-  rings the doorbell per record, and logs the firing in the trigger
-  log (`view.trigger_log` carries the newest 20).
-- **The steward** picks up the doorbell line on its next `watch`
-  and handles each delegation as usual.
+A playbook with a bad `when` is refused when it loads, so a run never
+surfaces a schema error.

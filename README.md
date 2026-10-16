@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.34.7-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.47.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-774-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1164-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -56,6 +56,8 @@ and a Claude Code plugin, all under one MIT licence.
 
 - **Solo developers running several AI agents**, tired of babysitting terminals.
 - **Tech leads** who want a written record of *why* the code is the way it is.
+- **Small teams** who share one console: each person has a role, each
+  decision records who made it, and the riskiest areas need two people.
 - **UX-leaning teams** who want to iterate on components, keep the versions
   that worked, and merge the chosen one through a real pull request.
 - **Anyone juggling several projects.** One portfolio page shows what is
@@ -63,37 +65,210 @@ and a Claude Code plugin, all under one MIT licence.
 
 ## Try it
 
-You need Claude Code and a Cloudflare account (the free tier is enough: it
-provides the login page that protects your inbox).
+You need Claude Code. For the login in front of your inbox, pick one: a
+Cloudflare account (the free tier is enough), or no account at all, with
+one-time sign-in links on this machine, your Tailscale tailnet or your
+ZeroTier network (1.46, 1.47).
 
     /plugin marketplace add MikeHeid/overture
     /plugin install overture@overture
     /overture:console-onboard
 
-The last command walks you through the rest, in your project. Full details
-under [Install](#install).
+The last command asks how you will reach the console and walks you through
+the rest, in your project. Full details under [Install](#install).
 
 **Already running Overture for another project?** Join this one to the same
 server: [docs/JOIN.md](docs/JOIN.md).
 
 ## Feature map
 
-| Area | What ships today |
-|---|---|
-| **The loop** | Inbox of agent questions · one-tap answer and lock · round forms with keyboard shortcuts · lock-all · live redraw |
-| **Rulings** | Locked answers stored in git · `valid_if` conditions · stale detection · **What changed?** diff · re-anchor / withdraw / keep / replace |
-| **Lessons** (1.33–1.34) | Your reason for withdrawing or un-tracking a ruling is kept · new sessions are told · a new question that looks like a settled one shows **📎 related past rulings** · `agent.py lessons` / `lesson-match` |
-| **UX View** (1.32 headline) | Full-screen component modal · versions and sizes · Generate · Save as component (opens a PR) · Claude Design link · design-system picker · Scripts switch |
-| **Tickets** | Per-item tasks / bugs / research / grilling · dependency graph · board across every item with blocking shown |
-| **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item |
-| **Dashboard** | Scaffolds `docs/console/page.html` · syncs an `items-tree` block · stages via `page-snapshot` · publishes on **Use this page** |
-| **Project map** | Tree of every item, coloured by state, boxed by lane · chip filters · lane colours published to the host page's CSS |
-| **Screenshots** | Before/after agent screenshots in the Feed · attachable owner images · GIFs · PNG/JPEG/WebP, SVG refused |
-| **Deliberation** | Up to three advisor seats · Roar panels · Refine / Drill · Next step ▾ on every locked answer |
-| **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold |
-| **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `j`/`k` row walk · **Ctrl+K** command palette |
-| **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health probe · readiness probe |
-| **Security** | Cloudflare Access gate · per-request CSP nonce · CSRF double-submit · atomic state writes · sandboxed iframes · parser-based HTML allowlist |
+Each area links to its own page, with the full reference and screenshots.
+
+| Area | What ships today | Read more |
+|---|---|---|
+| **The loop** | Inbox of agent questions · one-tap answer and lock · round forms with keyboard shortcuts · lock-all · live redraw · snooze · filter chips · deep links · drafts that follow you | [Inbox and rulings](docs/features/inbox-and-rulings.md) |
+| **Rulings** | Locked answers stored in git · `valid_if` conditions · stale detection · **What changed?** diff · re-anchor / withdraw / keep / replace · scan for a resolve · export today's rulings | [Inbox and rulings](docs/features/inbox-and-rulings.md#keep-rulings-honest-as-the-code-moves) |
+| **Lessons** (1.33–1.34) | Your reason for withdrawing a ruling is kept · new sessions are told · **📎 related past rulings** on a look-alike question · `agent.py lessons` / `lesson-match` | [Lessons](docs/features/inbox-and-rulings.md#lessons-what-you-settled-stays-settled-133134) |
+| **Teams and roles** (1.38–1.42) | Who decided, on every lock · owner / member (by area) / viewer roles · **People** tab · routing ("For you") · directors · role log | [Roles and people](docs/features/roles-and-people.md) |
+| **Two-key locks** (1.43) | Areas where a lock counts only once a second person confirms it · "Locked by A, confirmed by B" | [Two-key locks](docs/features/two-key-locks.md) |
+| **Settings and notifications** (1.44–1.45) | Limits, lane labels and colours, two-key areas and short names, set in the console · a digest of waiting questions to a Slack-style channel, with quiet hours | [Settings and notifications](docs/features/notifications-and-settings.md) |
+| **Sign-in links and networks** (1.46–1.47) | Cloudflare Access, or one-time sign-in links with no Cloudflare · signed-in browsers listed and revoked under People · `--listen` on a ZeroTier or Tailscale address · onboarding that asks how you reach the console | [Sign-in and networks](docs/features/sign-in-and-networks.md) |
+| **Automation** | **⚑ Delegate** bar · playbooks with `when` branching and Preview · webhook and cron triggers · trigger log and Replay · impact graph | [Automation](docs/features/automation.md) |
+| **MCP** (1.35) | An MCP server, so Cursor, Codex, Copilot and other MCP clients ask and read rulings like Claude Code | [MCP and CI](docs/features/mcp-and-ci.md) |
+| **CI** (1.36–1.37) | `rulecheck.py` and a GitHub Action fail a pull request that breaks a locked ruling, with no server · `--strict` | [MCP and CI](docs/features/mcp-and-ci.md#block-a-merge-that-breaks-a-ruling-ci-136) |
+| **UX View** (1.32) | Full-screen component modal · versions and sizes · Generate · Save as component (opens a PR) · Claude Design link · design-system picker · Scripts switch | [UX View](docs/features/ux-view.md) |
+| **Deliberation** | Up to three advisor seats · Roar panels · Refine / Drill · Next step ▾ on every locked answer · Launch Idea · Branch out · Grill with agent | [Deliberation](docs/features/deliberation.md) |
+| **Tickets** | Per-item tasks / bugs / research / grilling · dependency graph · board across every item with blocking shown | [Tickets, screenshots and visuals](docs/features/tickets-screenshots-visuals.md) |
+| **Screenshots and visuals** | Before/after agent screenshots in the Feed · owner images · GIFs · Mermaid and HTML visuals in a sandbox · status flowchart per item · variants | [Tickets, screenshots and visuals](docs/features/tickets-screenshots-visuals.md#see-what-agents-changed-as-screenshots) |
+| **Dashboard** | Scaffolds `docs/console/page.html` · syncs an `items-tree` block · numbered refs · stages via `page-snapshot` · publishes on **Use this page** | [Dashboard and map](docs/features/dashboard-and-map.md) |
+| **Project map** | Tree of every item, coloured by state, boxed by lane · chip filters · lane colours published to the host page's CSS | [Dashboard and map](docs/features/dashboard-and-map.md#project-map-lanes-and-the-dashboard) |
+| **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item · Portfolio · Operator Shift report · themes and skins | [Finding your way around](docs/features/navigation.md) |
+| **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `j`/`k` row walk · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
+| **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
+| **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
+| **Security** | Cloudflare Access or sign-in links · per-request CSP nonce · CSRF double-submit · atomic state writes · sandboxed iframes · parser-based HTML allowlist | [Trust](#trust) |
+
+## Features
+
+### The inbox and rulings
+
+Every question your agents ask lands in one Inbox. Answer with a tap or from
+the keyboard, lock it into a ruling, or lock a whole round at once. A ruling
+names what must stay true for it to stand; when the cited code changes, it
+turns **stale**, and **What changed?** shows the diff so you can re-lock,
+withdraw, keep or replace it. The reason you give for dropping one is kept as
+a **lesson**, so the next agent does not ask again.
+
+<img src="docs/screenshots/anim-stale.gif" alt="A stale ruling: What changed? shows the cited line was edited from automated to manual" width="400">
+
+→ [docs/features/inbox-and-rulings.md](docs/features/inbox-and-rulings.md)
+
+### Roles and people
+
+Several people can share one console. Each lock records the login that made
+it, an administrator gives everyone else a role on the **People** tab
+(member of some areas, or viewer), each question says who it is for, and
+**Role changes** lists every change.
+
+<img src="docs/screenshots/feature-people.png" alt="The People tab: an administrator, a member of API-2 and a director, each with a role, areas and Save, and Role changes below" width="400">
+
+→ [docs/features/roles-and-people.md](docs/features/roles-and-people.md)
+
+### Two-key locks
+
+In the areas an administrator names, one person may not lock alone: a lock
+waits until a second login confirms it, and only then is it a ruling.
+
+<img src="docs/screenshots/feature-two-key-confirmed.png" alt="A two-key ruling: Locked by owner@example.com, confirmed by dana@example.com" width="400">
+
+→ [docs/features/two-key-locks.md](docs/features/two-key-locks.md)
+
+### Settings and notifications
+
+Administrators and directors set the project's limits, lane labels and
+colours, two-key areas and short names in the console. The console can also
+post a digest of waiting questions to Slack, Mattermost or Discord, at most
+every N minutes and never in quiet hours. It never posts a question's text.
+
+<img src="docs/screenshots/feature-settings.png" alt="The Settings tab: the chat and agent limits, each with its default, and the lane labels and colours" width="400">
+
+→ [docs/features/notifications-and-settings.md](docs/features/notifications-and-settings.md)
+
+### Sign-in links and networks
+
+A console sits behind Cloudflare Access, or (1.46) runs with no Cloudflare at
+all: `agent.py invite EMAIL` prints a one-time link, the browser that opens
+it stays signed in, and **People** lists and revokes signed-in browsers. Your
+network decides who can reach the console: this machine only, Tailscale
+through `tailscale serve`, or (1.47) `--listen ADDR` on the console's own
+ZeroTier or Tailscale address beside 127.0.0.1, never `0.0.0.0`. Sign in once
+per address you use. With `--listen` the origin is plain `http://ADDR:PORT`,
+so use `tailscale serve` (https) **without** `--listen`, never both. On a
+machine other people log in to, read the cookie notes first.
+`/overture:console-onboard` asks which way you will reach the console and
+writes the rest.
+
+<img src="docs/screenshots/feature-signin.png" alt="Sign in to this console: Sign this browser in as owner@example.com? and the Sign this browser in button" width="400">
+
+→ [docs/features/sign-in-and-networks.md](docs/features/sign-in-and-networks.md)
+
+### Automation
+
+The **⚑ Delegate** bar starts a round, a visual or a chat from anywhere. A
+playbook codifies several steps, each with an optional `when` condition, and
+**Preview** says which would run and why the rest would not. Webhook and cron
+triggers fire playbooks without you; the Triggers tab logs each firing and
+replays one. Playbooks run from the console: a Claude session that asks to
+run one is told so, before anything runs (1.47).
+
+<img src="docs/screenshots/feature-playbook-preview.png" alt="Preview of release-triage: would run 2 of 3 steps; the round on API-3 would skip on its when condition" width="720">
+
+→ [docs/features/automation.md](docs/features/automation.md)
+
+### MCP and CI
+
+Agents other than Claude Code (Cursor, Codex, Copilot) ask and read rulings
+through an MCP server. In CI, a GitHub Action fails a pull request that
+breaks a locked ruling, with no console server needed:
+
+```yaml
+on: pull_request
+permissions: {contents: read, pull-requests: write}
+jobs:
+  rulings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: MikeHeid/overture@v1.47.0
+```
+
+→ [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
+
+### UX View
+
+On a UI item, **◫ UX View** opens a full-screen workspace over its HTML
+mock-ups: see each version at phone, tablet or desktop width, generate
+another, and save the one you want as a component by pull request.
+
+<img src="docs/screenshots/feature-ux-view.png" alt="UX View: a plan-picker component in a sandbox at desktop width, a version stepper, size buttons, Generate and Save as component" width="720">
+
+→ [docs/features/ux-view.md](docs/features/ux-view.md)
+
+### Deliberation, Launch Idea and Branch out
+
+Before you answer, pick up to three advisor seats (security, UX, devil's
+advocate and others) to weigh in; they never decide for you. After you lock,
+**Next step ▾** follows up, refines or drills. **Launch Idea** turns a pitch
+into grilled questions and tickets, and **Branch out** drills into a topic.
+
+<img src="docs/screenshots/feature-launch-idea.png" alt="Launch Idea on UI-4, step 2 Grill: five questions, the first answered, with Reframe, Grill with agent and Draft tickets" width="400">
+
+→ [docs/features/deliberation.md](docs/features/deliberation.md)
+
+### Tickets, screenshots and visuals
+
+Tickets are small units of work on an item, with blocking and a board across
+every item. Agents post before-and-after screenshots that appear in the
+Feed, and answer a request for a visual with a Mermaid diagram or an HTML
+mock, shown in a sandboxed frame.
+
+<img src="docs/screenshots/feature-ticket-graph.png" alt="What blocks what: tickets grouped by item, arrows from blocker to blocked, blocked tickets outlined in red" width="400">
+
+→ [docs/features/tickets-screenshots-visuals.md](docs/features/tickets-screenshots-visuals.md)
+
+### Dashboard, project map and lanes
+
+The console docks inside your project's own dashboard page, which an agent
+scaffolds and stages and only you publish. The project map draws every item
+as a tree, coloured by state and boxed by lane, and the Portfolio shows your
+other consoles.
+
+<img src="docs/screenshots/feature-project-map.png" alt="The project map: every item as a tree, boxed by lane and coloured by state" width="400">
+
+→ [docs/features/dashboard-and-map.md](docs/features/dashboard-and-map.md)
+
+### Finding your way around
+
+The page updates itself. The Feed, PRs (with Merge), Chat, Favorite and
+Portfolio tabs sit beside the Inbox, and the panel's title names the tab you
+are on. **Ctrl+K** searches everything, `?` lists the shortcuts, and
+**Operator Shift** reports the week as Markdown.
+
+<img src="docs/screenshots/feature-palette.png" alt="The command palette with retry typed: the matching item and questions" width="400">
+
+→ [docs/features/navigation.md](docs/features/navigation.md)
+
+### Hosting
+
+One server hosts every project on the machine, as a daemon or a systemd user
+unit, with `status` and `health` to check it. Each project's agents use their
+own token. Windows hosts run it in WSL2.
+
+    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
+    <py> <kit>/server.py status                    # which mode, pid, each project's port
+
+→ [docs/features/hosting.md](docs/features/hosting.md)
 
 ## Words you'll see
 
@@ -110,13 +285,16 @@ server: [docs/JOIN.md](docs/JOIN.md).
 | **Lane** | The slice of your project an item belongs to (API, UX, Infra, …), colour-coded on the map. |
 | **Ticket** | A small unit of work on an item: a task, bug, research, or grilling note. |
 | **UX item** | An item marked `"ux": true` in `.overture.json`; UX View opens on these. |
+| **Playbook** | A saved list of steps (a round, a visual, a chat) that you, a webhook or the clock can run. |
+| **Administrator** | The owner role: the login that may manage People and everything else. |
+| **Sign-in link** | A one-time link, made by `agent.py invite`, that signs one browser in to a console with no Cloudflare. |
 
 ## Where it's going
 
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~50%: CI ruling check (1.36), sign-in links without Cloudflare (1.46) |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~60%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47) |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
@@ -127,8 +305,9 @@ with AI.
 
 ---
 
-This README describes the kit as it is today. [CHANGELOG.md](CHANGELOG.md)
-says what each release added. Everything below is the full reference.
+This README is the overview of the kit as it is today; each area's page under
+[docs/features/](docs/features/) is the full reference. [CHANGELOG.md](CHANGELOG.md)
+says what each release added.
 
 ## Install
 
@@ -175,75 +354,24 @@ A one-liner for scripts, including other Claude sessions:
 
 Then run the two `/plugin` commands above and restart the session.
 
-### Install without Cloudflare (1.46)
+### Without Cloudflare
 
-Cloudflare Access is one way in; sign-in links are the other. A console
-runs one or the other, never both. With links, the network decides who can
-reach the console and the console itself decides who is at the browser:
-
-    # one project's server, on this machine only
-    <py> <kit>/server.py --root DIR --state STATE --auth link --port 4793
-    # or the one server, for every project in server.json
-    agent.py --state STATE server auth link
-    agent.py --state STATE server add NAME --port 4793    # no --hostname/--aud/--team-domain
+Onboarding asks first how you will reach the console: Cloudflare, Tailscale,
+ZeroTier, or this machine only. Without Cloudflare it writes a sign-in-link
+console, and you make the first link yourself, in your own terminal:
 
     agent.py --state STATE invite you@example.com --origin http://127.0.0.1:4793
 
-`invite` prints a link once. It works once, within 24 hours, and you run
-it, never a session. Open it in the browser you want signed in and press
-**Sign this browser in**. That browser stays signed in until you revoke it
-under **People**, or with `agent.py devices --revoke ID`. Invites,
-sign-ins and revokes go in the role log. A sign-in link opens the project
-it was made from, plus every project whose roles list that email; with
-roles off, only the projects it was invited from. Opening another
-project's link in the same browser adds that project to the same sign-in.
-Each project's roles still decide what that login may do. Taking away
-someone's role leaves them reading a project they were invited from; to
-shut them out, revoke their browser.
+The full steps, `--listen` on ZeroTier or Tailscale, ZeroTier inside WSL,
+and the cookie notes are in
+[Sign-in and networks](docs/features/sign-in-and-networks.md#install-without-cloudflare-146-147).
 
-- **The cookie goes to every port of the host:** browsers send cookies per
-  host name, not per port, so any other program served on the same name
-  (a dev server on another `127.0.0.1` port, another service on the
-  tailnet name) receives the `overture-device` cookie whenever that
-  browser visits it, for its 400 days. Prefer the Tailscale https name
-  (`tailscale serve`) for the console, don't browse untrusted local dev
-  servers on the same host name in that browser profile, and if in doubt
-  revoke the browser under **People** and sign in again.
+### Upgrade
 
-- **This machine only:** the console listens on 127.0.0.1, as always. Open
-  `http://127.0.0.1:PORT` on the same machine.
-- **Tailscale:** `tailscale serve --bg https / http://127.0.0.1:PORT` puts
-  the console on your tailnet over HTTPS, and the console stays on
-  127.0.0.1. Start it with `--origin https://MACHINE.TAILNET.ts.net` (or
-  `server add ... --origin` for the one server) so links and the
-  same-origin checks use that address.
-- **ZeroTier**, and listening on a Tailscale or ZeroTier address directly
-  (`--listen`), come in 1.47.
-- External triggers (`/api/trigger/...`) need a signed-in browser in link
-  mode, so a webhook cannot call them; keep them behind Cloudflare.
-
-### Upgrade the agent server on each onboarded project
-
-Updating the plugin only refreshes the files on disk; the running Python
-server does not pick them up until it restarts. For every project that was
-onboarded, run the installer with `--start` to copy the fresh kit to
-`~/.local/share/overture/kit/` and restart the systemd user units:
-
-    bash ~/overture/plugins/overture/kit/deploy/install.sh \
-      --project <path to project> --start
-
-(When using route A, the path is the plugin cache instead; the install
-script's path is printed by `onboard.py show` on the project.)
-
-After the restart, verify from the project's machine:
-
-    curl -s http://127.0.0.1:$(grep ^CONSOLE_PORT .overture/console.env | cut -d= -f2)/health
-    # → {"ok": true, "version": "<the version you just installed>", ...}
-
-The first Claude session in each project after the upgrade prints a short
-banner naming the new version and the commands most useful at that moment
-(`items-push`, `items-watch`, `scaffold-dashboard`, `sync-dashboard`,
-`page-snapshot`, `prs-push`, `inbox`).
+Updating the plugin only refreshes the files on disk; restart each onboarded
+project's server with `install.sh --project <path> --start`, then check
+`/health`. The steps are in
+[Hosting](docs/features/hosting.md#upgrade-the-agent-server-on-each-onboarded-project).
 
 | Guide | For |
 |---|---|
@@ -256,841 +384,40 @@ banner naming the new version and the commands most useful at that moment
 | [docs/DEPLOY.md](plugin/kit/docs/DEPLOY.md) | Installing, upgrading and rolling back the systemd services. |
 | [docs/RUNBOOK.md](plugin/kit/docs/RUNBOOK.md) | Symptoms, checks and fixes, starting with the loopback `/health` check. |
 
-## Hosting
-
-One server, `server.py --all`, hosts every project on the machine. Run it
-however suits the host (1.32):
-
-    <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log
-    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
-    <py> <kit>/server.py status                    # which mode, pid, each project's port
-    <py> <kit>/server.py health                    # agent door, version skew, linger; clears stale files
-
-`status` and `health` only read; a daemon and a service refuse to run
-together, each naming the other. `server.py --all` in the foreground is
-unchanged. macOS launchd support is on the roadmap.
-
-**Machine role (1.32).** A plugin setting named **Machine role** (`steward`
-or `worker`), and the CLI `agent.py role worker|steward|clear`, mark a
-machine where no session may be the steward — useful when the steward runs
-on a home server and laptops only *work*. On a `worker` the fold refuses,
-`watch`/`synced` refuse, and `/overture:as <steward>` is refused by name.
-If the plugin setting and the registry disagree, `worker` wins. See
-[docs/JOIN.md](docs/JOIN.md).
-
-## Name the session, bootstrap the dashboard
-
-**Set the agent id for a Claude session** — in Claude Code:
-
-    /overture:as my-agent-name
-
-The name is recorded against this session in `STATE/sessions.jsonl`. Every
-`agent.py` call the session makes signs with it, questions and messages are
-attributed to it, and the SessionStart banner knows which session is which.
-`OVERTURE_AGENT=my-agent-name` in the shell env is a machine-wide fallback;
-`/overture:as` wins for that session.
-
-**Bootstrap the dashboard** — in a terminal on the project's machine:
-
-    # Writes docs/console/page.html with Header / Items / Rollout / Engine / Spec
-    # sections and injects a matching board() into .overture/adapter.py.
-    agent.py --state <STATE> scaffold-dashboard --project .
-
-    # Insert a <details data-ck-item="X"> stub for every item not yet on the
-    # page, nested under its parent. Idempotent; hand-edits inside each node
-    # survive re-syncs.
-    agent.py --state <STATE> items-push --adapter .overture/adapter.py \
-      --sync-dashboard docs/console/page.html
-
-    # Commit, snapshot, press "Use this page" in the console.
-    git add -A && git commit -m "dashboard: scaffold + sync"
-    agent.py --state <STATE> page-snapshot --path docs/console/page.html
-
-    # Keep the live values fresh:
-    agent.py --state <STATE> items-watch --adapter .overture/adapter.py
-
-**Make it more beautiful.** The console inherits CSS custom properties from
-the host page's `:root`. Define any of these to re-skin the whole kit (an
-unlayered host `:root` beats the kit's `@layer console-fallbacks`):
-
-    :root {
-      --c-bg: #...;  --c-surface: #...;  --c-surface-alt: #...;
-      --c-fg: #...;  --c-fg-muted: #...;
-      --c-border: #...;  --c-border-light: #...;
-      --c-accent: #...;  --c-accent-fg: #...;
-      --c-open: #...;    --c-open-bg: #...;
-      --c-claimed: #...; --c-claimed-bg: #...;
-      --c-built: #...;   --c-built-bg: #...;
-      --c-blocked: #...; --c-blocked-bg: #...;
-      --c-deferred: #...; --c-deferred-bg: #...;
-      --radius-sm: 6px;  --radius-md: 10px;
-    }
-    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { ... } }
-
-The 0.9.11 fallback palette is Primer-aligned (`#0969da` accent on light,
-`#58a6ff` on dark) and ships `color-scheme` so native scrollbars match.
-Icons are the vendored Lucide set, ISC-licensed. Then:
-
-- Add deep links from the item view to your dashboard by setting
-  `sections` in `.overture.json`:
-  `{"sections": {"AB-2": ["#features/rollout", "#features/timeline"]}}`.
-  The item view renders chips linking to each anchor.
-- Add in-place state badges by marking any `<section data-ck-item="X">`
-  on the dashboard. The console injects an `X 2 1 3 4` badge, each count
-  behind its state's icon (awaiting you, unlocked, stale, locked),
-  in-place, updated on every live wake; clicking it opens the panel on X.
-
-## Use it from any agent (MCP, 1.35)
-
-Agents other than Claude Code reach the console through an MCP server,
-`plugin/kit/mcp_server.py`. Any client that speaks the Model Context
-Protocol (Cursor, Codex, Copilot, Claude and others) launches it over
-stdio. Register the project first (`agent.py register`, as for Claude
-Code), then add it to the client's MCP config:
-
-```json
-{
-  "mcpServers": {
-    "overture": {
-      "command": "python3",
-      "args": ["<kit>/mcp_server.py", "--state", "<STATE>",
-               "--project", "<your checkout>", "--as", "cursor-1"]
-    }
-  }
-}
-```
-
-For Codex, the same in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.overture]
-command = "python3"
-args = ["<kit>/mcp_server.py", "--state", "<STATE>", "--project", "<your checkout>", "--as", "codex-1"]
-```
-
-| Tool | What it does |
-|---|---|
-| `todo` | What is waiting on this agent |
-| `view` | The console's view, narrowed by `item` and `since` |
-| `answers` | Every question in a scope and the answer it got |
-| `check` | Why each stale ruling is stale |
-| `lesson_match` | Past withdrawn rulings that look like a draft question |
-| `health` | Whether the console server is up, and its version |
-| `ask` | Post a question for the owner |
-| `reply` | Post a message on an item's thread |
-| `working` | Show the owner "agent active" on items |
-
-The server tells the client how to use these when it connects: read
-`answers` before asking, run `lesson_match` first, prefer an excerpt
-for `valid_if`. Every tool runs `agent.py` underneath, so the same
-checks apply: the project picks its console and token, `--as` (or
-`OVERTURE_AGENT`) names its writes, and the console server validates
-each one. A bad request fails alone; the server stays up. The steward's
-and the owner's commands are not offered. Standard library only.
-
-## Block a merge that breaks a ruling (CI, 1.36)
-
-`plugin/kit/rulecheck.py` checks the rulings your project has
-committed (the files `fold.py export` writes, `.overture/locked` by
-default) against the checkout, with no console server. A ruling whose
-cited text a change edits or deletes fails the check, with the same
-reason and diff **What changed?** shows.
-
-In GitHub Actions:
-
-```yaml
-on: pull_request
-permissions: {contents: read, pull-requests: write}
-jobs:
-  rulings:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.37.0
-```
-
-The rulings checked, and the `.overture.json` that says where they live,
-are the ones committed at the pull request's base, so a pull request
-cannot pass by editing or deleting a ruling file. If you re-lock or
-settle a ruling and its export lands in the same pull request, it passes
-and is listed as re-ruled. The Action posts one comment on the pull
-request, and keeps it updated, when a ruling breaks or a reviewer must
-look: a re-ruling, an edited ruling file, or a ruling it could not
-check. If it finds no ruling files at all, the job summary says so.
-
-What it trusts: ruling files arrive by pull request, as they always
-have, so a re-ruling in the comment is a claim for the reviewer to
-confirm, not proof that you made it. Make the check a required status
-in branch protection, or a pull request can also edit the workflow.
-
-An `item_status` condition is checked only with the `adapter` input.
-Without it, such a ruling is listed as unchecked and passes; set
-`strict: true` to fail it instead, and to fail a run that found no
-ruling files (1.37). A re-ruling never fails strict: it is yours to
-make, and the comment shows it to the reviewer.
-
-Your adapter is code from the pull request's checkout, so it is opt-in
-and kept apart (1.37). The token is not handed to the step that runs
-it, no comment is posted after it (the job summary has the report), and
-the check refuses to run when `actions/checkout` left its token header
-in `.git/config` (use `persist-credentials: false`). **Give the adapter
-run a job of its own with no secrets**, and treat every later step in
-that job as untrusted: the adapter runs as the runner's user, which on
-GitHub's runners can use sudo and can read other processes'
-environments. (The check also starts with a clean environment, so the
-job's secrets are not handed to the adapter; that is hygiene, not
-isolation.)
-
-Anywhere else, run it yourself: `python3 <kit>/rulecheck.py --base
-origin/main` (add `--format markdown` or `--format json`, and
-`--strict`). It exits 0 when every ruling holds, 1 when one is broken
-(or, with `--strict`, could not be checked), and 2 when it could not
-run.
-
 ## Hooks the plugin ships
 
-The plugin runs three hooks in every Claude session on your machine. All
-three act only in projects that `agent.py register` has entered in your
-user-level registry (`~/.config/overture/projects.json`); in any other
-project they print nothing and exit 0.
+The plugin registers four hook scripts (`plugin/hooks/hooks.json`), and
+Claude Code runs them in every session on your machine. Three of them act
+only in projects that `agent.py register` has entered in your user-level
+registry (`~/.config/overture/projects.json`); in any other project they
+print nothing and exit 0. The fourth, `install_notice.py`, is the
+exception: it prints its banner once per plugin version in whichever
+project you open first.
 
-| Hook event | File | What it does |
-|---|---|---|
-| `SessionStart` (startup/resume/clear/compact/fork) | `plugin/hooks/session_start.py` | Reads the doorbell for this project's console and prints what the owner sent while no session was watching: questions, process requests, chat replies, scan requests, visual requests, each with its seq and the command to handle it. Names how many lessons (1.33) the owner has recorded, when there are any. On first run after an install or an upgrade, prints a banner naming the running kit version and the commands most useful at that moment. |
-| `UserPromptSubmit` | `plugin/hooks/name_session.py` | Picks up `/overture:as NAME` and records the mapping `session_id → agent name` in `STATE/sessions.jsonl` (atomic rewrite). The next `agent.py` call reads the name from this file. |
-| `PreToolUse` (matcher: `AskUserQuestion`) | `plugin/hooks/ask_guard.py` | On a non-steward session in a project that names a steward, refuses `AskUserQuestion` so the question goes to the owner through the console instead of a transient prompt. |
+| Hook event | File | Where it acts | What it does |
+|---|---|---|---|
+| `SessionStart` (startup/resume/clear/compact/fork) | `plugin/hooks/install_notice.py` | **Every project**, once per installed plugin version | Prints the Overture banner and the next step: on a first install, `/overture:console-onboard` and the JOIN guide; after an upgrade, the `install.sh --start` and `systemctl --user restart` commands that move a running server onto the new kit. Then it writes the flag file `${XDG_STATE_HOME:-~/.local/state}/overture/install-notice-seen-<VERSION>` and stays silent until the next version. It reads no project state; the flag is the only file it writes. |
+| `SessionStart` (same matcher) | `plugin/hooks/session_start.py` | Registered projects only | Reads the doorbell for this project's console and prints what the owner sent while no session was watching: questions, and the owner's requests (process, fork, chat replies, scan, visual, UX save and link, PR merge), each with its seq and the command to handle it. Names how many lessons (1.33) the owner has recorded, when there are any, and says when the shared server is down. The first time this project's state sees a new kit version it adds a short list of useful `agent.py` commands and records the version in `STATE/last_seen_kit_version`. It also appends `export OVERTURE_SESSION=<session id>` to Claude Code's `CLAUDE_ENV_FILE`. |
+| `UserPromptSubmit` | `plugin/hooks/name_session.py` | Registered projects only | Picks up `/overture:as NAME` and records the mapping `session_id → agent name` in `STATE/sessions.jsonl` (atomic rewrite). The next `agent.py` call reads the name from this file. Every other prompt is ignored. |
+| `PreToolUse` (matcher: `AskUserQuestion`) | `plugin/hooks/ask_guard.py` | Registered projects that name a steward | On a non-steward session, and on the steward's own session when this machine's role is `worker`, refuses `AskUserQuestion` so the question goes to the owner through the console instead of a transient prompt. It fails open: any error lets the call through. |
 
-All three are stdlib-only, read-only outside their known files, and never
+All four are stdlib-only, write only the files named above, and never
 run anything from the repository. See the module docstrings for the trust
-model.
-
-## What you can do
-
-### The inbox loop — answer, lock, round
-
-- **Answer and lock.** Each question shows its options, the ★ and whose
-  recommendation it is, and evidence rows. Evidence shows the cited lines
-  as they are now, and says whether they changed since the question was
-  asked. Your own words on an answer travel with it. Locking turns an
-  answer into a ruling. A round's questions open as one form: ←/→ move,
-  1–9 pick, **Lock all & process**.
-
-  <img src="docs/screenshots/feature-answer.png" alt="A question card: options with descriptions, the recommended pick starred, cited file, a box for your own words" width="400">
-
-- **One-tap lock.** **Lock this answer** sends the lock immediately. If
-  the server refuses (e.g. a condition is no longer true), the card shows
-  the reason and the Lock button comes back.
-- **Lock several at once.** When an item has more than one answered,
-  unlocked question, **Lock all N answers…** shows every answer it is
-  about to lock, locks them in order, and stops at the first refusal,
-  naming it.
-
-  <img src="docs/screenshots/anim-lock-all.gif" alt="Lock all 2 answers: the confirmation lists both answers, then both lock" width="400">
-
-- **A round moves on by itself.** Pick a single-choice option and the
-  form moves to the next question still without a pick, saying so. It
-  stays put for multiple choice, for a question you are writing words
-  on, and for ↑/↓ through the options. It never moves onto the Lock page.
-
-  <img src="docs/screenshots/anim-round.gif" alt="Answering a three-question round from the keyboard: press 1 for each, review, Lock all and process" width="400">
-
-- **Answer these together.** Loose questions on one item, asked by one
-  named agent session within five minutes of each other, are grouped in
-  the inbox and open as one form. Unnamed sessions are never grouped,
-  because nothing shows they are one agent's.
-- **Send to agent.** Once you have answered something, a bar under the
-  panel header shows "N answered · M left" and sends the agent the same
-  "process them" signal as before. It goes once sent and comes back with
-  the next answer.
-
-  <img src="docs/screenshots/feature-send.png" alt="The Send to agent bar: 1 answered, 0 left" width="400">
-
-- **Locked questions roll up** to one line (question, pick, state). Click
-  or press Enter to open one. Open and stale questions stay whole. The
-  slides and fades run only when your system does not ask for reduced
-  motion.
-
-  <img src="docs/screenshots/feature-locked.png" alt="An item whose locked question has rolled up to a single line" width="400">
-
-### Keep rulings honest as the code moves
-
-A question says what must stay true for its answer to stand (`valid_if`):
-cited text (an `excerpt`), a whole file (`file_sha256`), or an item's
-status. When that stops holding, the answer reads **stale** and **What
-changed?** names which check failed, with a diff of the cited text against
-the file as it is now.
-
-<img src="docs/screenshots/anim-stale.gif" alt="A stale ruling: What changed? shows the cited line was edited from automated to manual" width="400">
-
-- **Still holds: re-lock…** keeps your answer and re-checks it against the
-  files as they are now.
-- **`agent.py reanchor`** (the steward runs it, `--dry-run` first) turns a
-  stale whole-file hash into an excerpt only with evidence: the question
-  names a line range in that file, the steward's pushed history holds the
-  version it was locked against, and those lines are still in the file
-  exactly once. Anything else stays stale, with the reason listed.
-- **Withdraw…**: the ruling no longer applies, and you give a reason.
-- **Keep, stop checking…**: the ruling stands, but is no longer checked
-  against the files.
-- **Confirm a proposed anchor.** The steward proposes new lines for the
-  ruling to rest on, the server reads them itself, and nothing changes
-  until you press Confirm.
-- **Replace.** A new question is linked to the stale one. The old ruling
-  stands until you lock the new answer.
-
-Only the owner can do any of these, and only on a stale answer. Nothing is
-deleted: each act is recorded in a file beside the store, and the fold
-records the outcome in your project. New questions are refused a whole-file
-hash where an excerpt fits, which is what made most rulings go stale.
-
-### Who decided (1.38)
-
-Several people can sit behind one console's Access policy. Each owner
-decision now keeps the Access login that made it: the console reads the
-email from the token it already verifies on every request, and keeps it
-beside the store (`operators.jsonl`). A locked question's card says
-"Locked by alice@example.com" under your answer (1.38.1), and the
-**Feed** shows it on each answer, lock and message: "by
-alice@example.com". Both are shown to everyone your
-Access policy lets into the console (agents never see it). Agent writes,
-scheduled triggers and service tokens (which carry no email) keep none.
-Emails are compared in lower case.
-
-The email never leaves the console. The ruling files committed to your
-repository carry a short name only when you set one, so nothing personal
-lands in a repository that may be public:
-
-    agent.py --state STATE operator-name alice@example.com alice
-    agent.py --state STATE operator-name                    # list them (emails masked inside a Claude session)
-    agent.py --state STATE operator-name alice@example.com --clear
-
-The next export then adds `"locked_by_name": "alice"` to each lock that
-login took. Without a name, the files are exactly what 1.37 wrote. The
-store itself is unchanged, so an older kit still starts on it.
-
-### Who may decide (1.39–1.40)
-
-With no roles set, everyone your Access policy lets in is the owner.
-To share a console, first make yourself the **administrator** (the
-owner role): open **People** (under More) and press **Make me the
-administrator**. It takes the login you are signed in with, so you type
-no email. Then add each person there with their role, and change or
-remove them later the same way. Only an administrator sees the People
-tab. It refuses to remove the last administrator.
-
-The same from your own terminal:
-
-    agent.py --state STATE access you@example.com owner
-    agent.py --state STATE access bob@example.com member auth billing
-    agent.py --state STATE access carol@example.com viewer
-    agent.py --state STATE access                        # list them
-    agent.py --state STATE access bob@example.com --clear
-
-- **owner**: everything.
-- **member**: answers, locks and plain messages on the named items and
-  everything under them. Requests to agents (forks, merges, visuals),
-  playbooks, tickets, lock-all and the synced drafts stay the owner's.
-- **viewer**: reads only.
-
-Once any role is set, a login that is not listed only reads. Changes
-take effect on the next write, with no restart. The file
-(`STATE/roles.json`) stays on the console's machine. Run `access`
-yourself: it refuses inside a Claude Code session, and refuses to leave
-the console with no owner.
-
-<img src="docs/screenshots/feature-people.png" alt="The People tab: an administrator, a member of API-2 and a director, each with a role, areas and Save, and Role changes below" width="400">
-
-**Routing (1.41).** Each question shows who it is for: the members
-whose areas cover its item. An administrator sees "For bob@example.com"
-on every row and card; a member sees "For you" on their own. A member's
-Inbox opens on **Mine** (their areas and everything under them), with
-**All** one click away. A viewer can be given areas too, for what their
-Inbox opens on. Tick **Director** on a member or viewer (or pass
-`--director`) and their Inbox opens on everything; it changes what they
-see first, never what they may decide. Unsent drafts are now each
-login's own, so two administrators no longer overwrite each other.
-
-<img src="docs/screenshots/feature-routing.png" alt="The Inbox as an administrator: each waiting question says who it is for" width="400">
-
-**Role changes (1.42).** Under People, **Role changes** lists every
-change, newest first: who made it ("You", another administrator's
-login, or `agent.py access` from your terminal), whose role, and from
-what to what. The log (`STATE/roles-log.jsonl`) stays on the console's
-machine beside `roles.json` and keeps every line; the tab shows the
-newest 50.
-
-**Two-key locks (1.43).** Under Settings, **Two-key areas** names the
-items (each with everything under it) where one person may not lock
-alone. A lock there waits, shown on the card as "You locked this:
-waiting for a second person", until a second login that may lock there
-(another administrator, or a member of that area) confirms it by locking
-the same answer. Only then is it a ruling: until then agents, the
-process request and the ruling export see an unlocked answer. The card
-then says "Locked by A, confirmed by B". Re-lock and **Lock all** follow
-the same rule. Two-key areas need roles on.
-
-<img src="docs/screenshots/feature-two-key.png" alt="A question in a two-key area: one person has locked it, and the card waits for a second person to confirm" width="400">
-
-**Settings (1.44).** An administrator or a director opens **Settings**
-to make the project's own choices: how many chat messages a minute and
-an hour, how many agents may work one item at once, each lane's label
-and colour, the two-key areas (moved here from People), and the short
-names committed rulings carry instead of emails. A value set there
-lives beside the project on the console's machine
-(`STATE/settings.json`), overrides the default, applies at once, and is
-listed under **Changes**. **Reset** goes back to the default. People
-stays the administrator's alone.
-
-<img src="docs/screenshots/feature-settings.png" alt="The Settings tab: chat and agent limits with their defaults, lane labels and colours, notifications, two-key areas and short names" width="400">
-
-**Notifications (1.45).** The console can tell your team's channel when
-questions are waiting. It posts at most one message every N minutes
-(default 30), never during quiet hours, and each question is mentioned
-only once. A message says how many questions wait, on which items, with
-a link to the console. It never includes a question's text or anyone's
-email. It posts to any incoming webhook that takes Slack's format:
-Slack, Mattermost, or Discord's `/slack` URL. The URL works like a
-password, so you set it in your own terminal and the console shows only
-its host:
-
-    agent.py --state STATE notify-url https://hooks.slack.com/services/...
-    agent.py --state STATE notify-url --test     # post a test message
-    agent.py --state STATE notify-url --clear
-
-Then an administrator or a director turns notifications on under
-**Settings → Notifications** and sets how often and the quiet hours.
-The first message lists every question already waiting. If HTTPS_PROXY
-is set, the webhook is reached through it.
-
-<img src="docs/screenshots/feature-notify.png" alt="Settings, Notifications: posting to hooks.slack.com, Send notifications ticked, at most one message every 30 minutes, quiet hours 22:00 to 07:00" width="400">
-
-### Lessons: what you settled stays settled (1.33–1.34)
-
-When you **Withdraw…** a ruling or **Keep, stop checking…** it, the reason
-you give becomes a **lesson**. Lessons are how the project remembers *why*
-something was dropped, so the next agent doesn't bring it back.
-
-- **Every new session is told.** The SessionStart hook adds one line when
-  lessons exist: how many, and the command to read them. It is silent when
-  there are none.
-- **Related past rulings on the question card.** When an agent asks
-  something that looks like a ruling you already withdrew or stopped
-  checking *on the same item*, the card shows **📎 N related past rulings —
-  read before answering**. Open it to see the date, the ruling's id,
-  whether you withdrew it or stopped checking, and the start of your
-  reason. Questions you have already settled never show it.
-- **Agents can check before they ask.** `agent.py lesson-match "TEXT"
-  --item ITEM` prints the matching lessons and exits 0 (matches), 1
-  (none) or 2 (the lessons file cannot be read), so a session can
-  rephrase, or cite your reason, before it posts.
-- **Read or commit them.** `agent.py lessons` prints every lesson as
-  Markdown, newest first; `--fold PATH` writes the file atomically into
-  your project so it travels with the code.
-
-Matching is local and simple (shared three-letter fragments, accents and
-case ignored), so it catches close rewordings, not every paraphrase. A
-lesson's text never leaves your machine: the page receives at most a
-400-character preview, and peers never see it.
-
-### Design UI components in UX View (1.32)
-
-On a UI/UX item (one marked `"ux": true` in `.overture.json`'s lane
-settings), **◫ UX View** (or the `u` key) opens a full-screen workspace
-over the item's HTML mock-ups. See each version in a sandbox at Mobile,
-Tablet, Desktop or Fit width, step through versions with ◂ ▸ (or `[` and
-`]`), and press **Generate** for another. **Save as component** asks the
-steward to land the version as `components/<item>.md` by pull request; a
-replaced component is kept in `components/.history/`.
-
-<img src="docs/screenshots/feature-ux-view.png" alt="UX View: a plan-picker component in a sandbox at desktop width, a version stepper, size buttons, Generate and Save as component" width="720">
-
-Settings, in the same window, hold the rest:
-
-- **Claude Design link.** Link the item to its Claude Design project
-  (`https://claude.ai/design/p/<id>`). The console never opens or fetches
-  it; the agent reads the design with your login. A link you are typing in
-  no longer disappears when the console refreshes (1.32 fix).
-- **Design-system artifacts.** An agent lists the design's artifacts
-  (`agent.py design-inventory`). You filter, tick up to 10, and mark each
-  **inspire** (borrow the look) or **swap** (build the new version from
-  that artifact); **Generate** carries your picks. A swap is always a new
-  version, never an overwrite. Without a list, **Ask an agent to list it**
-  posts the request on the item.
-- **Scripts (this version).** Off by default. An agent may store a
-  scripted source beside the script-free version (`agent.py
-  component-source`, write-once); only your switch lets it run, in a
-  sealed frame with `allow-scripts` only (no same-origin, no forms, no
-  popups, no top navigation) under `default-src 'none'; connect-src
-  'none'`. The modal shows "⚡ Scripts on", and a save with it on lands
-  the scripted source with `scripts: true`.
-
-<img src="docs/screenshots/feature-ux-picker.png" alt="UX View with Settings open: the Claude Design link, a list of design artifacts with two ticked, one marked swap, and the Scripts switch" width="720">
-
-### Deliberate before answering
-
-- **Pick advisor seats.** On an open question, pick one to three seats
-  (DevOps, UX, adversarial, security, architect, analyst, or one you
-  name). They reply with a ★ and their reasons, and never answer or lock
-  for you. The cost is shown first, at about 100k tokens a seat.
-
-  <img src="docs/screenshots/feature-deliberate.png" alt="The deliberation form: focus, explore or tighten, an optional note, Start the deliberation" width="400">
-
-- **Next step ▾** beside every locked answer:
-  - **Follow up**: chosen seats look at that answer again.
-  - **Roar**: a three-round panel, at most once per lock.
-  - **Refine** or **Drill**: runs the skill your project names, by default
-    the plugin's own `overture:refine` and `overture:drill`.
-
-  Each step comes back as questions for you to lock. Nothing is written
-  into the project before you lock.
-
-  <img src="docs/screenshots/feature-next-step.png" alt="A locked answer with Next step open: Follow up, Refine, Drill" width="400">
-
-- **Branch out / Grill with agent.** The 💬 Chat ▾ menu on an item has
-  **Grill** (adversarial agent questions on your pitch) and **Branch out**
-  (open-ended drill-in). Grill questions carry a ⚡ **GRILL-ORIGIN** chip
-  so you can tell them apart from questions an agent raised on its own.
-
-### Track work as tickets
-
-Tickets are small units of work that belong to an item: a **task**, a
-**bug**, a **research** question, or a **grilling** note. You create them
-on an item's panel; Launch Idea and Branch Out create them for you.
-
-- **Blocking.** A ticket can be blocked by other tickets. Circular
-  blocking is refused by name. When a blocker closes, everything it
-  blocked unblocks.
-- **The Tickets tab** (`g k`) is a board across every item, with Open,
-  Blocked and Closed columns and a filter by kind. Each card names its
-  item, opens it with a click, and says what blocks it by title.
-- **What blocks what** draws the chains as a diagram, grouped by item.
-  There for the whole project on the Tickets tab, and for one item on
-  that item's panel.
-
-<img src="docs/screenshots/anim-tickets.gif" alt="Closing a blocking ticket: Ledger schema closes and Migration for the ledger moves from Blocked to Open" width="400">
-
-<img src="docs/screenshots/feature-ticket-graph.png" alt="What blocks what: tickets grouped by item, arrows from blocker to blocked, blocked tickets outlined in red" width="400">
-
-Only you create and close tickets. Agents cannot write them yet; that
-waits on the capability gate.
-
-### See what agents changed, as screenshots
-
-When an agent changes something you can see, it posts a **before** and an
-**after** screenshot on the item:
-
-    agent.py asset UI-1 --file after.png --caption "Tabs with icons" --kind after --pr 214
-
-They show up in the **Feed**, where a before and after appear side by side
-and the **Screenshots** filter shows only them, and in a **Screenshots**
-fold on the item. Click one to open a full-size viewer, and step through
-the others with ◂ ▸ or the arrow keys.
-
-<img src="docs/screenshots/feature-assets.png" alt="The Feed's Screenshots filter: a UX component at 375px, and the tab bar before and after icons, side by side" width="400">
-
-**Attach your own too (1.32).** In an item's Discussion box, **Attach
-image** (or paste an image) puts your picture on that item, shown as "you",
-beside the agents' screenshots. Rate-limited separately from an agent's
-budget.
-
-<img src="docs/screenshots/feature-attach.png" alt="An item's Screenshots fold with an agent's plan picker and the owner's own sketch, and the Discussion box with Send and Attach image" width="400">
-
-- **Formats:** PNG, JPEG, WebP or GIF. The format is decided from the
-  file's own bytes, never its name, and SVG is refused because it can
-  carry script.
-- **Size limits:** 2 MiB for a still image, 8 MiB for a GIF, 8000 px on
-  a side.
-- **Storage:** files are kept in the server's state directory, never in
-  your project.
-- **When space runs short** (100 per item, 3000 or 300 MiB per project),
-  the oldest screenshots that aren't starred or linked to a PR are
-  removed. The Feed says so.
-- **Your controls:** star a screenshot to keep it, or delete it (press
-  twice).
-- **Reduced motion:** with reduced motion turned on, a GIF waits for you
-  to press play.
-
-### Visuals and diagrams
-
-- **Request a visual** on an item. The agent answers with a Mermaid
-  diagram (rendered inside a sandboxed frame — the vendored lib runs in
-  an opaque origin and cannot touch the console's cookies, storage or
-  network; **View source** still shows the raw `.mmd`), or with an HTML
-  mock shown the same way, scripts off entirely.
-
-  <img src="docs/screenshots/feature-visual.png" alt="An agent's Mermaid diagram of a retry flow, rendered in the console with zoom and Save SVG" width="400">
-
-- **A short chime when a visual arrives**, the drawn item surfaces at the
-  top of the Inbox under **New visuals**, and the Feed row says "Visual
-  drawn". The badge on the inbox button and the Feed tab counts it too,
-  until you look.
-- **Save SVG** on every chart and Mermaid visual. The rendered SVG is sent
-  back to the parent and downloaded as a plain file; nothing goes back to
-  the server.
-- **Status flowchart on every item.** Each item view carries a collapsible
-  **Status flowchart** that the server builds from your questions and
-  rounds: the item at the left, open/stale/locked questions coloured,
-  rounds as their own shape, dotted edges where a newer question
-  supersedes an older one or a round follows up on an earlier one. Lazy
-  (nothing loads until you expand it); renders inside the same sandboxed
-  Mermaid frame. **Click a node** to jump straight to that question.
-
-  <img src="docs/screenshots/anim-flowchart.gif" alt="Expanding an item's status flowchart, zooming in, and fitting it back to the frame" width="400">
-
-### Project map, lanes, and the dashboard
-
-- **Project map** at the top of the Inbox: a tree of every item, parent
-  to child, drawn left to right.
-  - Each node is coloured by its own questions' roll-up (open > stale >
-    answered-but-unlocked > locked), with a short tally.
-  - Items are grouped in one box per **lane**, its border in the lane's
-    colour.
-  - Click an item to open it.
-  - A chip row narrows the map to one state; ancestors stay drawn muted,
-    so the tree is still a tree.
-  - It loads lazily, like the per-item chart.
-- **Lane colours.** A lane is the `lane-…` part of an item's section
-  (`wave-2/phase-2.2/lane-api`). An item without one inherits its
-  parent's.
-  - **Where it shows:** a chip coloured by the lane, on inbox and
-    Priority rows (with a matching left edge) and as a "Wave 2 › Phase
-    2.2 › API" trail at the top of the item.
-  - **Automatic.** Drawn from 8 colours that read at 3:1 or better in
-    light and dark; two lanes share one only past 8.
-  - **To pin a colour or a label,** add it to `.overture.json`:
-    `"lanes": {"lane-api": {"color": "blue", "label": "API"}}`. Palette
-    names only: blue, teal, green, amber, orange, red, purple or pink.
-    `"ux": true` marks a lane's items as UX components for UX View and
-    the console-ux skill.
-  - **On your dashboard,** each item's `<details>` and each
-    `data-ck-item` block gets `data-ck-lane` and `data-ck-lane-color`,
-    and console.css publishes `--ck-lane-<colour>`, so your page can
-    colour its own lane blocks to match.
-- **Your dashboard, published by you.** The console can sit inside your
-  project's own dashboard page. An agent stages a page from a merged
-  commit (`agent.py page-snapshot`). The console shows it as a proposal
-  with its ref, commit, size and a sandboxed preview. It is served only
-  after you press **Use this page**. No agent can publish; the "reviewed"
-  label is shown as the agent's claim, because the server cannot check it.
-  The published page's own `<script>` tags run again under the per-request
-  CSP nonce (1.32), **pinned by exact SHA-256**.
-
-### See what's happening
-
-- **The page updates itself**, no reload. A box you're typing in is never
-  redrawn under you.
-- The **Inbox** shows what waits for you, with an unread count. The
-  **Feed** shows every question, answer, lock and reply, newest first,
-  filterable by kind (chat, visuals, questions, screenshots, merges) and
-  item.
-
-  <img src="docs/screenshots/feature-feed.png" alt="The Feed tab: chat, visuals and questions, newest first, filterable by kind and item" width="400">
-
-- The status bar says whether an agent session is listening right now.
-  Optionally, a footer shows your Claude usage for the 5-hour and 7-day
-  windows.
-- **Status chip.** A pill in the panel's top-right reflects
-  `/api/status`: version, agent socket, waiters/caps, chat quota, cron
-  tick age, peer freshness. Click opens a drawer; **Operator shift →**
-  opens the weekly report.
-- **Operator Shift view.** Today / This week / This month: rulings
-  locked, items advanced, median time-to-answer, merged PRs tied to a
-  ruling, closed issues tied to a ruling, Living rulings still waiting.
-  Composed as Markdown with Copy. The screenshot-for-cofounder surface.
-- **Several agents, one console.** Sessions can be named (`/overture:as
-  agent-6`). One of them, the **steward** named in your own registry, is
-  the only one that processes your requests and folds your answers. The
-  others post their questions to your inbox instead of asking you
-  directly. Active-agents fold on each item panel reads
-  `cursor.working_by` and lists who is currently holding a mark on this
-  item.
-- The **PRs** tab shows each pull request as its own card. The left edge
-  shows its state: blue open, amber checks running, red checks failing,
-  grey draft, purple merged. Lists the project's open pull requests, then
-  those merged or closed in the last 30 days (`--days` changes it), with
-  checks, draft and merged badges, a link to each on GitHub, and an
-  **Open** button for any item or question a title or branch names. The
-  steward pushes the list (`agent.py prs-push`), and the tab says when it
-  last did.
-
-  <img src="docs/screenshots/feature-prs.png" alt="The PRs tab: two open pull requests and three merged, each with checks and an Open button for its item" width="400">
-
-- **Merge from the PR tab.** An open, ready, passing pull request has a
-  **Merge** button. It asks first ("Merge #214 into main?", with a link
-  to the diff), then sends your request on the reserved `@prs` thread.
-  The steward's own session merges with its own `gh`, pinned to the
-  commit you saw (`agent.py pr-merge --project WORKTREE --request ID`).
-  The console never merges anything and holds no GitHub token. If the
-  pull request changed since you looked, or the request is over 24 hours
-  old, nothing is merged and the steward says why.
-
-  <img src="docs/screenshots/feature-pr-merge.png" alt="The PRs tab with Merge #214 into main? open: the diff link, Merge and Cancel" width="400">
-
-- **Rulings → PRs and Rulings → Issues.** When a tracked PR or issue
-  title (and issue body) mentions a ruling's qid like `A/Q7`, each
-  matching PR/issue appears as a chip under the locked ruling. Merged PRs
-  render filled green ("Shipped: #142"); closed issues as filled grey.
-  Chips carry the author (`#142 by @alice`) so you can tell a drive-by
-  mention from a trusted one.
-- **The Favorite tab** lists everything you starred, grouped by item.
-
-  <img src="docs/screenshots/feature-favorite.png" alt="The Favorite tab listing two starred items" width="400">
-
-- **Chat**, for a message not tied to a question. Wakes the watching
-  session. On an item, **💬 Chat ▾** jumps to that item's discussion. Its
-  menu offers **Branch out**, **Grill**, **Advise** (deliberate) and
-  **Delegate**, each already scoped to the item.
-
-  <img src="docs/screenshots/feature-chat.png" alt="The Chat tab: the owner asks if main is green, the steward answers" width="400">
-
-  <img src="docs/screenshots/feature-chat-menu.png" alt="The Chat ▾ menu on an item: Branch out, Grill, Advise, Delegate" width="400">
-
-- **Cross-project priority ribbon.** The Inbox opens with up to six of
-  the oldest awaiting questions across every console (self + each
-  portfolio peer), each with a traffic-light dot (yellow < 1h, orange <
-  24h, red > 24h). Click a row to jump — local items open their panel;
-  peer rows open the peer in a new tab.
-
-  <img src="docs/screenshots/feature-priority.png" alt="The priority ribbon: six questions waiting, oldest first, each with a traffic-light dot and a snooze button" width="400">
-
-- **Command palette.** Press **Ctrl+K** / **Cmd+K** on any page to open
-  a search box over items, questions, playbooks, peers, tabs and actions.
-  Type a few characters, press Enter: jumps to an item, runs a playbook,
-  opens a peer in a new tab, hops a tab.
-
-  <img src="docs/screenshots/anim-palette.gif" alt="Pressing Ctrl+K, typing retry, and jumping straight to the matching item" width="720">
-
-- **Keyboard shortcuts.** Press `?`, or the **⌨ Shortcuts** button in
-  the footer, for the full list. `g i / f / k / p / s / o / c` hop to the
-  Inbox / Feed / Tickets / PRs / Favorite / Portfolio / Chat tab; `g b`
-  closes the panel; `.` focuses the Delegate bar; `j / k` walk the rows;
-  Enter / Space opens the focused row. Shortcuts never fire in a text
-  input.
-
-  <img src="docs/screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
-
-- **The Portfolio tab** lists every other console you have configured
-  with its state tallies (`2 you`, `1 unlocked`, `1 stale`, `9 locked`,
-  each with its state icon), last-activity, and a click that opens it in
-  a new tab. A bell button opts in to desktop notifications so a sibling's
-  new `?you` or `!stale` reaches you even when the tab is in the
-  background; a Snooze button sets a 1-hour DND lid. Peers are declared
-  in `.overture/portfolio.json`; the Cloudflare Access service-token
-  secrets live in `STATE/portfolio-secrets/<peer>.json` (`agent.py
-  portfolio-token` prints the layout). The home server does the
-  cross-origin calls, so the browser never sees a peer's secret.
-- A **Back** control sits at the top of every item view, so **discuss**
-  from the dashboard always has a one-tap way home.
-- **Direction stays visible.** Each item in the Inbox carries a
-  collapsible "N answered on this item" under its open questions, showing
-  the last few locked rulings. Items whose questions are all locked
-  within the last day stay on the list under **Recently answered**, so
-  you can see what was asked and answered without leaving the Inbox.
-
-## How it fits together
-
-```
- browser ──Access login──▶ Cloudflare ──tunnel──▶ 127.0.0.1:PORT  server.py
-                                                     │ checks the Access JWT (team keys + AUD)
-                                                     ▼
-                                              state dir: store + doorbell
-                                                     ▲
- Claude session ── SessionStart hook reads the doorbell (registered projects only)
-                └─ skills: console-process / console-fork / console-fold / console-ask / console-visual / console-ux ── agent.py
-```
-
-- **`server.py`** serves the console inside your published dashboard
-  page. Every request without a valid Access token is refused, loopback
-  included. **It runs no project code and no git.** Your work items
-  arrive by `agent.py items-push`, git history by `agent.py
-  history-push`, pull requests by `agent.py prs-push` (`gh` runs in the
-  steward, never in the server), and the page by `agent.py
-  page-snapshot`. The steward runs all four in its own process, and
-  each sends data the server checks against a closed schema.
-- **`agent.py`** is the agent's side. Its commands:
-
-  | Purpose | Commands |
-  |---|---|
-  | Reading | `inbox`, `todo`, `view`, `answers` (capped at 64 KiB, with a narrower command named when a read is too big), `health` |
-  | Asking and answering | `ask`, `reply`, `working`, `synced`, `watch` |
-  | Deliberation | `fork-context`, `transcript`, `visual`, `visual-export`, `next-step`, `costs` |
-  | Stale answers | `check`, `reanchor`, `propose-anchor` |
-  | Pushing data | `items-push`, `items-watch`, `history-push`, `prs-push`, `page-snapshot`, `asset`, `component-source`, `design-inventory` |
-  | Owner only | `register`, `steward`, `role`, `server add`, `server token rotate`, `pr-merge` |
-
-  `--as NAME` names the session.
-- **`fold.py`** writes locked answers, and what became of them, into
-  your project through its adapter, in the steward's process.
-- **`plugin/`** holds the Claude Code plugin: the hooks, the skills, and
-  the committee agents. Skills include `roar`, `refine`, `drill`,
-  `deliberate`, `grill-me`, `console-ux` and the console-* workflow
-  skills.
-- **`onboard.py`** and **`deploy/`** onboard a project and install the
-  services. `onboard.py verify` does an end-to-end reachability check.
-
-### What a project token protects
-
-One console server can host several projects. Each project's agents
-reach it with that project's own token. The token is kept in
-`~/.config/overture/tokens/NAME` (mode 0600, outside every repository);
-`server.json` holds only its hash. `agent.py` picks the project from the
-directory it runs in. `agent.py server token rotate NAME` (which you run)
-refuses the old token from the next request.
-
-- **What it stops:** cross-talk and mistakes. A wrong `--state`, a skill
-  bug, or an agent carrying another project's habits cannot read or
-  write another project's console through the kit.
-- **What it does not stop:** an agent running as the same OS user that
-  sets out to cross over. It can read `tokens/` and the state directories
-  directly. Real isolation needs a sandbox or a separate user.
-- **An old per-project server is a way around it.** While one still
-  listens on `STATE/agent.sock`, that socket answers without a token.
-  Stop it before relying on the token.
-
-## Windows + WSL2 (optional)
-
-The server, the tunnel and the systemd units are POSIX; a convenient
-layout on a Windows host is to run them in WSL2 while a Claude Code
-session lives on either side. A few traps worth knowing:
-
-- **CRLF.** `git config core.autocrlf=true` on Windows gives every file
-  in the plugin cache CRLF endings. `install.sh` then fails at once
-  (`set: pipefail: invalid option name`), and systemd unit files with a
-  `\r` silently misbehave. Install the kit from a copy stripped of CR
-  (`sed -i 's/\r$//'` on each `*.sh`, `*.in`, `*.py`, `*.js`, `*.css`,
-  `*.html`) or clone with `core.autocrlf=false`.
-- **Default branch.** `page-snapshot --from-ref origin/main` is the
-  default and fails on a repository whose default is anything else. Pass
-  `--from-ref HEAD --unreviewed` while bootstrapping, or point
-  `--from-ref` at your actual branch.
-- **Page path.** `onboard.py` defaults the page to
-  `.overture/page.html`, which `page-snapshot` refuses (leading dot).
-  Move the page under `docs/console/page.html` or similar.
-- **Items.** The server never runs your adapter. After onboarding, run
-  `agent.py --state STATE items-push --adapter PATH` once (and whenever
-  the item list changes); until then `ask` on any item but `PROJECT` is
-  refused.
-- **Reaching the server from Windows.** The agent socket lives in WSL
-  and Windows cannot open a WSL2 Unix socket. Options: run the
-  agent-side session inside WSL (`wsl -e bash` wrapper), or use the
-  one-server HTTP door with a project token on loopback.
-- **Linger.** Systemd user units stop when WSL shuts down. Run
-  `loginctl enable-linger $USER` in WSL; a Windows process that keeps
-  WSL alive still helps when nothing else holds it.
-- **Platform guard (1.26+).** `server.py` refuses to start on non-POSIX
-  rather than corrupting state under a half-working runtime.
+model. How the server, `agent.py`, the fold and the skills fit together is in
+[Hosting](docs/features/hosting.md#how-it-fits-together).
 
 ## Trust
 
 The security model has been through parallel review passes (code,
-security, python, typescript, adversarial) across the 1.22 → 1.33 arc,
-most recently the three-reviewer pass that became 1.33.1. Every HIGH
-finding is closed; the current state:
+security, python, typescript, adversarial) across the 1.22 → 1.47 arc.
+Every HIGH finding is closed; the current state:
 
-- **The plugin's hook runs in every project you open**, but acts only
+- **The plugin's hooks run in every project you open.** Three act only
   in projects listed in `~/.config/overture/projects.json`, which only
-  `agent.py register` and `agent.py steward` write. A cloned repository's
+  `agent.py register` and `agent.py steward` write. The fourth,
+  `install_notice.py`, prints a banner once per plugin version in any
+  project and writes one flag file under `~/.local/state/overture/`; it
+  reads nothing from the project. A cloned repository's
   `.overture.json` is never trusted by itself, and cannot name a steward.
 - **Anything an agent can write** — the adapter, `.git/config`, the
   dashboard file in the working tree — is never run or read by the
@@ -1100,6 +427,13 @@ finding is closed; the current state:
 - **Nothing onboarding writes is a secret.** The AUD tag and team
   domain are what tokens are *checked against*; no token can be made
   from them.
+- **Sign-in links** (1.46, 1.47): a link works once, within 24 hours, and
+  only you can make one; only hashes of invites and cookies are kept. The
+  console listens on 127.0.0.1 and, with `--listen`, on one ZeroTier or
+  Tailscale address, never `0.0.0.0`; a request on that address must name
+  it in its Host. See
+  [Sign-in and networks](docs/features/sign-in-and-networks.md) for the
+  cookie's limits.
 - **Owner-door CSP** (1.31, tightened 1.33.1): `frame-ancestors 'none';
   object-src 'none'; base-uri 'none'; frame-src 'self'; img-src 'self'
   data:; connect-src 'self'; script-src 'nonce-<per-request>'`. The
@@ -1122,7 +456,9 @@ finding is closed; the current state:
   writes race on a per-file lock, not on a shared `.tmp`.
 - **Ticket id entropy:** `secrets.token_urlsafe(8)` (≈64 bits).
 - **Agent-door `/playbook`** writes `by="agent"` (1.30.1): an
-  agent-authored playbook cannot forge owner-only intents.
+  agent-authored playbook cannot forge owner-only intents. Since every
+  step is an owner intent, 1.47 refuses a session's playbook outright,
+  before any step runs, and says to use the console's Playbooks tab.
 - **Lessons** (1.33): written only by the owner's own Withdraw / Keep
   acts, stored under STATE with the same atomic writes, capped by count
   and size so they can never block a later lesson. The page gets a count
@@ -1137,7 +473,7 @@ finding is closed; the current state:
     python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
     .venv/bin/python test_mcp.py && .venv/bin/python test_rulecheck.py
-    .venv/bin/python test_build.py
+    .venv/bin/python test_build.py && .venv/bin/python test_vendor.py
     .venv/bin/pip install playwright && .venv/bin/playwright install chromium
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py
 
@@ -1150,19 +486,21 @@ missing, so they cannot quietly not run. On a machine without it, set
 `OVERTURE_NO_STRACE=1` to skip them, and each is then reported, by
 name, as not run.
 
-To refresh the README screenshots after a UI change (needs Playwright
-and Chromium):
+To refresh the screenshots after a UI change (needs Playwright, Chromium
+and Pillow):
 
     python3 docs/demo/screenshots.py
 
 The script starts the real console server in-process, with a throwaway
-key standing in for Cloudflare Access. It publishes
-`docs/demo/showcase.html`, an example dashboard with waves, phases and
-lanes, as the project page. It seeds questions, rulings, a stale
-ruling, a round, a visual, chat and PRs through the same doors agents
-and the owner use. Then it captures every capability in this README:
-stills in `docs/screenshots/feature-*.png`, hero shots in dark and
-light, and short GIFs (`anim-*.gif`) of the interactive ones.
+key standing in for Cloudflare Access, and a second console with sign-in
+links for the sign-in shots. It publishes `docs/demo/showcase.html`, an
+example dashboard with waves, phases and lanes, as the project page. It
+seeds questions, rulings, a stale ruling, a round, a visual, chat, PRs,
+roles, playbooks and triggers through the same doors agents and the owner
+use. Then it captures every capability in this README and the feature
+pages: stills in `docs/screenshots/feature-*.png`, hero shots in dark and
+light, and short GIFs (`anim-*.gif`) of the interactive ones. Only demo
+data appears: the Northwind project and `@example.com` logins.
 
 To build the release zip:
 
@@ -1171,73 +509,21 @@ To build the release zip:
 It runs `claude plugin validate --strict` on the result. The deny file
 lists strings from your own deployment (hostnames, AUD tags, team
 domain, home path), and the build refuses if any of them appears in the
-zip.
+zip. The zip carries the plugin and INSTALL.md; this README and
+`docs/features/` are read here on GitHub.
 
-## Changelog & release notes
+## Changelog
 
 Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
-Highlights of the 1.x arc:
+The latest three:
 
+- **1.47 — ZeroTier and Tailscale**: `--listen` puts a link-mode console on
+  its ZeroTier or Tailscale address too, and onboarding asks how you reach it.
 - **1.46 — Sign-in links**: run a console with no Cloudflare: `agent.py
   invite EMAIL` makes a one-time link, People lists and revokes browsers.
 - **1.45 — Notifications**: a digest of waiting questions to your team's
   Slack-style channel, with quiet hours; never a question's text.
-- **1.44 — Settings**: administrators and directors set the limits, lane
-  labels and colours, two-key areas and short names in the console.
-- **1.43 — Two-key locks**: in the areas an administrator names, a lock
-  counts once a second person confirms it.
-- **1.42 — Role changes**: People lists who changed whose role, and
-  when, from the console or the terminal.
-- **1.41 — Routing**: each question says who it is for; members' Inbox
-  opens on Mine; a director flag shows all; drafts per login.
-- **1.40 — People**: a tab where the administrator manages roles, and
-  onboarding's step to claim the administrator account.
-- **1.39 — Who may decide**: owner, member (by area) and viewer roles
-  per Access login, enforced by the console; none set, nothing changes.
-- **1.38 — Who decided**: each owner decision keeps the Access login
-  that made it, shown in the Feed; exports carry only a name you set.
-- **1.37 — Strict**: `--strict` fails a ruling nobody could check, and
-  the Action keeps its token away from your adapter's code.
-- **1.36 — Rulings that block a merge**: `rulecheck.py` and a GitHub
-  Action fail a pull request that breaks a locked ruling, no server
-  needed.
-- **1.35 — Any agent can ask**: an MCP server, so Cursor, Codex,
-  Copilot and other MCP clients use the console like Claude Code.
-- **1.34 — Lesson match**: related past rulings on the question card,
-  `agent.py lesson-match`. **1.34.1** brings this README up to date and
-  caches lessons between page polls. **1.34.2**: upkeep (dependency
-  pins, a test that failed inside Claude Code). **1.34.3**: lessons
-  hardening from the 1.34 review. **1.34.4**: an opened 📎 chip stays
-  open when the page refreshes. **1.34.5**: so do the console's other
-  folds; `lesson-match` output hardened like the folded file.
-  **1.34.6**: tickets spawned from Launch Idea open their fold.
-  **1.34.7**: Launch Idea and Branch Out survive a repaint and a
-  close mid-request.
-- **1.33 — Lessons**: withdraw / keep reasons kept as lessons, the
-  SessionStart line, `agent.py lessons [--fold]`. **1.33.1**: review
-  fixes (lesson size caps, sanitizer, CSP, CSRF).
-- **1.32 — View**: UX View modal, design-system picker, Scripts switch,
-  Merge from PR tab, Machine role, lane colours, screenshots in Feed,
-  owner-attached images, `server.py daemon|service|status|health`,
-  Lucide icons.
-- **1.31 — Hardening**: parser-based HTML sanitizer, per-request CSP
-  nonce, `/api/csrf-rotate`, backlink author labels, grill provenance.
-- **1.30 — Shift**: Operator Shift modal, agent-mediated grill (`intent:
-  grill`).
-- **1.29 — Prototype**: visual variant chips, HTML sanitization.
-- **1.28 — Active**: real spawn semaphore, active-agents fold.
-- **1.27 — Shipped as**: `issues-push`, Rulings → Issues backlinks,
-  CSRF double-submit, COEP require-corp.
-- **1.26 — Deliberate**: Launch Idea pane, Branch Out wizard, tickets
-  module, `grill-me` skill, COOP, platform guard.
-- **1.25 — Legible**: Living Rulings badge, Playbooks + Triggers tabs,
-  Rulings → PRs backlinks, portfolio upgrade seam.
-- **1.24 — Welcoming**: first-run hero, focus trap+return on secondary
-  modals, dock drag + resize, textarea labels, inbox rows as buttons.
-- **1.23 — Visible truth**: toast surface, danger buttons, `/api/status`,
-  `/ready`, contrast fixes.
-- **1.22 — Mobile polish**: `@media (max-width: 640px)` block.
 
 ## License
 

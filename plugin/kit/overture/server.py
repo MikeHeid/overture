@@ -54,6 +54,14 @@ Access token, and never reads a Cf-Access header; the only two requests it
 answers before the gate are `GET /signin` (which asks, and spends nothing)
 and `POST /signin` (which spends an invite, from the console's own origin).
 The default, `--auth cloudflare`, is byte for byte 1.45's door.
+
+1.47.0 (`--listen ADDR`, link mode only, netif.py): the owner's door binds
+that ZeroTier or Tailscale address AS WELL AS 127.0.0.1, two sockets on one
+port, never 0.0.0.0. Each socket has its own origin (`door_origins`, taken
+from the socket a request arrived on, never from its Host), and the LISTEN
+one answers only a Host naming it. A browser signs in once per address it
+uses (a cookie is per host). The agent socket and the health door stay where
+they are. Without --listen, 1.46.
 """
 
 from __future__ import annotations
@@ -90,6 +98,7 @@ from . import anchors as A
 from . import atfile as AF   # cursor + working now use atfile.write_at
 from . import chart as CH
 from . import devices as DV   # 1.46.0: sign-in links, the console's own way in without Cloudflare
+from . import netif as NI     # 1.47.0: --listen, on a ZeroTier or Tailscale interface only
 from . import doorbell as D
 from . import favorites as FV
 from . import gitseam as G
@@ -122,7 +131,8 @@ from . import view as V
 from . import visuals as VIS
 from .store import Store, StoreError, utc_now
 
-HOST = "127.0.0.1"          # never configurable: the tunnel is the only way in
+HOST = "127.0.0.1"          # never configurable: the tunnel is the only way in (1.47: link mode's --listen
+                            # adds a second owner-door socket beside it, never in its place; health stays here)
 DRAIN_SECONDS = 2.0         # at most this long, in all, reading a body an early refusal left unread
 BODY_SECONDS = 30.0         # at most this long, in all, receiving one request body (the per-read timeout restarts)
 MAX_BODY = 64 * 1024        # far above any real answer (MAX_TEXT is 20 000 characters)
@@ -282,8 +292,15 @@ def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str,
         f"<title>{esc(title)}</title>"
         f"<style nonce=\"{esc(nonce)}\">{WRAPPER_CSS}"
         "#ck-cyto{position:absolute;inset:0;}"
-        ".ck-cyto-note{position:absolute;left:12px;bottom:12px;z-index:2;font:12px system-ui,sans-serif;"
-        "color:var(--wrap-fg-muted);background:var(--wrap-surface);padding:4px 10px;border:1px solid var(--wrap-border);border-radius:6px;opacity:.85}"
+        # 1.47 (U9): the stage fills what the filter bar leaves. `calc(100vh - 60px)` assumed a one-line bar;
+        # in a narrow column the bar wraps to two, and the stage's bottom (the lower nodes) fell off the frame.
+        "html{padding:0;height:100%}body{box-sizing:border-box;height:100%;display:flex;flex-direction:column}"
+        "#ck-stage{flex:1 1 auto;height:auto;min-height:120px}"
+        # The hint sits below the stage, in the body's column, not over it: drawn inside the stage it covered
+        # the lowest node (a cited file). The stage's flex:1 gives up its line, and the height asked of the
+        # console (body less stage, plus the graph) counts it.
+        ".ck-cyto-note{flex:0 0 auto;align-self:flex-start;margin-top:6px;font:12px system-ui,sans-serif;"
+        "color:var(--wrap-fg-muted);background:var(--wrap-surface);padding:4px 10px;border:1px solid var(--wrap-border);border-radius:6px}"
         "#ck-filters{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 2px;font:12px system-ui,sans-serif;color:var(--wrap-fg-muted)}"
         ".ck-chip{font:12px system-ui,sans-serif;padding:3px 10px;border:1px solid var(--wrap-border);"
         "border-radius:999px;background:var(--wrap-surface);color:var(--wrap-fg);cursor:pointer}"
@@ -295,8 +312,8 @@ def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str,
         "<div class=\"ck-wrapper-bar\" id=\"ck-filters\"></div>"
         "<div class=\"ck-stage\" id=\"ck-stage\">"
         "<div id=\"ck-cyto\"></div>"
-        "<div class=\"ck-cyto-note\">Drag · wheel to zoom · click a node to highlight downstream</div>"
         "</div>"
+        "<div class=\"ck-cyto-note\">Drag · wheel to zoom · click a node to highlight downstream</div>"
         f"{lib_block}"
         f"<script nonce=\"{esc(nonce)}\" id=\"ck-data\" type=\"application/json\">{data_json}</script>"
         f"<script nonce=\"{esc(nonce)}\">"
@@ -362,7 +379,10 @@ def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str,
         "bar.appendChild(document.createTextNode('Kind:'));"
         "[['item','item'],['question','question'],['fork','round'],['section','section'],['file','file']].forEach(function(p){bar.appendChild(chip(p[1],'kind',p[0]));});"
         "bar.appendChild(document.createTextNode('  State:'));"
-        "[['awaiting_you','?you'],['unlocked','~unlocked'],['locked','olocked'],['stale','!stale']].forEach(function(p){bar.appendChild(chip(p[1],'state',p[0]));});"
+        # 1.47 docs: the state chips carry the console's own state glyphs (console.js GLYPH), set apart by a
+        # space. They were the ASCII stand-ins of chart.py's badges (? ~ ! o) glued to the word, so the
+        # locked chip read "olocked".
+        "[['awaiting_you','\\u25d0 you'],['unlocked','\\u25d1 unlocked'],['locked','\\u25cb locked'],['stale','\\u25cc stale']].forEach(function(p){bar.appendChild(chip(p[1],'state',p[0]));});"
         "var reset=document.createElement('button');reset.type='button';reset.className='ck-chip ck-chip-reset';reset.textContent='reset';"
         "reset.addEventListener('click',function(){filters.kind.clear();filters.state.clear();"
           "bar.querySelectorAll('.ck-chip').forEach(function(b){b.classList.remove('on');b.setAttribute('aria-pressed','false');});"
@@ -380,6 +400,17 @@ def _impact_wrapper(elements: dict, title: str, nonce: str) -> tuple[bytes, str,
           "if(kind==='question'||kind==='item'){window.parent.postMessage({type:'ck-chart-click',kind:kind,target:target},'*');}}catch(e){}"
         "});"
         "cy.on('tap',function(ev){if(ev.target===cy){cy.elements().removeClass('ck-dim ck-hi ck-focus');}});"
+        # 1.47 (U9): size the frame to the graph. Never zoom in past 1 (a two-node graph filled the frame at 4x);
+        # tell the console the height the graph needs at that zoom, scaled down when it is wider than the stage;
+        # the console sets the frame to it, and its slot scrolls beyond a maximum.
+        "var stage=document.getElementById('ck-stage');"
+        "function fit(){cy.resize();cy.fit(undefined,20);if(cy.zoom()>1){cy.zoom(1);cy.center();}}"
+        "fit();"
+        "var bb=cy.elements().boundingBox();"
+        "var scale=bb.w>0?Math.min(1,(stage.clientWidth-40)/bb.w):1;"
+        "var want=Math.ceil(document.body.offsetHeight-stage.clientHeight+bb.h*scale+40);"
+        "try{window.parent.postMessage({type:'ck-chart-size',height:want},'*');}catch(e){}"
+        "window.addEventListener('resize',fit);"
         "})();"
         "</script></body></html>"
     )
@@ -872,10 +903,17 @@ class Config:
     auth: str = "cloudflare"
     origin: str = ""
     devices: Path | None = None
+    # 1.47.0 (L4, L14; contract 3 as amended by the owner): `--listen ADDR`, link mode only: the owner door
+    # binds 127.0.0.1:PORT AND this address (a ZeroTier or Tailscale one, netif.py) on the same port, two
+    # sockets. Each socket has its own origin (door_origins): loopback's http://127.0.0.1:PORT, and `origin`
+    # (default http://ADDR:PORT) on this one, where a request's Host must name it too. "" (the default): one
+    # socket on 127.0.0.1, no Host check, byte for byte 1.46.
+    listen: str = ""
 
     @property
     def console_origin(self) -> str:
-        """The origin the console's own pages come from: what a write's Origin must be, and what a link names."""
+        """The origin the console's own pages come from: what a write's Origin must be, and what a link names.
+        1.47.0: with --listen, the LISTEN socket's (the overlay's), which links and notifications name."""
         return self.origin or f"https://{self.hostname}"
 
     @property
@@ -2190,7 +2228,7 @@ class Console:
             if when is not None:
                 passes, reason = PB.evaluate_when(when, view, items)
                 if not passes:
-                    skipped.append({"index": index, "why": f"when:{reason}"})
+                    skipped.append({"index": index, "why": f"skipped: {reason}"})
                     continue
             if step["item"] != S.CHAT_ITEM and step["item"] not in items:
                 skipped.append({"index": index, "why": f"item {step['item']!r} is not in the project's item list"})
@@ -2362,7 +2400,7 @@ class Console:
                 if not passes:
                     plan.append({"index": index, "kind": step["kind"], "item": step.get("item"),
                                  "text": step.get("text") or "", "would_run": False,
-                                 "reason": f"when:{reason}"})
+                                 "reason": f"skipped: {reason}"})
                     continue
             if step["item"] != S.CHAT_ITEM and step["item"] not in items:
                 plan.append({"index": index, "kind": step["kind"], "item": step.get("item"),
@@ -4316,13 +4354,22 @@ class _Handler(BaseHTTPRequestHandler):
         # (security review of 1.46) a /signin target loses its WHOLE query, as it is parsed (`?%74=ovi_…` is
         # t= to parse_qs but not to a `t=` regex); every other line loses the value of each `t=`; and any literal
         # token left anywhere (a 400's "Bad request syntax ('…')") is cut too. The line still names the route.
+        # 1.47.0 (L18): "anywhere" includes percent-encoded, in any of its characters and to any depth
+        # (`/x?a=%6Fvi%5F…`, `ovi%255F…`): _OVI matches each character literally or as %XX (%25 repeated), so
+        # the line is cut where the token sits without decoding (and so changing) anything else in it.
         line = _OVI.sub("ovi_…", _T_PARAM.sub(r"\1…", _TARGET.sub(_signin_target, fmt % args)))
         sys.stderr.write(f"overture {self.address_string()} {line}\n")
 
 
 _T_PARAM = re.compile(r"([?&;]t=)[^&;\s\"]*")
 _TARGET = re.compile(r"(?<=[\s'\"(])(/[^\s\"'?]*)\?[^\s\"']*")   # a request target with a query, in a log line
-_OVI = re.compile(r"ovi_[A-Za-z0-9_-]+")
+def _encodable(c: str) -> str:
+    """A regex for the character `c` as it is, or percent-encoded once or more (%6F, %6f, %256F, ...)."""
+    h = f"{ord(c):02x}"
+    return f"(?:{re.escape(c)}|%(?:25)*{h[0]}[{h[1]}{h[1].upper()}])"
+
+
+_OVI = re.compile("".join(_encodable(c) for c in "ovi_") + r"(?:[A-Za-z0-9_-]|%(?:25)*[0-9A-Fa-f]{2})+")
 
 
 def _signin_target(m: "re.Match") -> str:
@@ -4370,6 +4417,17 @@ def credential_for(auth: str, headers) -> str | None:
     return DV.credential(headers) if auth == "link" else headers.get("Cf-Access-Jwt-Assertion")
 
 
+def door_origins(origin: str, listen: str, port: int, on_listen: bool) -> tuple[str, ...]:
+    """1.47.0 (contract 3, as amended by the owner): the origins a request may carry, by the socket it arrived
+    on. Without --listen: (origin,), 1.46's one. With it, the LISTEN socket: (origin,), the overlay's
+    (http://LISTEN:PORT, or the explicit --origin); the loopback socket: http://127.0.0.1:PORT and
+    http://localhost:PORT, its port the door's. The first is the one a Set-Cookie's Secure is decided by. A
+    request on one socket bearing the other's origin is refused, either way round."""
+    if not listen or on_listen:
+        return (origin,)
+    return (f"http://{HOST}:{port}", f"http://localhost:{port}")
+
+
 class SigninDoor:
     """GET and POST /signin, and the link-mode refusal page, for an owner door (`OwnerHandler`, and the one
     server's `FaultOwnerHandler` for a refused project). `_signin_where()` names (devices file, the console's own
@@ -4381,6 +4439,42 @@ class SigninDoor:
 
     def _auth(self) -> str:
         return "link" if self._signin_where() is not None else "cloudflare"
+
+    def _listen_at(self) -> str | None:
+        """1.47.0: the console's --listen address, or None (one socket on loopback: as 1.46)."""
+        return None
+
+    def _base_origin(self) -> str:
+        """The console's configured origin (Config.console_origin): with --listen, the LISTEN socket's."""
+        raise NotImplementedError
+
+    def _on_listen_socket(self) -> bool:
+        """1.47.0: whether this request ARRIVED on the --listen socket, by the address that socket is bound to
+        (never by anything the request says, its Host header included)."""
+        listen = self._listen_at()
+        return bool(listen) and self.server.server_address[0] == listen
+
+    def _origins(self) -> tuple[str, ...]:
+        """1.47.0: the Origin a browser's write must carry HERE, by the socket it came in on (door_origins): the
+        POST /signin check, every write route's check, and the cookie's Secure attribute all ask this."""
+        return door_origins(self._base_origin(), self._listen_at() or "", self.server.server_address[1],
+                            self._on_listen_socket())
+
+    def _host_refused(self) -> bool:
+        """1.47.0 (contract 5): on the --listen socket, a request whose one Host header does not name the
+        listen address (bare, or with this door's port), or the host of an explicit --origin (`tailscale serve`
+        forwards its own name), meets the gate's ordinary 403 JSON, before /signin and before the gate: a page
+        elsewhere that re-binds its own name to the address (DNS rebinding) sends its own name as Host. True
+        when refused (answered). On the loopback socket, and without --listen, nothing is read: 1.46."""
+        if not self._on_listen_socket():
+            return False
+        listen, port = self._listen_at(), self.server.server_address[1]
+        named = {listen, f"{listen}:{port}", urlsplit(self._base_origin()).netloc}
+        hosts = self.headers.get_all("Host") or []
+        if len(hosts) == 1 and hosts[0].strip().lower() in named:
+            return False
+        self._send(403, {"error": NOT_SIGNED_IN})
+        return True
 
     def _credential(self) -> str | None:
         return credential_for(self._auth(), self.headers)
@@ -4415,6 +4509,8 @@ class SigninDoor:
 
     def _signin(self) -> bool:
         """Answer GET or POST /signin when this is one (link mode only): True when answered, False otherwise."""
+        if self._host_refused():   # 1.47.0: with --listen, a foreign Host meets the 403 before /signin too
+            return True
         where = self._signin_where()
         if where is None or not (self.path == "/signin" or (self.command == "GET" and self.path.startswith("/signin?"))):
             return False
@@ -4452,10 +4548,12 @@ class SigninDoor:
             "People.</p>", referrer=FORM_REFERRER), referrer=FORM_REFERRER)
 
     def _signin_post(self, where: tuple[Path, str, Path]) -> None:
-        devices, origin, state = where
+        devices, _origin, state = where
         # Login CSRF: a page elsewhere could post a token of ITS owner's and sign this browser in as them. A
-        # browser sends Origin on every POST, so a missing one is refused too.
-        if self.headers.get("Origin") != origin:
+        # browser sends Origin on every POST, so a missing one is refused too. 1.47.0: the origin of the socket
+        # the request came in on (`_origins`; without --listen, `where`'s one, as 1.46).
+        origins = self._origins()
+        if self.headers.get("Origin") not in origins:
             return self._send_page(403, _signin_html("Sign-in refused", "<h1>Sign-in refused</h1><p>A sign-in "
                                                      "is accepted only from this console's own page.</p>"))
         if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/x-www-form-urlencoded":
@@ -4492,7 +4590,7 @@ class SigninDoor:
         _ident, value, _email = got
         self._send_page(303, _signin_html("Signed in", "<h1>Signed in</h1><p><a href=\"/\">Open the console</a>"
                                           "</p>"),
-                        (("Location", "/"), ("Set-Cookie", DV.cookie_header(value, origin))))
+                        (("Location", "/"), ("Set-Cookie", DV.cookie_header(value, origins[0]))))
 
 
 class OwnerHandler(SigninDoor, _Handler):
@@ -4502,6 +4600,12 @@ class OwnerHandler(SigninDoor, _Handler):
     def _signin_where(self) -> tuple[Path, str, Path] | None:
         cfg = self.console.cfg
         return (cfg.devices_file, cfg.console_origin, cfg.state) if cfg.auth == "link" else None
+
+    def _listen_at(self) -> str | None:
+        return self.console.cfg.listen or None
+
+    def _base_origin(self) -> str:
+        return self.console.cfg.console_origin
 
     def _send(self, code: int, body: object, ctype: str = "application/json") -> None:
         try:
@@ -4522,6 +4626,8 @@ class OwnerHandler(SigninDoor, _Handler):
     def _gate(self) -> bool:
         # Cleared first: a kept-alive connection reuses this thread, and a refused request names no one.
         self.console.act_as(None)
+        if self._host_refused():   # 1.47.0: with --listen, every method meets the Host check first
+            return False
         # 1.46.0: the credential by the console's mode (credential_for), one at a time; `verify` keeps its shape.
         cred = self._credential()
         try:
@@ -4572,7 +4678,8 @@ class OwnerHandler(SigninDoor, _Handler):
             if self._device_cookie:
                 # 1.46.0 (L2): "signed in until revoked". The browser keeps a cookie at most 400 days, so each
                 # opening of the console sends the same one back, and the 400 days start again.
-                self.send_header("Set-Cookie", DV.cookie_header(self._device_cookie, self.console.cfg.console_origin))
+                # 1.47.0: Secure by the origin of the socket this page came in on (`_origins`).
+                self.send_header("Set-Cookie", DV.cookie_header(self._device_cookie, self._origins()[0]))
             self.end_headers()
             self.wfile.write(data)
             return
@@ -4857,7 +4964,7 @@ class OwnerHandler(SigninDoor, _Handler):
         # per-trigger acceptor. Access service tokens handle the perimeter (configured on the Access app),
         # so the regular Origin check is skipped — a cron.io or GitHub Worker call has no browser Origin.
         # 1.46.0: in link mode the gate above wants a signed-in browser's cookie, which no webhook has: an
-        # external trigger is refused there (README, "Install without Cloudflare").
+        # external trigger is refused there (docs/features/sign-in-and-networks.md, "Install without Cloudflare").
         if self.path.startswith("/api/trigger/"):
             return self._fire_trigger(self.path[len("/api/trigger/"):])
         kind = OWNER_ROUTES.get(self.path)
@@ -4871,8 +4978,9 @@ class OwnerHandler(SigninDoor, _Handler):
             return self._send(404, {"error": "not found"})
         # Browsers send Origin on every POST, same-origin included, so a missing one is refused too:
         # an absent header must not read as "trusted". 1.46.0: the console's own origin (`console_origin`):
-        # https://HOSTNAME behind Cloudflare, the `--origin` in link mode.
-        if self.headers.get("Origin") != self.console.cfg.console_origin:
+        # https://HOSTNAME behind Cloudflare, the `--origin` in link mode. 1.47.0: with --listen, the origin of
+        # the socket this request ARRIVED on (`_origins`): loopback's on 127.0.0.1, the overlay's on LISTEN.
+        if self.headers.get("Origin") not in self._origins():
             return self._send(403, {"error": "a write from another site, or with no Origin, is refused"})
         # CSRF double-submit — the HTML carried the boot's CSRF token in its config block;
         # every POST must echo it in X-Overture-CSRF. Belt-and-braces with the Origin check; also
@@ -5026,7 +5134,9 @@ class AgentHandler(_Handler):
                 # The agent socket is still user-only (0600 under a 0700 dir), so the trust surface is the
                 # OS user, but attributing agent-side writes under the calling agent closes the escalation
                 # path by name. OWNER_INTENTS still refuse `by: agent` at the schema layer.
-                return self._send(200, self.console.run_playbook(self._body(), by="agent", agent=agent))
+                # 1.47 (U7, owner): every step kind is an owner intent, so an agent-run playbook was refused step
+                # by step and did nothing. It stays refused, now plainly and before any step runs.
+                return self._send(403, {"error": PB.OWNER_ONLY})
             if self.path == "/item-move":  # 1.17.0: record a re-parent intent on an item
                 # 1.19.1: a session on the owner's machine writes with its own authorship; the
                 # intent "move" is reserved for the owner-door path. The agent variant lands as a
@@ -5126,8 +5236,102 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
     daemon_threads = True
 
 
-def owner_server(console: Console, verify: Callable[[str | None], dict], port: int) -> ThreadingHTTPServer:
+def listen_refusal(auth: str, listen: str) -> str | None:
+    """1.47.0 (contract 1, 2): why a door may not bind `listen` now, or None. Every bind beyond loopback asks
+    this first (owner_server, the one server's start), whoever built the Config: never 0.0.0.0, never with
+    Access, never an address netif does not put on a ZeroTier or Tailscale interface."""
+    if auth != "link":
+        return ("--listen is refused with --auth cloudflare: behind Cloudflare the console listens on 127.0.0.1 "
+                "only, and the tunnel is its way in")
+    return NI.problem(listen)
+
+
+def bind_doors(handler, listen: str, port: int) -> list[ThreadingHTTPServer]:
+    """1.47.0 (contract 3, as amended): an owner door with --listen is two sockets on one port number, never
+    0.0.0.0: [LISTEN:port, 127.0.0.1:port]. LISTEN is bound first (the caller has waited for it, L16) and
+    loopback then takes the port LISTEN got; if loopback cannot, LISTEN is closed again, so no half-up door
+    lingers. OSError names why."""
+    first = ThreadingHTTPServer((listen, port), handler)
+    try:
+        second = ThreadingHTTPServer((HOST, first.server_address[1]), handler)
+    except BaseException:
+        first.server_close()
+        raise
+    for s in (first, second):
+        s.daemon_threads = True
+    return [first, second]
+
+
+class OwnerDoors:
+    """1.47.0: a --listen owner door's two sockets, served and stopped as one, with the calls a caller makes of
+    one ThreadingHTTPServer. `server_address` is the LISTEN socket's (its port is loopback's too)."""
+
+    def __init__(self, servers: list[ThreadingHTTPServer], on_fail: Callable[[str], None] | None = None) -> None:
+        self.servers = list(servers)
+        self.on_fail = on_fail
+        self._stopping = False
+        self._done: set[int] = set()   # the indexes of the loops that have ended
+
+    @property
+    def server_address(self):
+        return self.servers[0].server_address
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        """Serve every socket, each in its own thread, until shutdown(). 1.47 (C7, S6): if either loop ends by
+        itself (an exception in its select loop), the other is stopped too, `on_fail` hears why, and this
+        raises SystemExit (a non-zero exit for the single server, whose main thread runs this): a door half up,
+        on loopback only or on the overlay only, is never left serving."""
+        ended, why, done = threading.Event(), [], self._done
+
+        def run(i: int, s: ThreadingHTTPServer) -> None:
+            try:
+                s.serve_forever(poll_interval)
+            except BaseException as e:   # noqa: BLE001 -- any end of a loop is the door's end; it is named below
+                why.append(f"{s.server_address[0]}: {e.__class__.__name__}: {e}")
+            finally:
+                done.add(i)
+                ended.set()
+        threads = [threading.Thread(target=run, args=(i, s), daemon=True) for i, s in enumerate(self.servers)]
+        for t in threads:
+            t.start()
+        ended.wait()
+        failed = not self._stopping
+        if failed:
+            for i, s in enumerate(self.servers):
+                if i not in done:   # only a loop still running: shutdown() waits for a loop to say it ended
+                    s.shutdown()
+        for t in threads:
+            t.join()
+        if failed:
+            msg = (f"console: an owner door socket stopped serving ({'; '.join(why) or 'its loop ended'}); the "
+                   f"other was stopped with it")
+            if self.on_fail is not None:
+                self.on_fail(msg)
+            raise SystemExit(msg)
+
+    def shutdown(self) -> None:
+        self._stopping = True
+        for i, s in enumerate(self.servers):
+            if i not in self._done:
+                s.shutdown()
+
+    def server_close(self) -> None:
+        for s in self.servers:
+            s.server_close()
+
+
+def owner_server(console: Console, verify: Callable[[str | None], dict], port: int):
     handler = type("BoundOwnerHandler", (OwnerHandler,), {"console": console, "verify": staticmethod(verify)})
+    # 1.47.0: with --listen, two sockets (OwnerDoors): the --listen address and HOST, one port; else HOST alone,
+    # the one ThreadingHTTPServer 1.46 returned.
+    if console.cfg.listen:
+        # 1.47 (S1): and whoever built the Config, its origin must be the LISTEN socket's own (never a proxy's
+        # https one, which reaches the loopback socket instead), so the two sockets' origin sets stay disjoint.
+        why = (listen_refusal(console.cfg.auth, console.cfg.listen)
+               or DV.listen_origin_problem(console.cfg.console_origin, console.cfg.listen))
+        if why:
+            raise SystemExit(f"console: {why}")
+        return OwnerDoors(bind_doors(handler, console.cfg.listen, port))
     srv = ThreadingHTTPServer((HOST, port), handler)
     srv.daemon_threads = True
     return srv
@@ -5195,7 +5399,10 @@ def serve(cfg: Config, verify: Callable[[str | None], dict] | None = None) -> No
     owner = owner_server(console, verify, cfg.port)
     how = (f"sign-in links (--auth link), its origin {cfg.console_origin}, devices in {cfg.devices_file}"
            if cfg.auth == "link" else f"Cloudflare Access (--auth cloudflare), {cfg.console_origin}")
-    sys.stderr.write(f"console: owner door http://{HOST}:{cfg.port} through {how}; agent door {cfg.socket}\n")
+    # 1.47.0: with --listen, both sockets of the door (the overlay one and loopback, one port).
+    where = f"{HOST}:{owner.server_address[1]} and http://{cfg.listen}:{owner.server_address[1]} (--listen)" \
+        if cfg.listen else f"{HOST}:{cfg.port}"
+    sys.stderr.write(f"console: owner door http://{where} through {how}; agent door {cfg.socket}\n")
     try:
         owner.serve_forever()
     finally:
@@ -5262,6 +5469,10 @@ def main(argv: list[str] | None = None) -> int:
                                        "cloudflare)")
     ap.add_argument("--origin", help="--auth link: the console's own origin as the browser sees it (default "
                                      "http://127.0.0.1:PORT; https://NAME behind `tailscale serve`)")
+    ap.add_argument("--listen", metavar="ADDR",
+                    help="--auth link (1.47): also put the owner door on this ZeroTier (zt…) or Tailscale "
+                         "(tailscale0) address, beside 127.0.0.1 on the same port, waiting up to 2 minutes for it "
+                         "to come up; never 0.0.0.0, a public or a loopback address. Linux and WSL")
     ap.add_argument("--port", type=int, default=4793)
     ap.add_argument("--project", default="")
     ap.add_argument("--health-port", type=int, default=0,
@@ -5274,7 +5485,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Claude Code's settings file; the footer shows its account email and nothing "
                          "else is read from it (default: off)")
     a = ap.parse_args(argv)
-    origin = ""
+    origin = listen = ""
     if a.auth == "cloudflare":
         missing = [f for f, v in (("--team-domain", a.team_domain), ("--aud", a.aud), ("--hostname", a.hostname))
                    if not v]
@@ -5282,9 +5493,17 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"the following arguments are required with --auth cloudflare: {', '.join(missing)}")
         if a.origin is not None:
             ap.error("--origin is for --auth link: behind Cloudflare the console's origin is https://HOSTNAME")
+        if a.listen is not None:   # 1.47.0 (contract 2): Access never listens beyond loopback
+            ap.error(listen_refusal("cloudflare", a.listen))
     else:
-        origin = DV.clean_origin(a.origin if a.origin is not None else f"http://127.0.0.1:{a.port}")
-        why = DV.origin_problem(origin)
+        listen = a.listen or ""
+        if a.listen is not None:   # 1.47.0 (contract 1): refused by name before anything waits
+            why = NI.NOT_LINUX if not sys.platform.startswith("linux") else NI.static_problem(a.listen)
+            if why:
+                ap.error(why)
+        # 1.47.0 (L15): with --listen the origin defaults to http://ADDR:PORT, and may be http on that address.
+        origin = DV.clean_origin(a.origin if a.origin is not None else f"http://{listen or '127.0.0.1'}:{a.port}")
+        why = DV.origin_problem(origin, listen or None) or (listen and DV.listen_origin_problem(origin, listen))
         if why:
             ap.error(f"--origin: {why}")
     if not 0 <= a.health_port <= 65535:
@@ -5297,9 +5516,17 @@ def main(argv: list[str] | None = None) -> int:
     if a.adapter is not None:
         sys.stderr.write("console: --adapter is ignored: this server never runs the adapter; items arrive when "
                          "the steward runs `agent.py items-push`\n")
+    if listen:
+        # 1.47.0 (L16, L17): wait for the address (one line), then warn of any network overlapping it. A refusal,
+        # or no address after 2 minutes, exits 1 by name: the service's Restart=on-failure tries again.
+        try:
+            NI.accept(listen, lambda line: (sys.stderr.write(line + "\n"), sys.stderr.flush()))
+        except NI.ListenError as e:
+            sys.stderr.write(f"overture: {e}\n")
+            return 1
     serve(Config(root=a.root, page=a.page, state=a.state, adapter=a.adapter or Path(os.devnull),
                  team_domain=a.team_domain or "",
                  aud=a.aud or "", hostname=a.hostname or "", port=a.port, project=a.project,
                  health_port=a.health_port, usage_file=a.usage_file, account_file=a.account_file,
-                 auth=a.auth, origin=origin))
+                 auth=a.auth, origin=origin, listen=listen))
     return 0

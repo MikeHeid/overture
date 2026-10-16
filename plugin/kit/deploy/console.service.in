@@ -4,6 +4,10 @@
 [Unit]
 Description=@NAME@ owner console (loopback only; reached through Cloudflare Access)
 After=network-online.target
+# 1.47 (C2): a server that fails at once (a missing dependency, a bad console.env) stops retrying after 5 starts
+# within 120 s, as the one server's unit does, instead of restarting every 5 s forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

@@ -2990,6 +2990,111 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Listening on ZeroTier and Tailscale (1.47.0)
+
+The owner's choices of 2026-10-15 (OPEN-DECISIONS.md, "Without Cloudflare",
+L4 as refined by L13 L14, L15–L18, and L7), with contract 3 amended by the
+owner on 2026-10-16: a console with sign-in links can be reached on its
+ZeroTier or Tailscale address directly, and onboarding asks how you will
+reach it.
+
+- **`--listen ADDR`** (link mode only; Linux and WSL, "comes with 1.48"
+  elsewhere): the owner door binds `127.0.0.1:PORT` **and** `ADDR:PORT`, two
+  sockets on one port, never `0.0.0.0`. ADDR must be the address of a
+  ZeroTier interface (`zt…`) or a Tailscale one (`tailscale0`, or 100.64/10
+  on a `tailscale…` interface), found by `overture/netif.py` through
+  rtnetlink, every address of every interface, secondaries included (no
+  process, no `ip`; without netlink it falls back to each interface's primary
+  address and says so). Refused by name: `0.0.0.0`, loopback, a public
+  address that is not Tailscale's, IPv6, an address on any other interface
+  (`eth0`, `docker0`, `br-…`, `lo`), and one held by an overlay AND another
+  interface.
+  `--auth cloudflare` never listens beyond loopback. Without `--listen`
+  nothing changes. The agent socket and the health door stay where they were.
+- **One origin per socket** (L15): loopback's `http://127.0.0.1:PORT` (and
+  `localhost`), and the overlay's `http://ADDR:PORT`. An https `--origin`
+  with `--listen` is refused by name (security review): for Tailscale's
+  HTTPS, run `tailscale serve` WITHOUT `--listen`, as in 1.46. The origin
+  a request must carry is the one of the socket it ARRIVED on, never its
+  Host: for `POST /signin`, for every write, and for the cookie's `Secure`.
+  The other socket's origin is refused, either way round. A cookie is per
+  host, so **sign in once per address you use**. Links and notifications
+  name the overlay origin.
+- **Host on the overlay** (DNS rebinding): on the `--listen` socket a request
+  whose one Host does not name ADDR (or ADDR:PORT) gets the gate's 403 JSON,
+  before `/signin` and the gate. Loopback is 1.46's, Host unread.
+- **Waiting for ZeroTier** (L16): an address not on any interface yet is
+  polled every 2 s for up to 2 minutes, with one line (`overture: waiting for
+  ADDR on a ZeroTier or Tailscale interface (up to 2 minutes)`), then bound,
+  or exit 1 by name for `Restart=on-failure` to try again. Such starts are
+  at least 125 s apart, so the one server's `StartLimitBurst=5` per 120 s
+  never trips on a slow boot, while a server that fails at once still stops
+  after five tries (the link unit gained the same limit). An address on a
+  disallowed interface is refused at once. LISTEN is bound first and
+  loopback after; if loopback cannot be, LISTEN is closed again; if either
+  socket's loop dies later, both stop and the server exits 1, so a door is
+  never half up.
+- **Overlap warning** (L17): once ADDR is accepted, every other interface
+  whose network overlaps ADDR's (down ones too, marked `(down)`) is named
+  with both networks: it may shadow the ZeroTier route; move the ZeroTier
+  network or Docker's `default-address-pools`. Startup continues.
+- **The one server:** `server.json` gains `"listen"` (absent: none), kept by
+  every writer (`server add`, `token rotate`, `server auth`, `server
+  listen`). `agent.py server listen [ADDR | --clear]` shows or sets it, link
+  mode only, refused in a Claude Code session; an address ZeroTier has not
+  brought up yet is set with a warning. Every project's port is on loopback
+  and ADDR; an entry with no `origin` is at `http://ADDR:PORT`. `server auth
+  cloudflare` is refused while listen is set. `agent.py invite` prints the
+  overlay link then (`--origin` overrides).
+- **Onboarding** (L7): `onboard.py write --auth link [--listen ADDR]
+  [--origin URL]` needs no Cloudflare values (and refuses them by name), and
+  writes `CONSOLE_AUTH`, `CONSOLE_ORIGIN` and `CONSOLE_LISTEN`; `show` and
+  `install.sh` carry them through to a link unit (`console-link.service.in`,
+  no tunnel unit). `onboard.py detect [--json]` lists the ZeroTier and
+  Tailscale addresses here, with any overlap warning. Its next steps print
+  the owner's commands (install, `invite` in your own terminal, the
+  `tailscale serve` line or `http://ADDR:PORT`). `onboard.py verify` in link
+  mode says Cloudflare and the tunnel are "not used", and checks that the
+  door answers on each address and that `/signin` answers 410 for a token
+  nobody made. The console-onboard skill asks first: Cloudflare, Tailscale,
+  ZeroTier or this machine only.
+- **The two 1.46 LOWs** (L18): an `ovi_` token percent-encoded anywhere in a
+  log line (`%6Fvi_`, `ovi%5F`, twice-encoded `%256F`) is cut too; and
+  invalid UTF-8 in `roles.json` is a roles error (the gate's 403, People's
+  503), not a dropped connection.
+- **Also checked by review:** `server listen` re-checks every project's
+  origin and refuses, by project name, a change that would break one;
+  `agent.py invite --origin http://X` takes plain http only for this
+  console's own listen address.
+- **Fixes the owner chose to ship now** (OPEN-DECISIONS.md U4, U7, found in
+  real screenshots): the Operator shift dialog is one dialog again; the
+  snooze menu draws over the next row instead of under it; the panel title
+  names the tab you are on, not always "Inbox"; People in link mode speaks
+  of sign-in links, not of an Access policy, and its log reads as sentences
+  ("X was invited (from the terminal)"); a locked card shows one "locked"
+  pill; the Triggers tab lists its firings flat, and the Inbox's quick look
+  at firings stays on the Inbox; the impact graph's frame fits its graph,
+  with the zoom hint below it, and only that frame may size itself;
+  Portfolio's "Setup guide" opens the setup section and its command wraps;
+  the Delegate bar fits in playbook mode; a skipped playbook step says why
+  in words; and a playbook started from a Claude session (`agent.py
+  playbook`, `/overture:playbook`) is refused at once, saying that
+  playbooks run from the console's Playbooks tab, instead of quietly doing
+  nothing.
+- **Documentation:** the README is an overview again, with a complete
+  feature map; the detail moved, word for word where it existed, to
+  thirteen pages under `docs/features/`, which also document for the first
+  time what never was (Delegate, playbooks, triggers and replay, the impact
+  graph, snooze, deep links, Export today, theme and skins, Launch Idea,
+  Operator shift, and more). Every screenshot was rendered again on this
+  release, with new ones of sign-in, signed-in browsers, playbooks,
+  triggers, Operator shift and Launch Idea.
+
+**Going back to 1.46.** A 1.46 kit refuses `--listen` (no such flag), so a
+unit with it does not start; it ignores `"listen"` in `server.json`, so the
+one server comes back on loopback only; it ignores `CONSOLE_AUTH` in
+console.env and `onboard.py show` then refuses the file (no hostname).
+
 ## Sign-in links (1.46.0)
 
 The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Without Cloudflare",

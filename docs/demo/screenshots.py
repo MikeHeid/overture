@@ -53,9 +53,9 @@ HOSTNAME = "console.northwind.example"
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def token() -> str:
+def token(email: str = "owner@example.com") -> str:
     now = int(time.time())
-    return jwt.encode({"aud": [AUD], "iss": f"https://{TEAM}", "email": "owner@example.com",
+    return jwt.encode({"aud": [AUD], "iss": f"https://{TEAM}", "email": email,
                        "iat": now, "exp": now + 3600, "sub": "owner"}, KEY, algorithm="RS256",
                       headers={"kid": "k1"})
 
@@ -176,12 +176,12 @@ class Demo:
             raise RuntimeError(f"agent {path}: {code} {out}")
         return out
 
-    def owner(self, path: str, body: dict) -> dict:
+    def owner(self, path: str, body: dict, email: str = "owner@example.com") -> dict:
         body.setdefault("nonce", "o" + secrets.token_hex(8))
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         conn.request("POST", path, body=json.dumps(body).encode(), headers={
             "Content-Type": "application/json", "Origin": f"https://{HOSTNAME}",
-            "X-Overture-CSRF": self.console._csrf, "Cf-Access-Jwt-Assertion": token()})
+            "X-Overture-CSRF": self.console._csrf, "Cf-Access-Jwt-Assertion": token(email)})
         r = conn.getresponse()
         out = json.loads(r.read() or b"{}")
         conn.close()
@@ -645,6 +645,11 @@ def capture(demo: Demo) -> list[str]:
 
         record_gifs(browser, url, problems)
         team_scenes(demo, shot, tab, panel, item)
+        try:
+            later_scenes(demo, shot, tab, panel, item)
+        except Exception as e:  # the seeding itself failed: name it, keep the shots already taken
+            problems.append(f"later scenes: {str(e).splitlines()[0]}")
+        link_scenes(browser, problems)
         browser.close()
     return problems
 
@@ -694,49 +699,266 @@ def team_scenes(demo: Demo, shot, tab, panel, item) -> None:
     shot("feature-two-key", two_key)
 
 
-# -- the team features (1.39–1.45) ------------------------------------------
-def team_scenes(demo: Demo, shot, tab, panel, item) -> None:
-    """Roles, routing, two-key locks, Settings and notifications. Captured last: once roles are on, every
-    question carries a "For" line, so the scenes above (and the animations) are taken without them."""
-    from overture import notify as NT
+# -- automation, lessons, second keys and the shift (docs/features/*.md) ---------------------
+def later_scenes(demo: Demo, shot, tab, panel, item) -> None:
+    """Captured after the team scenes (roles stay on). Triggers are armed only now, so every shot above is taken
+    without the Inbox's Triggers fold: the server loads .overture/triggers.json at start, and the demo re-reads it
+    here the same way (Console.triggers.set_all(triggers.load(root)))."""
+    from overture import lessons as LN
     from overture import roles as RO
-    from overture import settings as SET
-    st, me = demo.cfg.state, "owner@example.com"   # the page's own login, as token() signs it
-    RO.set_role(st, me, "owner")
-    RO.set_role(st, "bob@example.com", "member", ["API-2", "UI-2"], by=me)
-    RO.set_role(st, "carol@example.com", "viewer", director=True, by=me)
-    RO.set_two_key(st, ["SEC-2"], by=me)
-    SET.put(st, "chat_per_minute", 4, by=me)
-    SET.put(st, "lanes", {"lane-api": {"label": "API", "color": "blue"}}, by=me)
-    SET.put_name(st, "bob@example.com", "bob", by=me)
-    NT.set_url(st, "https://hooks.slack.com/services/T0DEMO/B0DEMO/not-a-real-hook")
-    SET.put(st, "notify_on", True, by=me)
-    SET.put(st, "notify_quiet", {"from": "22:00", "to": "07:00"}, by=me)
-    # A first key on SEC-2/Q2 (answered in seed): the card waits for a second person.
-    demo.owner("/api/lock", {"qid": "SEC-2/Q2", "answer": demo.console.store.head("SEC-2/Q2")["id"]})
+    from overture import triggers as TR
+    st, me = demo.cfg.state, "owner@example.com"
 
-    shot("feature-people", tab("feature-people", "people"))
-    shot("feature-settings", tab("feature-settings", "settings"))
+    # Playbooks under .overture/playbooks/, and two triggers that fire them (a webhook and a cron).
+    books = demo.root / ".overture" / "playbooks"
+    books.mkdir(parents=True, exist_ok=True)
+    (books / "release-triage.json").write_text(json.dumps({
+        "description": "Before a release: a heads-up while questions wait, a retry diagram, a round once clear.",
+        "steps": [
+            {"kind": "chat", "text": "Release window opens Monday 09:00. Anything blocking?",
+             "when": {"kind": "project_has_state", "state": "awaiting_you", "min": 1}},
+            {"kind": "visual", "item": "API-2", "text": "Draw the dead-letter replay path."},
+            {"kind": "round", "item": "API-3", "mode": "tighten", "text": "Confirm the v2 cut-over gates.",
+             "when": {"kind": "not", "of": {"kind": "project_has_state", "state": "awaiting_you", "min": 1}}}]}))
+    (books / "weekly-review.json").write_text(json.dumps({
+        "description": "Monday review: a round on the search index, and billing once it is on the plan.",
+        "steps": [
+            {"kind": "round", "item": "DATA-3", "mode": "explore", "text": "Postgres full-text or a search service?"},
+            {"kind": "round", "item": "BILL-1", "mode": "explore", "text": "Invoice numbering per region.",
+             "when": {"kind": "item_exists", "item": "BILL-1"}}]}))
+    secret, sha = TR.mint()
+    (demo.root / ".overture" / "triggers.json").write_text(json.dumps({"triggers": {
+        "pr-merged": {"playbook": "release-triage", "token_sha256": sha},
+        "monday-review": {"playbook": "weekly-review", "cron": "0 9 * * MON"}}}))
+    demo.console.triggers.set_all(TR.load(demo.root))
+    # One firing of each kind, through the real paths: the webhook over HTTP, the clock's own fire_cron, a replay.
+    conn = http.client.HTTPConnection("127.0.0.1", demo.port, timeout=10)
+    conn.request("POST", "/api/trigger/pr-merged", body=b"{}", headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {secret}", "Cf-Access-Jwt-Assertion": token()})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+    if r.status != 200:
+        raise RuntimeError(f"webhook trigger: {r.status}")
+    demo.console.fire_cron("monday-review")
+    demo.owner("/api/trigger-replay", {"name": "monday-review"})
 
-    def notify(pg):
-        tab("feature-settings", "settings")(pg)
-        pg.locator(".ck-settings-notify").screenshot(path=str(OUT / "feature-notify.png"))
-    shot("feature-notify", notify)
+    # A lesson: the owner withdrew an earlier versioning ruling on API-3, and the open question looks like it.
+    LN.record(st, "API-3/Q0", "API-3", "withdraw", "How should the public API be versioned for partners?",
+              "Header versioning is out: partners' curl examples kept dropping Accept-Version. Prefer the URL.",
+              (datetime.now(timezone.utc) - timedelta(days=12)).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
-    def routing(pg):
+    shot("feature-playbooks", tab("feature-playbooks", "playbooks"))
+    def triggers_tab(pg):
+        tab("feature-triggers", "triggers")(pg)
+        nested = pg.locator(".ck-body details.ck-triggers summary")   # the firing log, a fold of its own
+        if nested.count():
+            nested.first.click()
+            pg.wait_for_timeout(500)
+        panel(pg, "feature-triggers")
+    shot("feature-triggers", triggers_tab)
+
+    def inbox_top(pg):
         pg.evaluate("ConsoleKit.openTab('inbox')")
-        pg.wait_for_timeout(1500)
-        panel(pg, "feature-routing")
-    shot("feature-routing", routing)
+        pg.wait_for_timeout(1200)
+        panel(pg, "feature-inbox-top")
+    shot("feature-inbox-top", inbox_top)
 
-    def two_key(pg):
+    def snooze(pg):
+        pg.locator(".ck-priority-ribbon .ck-snooze-btn").first.click()
+        pg.wait_for_timeout(400)
+        pg.locator(".ck-priority-ribbon").first.screenshot(path=str(OUT / "feature-snooze.png"))
+    shot("feature-snooze", snooze)
+
+    def status_pop(pg):
+        pg.locator(".ck-status-chip").first.click()
+        pg.wait_for_selector("#ck-status-pop")
+        pg.wait_for_timeout(600)
+        pg.locator("#ck-status-pop").screenshot(path=str(OUT / "feature-status.png"))
+    shot("feature-status", status_pop)
+
+    shot("feature-portfolio", tab("feature-portfolio", "portfolio"))
+
+    def export_today(pg):
+        pg.locator("#ck-tab-feed").click()
+        pg.wait_for_timeout(900)
+        pg.locator(".ck-feed-digest").click()
+        pg.wait_for_selector("#ck-digest")
+        pg.wait_for_timeout(800)
+        pg.screenshot(path=str(OUT / "feature-export-today.png"))
+    shot("feature-export-today", export_today)
+
+    def branch_out(pg):
+        item(pg, "UI-3")
+        pg.locator(".ck-panel button", has_text="Branch out").first.click()
+        pg.wait_for_selector(".ck-branch-pane")
+        pg.wait_for_timeout(500)
+        pg.locator(".ck-branch-pane").screenshot(path=str(OUT / "feature-branch-out.png"))
+    shot("feature-branch-out", branch_out)
+
+    def variant(pg):
+        item(pg, "UI-3", wait=3000)
+        v = pg.locator(".ck-visual", has=pg.locator(".ck-visual-variant")).first
+        v.scroll_into_view_if_needed()
+        pg.wait_for_timeout(1500)
+        v.screenshot(path=str(OUT / "feature-variant.png"))
+    shot("feature-variant", variant)
+
+    def preview(pg):
+        tab("feature-playbook-preview", "playbooks")(pg)
+        pg.locator(".ck-playbook-row", has_text="release-triage").locator("button", has_text="Preview").click()
+        pg.wait_for_selector(".ck-pb-plan-row")
+        pg.wait_for_timeout(500)
+        pg.locator("#ck-pb-preview").screenshot(path=str(OUT / "feature-playbook-preview.png"))
+    shot("feature-playbook-preview", preview)
+
+    def delegate(pg):
+        pg.locator(".ck-delegate-summary").click()
+        pg.wait_for_timeout(400)
+        pg.locator(".ck-delegate-bar input[value='playbook']").check()
+        pg.wait_for_timeout(400)
+        pg.locator(".ck-delegate-bar").screenshot(path=str(OUT / "feature-delegate.png"))
+    shot("feature-delegate", delegate)
+
+    def impact(pg):
+        item(pg, "API-2")
+        fold = pg.locator(".ck-panel details.ck-item-chart", has_text="Impact graph").first
+        fold.locator("summary").click()
+        pg.wait_for_timeout(4000)
+        fold.evaluate(SHOW_WHOLE)
+        pg.wait_for_timeout(300)
+        fold.screenshot(path=str(OUT / "feature-impact-graph.png"))
+    shot("feature-impact-graph", impact)
+
+    def lesson_chip(pg):
+        item(pg, "API-3")
+        card = pg.locator(".ck-question[data-qid='API-3/Q1']")
+        if not card.locator("summary.ck-q-lessons-chip").count():
+            pg.locator(".ck-q-line[data-qid='API-3/Q1']").click()
+            pg.wait_for_timeout(600)
+        card.locator("summary.ck-q-lessons-chip").click()
+        pg.wait_for_timeout(500)
+        card.screenshot(path=str(OUT / "feature-lesson-chip.png"))
+    shot("feature-lesson-chip", lesson_chip)
+
+    def launch_idea(pg):
+        item(pg, "UI-4")
+        pg.locator(".ck-panel button", has_text="Launch Idea").first.click()
+        pg.wait_for_selector("#ck-launch-pane")
+        pg.fill("#ck-launch-pane input[aria-label='Idea title']", "Invite a whole team from a CSV")
+        pg.fill("#ck-launch-pane textarea[aria-label='Idea pitch']",
+                "Admins at larger customers add 40 people at once; one-by-one invites are the top support ask.")
+        pg.locator("#ck-launch-pane button", has_text="Grill it").click()
+        pg.wait_for_timeout(400)
+        pg.fill("#ck-grill-user", "Priya, the IT admin at a 200-seat customer.")
+        pg.wait_for_timeout(300)
+        pg.locator("#ck-launch-pane").screenshot(path=str(OUT / "feature-launch-idea.png"))
+    shot("feature-launch-idea", launch_idea)
+
+    def shift(pg):
+        pg.keyboard.press("Control+k")
+        pg.wait_for_timeout(400)
+        pg.keyboard.type("operator shift")
+        pg.wait_for_timeout(500)
+        pg.keyboard.press("Enter")
+        pg.wait_for_selector("#ck-shift")
+        pg.wait_for_timeout(600)
+        pg.locator("#ck-shift").screenshot(path=str(OUT / "feature-shift.png"))
+    shot("feature-shift", shift)
+
+    def role_log(pg):
+        tab("feature-role-log", "people")(pg)
+        log = pg.locator(".ck-people-log").first
+        log.evaluate(SHOW_WHOLE)
+        pg.wait_for_timeout(300)
+        panel(pg, "feature-role-log")
+    shot("feature-role-log", role_log)
+
+    def locked_by(pg):
+        item(pg, "API-1")
+        card = pg.locator(".ck-question[data-qid='API-1/Q1']")
+        if not card.locator(".ck-receipt-by").count():
+            pg.locator(".ck-q-line[data-qid='API-1/Q1']").click()
+            pg.wait_for_timeout(600)
+        card.screenshot(path=str(OUT / "feature-locked-by.png"))
+    shot("feature-locked-by", locked_by)
+
+    # The second key on SEC-2/Q2: another administrator locks the same answer.
+    RO.set_role(st, "dana@example.com", "owner", by=me)
+    demo.owner("/api/lock", {"qid": "SEC-2/Q2", "answer": demo.console.store.head("SEC-2/Q2")["id"]},
+               email="dana@example.com")
+
+    def confirmed(pg):
         item(pg, "SEC-2")
         card = pg.locator(".ck-question[data-qid='SEC-2/Q2']")
-        if not card.locator(".ck-two-key-note").count():
+        if not card.locator(".ck-receipt-by").count():
             pg.locator(".ck-q-line[data-qid='SEC-2/Q2']").click()
+            pg.wait_for_timeout(600)
+        card.screenshot(path=str(OUT / "feature-two-key-confirmed.png"))
+    shot("feature-two-key-confirmed", confirmed)
+
+
+# -- sign-in links (1.46): a second console, --auth link, no Cloudflare --------------------------
+def link_scenes(browser, problems: list[str]) -> None:
+    """The sign-in page, the not-signed-in page, and People's signed-in browsers. Invites and sign-ins go through
+    devices.invite / redeem against the devices file beside the TEMP registry (XDG_CONFIG_HOME, set above), and the
+    browser signs itself in by pressing the page's own button."""
+    import socket
+    from overture import devices as DV
+    cfg_home = os.path.realpath(os.environ["XDG_CONFIG_HOME"])
+    if not os.path.realpath(DV.location()).startswith(cfg_home + os.sep):
+        problems.append(f"link scenes: devices file {DV.location()} is outside the temp config; not run")
+        return
+    tmp = tempfile.TemporaryDirectory(prefix="ck-demo-link-")
+    root = Path(tmp.name)
+    with socket.socket() as s:   # the console's origin names its port, so pick one first
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    origin = f"http://127.0.0.1:{port}"
+    cfg = SV.Config(root=root, page=None, state=root / "state", adapter=root / "unused.py", team_domain="",
+                    aud="", hostname="", port=port, project="northwind", auth="link", origin=origin)
+    console = SV.Console(cfg, Adapter())
+    console.seed()
+    page = (HERE / "showcase.html").read_bytes()
+    commit = "4f2c9e1" + "0" * 33
+    PS.stage(cfg.state, {"content": base64.b64encode(page).decode(), "ref": "refs/heads/main",
+                         "commit": commit, "path": "docs/console/page.html", "reviewed": True})
+    PS.publish(cfg.state, commit)
+    owner = SV.owner_server(console, SV.link_verifier(cfg), port)
+    threading.Thread(target=owner.serve_forever, daemon=True).start()
+    try:
+        mine = DV.invite(None, "owner@example.com", cfg.state)[0]
+        bob = DV.invite(None, "bob@example.com", cfg.state)[0]
+        DV.redeem(None, bob, "Chrome on Android", cfg.state)
+        url = origin + "/"
+        ctx = browser.new_context(viewport={"width": 1680, "height": 1000}, color_scheme="dark", device_scale_factor=2)
+        pg = ctx.new_page()
+        for name, step in (
+                ("feature-signed-out", lambda: (pg.goto(url), pg.wait_for_selector("text=Not signed in"))),
+                ("feature-signin", lambda: (pg.goto(url + "signin?t=" + mine),
+                                            pg.wait_for_selector("text=Sign this browser in as")))):
+            try:
+                step()
+                pg.locator("main").screenshot(path=str(OUT / f"{name}.png"))
+                print("wrote", name)
+            except Exception as e:
+                problems.append(f"{name}: {str(e).splitlines()[0]}")
+        try:
+            pg.click("button:has-text('Sign this browser in')")
+            pg.wait_for_url(url)
+            pg.wait_for_selector(".ck-panel[data-open='true']", timeout=15000)
+            pg.evaluate("ConsoleKit.openTab('people')")
+            pg.wait_for_selector(".ck-device-row")
             pg.wait_for_timeout(800)
-        card.screenshot(path=str(OUT / "feature-two-key.png"))
-    shot("feature-two-key", two_key)
+            pg.locator(".ck-panel").screenshot(path=str(OUT / "feature-devices.png"))
+            print("wrote feature-devices")
+        except Exception as e:
+            problems.append(f"feature-devices: {str(e).splitlines()[0]}")
+        ctx.close()
+    finally:
+        owner.shutdown()
+        owner.server_close()
+        tmp.cleanup()
 
 
 # -- animations ------------------------------------------------------------

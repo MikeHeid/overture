@@ -160,6 +160,35 @@ class UnitTemplateTests(unittest.TestCase):
         for f in flags:
             self.assertIn(f'ap.add_argument("{f}"', parser, f)
 
+    def test_the_link_unit_passes_only_flags_the_server_defines_and_none_of_access(self):
+        # Catches (1.47.0, L7): the sign-in-link unit carrying an Access flag (empty in a link console.env), a
+        # flag the parser lacks, no --auth link at all (it would start behind Cloudflare), and install.sh's
+        # --listen/--origin (rendered into @LINK_ARGS@) not defined by the server.
+        unit = (self.KIT / "deploy" / "console-link.service.in").read_text()
+        start = unit.split("ExecStart=", 1)[1].split("\nRestart", 1)[0]
+        flags = re.findall(r"(?<!\S)(--[a-z][a-z-]*)", start)
+        self.assertIn("--auth", flags)
+        self.assertIn("--auth link", start)
+        self.assertIn("@LINK_ARGS@", start)
+        for f in ("--team-domain", "--aud", "--hostname", "--page", "--adapter"):
+            self.assertNotIn(f, flags)
+        parser = (self.KIT / "overture" / "server.py").read_text()
+        install = (self.KIT / "deploy" / "install.sh").read_text()
+        for f in flags + re.findall(r'LINK_ARGS="[^"]*?(--[a-z-]+)', install):
+            self.assertIn(f'ap.add_argument("{f}"', parser, f)
+
+    def test_every_console_unit_stops_retrying_a_server_that_fails_at_once(self):
+        # Catches (1.47, C2): a per-project unit (link or Cloudflare) with no StartLimit lines, so a server that
+        # fails at once (--listen on an eth0 address) restarts every 5 s forever (systemd's default, 5 within
+        # 10 s, never catches a RestartSec=5 loop); and the lines put under [Service], where systemd ignores them.
+        for name in ("console-link", "console", "overture-console"):
+            unit = (self.KIT / "deploy" / f"{name}.service.in").read_text()
+            head = unit.split("[Unit]", 1)[1].split("[Service]", 1)[0]
+            with self.subTest(unit=name):
+                self.assertIn("\nStartLimitIntervalSec=120\n", head)
+                self.assertIn("\nStartLimitBurst=5\n", head)
+                self.assertIn("\nRestartSec=5\n", unit)   # 5 starts at once land well inside 120 s
+
 
 @unittest.skipUnless(shutil.which("claude"), "`claude` is not on PATH")
 class ValidateTests(Base):

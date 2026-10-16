@@ -99,9 +99,21 @@ real items and folds land in your decision record:
   stays signed in until revoked under People. With `--auth link`, a request
   without that browser's cookie is refused, loopback included. A sign-in link
   opens the project it was made from, plus every project whose roles list that
-  email; with roles off, only the projects it was invited from. See the README,
+  email; with roles off, only the projects it was invited from. See
+  [Sign-in and networks](features/sign-in-and-networks.md#install-without-cloudflare-146-147),
   "Install without Cloudflare" (this machine, or Tailscale through
   `tailscale serve`).
+- **On ZeroTier or Tailscale directly (1.47):** add `--listen ADDR` (or
+  `agent.py server listen ADDR` for the one server). The console then answers
+  on 127.0.0.1 and on that ZeroTier or Tailscale address, the same port, and
+  nowhere else; `onboard.py detect` lists the addresses it would take. Sign in
+  once per address you use. `/overture:console-onboard` asks which way you
+  will reach the console and writes the rest. With `--listen` the origin is
+  `http://ADDR:PORT`: an https `--origin` (`tailscale serve`) is refused,
+  since that proxy reaches the console on 127.0.0.1, where it would get 403.
+  Use `tailscale serve` without `--listen` instead. On a machine other
+  people log in to, see the cookie notes in
+  [Sign-in and networks](features/sign-in-and-networks.md) first.
 - Agents never go through Access. They talk to `<state>/agent.sock`, a socket
   only your user can open.
 - Health, from any shell: `python3 <kit>/agent.py --state <state> health`

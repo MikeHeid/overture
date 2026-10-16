@@ -1085,6 +1085,16 @@
     const d = e && e.data;
     if (!d || typeof d !== 'object' || !d.type) return;
     if (!fromChartFrame(e)) return;
+    if (d.type === 'ck-chart-size') {
+      // 1.47 (U9): the impact graph asks for the height its nodes need. Only an impact frame is resized,
+      // to a bounded number; its slot scrolls beyond its own maximum (console.css .ck-impact-slot).
+      const h = Number(d.height);
+      if (!Number.isFinite(h)) return;
+      for (const f of document.querySelectorAll('.ck-impact-slot > iframe.ck-item-chart-frame[data-ck-chart]')) {
+        if (f.contentWindow === e.source) f.style.height = Math.round(Math.min(Math.max(h, 240), 4000)) + 'px';
+      }
+      return;
+    }
     if (d.type === 'ck-chart-export') {
       // The iframe serialised its rendered SVG; the parent builds a blob and triggers the download.
       if (typeof d.svg !== 'string' || !d.svg.length) return;
@@ -2177,16 +2187,20 @@
 
   // Render inbox mode
   function renderInbox() {
-    panelEl.appendChild(makeHeader(['Inbox'], closePanel, 'Back to board'));
+    // The title names the tab on show (U4): it read "Inbox" on People, Triggers, Playbooks and the rest.
+    panelEl.appendChild(makeHeader([tabTitle(currentTab)], closePanel, 'Back to board'));
     const tabBar = renderTabs();
     panelEl.appendChild(tabBar);
     fitDockToTabs(tabBar);
     panelEl.appendChild(renderStatusBar(null));
     appendYourRole(panelEl);
     panelEl.appendChild(renderDelegateBar());   // Delegate ▾ — orchestrate from anywhere, not only on an item.
+    // The Triggers fold is the Inbox's glance at what fired (and what failed) while questions wait.
+    // It belongs on the Inbox tab only (U4): the Triggers tab holds the full list, and on Feed,
+    // People or Portfolio it was noise.
     const trgs = view && Array.isArray(view.triggers) ? view.triggers : [];
     const log = view && Array.isArray(view.trigger_log) ? view.trigger_log : [];
-    if (trgs.length || log.length) panelEl.appendChild(renderTriggerLog(trgs, log));
+    if (currentTab === 'inbox' && (trgs.length || log.length)) panelEl.appendChild(renderTriggerLog(trgs, log));
 
     // One tab panel; the tab bar above says which view it holds (0.7.0).
     const body = el('div', { className: 'ck-body', role: 'tabpanel', id: 'ck-tabpanel',
@@ -2238,6 +2252,11 @@
     ['people', 'People'],   // 1.40: roles; shown to an owner's login only (visibleTabs)
     ['settings', 'Settings']   // 1.44: an administrator's or a director's login only
   ];
+  // The panel title for a tab: its label, or "Inbox" for anything unknown (the body falls back to the Inbox too).
+  function tabTitle(id) {
+    const t = TABS.find(([tid]) => tid === id);
+    return t ? t[1] : 'Inbox';
+  }
   // The tabs this login sees: People only when the server sent its list, which it does to an owner alone;
   // Settings only when it sent the settings, which it does to an administrator or a director.
   function visibleTabs() {
@@ -3286,8 +3305,9 @@
     const card = el('div', { className: 'ck-question', dataQid: qData.qid });
     if (open) card.appendChild(rollLine(q, true));
 
-    // Header
-    const hdr = el('div', { className: 'ck-q-header' }, [
+    // Header. An unrolled card's line above already wears the state pill, so the header leaves it
+    // out (U4): a locked card showed "locked" twice.
+    const hdr = el('div', { className: 'ck-q-header' }, open ? [] : [
       el('span', { className: 'ck-q-state', dataState: state }, [
         stateMark(state), ' ', state.replace('_', ' ')
       ])
@@ -3797,10 +3817,11 @@
       itemSel.appendChild(el('option', { value: id }, [id + (data.title ? ' — ' + truncateText(data.title, 60) : '')]));
     }
     if (delegateItem && items && items[delegateItem]) { itemSel.value = delegateItem; delegateItem = null; }
-    body.appendChild(el('div', { className: 'ck-field ck-del-itemrow' }, [
+    const itemRow = el('div', { className: 'ck-field ck-del-itemrow' }, [
       el('label', { for: 'ck-del-item', className: 'ck-field-label' }, ['On item']),
       itemSel
-    ]));
+    ]);
+    body.appendChild(itemRow);
 
     // Row 3: round-only — mode + focus.
     const modeSel = el('select', { className: 'ck-select', id: 'ck-del-mode' });
@@ -3846,6 +3867,7 @@
       roundRow.hidden = kind !== 'round';
       playbookRow.hidden = kind !== 'playbook';
       itemSel.disabled = kind === 'chat' || kind === 'playbook';
+      itemRow.hidden = itemSel.disabled;   // U4: a picker that does not apply is not shown greyed out
       text.hidden = kind === 'playbook';
       send.textContent = kind === 'playbook' ? 'Run playbook' : 'Delegate';
     };
@@ -4097,9 +4119,15 @@
         : !e.to ? ' removed ' + e.email + ' (was ' + describeRole(e.from) + ')'
         : !e.from ? ' added ' + e.email + ' as ' + describeRole(e.to)
         : ' changed ' + e.email + ' from ' + describeRole(e.from) + ' to ' + describeRole(e.to);
+      // A terminal's invite or revoke reads as a sentence, not a command name (U4): "agent.py invite invited
+      // bob@…" became "bob@… was invited (from the terminal)".
+      const line = e.device && !e.by && e.device.action !== 'signin'
+        ? (e.device.action === 'invite' ? e.device.email + ' was invited'
+          : 'A browser of ' + e.device.email + ' was revoked') + ' (from the terminal)'
+        : who + what;
       ul.appendChild(el('li', { className: 'ck-people-log-row' }, [
         el('span', { className: 'ck-feed-time', title: new Date(e.at).toLocaleString() }, [relTime(e.at)]),
-        ' ' + who + what]));
+        ' ' + line]));
     }
     body.appendChild(ul);
     if (roles.log_total > log.length) body.appendChild(el('p', { className: 'ck-muted' }, [
@@ -4186,8 +4214,11 @@
     if (!roles.on) {
       const box = el('div', { className: 'ck-firstrun ck-people-off' });
       box.appendChild(el('div', { className: 'ck-firstrun-title' }, ['Roles are off']));
+      // A link-mode console has no Access policy (U4): it lets in the browsers its sign-in links opened.
+      const link = roles.auth === 'link';
       box.appendChild(el('p', { className: 'ck-firstrun-pitch' }, [
-        'Everyone your Access policy lets in can do everything here. Make yourself the administrator, ' +
+        (link ? 'Everyone signed in with a sign-in link' : 'Everyone your Access policy lets in') +
+        ' can do everything here. Make yourself the administrator, ' +
         'then give others a narrower role: a member answers and locks in their own areas, a viewer only reads.']));
       box.appendChild(el('p', { className: 'ck-firstrun-pitch ck-people-warn' }, [
         'From that moment everyone else only reads, until you add them here.']));
@@ -4200,7 +4231,8 @@
       } else {
         box.appendChild(el('p', { className: 'ck-muted' }, [
           'This sign-in carries no email (a service token), so it cannot be the administrator. ' +
-          'Open the console with your own Access login.']));
+          (link ? 'Open the console from a sign-in link made for your own email.'
+            : 'Open the console with your own Access login.')]));
       }
       body.appendChild(box);
       renderDevices(body, roles);
@@ -4237,7 +4269,8 @@
     body.appendChild(list);
     const add = el('form', { className: 'ck-people-add', 'aria-label': 'Add a person' });
     const email = el('input', { type: 'email', className: 'ck-input ck-people-new-email', required: true,
-      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email', autocomplete: 'off' });
+      placeholder: roles.auth === 'link' ? 'the email their sign-in link is for, e.g. bob@example.com'
+        : 'their Access login, e.g. bob@example.com', 'aria-label': 'Email', autocomplete: 'off' });
     const c = roleControls('ck-people-new', { role: 'member' });
     c.sel.setAttribute('aria-label', 'Role');
     c.areas.setAttribute('aria-label', 'Areas');
@@ -4469,7 +4502,8 @@
     body.appendChild(ul);
     const add = el('form', { className: 'ck-people-add ck-settings-name-add', 'aria-label': 'Add a short name' });
     const email = draftField(el('input', { type: 'email', className: 'ck-input', required: true, autocomplete: 'off',
-      placeholder: 'their Access login, e.g. bob@example.com', 'aria-label': 'Email' }), 'name-add-email', '');
+      placeholder: config && config.auth === 'link' ? 'the email their sign-in link is for, e.g. bob@example.com'
+        : 'their Access login, e.g. bob@example.com', 'aria-label': 'Email' }), 'name-add-email', '');
     const name = draftField(el('input', { type: 'text', className: 'ck-input', required: true, maxlength: '40',
       placeholder: 'short name', 'aria-label': 'Short name', autocomplete: 'off' }), 'name-add-name', '');
     add.appendChild(email);
@@ -4545,9 +4579,34 @@
     }
     if (log.length) {
       body.appendChild(el('div', { className: 'ck-section-heading' }, ['Recent firings']));
-      // Reuse the existing trigger-log renderer so the two surfaces stay consistent.
-      body.appendChild(renderTriggerLog([], log));
+      // The same list the Inbox fold shows, laid flat: a second "Triggers" fold nested inside
+      // the Triggers tab hid it (U9).
+      body.appendChild(renderTriggerFirings(trgs, log));
     }
+  }
+
+  // Recent trigger firings, newest first. The Inbox's Triggers fold and the Triggers tab share it.
+  function renderTriggerFirings(triggers, log) {
+    const list = el('ol', { className: 'ck-trigger-log', 'aria-label': 'Recent trigger firings, newest first' });
+    const liveNames = new Set((triggers || []).map(t => t.name));
+    for (const row of log) {
+      const li = el('li', { className: 'ck-trigger-log-row' });
+      li.appendChild(el('span', { className: 'ck-trigger-log-time' }, [relTime(row.ts) || row.ts || '?']));
+      li.appendChild(el('code', { className: 'ck-trigger-log-name' }, [row.name || '?']));
+      li.appendChild(el('span', { className: 'ck-muted' }, [' (' + (row.kind || '?') + ') · ']));
+      li.appendChild(el('span', {}, [(row.records || 0) + ' step' + ((row.records || 0) === 1 ? '' : 's')]));
+      if (row.skipped) {
+        li.appendChild(el('span', { className: 'ck-muted' }, ['  · ' + row.skipped + ' skipped']));
+      }
+      if (row.error) {
+        li.appendChild(el('div', { className: 'ck-trigger-log-err' }, ['error: ' + row.error]));
+      }
+      if (row.name && liveNames.has(row.name)) {
+        li.appendChild(renderTriggerReplayButton(row.name));
+      }
+      list.appendChild(li);
+    }
+    return list;
   }
 
   function renderTriggerLog(triggers, log) {
@@ -4591,26 +4650,7 @@
 
     if (log.length) {
       body.appendChild(el('div', { className: 'ck-section-heading' }, ['Recent firings']));
-      const list = el('ol', { className: 'ck-trigger-log', 'aria-label': 'Recent trigger firings, newest first' });
-      const liveNames = new Set((triggers || []).map(t => t.name));
-      for (const row of log) {
-        const li = el('li', { className: 'ck-trigger-log-row' });
-        li.appendChild(el('span', { className: 'ck-trigger-log-time' }, [relTime(row.ts) || row.ts || '?']));
-        li.appendChild(el('code', { className: 'ck-trigger-log-name' }, [row.name || '?']));
-        li.appendChild(el('span', { className: 'ck-muted' }, [' (' + (row.kind || '?') + ') · ']));
-        li.appendChild(el('span', {}, [(row.records || 0) + ' step' + ((row.records || 0) === 1 ? '' : 's')]));
-        if (row.skipped) {
-          li.appendChild(el('span', { className: 'ck-muted' }, ['  · ' + row.skipped + ' skipped']));
-        }
-        if (row.error) {
-          li.appendChild(el('div', { className: 'ck-trigger-log-err' }, ['error: ' + row.error]));
-        }
-        if (row.name && liveNames.has(row.name)) {
-          li.appendChild(renderTriggerReplayButton(row.name));
-        }
-        list.appendChild(li);
-      }
-      body.appendChild(list);
+      body.appendChild(renderTriggerFirings(triggers, log));
     } else if (!triggers.length) {
       body.appendChild(el('p', { className: 'ck-muted' },
         ['Add .overture/triggers.json to arm webhook or cron triggers.']));
@@ -4724,7 +4764,7 @@
       ])
     ]);
     wrap.appendChild(sum);
-    const slot = el('div', { className: 'ck-item-chart-slot' });
+    const slot = el('div', { className: 'ck-item-chart-slot ck-impact-slot' });
     wrap.appendChild(slot);
     const load = () => {
       if (slot.querySelector('iframe')) return;
@@ -9000,6 +9040,19 @@
   // Portfolio upgrade card : the natural monetization seam — one project is free,
   // many projects (portfolio federation) is where team pricing lives. Even without any
   // paid tier, this card teaches operators the feature exists.
+  // The section's own anchor: GitHub's slug of the heading "Portfolio: your other consoles".
+  const PORTFOLIO_GUIDE_URL =
+    'https://github.com/MikeHeid/overture/blob/main/docs/features/dashboard-and-map.md#portfolio-your-other-consoles';
+  // The real steps (dashboard-and-map.md, "Add a peer"): there is no skill that adds a peer.
+  const PORTFOLIO_SETUP_STEPS =
+    '# On THIS console\'s machine, for each peer console:\n' +
+    '# 1. Cloudflare Zero Trust > Access > Service Auth: create a service token,\n' +
+    '#    and allow it in the peer console\'s Access application.\n' +
+    '# 2. Write its secret to STATE/portfolio-secrets/<peer>.json (mode 0600):\n' +
+    '#    {"client_secret": "<the secret>"}\n' +
+    '# 3. Add the peer to .overture/portfolio.json with the token\'s client id\n' +
+    '#    and its token_sha256; this prints the layout and the hash command:\n' +
+    'python3 <kit>/agent.py portfolio-token';
   function renderPortfolioUpgrade(variant) {
     const card = el('div', { className: 'ck-portfolio-upgrade', role: 'region',
       'aria-label': 'Add a second project to your portfolio' });
@@ -9013,18 +9066,15 @@
     card.appendChild(el('p', { className: 'ck-portfolio-upgrade-pitch' }, [pitch]));
     const step = el('div', { className: 'ck-portfolio-upgrade-step' });
     step.appendChild(el('div', { className: 'ck-portfolio-upgrade-steplabel' },
-      ['Add a peer from the other project\'s machine:']));
+      ['Add a peer, on this console\'s machine (the peer needs Cloudflare Access):']));
     const pre = el('pre', { className: 'ck-portfolio-upgrade-code', tabindex: '0' });
-    pre.textContent =
-      '# On the other project\'s machine:\n' +
-      '/overture:portfolio-add https://this-console.your-domain.example\n\n' +
-      '# Or edit .overture/portfolio.json by hand (see the docs).';
+    pre.textContent = PORTFOLIO_SETUP_STEPS;
     step.appendChild(pre);
     const copyBtn = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-portfolio-upgrade-copy' },
       ['Copy']);
     copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText('/overture:portfolio-add https://this-console.your-domain.example');
+        await navigator.clipboard.writeText(PORTFOLIO_SETUP_STEPS);
         announce('Copied', { tone: 'ok' });
       } catch (_e) {
         announce('Could not copy — select and copy manually', { tone: 'error' });
@@ -9034,8 +9084,9 @@
     card.appendChild(step);
     card.appendChild(el('p', { className: 'ck-portfolio-upgrade-doc' }, [
       'Setup guide: ',
-      Object.assign(el('a', { href: 'https://github.com/MikeHeid/overture#portfolio',
-        target: '_blank', rel: 'noopener' }), { textContent: 'github.com/MikeHeid/overture#portfolio' })
+      // U4: the README has no #portfolio anchor; the dashboard-and-map feature page's section covers the setup.
+      Object.assign(el('a', { href: PORTFOLIO_GUIDE_URL, target: '_blank', rel: 'noopener' }),
+        { textContent: 'docs/features/dashboard-and-map.md' })
     ]));
     return card;
   }
