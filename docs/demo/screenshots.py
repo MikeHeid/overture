@@ -392,6 +392,12 @@ SHOW_WHOLE = "el => { el.scrollIntoView({block: 'end'}); const p = el.closest('.
              " if (p && p.scrollBy) p.scrollBy(0, 24); }"
 
 
+# 1.48 (U1): which section holds each tab, so a scene reaches a tab behind another rail button.
+SECTION_OF = {"inbox": "work", "feed": "work", "tickets": "work", "prs": "work", "playbooks": "automation",
+              "triggers": "automation", "portfolio": "projects", "favorite": "projects", "people": "team",
+              "chat": "team", "settings": "team"}
+
+
 # -- capture ---------------------------------------------------------------
 def capture(demo: Demo) -> list[str]:
     from playwright.sync_api import sync_playwright
@@ -516,12 +522,10 @@ def capture(demo: Demo) -> list[str]:
         def tab(name, label, wait=1500):
             def f(pg):
                 t = pg.locator(f"#ck-tab-{label}")
-                if t.count():
-                    t.click()
-                else:
-                    pg.locator(".ck-tab-more").click()
+                if not t.count():   # 1.48 (U1): another section's tab; its rail button first
+                    pg.locator(f".ck-rail-btn[data-section='{SECTION_OF[label]}']").click()
                     pg.wait_for_timeout(300)
-                    pg.get_by_role("menuitem", name=label.capitalize()).first.click()
+                pg.locator(f"#ck-tab-{label}").click()
                 pg.wait_for_timeout(wait)
                 panel(pg, name)
             return f
@@ -635,6 +639,33 @@ def capture(demo: Demo) -> list[str]:
             pg.wait_for_timeout(700)
             pg.locator("#ck-palette").screenshot(path=str(OUT / "feature-palette.png"))
         shot("feature-palette", palette)
+
+        # 1.48 (U1, U2): the section rail at 1440, and the Inbox full screen on a 390px phone whose host page is
+        # wider than the screen (the showcase spills; uxshot 02 started the console 164px in).
+        def sections(pg):
+            pg.locator(".ck-rail-btn[data-section='automation']").click()
+            pg.wait_for_timeout(600)
+            panel(pg, "feature-sections")
+        try:
+            pg = page_for("dark", 1440, 900)
+            sections(pg)
+            pg.context.close()
+            print("wrote feature-sections")
+        except Exception as e:
+            problems.append(f"feature-sections: {str(e).splitlines()[0]}")
+        try:
+            ctx = browser.new_context(viewport={"width": 390, "height": 844}, color_scheme="dark", device_scale_factor=2,
+                                      is_mobile=True, has_touch=True,
+                                      extra_http_headers={"Cf-Access-Jwt-Assertion": token()})
+            pg = ctx.new_page()
+            pg.goto(url + "#inbox")
+            pg.wait_for_selector(".ck-panel[data-open='true'] .ck-rail", timeout=15000)
+            pg.wait_for_timeout(1500)
+            pg.screenshot(path=str(OUT / "feature-phone.png"))
+            ctx.close()
+            print("wrote feature-phone")
+        except Exception as e:
+            problems.append(f"feature-phone: {str(e).splitlines()[0]}")
 
         def shortcuts(pg):
             pg.locator("body").click(position={"x": 400, "y": 600})

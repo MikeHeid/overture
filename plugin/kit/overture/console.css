@@ -838,8 +838,9 @@ span.ck-q-for { margin-left: 6px; }
      monitor on open, which operators closed reflexively). The width is set per
      project in localStorage via the drag handle; this is the fallback.
      Widened to 480px later: at 420px the eight-tab strip and the priority
-     rows were cut off. */
-  :root { --ck-col: 480px; }
+     rows were cut off. 576px in 1.48 (U1): the section rail takes about 92px of the column, and the content keeps
+     the room it had at 480 (at 480 the Priority rows' ⌛ was cut off beside the rail). */
+  :root { --ck-col: 576px; }
   html.ck-dock-open .ck-dock-handle {
     display: block;
     position: absolute;
@@ -1114,7 +1115,9 @@ span.ck-q-for { margin-left: 6px; }
   .ck-q-state { transition: background-color 0.3s ease, color 0.3s ease; }
   .ck-pulse { animation: ck-pop 0.6s ease; }
   .ck-arrived { animation: ck-arrive 1.6s ease; }
-  .ck-panel .ck-body { animation: ck-fade 0.18s ease; }
+  /* U9: no animation on .ck-body itself any more. Through 1.47 a 0.18 s fade sat here and replayed on every redraw,
+     the long-poll's included; the body now animates only through the ck-enter-* classes markMotion() sets on a real
+     change of view (see "Sections" below). */
 }
 @keyframes ck-pop { 30% { transform: scale(1.15); } }
 @keyframes ck-arrive {
@@ -1122,7 +1125,6 @@ span.ck-q-for { margin-left: 6px; }
   30% { opacity: 1; transform: none; }
   100% { box-shadow: 0 0 0 3px transparent; }
 }
-@keyframes ck-fade { from { opacity: 0.85; } to { opacity: 1; } }
 
 /* --- Tabs in the inbox --- */
 .ck-tabs {
@@ -2548,11 +2550,8 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 }
 .ck-trigger-kinds { font-size: 12px; }
 
-/* ========= More ▾ overflow menu (1.25.0) ====================================
-   Lightweight dropdown anchored to the "More" tab button; folds Favorite + Chat
-   (and anything else moved out of the main bar). */
-.ck-tab-more { position: relative; }
-.ck-tab-more-caret { color: var(--c-fg-muted); }
+/* ========= Pop-up menu (1.25.0) ==============================================
+   The Chat ▾ action menu. It began as the "More ▾" tab menu, which 1.48 (U1) replaced with the section rail. */
 .ck-more-menu {
   position: absolute;
   z-index: 20;
@@ -3399,13 +3398,30 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 @media (max-width: 640px) {
   /* The whole panel takes the full viewport; the backdrop pattern already does this at 399px — this
      widens the breakpoint to the common 640px cutoff. */
+  /* U2 (owner, 2026-10-16): open, the console is the WHOLE screen whatever the host page does. Pinned to the left
+     edge, not the right: a host page wider than the phone (uxshot 02 spilled to 554px) moved `right: 0` to the page's
+     right edge and the console started 164px in, cut off. 100vw and 100dvh are the screen; 100vh is the fallback for
+     a browser without dvh. The bottom inset belongs to the bottom bar (.ck-rail below), not to the panel. Closed, it
+     is hidden outright: on a page wider than the screen, sliding it 100% right could still leave it in view. */
   .ck-panel {
+    left: 0;
+    right: auto;
+    top: 0;
+    box-sizing: border-box;
     width: 100vw;
     max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    border-left: none;
+    overscroll-behavior: contain;
     padding-left: env(safe-area-inset-left, 0);
     padding-right: env(safe-area-inset-right, 0);
-    padding-bottom: env(safe-area-inset-bottom, 0);
   }
+  .ck-panel:not([data-open="true"]) { visibility: hidden; }
+  /* The host page underneath neither scrolls nor takes taps while the console is open (console.js toggles the class
+     in applyDock, and takes it off on close). The panel covers the screen and stacks above the host (z-index 1000),
+     so every tap lands in it. */
+  html.ck-phone-open, html.ck-phone-open body { overflow: hidden !important; overscroll-behavior: none; }
 
   /* Tap-target floor: buttons, chips, tabs, segment controls at ≥36px (WCAG AA target size is 24,
      Apple HIG and Material both call out 44 for primary; 36 is the compromise that keeps secondary
@@ -3455,9 +3471,25 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   .ck-frag-body, .ck-frag-raw, .ck-frag-rendered,
   .ck-digest-text { max-height: 60vh; }
 
-  /* Priority ribbon rows: ensure text wraps rather than overflowing the panel. */
-  .ck-priority-row { flex-wrap: wrap; }
-  .ck-priority-text { flex: 1 1 100%; order: 10; }
+  /* Priority ribbon rows (U2): two lines, always. Line one says which (project, id, lane) with its ⌛, line two the
+     question and its age. Through 1.47 the row wrapped as flex items do, so at 390px the ⌛ fell onto a line of its
+     own between the id and a clipped question (uxshot 02): three lines. A grid places each part. The id never
+     shrinks; the project name gives way first (ellipsis), as it is the same on every row of this console. The lane
+     chip is absent for another project's row; its cell then stays empty. Grouping the Inbox is 1.49 (U5). */
+  .ck-priority-row {
+    display: grid; grid-template-columns: auto minmax(0, max-content) max-content auto 1fr auto;
+    align-items: center; column-gap: 2px; row-gap: 2px;
+  }
+  .ck-priority-dot { grid-column: 1; grid-row: 1; }
+  .ck-priority-project { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ck-priority-qid { grid-column: 3; grid-row: 1; }
+  .ck-priority-row > .ck-lane-chip { grid-column: 4; grid-row: 1; }
+  .ck-priority-row > .ck-snooze { grid-column: 6; grid-row: 1; }
+  .ck-priority-text { grid-column: 2 / 6; grid-row: 2; }
+  .ck-priority-when { grid-column: 6; grid-row: 2; }
+  /* X2: the question starts line two here, so its separator would lead the line as a stray "·". The one-line row
+     (wider than 640px) keeps it. */
+  .ck-priority-text > .ck-priority-sep { display: none; }
 
   /* Inbox-item rows: wrap the ref pill + id + title so long titles don't push off-screen. */
   .ck-inbox-item { flex-wrap: wrap; row-gap: 2px; }
@@ -3535,7 +3567,6 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 }
 .ck-tab { gap: 5px; padding: 10px 8px; }
 .ck-tab .ck-icon { width: 15px; height: 15px; }
-.ck-tab-more-caret { display: inline-flex; }
 .ck-mark { display: inline-flex; align-items: center; }
 /* Outside a coloured state chip the mark carries the state's colour; inside one it inherits it. */
 .ck-mark[data-state="awaiting_you"] { color: var(--c-claimed); }
@@ -3723,3 +3754,120 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-ux-refmode { font-size: 12px; }
 .ck-ux-refs-line { margin: 0; font-size: 12px; }
 .ck-ux-refs-line[hidden] { display: none; }
+
+/* ========= Sections: the rail, the bottom bar and their motion (1.48) ==========================================
+   U1 (amends D14): four sections, each with its own strip of sub-tabs (.ck-tabs, unchanged), and a rail of the
+   sections in place of "More ▾". U2: on a phone the rail is a bottom bar. U8 (amends D9): below 400px the rail shows
+   icons only; the label stays each button's accessible name. U9: CSS-only motion, 100–180 ms, none under
+   prefers-reduced-motion, and none on a redraw (console.js markMotion sets the classes on a real change only).
+
+   Colours (contrast checked in test_browser for both themes and every skin): the labels are --c-fg, never
+   --c-fg-muted, on --c-surface (muted text fell to 4.0:1 under Solarized). The indicator and the badge use
+   --ck-rail-mark, the accent mixed 40% toward the text colour: plain --c-accent is under 3:1 against Solarized's and
+   Nord's light surfaces, and the mix keeps the hue while clearing 4.5:1 on every palette (the lowest, Solarized
+   light, is 4.9:1). The badge's text is --c-surface on that mark, the same pair the other way round. */
+.ck-panel { --ck-rail-mark: color-mix(in srgb, var(--c-accent) 60%, var(--c-fg)); }
+.ck-sections { flex: 1 1 auto; min-height: 0; display: flex; }
+/* overflow-x: clip, so a sub-tab's slide-in (12px) never makes the column scroll sideways; y stays visible. */
+.ck-section-main {
+  flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow-x: clip;
+}
+.ck-rail {
+  /* As wide as its widest label (D9: a label is never cut), and never under 76px. */
+  flex: 0 0 auto; box-sizing: border-box; width: max-content; min-width: 76px;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 0;
+  background: var(--c-surface); border-right: 1px solid var(--c-border);
+  overflow-y: auto; overflow-x: hidden;
+}
+.ck-rail-btn {
+  position: relative; box-sizing: border-box; flex: 0 0 auto; height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  margin: 0; padding: 6px 10px; border: 0; border-radius: 0; background: transparent;
+  color: var(--c-fg); font: inherit; font-size: 11px; font-weight: 600; line-height: 1.1; cursor: pointer;
+}
+.ck-rail-btn .ck-rail-icon { width: 18px; height: 18px; }
+.ck-rail-label { white-space: nowrap; }
+.ck-rail-btn:hover { background: var(--c-surface-alt); }
+/* The section on show: its bar and a tinted ground. Not bolder: a bolder label is wider, and the rail would change
+   width, moving the whole column, at every switch. */
+.ck-rail-btn[aria-current="page"] { background: var(--c-surface-alt); }
+/* The indicator: a bar on the rail's leading edge, on the section on show. */
+.ck-rail-btn[aria-current="page"]::before {
+  content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--ck-rail-mark);
+}
+/* X6: the focus ring sits inside the button (the desktop rail clips sideways, so a ring outside would be cut) and
+   clear of the 3px indicator, with a band of the rail's own colour between them: before the 1.48 review the ring was drawn
+   1-3px in, on the indicator itself, in the indicator's colour, and that side of it vanished. The ring is
+   --ck-rail-mark, 3:1 or better on the band and on the tinted ground (test_browser checks every theme and skin). */
+.ck-rail-btn:focus-visible {
+  outline: 2px solid var(--ck-rail-mark); outline-offset: -7px; box-shadow: inset 0 0 0 5px var(--c-surface);
+}
+.ck-rail-badge {
+  position: absolute; top: 4px; right: 6px; box-sizing: border-box; min-width: 18px; padding: 0 5px;
+  border-radius: 9px; background: var(--ck-rail-mark); color: var(--c-surface);
+  font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center;
+}
+@media (forced-colors: active) {
+  .ck-rail-btn[aria-current="page"]::before, .ck-rail-badge,
+  .ck-rail-btn[aria-current="page"] .ck-rail-icon { background: Highlight; color: HighlightText; }
+}
+
+/* U2: a phone (the 640px phone block above). The rail becomes the bottom bar: four equal buttons, each at least 48px
+   high and wide, clear of the home indicator (safe-area inset). The section's sub-tabs stay a strip at the top that
+   scrolls sideways and never wraps (the phone block's .ck-tabs rule). */
+@media (max-width: 640px) {
+  .ck-sections { flex-direction: column; }
+  .ck-section-main { order: 1; }
+  .ck-rail {
+    order: 2; width: auto; flex-direction: row; gap: 0; padding: 0 0 env(safe-area-inset-bottom, 0);
+    border-right: 0; border-top: 1px solid var(--c-border); overflow: visible;
+  }
+  .ck-rail-btn { flex: 1 1 0; min-width: 48px; height: auto; min-height: 56px; }
+  .ck-rail-btn[aria-current="page"]::before {
+    left: 12%; right: 12%; top: 0; bottom: auto; width: auto; height: 3px; border-radius: 0 0 3px 3px;
+  }
+  /* X1: on the bottom bar the section on show was told only by the 3px line and the faint --c-surface-alt ground,
+     which is under 1.3:1 against the bar. Its icon now sits in a filled pill of --ck-rail-mark, the icon in
+     --c-surface: the badge's own pair, 4.5:1 or better on every theme and skin, and the pill 3:1 or better against
+     the bar (test_browser). Every icon has the pill's padding, so the current one is no taller than the rest and
+     nothing moves at a switch. */
+  .ck-rail-btn .ck-rail-icon { box-sizing: content-box; padding: 4px 12px; border-radius: 999px; }
+  .ck-rail-btn[aria-current="page"] .ck-rail-icon { background: var(--ck-rail-mark); color: var(--c-surface); }
+  /* A badge on the pill's corner is ringed in the bar's colour, so the two never run together. */
+  .ck-rail-badge { right: calc(50% - 30px); box-shadow: 0 0 0 2px var(--c-surface); }
+}
+/* U8 (amends D9): below 400px, icons only. The label is hidden visually but not from a screen reader (aria-label and
+   title also carry it), so each button keeps its name. */
+@media (max-width: 399px) {
+  .ck-rail-label {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .ck-rail-btn .ck-rail-icon { width: 22px; height: 22px; }
+  /* X5: with no label the icon (and its pill, 30px high) is centred in the button, and the badge is centred on the
+     pill's top-right corner: a one-digit badge exactly, a longer one growing to the right, away from the icon. The
+     pill is 46px wide (22 + 2 × 12), so its corner is 23px right of and 15px above the button's centre; the badge is
+     18px wide at least and 16px high. Before the 1.48 review it hung from the button's top edge and covered the icon's top. */
+  .ck-rail-badge { right: auto; left: calc(50% + 23px - 9px); top: calc(50% - 15px - 8px); }
+}
+
+/* U9: motion, only where the viewer has not asked for less, and only on the classes markMotion() sets for a real
+   change: a section crossfades (160 ms), a sub-tab slides in (140 ms), another view fades (120 ms), and the rail's
+   indicator slides from the old section's place (180 ms; --ck-rail-from counts buttons, signed). A count, a badge,
+   the status words or a long-poll redraw never animate: none of them sets a class. */
+@media (prefers-reduced-motion: no-preference) {
+  .ck-body.ck-enter-section { animation: ck-section-in 160ms ease-out; }
+  .ck-body.ck-enter-tab { animation: ck-subtab-in 140ms ease-out; }
+  .ck-body.ck-enter-view { animation: ck-section-in 120ms ease-out; }
+  .ck-rail.ck-rail-moved .ck-rail-btn[aria-current="page"]::before { animation: ck-rail-mark-y 180ms ease-out; }
+}
+@media (prefers-reduced-motion: no-preference) and (max-width: 640px) {
+  .ck-rail.ck-rail-moved .ck-rail-btn[aria-current="page"]::before { animation-name: ck-rail-mark-x; }
+}
+@keyframes ck-section-in { from { opacity: 0; } }
+@keyframes ck-subtab-in { from { opacity: 0.5; transform: translateX(12px); } }
+/* The bar is the button's height less 8px, and the buttons are 58px apart (2px gap): one step is 60px. */
+@keyframes ck-rail-mark-y { from { transform: translateY(calc(var(--ck-rail-from, 0) * 60px)); } }
+/* On the bottom bar the bar is 76% of an equal-width button: one step is 100% / 0.76 of its own width. */
+@keyframes ck-rail-mark-x { from { transform: translateX(calc(var(--ck-rail-from, 0) * 131.6%)); } }
