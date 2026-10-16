@@ -44,7 +44,11 @@
     'user-round-plus': [["path",{"d":"M2 21a8 8 0 0 1 13.292-6"}],["circle",{"cx":"10","cy":"8","r":"5"}],["path",{"d":"M19 16v6"}],["path",{"d":"M22 19h-6"}]],
     'keyboard': [["path",{"d":"M10 8h.01"}],["path",{"d":"M12 12h.01"}],["path",{"d":"M14 8h.01"}],["path",{"d":"M16 12h.01"}],["path",{"d":"M18 8h.01"}],["path",{"d":"M6 8h.01"}],["path",{"d":"M7 16h10"}],["path",{"d":"M8 12h.01"}],["rect",{"width":"20","height":"16","x":"2","y":"4","rx":"2"}]],
     'x': [["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],
-    'image': [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2","ry":"2"}],["circle",{"cx":"9","cy":"9","r":"2"}],["path",{"d":"m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"}]]
+    'image': [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2","ry":"2"}],["circle",{"cx":"9","cy":"9","r":"2"}],["path",{"d":"m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"}]],
+    // U1 (1.48): the section rail's icons, from lucide 0.469.0 (the same ISC set; these three are unchanged since 0.460).
+    'briefcase': [["path",{"d":"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"}],["rect",{"width":"20","height":"14","x":"2","y":"6","rx":"2"}]],
+    'workflow': [["rect",{"width":"8","height":"8","x":"3","y":"3","rx":"2"}],["path",{"d":"M7 11v4a2 2 0 0 0 2 2h4"}],["rect",{"width":"8","height":"8","x":"13","y":"13","rx":"2"}]],
+    'folder-kanban': [["path",{"d":"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"}],["path",{"d":"M8 10v4"}],["path",{"d":"M12 10v2"}],["path",{"d":"M16 10v6"}]]
 
   };
   const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -89,11 +93,18 @@
   let dockHandle = null;         // drag handle on docked panel's left edge
   const DOCK_W_MIN = 320;        // px; narrower cuts off the inbox tab strip
   const DOCK_W_MAX_FRAC = 0.6;   // never eat more than 60% of the viewport
-  const DOCK_W_DEFAULT = 480;
+  // 1.48 (U1): 576, the 1.47 column's 480 for the content plus room for the section rail (about 92px) beside it.
+  const DOCK_W_DEFAULT = 576;
   // AB-2/Q2 (owner): at 1024px and wider the panel is a column docked on the
   // right, not an overlay; it starts collapsed to a strip with an unread badge.
   const DOCK_QUERY = '(min-width: 1024px)';
   let dockMedia = null;
+  // U2: a phone. 640px, not 600: console.css's phone block (1.22.0) already makes the panel the screen's width below
+  // 640px, so the full-screen console, the bottom bar and the scroll lock start where that block does. A second
+  // breakpoint at 600 would leave 600–640px with a full-width panel, a side rail and a host page still scrolling
+  // underneath. 640 also holds a large phone held sideways at 568–640px.
+  const PHONE_QUERY = '(max-width: 640px)';
+  let phoneMedia = null;
   let lastFocused = null;
   let currentItem = null;
   let currentMode = null; // 'item' or 'inbox'
@@ -1313,13 +1324,11 @@
   }
   // Measure the tab row's natural width; widen the column if it is narrower. Only while docked: the
   // overlay is the full screen width, and there the row scrolls sideways instead of wrapping.
-  function fitDockToTabs(bar) {
+  // U1: the rail sits beside the strip, so its width counts too.
+  function fitDockToTabs(bar, rail) {
     if (!bar || !isDocked()) return;
-    let w = 0;
-    for (const c of bar.children) {
-      if (c.classList.contains('ck-more-menu')) continue;
-      w += c.getBoundingClientRect().width;
-    }
+    let w = rail ? rail.getBoundingClientRect().width : 0;
+    for (const c of bar.children) w += c.getBoundingClientRect().width;
     const cs = getComputedStyle(bar);
     w += (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
       + (parseFloat(cs.columnGap) || 0) * Math.max(0, bar.children.length - 1) + 2;
@@ -1412,6 +1421,9 @@
     const root = document.documentElement;
     root.classList.toggle('ck-dock', docked);
     root.classList.toggle('ck-dock-open', docked && open);
+    // U2: open on a phone, the console is the whole screen. The host page under it must neither scroll nor take taps:
+    // this class locks <html> and <body> (console.css), and taking it off on close gives the page its scroll back.
+    root.classList.toggle('ck-phone-open', open && !!(phoneMedia && phoneMedia.matches));
     // A docked column sits beside the board: not modal, no backdrop, no trap.
     // An overlay is a modal dialog; a docked column stays on screen beside the
     // board, so it is a landmark ("Inbox") a screen reader can jump to.
@@ -1652,10 +1664,12 @@
     applyDockWidth();
 
     dockMedia = window.matchMedia ? window.matchMedia(DOCK_QUERY) : null;
-    if (dockMedia) {
+    phoneMedia = window.matchMedia ? window.matchMedia(PHONE_QUERY) : null;
+    for (const m of [dockMedia, phoneMedia]) {
+      if (!m) continue;
       const onChange = () => applyDock();
-      if (dockMedia.addEventListener) dockMedia.addEventListener('change', onChange);
-      else if (dockMedia.addListener) dockMedia.addListener(onChange);
+      if (m.addEventListener) m.addEventListener('change', onChange);
+      else if (m.addListener) m.addListener(onChange);
     }
     applyDock();
 
@@ -1688,16 +1702,21 @@
     const now = Date.now();
     if (now - shortcutGpfx < 1500) {
       shortcutGpfx = 0;
-      // new tabs — 'y' = playbooks (p is PRs), 't' = triggers. Favorite/chat shortcuts
-      // still work even though they're behind the "More ▾" dropdown.
+      // 'y' = playbooks (p is PRs), 't' = triggers. Each one also switches to its tab's section (U1).
       const tab = ({ i: 'inbox', f: 'feed', k: 'tickets', p: 'prs', y: 'playbooks', t: 'triggers',
                      s: 'favorite', o: 'portfolio', c: 'chat' })[e.key];
       if (tab) {
         e.preventDefault();
-        if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
-        currentMode = 'inbox';
-        currentTab = tab;
-        renderPanel();
+        goTab(tab, false);
+        return;
+      }
+      // U1: `g 1`–`g 4` open a section on its last-used (else first) sub-tab. The number is the rail's order among
+      // ALL four sections, not the visible ones, so `g 4` is Team for every login.
+      const sec = ({ 1: 'work', 2: 'automation', 3: 'projects', 4: 'team' })[e.key];
+      if (sec) {
+        e.preventDefault();
+        const to = sectionEntryTab(sec);
+        if (to) goTab(to, false);
         return;
       }
       if (e.key === 'b') { e.preventDefault(); if (panelEl.getAttribute('data-open') === 'true') closePanel(); return; }
@@ -1744,9 +1763,11 @@
     const rows = [
       ['Ctrl/Cmd + K', 'Open the command palette'],
       ['Alt + Enter', 'Copy a shareable link to the selected palette row'],
-      ['g i', 'Open Inbox tab'], ['g f', 'Open Feed tab'], ['g k', 'Open Tickets tab'], ['g p', 'Open PRs tab'],
-      ['g y', 'Open Playbooks tab'], ['g t', 'Open Triggers tab'],
-      ['g o', 'Open Portfolio tab'], ['g s', 'Open Favorite tab'], ['g c', 'Open Chat tab'],
+      ['g 1', 'Work section'], ['g 2', 'Automation section'], ['g 3', 'Projects section'], ['g 4', 'Team section'],
+      ['g i', 'Open Inbox tab (Work)'], ['g f', 'Open Feed tab (Work)'], ['g k', 'Open Tickets tab (Work)'],
+      ['g p', 'Open PRs tab (Work)'], ['g y', 'Open Playbooks tab (Automation)'], ['g t', 'Open Triggers tab (Automation)'],
+      ['g o', 'Open Portfolio tab (Projects)'], ['g s', 'Open Favorite tab (Projects)'], ['g c', 'Open Chat tab (Team)'],
+      ['← → / ↑ ↓', 'Move between sections on the rail, or tabs in a strip'],
       ['g b', 'Close panel (back to board)'],
       ['.',   'Focus the Delegate bar'],
       ['u',   'Open UX View (on a UX item)'],
@@ -1931,22 +1952,13 @@
     const c = paletteState.items[paletteState.idx];
     if (!c) return;
     closePalette();
-    if (c.kind === 'tab') {
-      if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
-      currentMode = 'inbox';
-      currentTab = c.id;
-      renderPanel();
-      return;
-    }
+    if (c.kind === 'tab') { goTab(c.id, false); return; }
     if (c.kind === 'item') { openPanel(c.id, 'item'); return; }
     if (c.kind === 'question') { openPanel(c.item, 'item'); return; }
     if (c.kind === 'chat') {
       // Open the Inbox on the Chat tab; the chat log scrolls to its end on render so the message
       // the owner was searching for is usually visible without further navigation.
-      if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
-      currentMode = 'inbox';
-      currentTab = 'chat';
-      renderPanel();
+      goTab('chat', false);
       return;
     }
     if (c.kind === 'playbook') {
@@ -2082,7 +2094,7 @@
     panelEl.setAttribute('aria-label', mode === 'inbox' ? 'Inbox' : 'Console: ' + (itemId || ''));
     applyDock();
     renderPanel();
-    if (mode === 'inbox') syncLocationHash(currentTab);
+    if (mode === 'inbox') syncLocationHash(tabHash(currentTab));
     else if (mode === 'item' && itemId) syncLocationHash('item=' + encodeURIComponent(itemId));
     // Fix #2: Focus the close button reliably after render
     requestAnimationFrame(() => {
@@ -2157,6 +2169,7 @@
     } else if (currentItem) {
       renderItem(currentItem);
     }
+    markMotion();
     // Keep the aux pane AT THE END of panelEl so it sits above everything. Re-append after
     // mode-specific render so a Launch Idea in-flight survives a live tick without the user
     // noticing. closeAuxPane() is called from openPanel() when currentItem changes, and from
@@ -2168,6 +2181,33 @@
       if (twin) {
         twin.focus();
         try { if (caret && caret[0] !== null) twin.setSelectionRange(caret[0], caret[1]); } catch (e) { /* number, time */ }
+      }
+    }
+  }
+  // U9: motion is keyed to a real change of view, never to a redraw. Every redraw (a live tick from liveLoop, a fetch
+  // landing, a Save) rebuilds the panel from nothing, so an animation set in CSS on .ck-body alone replayed on each one
+  // (through 1.47 a 0.18 s fade did). Here the last view drawn is remembered, and the body gets a class only when this
+  // draw shows a different one: another section crossfades, another sub-tab slides, another item or mode fades in. The
+  // rail's indicator slides from the old section's place (--ck-rail-from, in buttons). The motion itself is CSS, and
+  // only under prefers-reduced-motion: no-preference.
+  let drawnView = null;
+  function markMotion() {
+    const inbox = currentMode === 'inbox';
+    const key = inbox ? 'tab:' + currentTab : currentMode + ':' + (currentItem || '') + ':' + (currentFork || '');
+    const sec = inbox ? sectionOf(currentTab) : null;
+    const prev = drawnView;
+    drawnView = { key, sec };
+    if (!prev || prev.key === key) return;
+    const body = panelEl.querySelector('.ck-body');
+    const kind = sec && prev.sec ? (sec !== prev.sec ? 'section' : 'tab') : 'view';
+    if (body) body.classList.add('ck-enter-' + kind);
+    const rail = kind === 'section' && panelEl.querySelector('.ck-rail');
+    if (rail) {
+      const ids = Array.from(rail.querySelectorAll('.ck-rail-btn')).map(b => b.getAttribute('data-section'));
+      const from = ids.indexOf(prev.sec), to = ids.indexOf(sec);
+      if (from >= 0 && to >= 0) {
+        rail.style.setProperty('--ck-rail-from', String(from - to));
+        rail.classList.add('ck-rail-moved');
       }
     }
   }
@@ -2189,18 +2229,23 @@
   function renderInbox() {
     // The title names the tab on show (U4): it read "Inbox" on People, Triggers, Playbooks and the rest.
     panelEl.appendChild(makeHeader([tabTitle(currentTab)], closePanel, 'Back to board'));
+    // U1: the rail of sections and, beside it (above it, on a phone: U2), the section's own column: its sub-tabs,
+    // the status bar and the body. The body stays the one scroll container (.ck-body), as every redraw expects.
+    const rail = renderRail();
+    const main = el('div', { className: 'ck-section-main' });
+    panelEl.appendChild(el('div', { className: 'ck-sections' }, [rail, main]));
     const tabBar = renderTabs();
-    panelEl.appendChild(tabBar);
-    fitDockToTabs(tabBar);
-    panelEl.appendChild(renderStatusBar(null));
-    appendYourRole(panelEl);
-    panelEl.appendChild(renderDelegateBar());   // Delegate ▾ — orchestrate from anywhere, not only on an item.
+    main.appendChild(tabBar);
+    fitDockToTabs(tabBar, rail);
+    main.appendChild(renderStatusBar(null));
+    appendYourRole(main);
+    main.appendChild(renderDelegateBar());   // Delegate ▾ — orchestrate from anywhere, not only on an item.
     // The Triggers fold is the Inbox's glance at what fired (and what failed) while questions wait.
     // It belongs on the Inbox tab only (U4): the Triggers tab holds the full list, and on Feed,
     // People or Portfolio it was noise.
     const trgs = view && Array.isArray(view.triggers) ? view.triggers : [];
     const log = view && Array.isArray(view.trigger_log) ? view.trigger_log : [];
-    if (currentTab === 'inbox' && (trgs.length || log.length)) panelEl.appendChild(renderTriggerLog(trgs, log));
+    if (currentTab === 'inbox' && (trgs.length || log.length)) main.appendChild(renderTriggerLog(trgs, log));
 
     // One tab panel; the tab bar above says which view it holds (0.7.0).
     const body = el('div', { className: 'ck-body', role: 'tabpanel', id: 'ck-tabpanel',
@@ -2230,15 +2275,14 @@
     } else {
       renderInboxList(body);
     }
-    panelEl.appendChild(body);
+    main.appendChild(body);
     if (currentTab === 'chat') {
       const log = body.querySelector('.ck-chat-log');
       if (log) log.scrollTop = log.scrollHeight;
     }
   }
 
-  // The inbox's tabs. Order: Inbox Feed Tickets PRs Portfolio (More ▾: Playbooks, Triggers,
-  // Favorite, Chat). Keyboard shortcuts (g k, g c, g s, …) reach every tab either way.
+  // The inbox's tabs, in section order (U1, below). Keyboard shortcuts (g k, g c, g s, …) reach every tab.
   const TABS = [
     ['inbox', 'Inbox'],
     ['feed', 'Feed'],
@@ -2248,11 +2292,14 @@
     ['triggers', 'Triggers'],
     ['portfolio', 'Portfolio'],
     ['favorite', 'Favorite'],
-    ['chat', 'Chat'],
     ['people', 'People'],   // 1.40: roles; shown to an owner's login only (visibleTabs)
+    ['chat', 'Chat'],
     ['settings', 'Settings']   // 1.44: an administrator's or a director's login only
   ];
   // The panel title for a tab: its label, or "Inbox" for anything unknown (the body falls back to the Inbox too).
+  // U1: the title names the tab alone, not "Section · Tab". The rail beside it already marks the section (and says
+  // so to a screen reader with aria-current), and at phone width "Automation · Playbooks" would be cut to an ellipsis
+  // where "Playbooks" fits whole.
   function tabTitle(id) {
     const t = TABS.find(([tid]) => tid === id);
     return t ? t[1] : 'Inbox';
@@ -2267,9 +2314,73 @@
   const TAB_ICON = { inbox: 'inbox', feed: 'rss', tickets: 'ticket', prs: 'git-pull-request', playbooks: 'book-open',
     triggers: 'zap', portfolio: 'layout-grid', favorite: 'star', chat: 'message-square', people: 'users',
     settings: 'sliders-horizontal' };
-  // Which TABS are shown directly in the bar vs. folded behind "More ▾".
-  // D9: five tabs with icon and label fit a ~530px column on one line; the rest sit behind More.
-  const TABS_PRIMARY_IDS = ['inbox', 'feed', 'tickets', 'prs', 'portfolio'];
+
+  // U1 (owner, 2026-10-16; amends D14): the tabs sit in four sections, each with its own strip of sub-tabs, and a rail
+  // of the sections replaces "More ▾". U9: Chat sits in Team. currentTab stays the one source of truth: the section is
+  // always derived from it (sectionOf), never stored beside it, so the two cannot disagree.
+  const SECTIONS = [
+    ['work', 'Work', 'briefcase', ['inbox', 'feed', 'tickets', 'prs']],
+    ['automation', 'Automation', 'workflow', ['playbooks', 'triggers']],
+    ['projects', 'Projects', 'folder-kanban', ['portfolio', 'favorite']],
+    ['team', 'Team', 'users', ['people', 'chat', 'settings']]
+  ];
+  function sectionOf(tab) {
+    const s = SECTIONS.find(sec => sec[3].indexOf(tab) >= 0);
+    return s ? s[0] : 'work';
+  }
+  function sectionLabel(id) {
+    const s = SECTIONS.find(sec => sec[0] === id);
+    return s ? s[1] : 'Work';
+  }
+  // A section's sub-tabs this login sees, in strip order.
+  function sectionTabs(secId) {
+    const s = SECTIONS.find(sec => sec[0] === secId);
+    const ids = s ? s[3] : [];
+    return visibleTabs().filter(([id]) => ids.indexOf(id) >= 0);
+  }
+  // U1: role visibility is visibleTabs() unchanged; a section none of whose sub-tabs is shown is not shown at all.
+  // Chat is everyone's, so Team stays for every login.
+  function visibleSections() {
+    return SECTIONS.filter(sec => sectionTabs(sec[0]).length > 0);
+  }
+  // The rail and `g 1`–`g 4` return to the sub-tab last used in a section (this page's memory, nothing stored), else
+  // its first visible one.
+  const lastTabInSection = {};
+  function sectionEntryTab(secId) {
+    const tabs = sectionTabs(secId);
+    const last = lastTabInSection[secId];
+    if (last && tabs.some(([id]) => id === last)) return last;
+    return tabs.length ? tabs[0][0] : null;
+  }
+  // The URL fragment for a tab (U1): the tab first, so a 1.47 link (#feed) and a 1.48 one (#feed&section=work) open
+  // the same view in either version, and the section after it so the address says where the owner is.
+  function tabHash(id) {
+    return id + '&section=' + sectionOf(id);
+  }
+
+  // A section's badge (U1): the MOST URGENT of its sub-tabs' notes, never their sum. The notes are not one unit ("30",
+  // "3 new", "●", a count of open tickets, a count of playbooks), so a sum would add questions to playbooks and mean
+  // nothing. Only notes that ask for the owner rank, most urgent first: questions waiting for you (Inbox), an agent
+  // waiting on the chat (the ● "More" used to carry), questions waiting in other projects (Portfolio), new Feed
+  // events. Counts of things that merely exist (tickets, playbooks, triggers, favorites) stay on their own sub-tab and
+  // never light a section. So Work shows the Inbox count, as the spec asks.
+  const SECTION_BADGE_RANK = ['inbox', 'chat', 'portfolio', 'feed'];
+  function sectionBadge(secId) {
+    const ids = sectionTabs(secId).map(([id]) => id);
+    for (const id of SECTION_BADGE_RANK) {
+      if (ids.indexOf(id) < 0) continue;
+      const note = tabNote(id);
+      if (note) return { tab: id, note };
+    }
+    return null;
+  }
+  function sectionBadgeWords(b) {
+    if (!b) return '';
+    if (b.tab === 'chat') return 'an agent is waiting on the chat';
+    if (b.tab === 'inbox') return b.note + ' waiting for you';
+    if (b.tab === 'portfolio') return b.note + ' waiting in other projects';
+    return b.note + ' in the feed';
+  }
 
   function tabNote(id) {
     const unread = unreadCount();
@@ -2302,9 +2413,11 @@
     if (note) b.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + note]));
     if (id === 'chat' && note) b.setAttribute('aria-label', 'Chat, waiting on an agent');
     b.addEventListener('click', () => selectTab(id));
+    // Arrow keys walk this section's strip only (U1): the strip is the tablist, so its ends are the section's ends.
     b.addEventListener('keydown', e => {
-      const tabs = visibleTabs();
+      const tabs = sectionTabs(sectionOf(id));
       const n = tabs.findIndex(t => t[0] === id);
+      if (n < 0) return;
       let to = null;
       if (e.key === 'ArrowRight') to = tabs[(n + 1) % tabs.length][0];
       else if (e.key === 'ArrowLeft') to = tabs[(n + tabs.length - 1) % tabs.length][0];
@@ -2314,85 +2427,85 @@
     });
     return b;
   }
+  // The current section's sub-tabs, in today's tab markup (U1). "More ▾" is gone: each strip holds at most four tabs,
+  // so it fits the column without folding any away (D9, amended by U8).
   function renderTabs() {
-    const bar = el('div', { className: 'ck-tabs', role: 'tablist', 'aria-label': 'Inbox views' });
-    // Primary tabs sit directly in the bar.
-    for (const [id, label] of TABS) {
-      if (TABS_PRIMARY_IDS.indexOf(id) < 0) continue;
-      bar.appendChild(makeTabButton(id, label));
-    }
-    // Overflow tabs land behind a "More ▾" dropdown so the bar stays sized for one row.
-    // Current-tab-is-in-overflow raises the chip to show which view the operator is in.
-    const overflow = visibleTabs().filter(([id]) => TABS_PRIMARY_IDS.indexOf(id) < 0);
-    if (overflow.length) {
-      const activeOverflow = overflow.find(([id]) => id === currentTab);
-      const label = activeOverflow ? activeOverflow[1] : 'More';
-      const more = el('button', { className: 'ck-tab ck-tab-more', type: 'button',
-        'aria-haspopup': 'menu', 'aria-expanded': 'false',
-        'aria-label': activeOverflow ? ('More tabs — currently in ' + activeOverflow[1]) : 'More tabs',
-        'aria-selected': activeOverflow ? 'true' : 'false' },
-        [activeOverflow ? icon(TAB_ICON[activeOverflow[0]]) : null, el('span', { className: 'ck-tab-label' }, [label]),
-          el('span', { 'aria-hidden': 'true', className: 'ck-tab-more-caret' }, [icon('chevron-down') || ' ▾'])]);
-      // Current overflow tab shows its note (same as a primary tab) so the operator sees state.
-      if (activeOverflow) {
-        const note = tabNote(activeOverflow[0]);
-        if (note) more.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + note]));
-      } else {
-        // Fold any non-active overflow note (e.g. a chat ● when sitting on Inbox) into the "More" button
-        // so the operator still sees the agent is waiting.
-        const anyNote = overflow.find(([id]) => id !== currentTab && tabNote(id));
-        if (anyNote) more.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + tabNote(anyNote[0])]));
-      }
-      more.addEventListener('click', () => openMoreMenu(more, overflow));
-      more.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
-          e.preventDefault();
-          openMoreMenu(more, overflow);
-        }
-      });
-      bar.appendChild(more);
-    }
+    const sec = sectionOf(currentTab);
+    const bar = el('div', { className: 'ck-tabs', role: 'tablist', 'aria-label': sectionLabel(sec) + ' views',
+      dataSection: sec });
+    for (const [id, label] of sectionTabs(sec)) bar.appendChild(makeTabButton(id, label));
     return bar;
   }
-
-  // pop a lightweight menu listing the overflow tabs. Click or Enter closes +
-  // selects. Esc closes. Click-outside closes. Focus returns to the "More" button.
-  let moreMenuOpen = null;
-  function openMoreMenu(anchor, overflow) {
-    closeMoreMenu();
-    const menu = el('div', { className: 'ck-more-menu', role: 'menu' });
-    for (const [id, label] of overflow) {
-      const item = el('button', { type: 'button', className: 'ck-more-item', role: 'menuitem' }, [icon(TAB_ICON[id]), label]);
-      const note = tabNote(id);
-      if (note) item.appendChild(el('span', { className: 'ck-tab-note' }, [' ' + note]));
-      item.addEventListener('click', () => { closeMoreMenu(); selectTab(id); });
-      menu.appendChild(item);
-    }
-    anchor.setAttribute('aria-expanded', 'true');
-    anchor.parentNode.appendChild(menu);
-    const rect = anchor.getBoundingClientRect();
-    const panelRect = panelEl.getBoundingClientRect();
-    menu.style.left = (rect.left - panelRect.left) + 'px';
-    menu.style.top = (rect.bottom - panelRect.top + 4) + 'px';
-    const items = menu.querySelectorAll('.ck-more-item');
-    if (items.length) items[0].focus();
-    const onKey = e => {
-      if (e.key === 'Escape') { e.preventDefault(); closeMoreMenu(); anchor.focus(); }
-      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+  // The rail of sections (U1): one <nav> of buttons, aria-current on the section on show. Wide, a slim column of icon
+  // and label on the column's leading edge; on a phone the same buttons are the bottom bar (U2); below 400px the labels
+  // are hidden visually but stay each button's name (U8). Arrow keys move between the buttons (roving tabindex: one Tab
+  // stop for the whole rail), and Enter or Space opens the section.
+  function renderRail() {
+    const cur = sectionOf(currentTab);
+    const nav = el('nav', { className: 'ck-rail', 'aria-label': 'Sections' });
+    for (const [id, label, iconName] of visibleSections()) {
+      const badge = sectionBadge(id);
+      const words = sectionBadgeWords(badge);
+      const b = el('button', { className: 'ck-rail-btn', type: 'button', dataSection: id,
+        'aria-label': label + (words ? ', ' + words : ''), title: label + (words ? ' (' + words + ')' : ''),
+        tabindex: id === cur ? '0' : '-1', 'aria-current': id === cur ? 'page' : null,
+        'data-focus-key': 'rail-' + id },
+        [icon(iconName, 'ck-rail-icon'), el('span', { className: 'ck-rail-label' }, [label]),
+          badge ? el('span', { className: 'ck-rail-badge', 'aria-hidden': 'true' }, [badge.note]) : null]);
+      b.addEventListener('click', () => selectSection(id));
+      b.addEventListener('keydown', e => {
+        const all = Array.from(nav.querySelectorAll('.ck-rail-btn'));
+        const n = all.indexOf(b);
+        let to = -1;
+        // Both axes: the rail is vertical on a wide screen and the bottom bar horizontal on a phone.
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') to = (n + 1) % all.length;
+        else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') to = (n + all.length - 1) % all.length;
+        else if (e.key === 'Home') to = 0;
+        else if (e.key === 'End') to = all.length - 1;
+        if (to < 0) return;
         e.preventDefault();
-        const idx = Array.prototype.indexOf.call(items, document.activeElement);
-        const next = e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
-        items[next].focus();
-      }
-    };
-    const onOutside = e => {
-      if (!menu.contains(e.target) && e.target !== anchor) closeMoreMenu();
-    };
-    menu.addEventListener('keydown', onKey);
-    setTimeout(() => document.addEventListener('click', onOutside, true), 0);
-    moreMenuOpen = { menu, anchor, onOutside };
+        for (const x of all) x.setAttribute('tabindex', x === all[to] ? '0' : '-1');
+        all[to].focus();
+      });
+      nav.appendChild(b);
+    }
+    return nav;
   }
-  // A small action menu (Chat ▾): same keyboard and outside-click behaviour as More ▾.
+
+  // Changing section moves focus to the section's active sub-tab (U1, accessibility): a keyboard user lands where the
+  // arrow keys work at once, and a screen reader hears "Feed, tab, selected, 2 of 4", which names where they are. The
+  // panel heading is not focusable, and a focus there would need one more Tab to reach anything.
+  function selectSection(id) {
+    const tab = sectionEntryTab(id);
+    if (tab) goTab(tab, true);
+  }
+  function selectTab(id) {
+    goTab(id, true);
+  }
+  // Every way to a tab (a sub-tab, the rail, `g X`, the palette, a deep link) comes through here, so the section,
+  // the sub-tab remembered for it and the URL fragment are set in one place. `focus`: put focus on the tab's button
+  // afterwards; it also happens when the redraw took focus away from inside the panel.
+  function goTab(id, focus) {
+    const a = document.activeElement;
+    const wasInside = !!(a && a !== document.body && panelEl.contains(a));
+    currentTab = id;
+    lastTabInSection[sectionOf(id)] = id;
+    if (panelEl.getAttribute('data-open') !== 'true') {
+      openPanel(null, 'inbox');   // draws, writes the fragment and focuses Close, as it always has
+      return;
+    }
+    currentMode = 'inbox';
+    renderPanel();
+    syncLocationHash(tabHash(id));
+    if (focus || (wasInside && !panelEl.contains(document.activeElement))) {
+      const t = panelEl.querySelector('#ck-tab-' + CSS.escape(id));
+      if (t) t.focus();
+    }
+  }
+
+  // pop-up menus share one slot, so opening one closes another; Esc and an outside click close it.
+  let moreMenuOpen = null;
+  // A small action menu (Chat ▾): arrow keys walk it, Esc and an outside click close it.
   function openActionMenu(anchor, entries) {
     closeMoreMenu();
     const menu = el('div', { className: 'ck-more-menu ck-action-menu', role: 'menu' });
@@ -2429,14 +2542,6 @@
     if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
     if (anchor) anchor.setAttribute('aria-expanded', 'false');
     moreMenuOpen = null;
-  }
-
-  function selectTab(id) {
-    currentTab = id;
-    renderPanel();
-    if (currentMode === 'inbox') syncLocationHash(id);
-    const t = panelEl.querySelector('#ck-tab-' + id);
-    if (t) t.focus();
   }
 
   // First-run hero : what someone sees on an Overture instance that has no items yet.
@@ -9800,8 +9905,11 @@
     if (tabs && !tabs.contains(document.activeElement)) {
       const bar = renderTabs();
       tabs.replaceWith(bar);
-      fitDockToTabs(bar);
+      fitDockToTabs(bar, panelEl.querySelector('.ck-rail'));
     }
+    // U1: the rail's badges follow too (Team's ● goes once the agent has answered). Not while focus is on the rail.
+    const rail = panelEl.querySelector('.ck-rail');
+    if (rail && !rail.contains(document.activeElement)) rail.replaceWith(renderRail());
     return true;
   }
 
@@ -10262,7 +10370,7 @@
     footerEl.textContent = parts.join(' · ');
     // The shortcut sheet is one press of `?` away, but nobody finds `?`: give it a button.
     const keys = el('button', { type: 'button', className: 'ck-footer-keys',
-      title: 'Keyboard shortcuts (?)', 'aria-label': 'Show keyboard shortcuts' }, [icon('keyboard'), ' Shortcuts']);
+      title: 'Keyboard shortcuts (?): g 1–4 switch section, g i, g f, … open a tab', 'aria-label': 'Show keyboard shortcuts' }, [icon('keyboard'), ' Shortcuts']);
     keys.addEventListener('click', () => openShortcutHelp());
     footerEl.appendChild(keys);
     footerEl.setAttribute('data-stale', stale ? 'true' : 'false');
@@ -10402,7 +10510,9 @@
   }
 
   // Deep links. The URL hash activates one view on load (and on an in-page back/forward):
-  //   #inbox | #feed | #prs | #favorite | #portfolio | #chat   — open the panel on that tab
+  //   #inbox | #feed | #prs | #favorite | #portfolio | #chat   — open the panel on that tab (any of TABS)
+  //   #feed&section=work | #tab=feed                           — the same (1.48, U1); the tab wins over the section
+  //   #section=team                                            — open a section on its first visible sub-tab
   //   #item=<id>                                               — open the item panel
   //   #qid=<id>/Q<n>                                           — open the owning item
   // Anything else is ignored. applyLocationHash returns true when it did something.
@@ -10416,11 +10526,13 @@
       if (i < 0) kv[p] = true; else kv[p.slice(0, i)] = decodeURIComponent(p.slice(i + 1));
     }
     const bare = parts[0] && parts[0].indexOf('=') < 0 ? parts[0] : null;
-    if (bare && TABS.some(t => t[0] === bare)) {
-      currentTab = bare;
-      if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
-      currentMode = 'inbox';
-      renderPanel();
+    let tab = bare && TABS.some(t => t[0] === bare) ? bare
+      : (typeof kv.tab === 'string' && TABS.some(t => t[0] === kv.tab) ? kv.tab : null);
+    if (!tab && typeof kv.section === 'string' && SECTIONS.some(sec => sec[0] === kv.section)) {
+      tab = sectionEntryTab(kv.section);
+    }
+    if (tab) {
+      goTab(tab, false);
       return true;
     }
     if (kv.item) {
@@ -10442,16 +10554,13 @@
 
   // Keep the URL hash in sync with what the owner is looking at. Uses replaceState so each nav
   // is one hash write, not a history entry per click (which would make Back feel broken).
-  let hashSyncSuspended = false;
+  // 1.48: every write lands. Through 1.47 a write set a flag that a setTimeout(0) cleared, and every write until then
+  // was dropped; a timer can run late (it measured 100 ms just after the panel opened), so `g 1` then `g f` left the
+  // address on the first tab. replaceState never fires hashchange, so there is no loop for a flag to break.
   function syncLocationHash(frag) {
-    if (hashSyncSuspended) return;
     try {
       const next = frag ? '#' + frag : location.pathname + location.search;
-      if (frag ? location.hash !== '#' + frag : location.hash) {
-        hashSyncSuspended = true;
-        history.replaceState(null, '', next);
-        setTimeout(() => { hashSyncSuspended = false; }, 0);
-      }
+      if (frag ? location.hash !== '#' + frag : location.hash) history.replaceState(null, '', next);
     } catch (e) { /* some browsers refuse replaceState with a hash — ignore */ }
   }
 
@@ -10470,6 +10579,7 @@
     // 0.7.0: open the inbox on a tab ('inbox', 'feed', 'chat'), or a round's form.
     openTab: function(tab) {
       currentTab = TABS.some(t => t[0] === tab) ? tab : 'inbox';
+      lastTabInSection[sectionOf(currentTab)] = currentTab;
       openPanel(null, 'inbox');
     },
     openRound: function(forkId) {

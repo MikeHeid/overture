@@ -2,7 +2,7 @@
 
 [← Back to README](../../README.md)
 
-The live page, the tabs, the palette, the keyboard, the Portfolio and the Operator Shift report.
+The live page, the sections and their tabs, the palette, the keyboard, phones, the Portfolio and the Operator Shift report.
 
 ## See what's happening
 
@@ -103,11 +103,13 @@ The live page, the tabs, the palette, the keyboard, the Portfolio and the Operat
   <img src="../screenshots/anim-palette.gif" alt="Pressing Ctrl+K, typing retry, and jumping straight to the matching item" width="720">
 
 - **Keyboard shortcuts.** Press `?`, or the **⌨ Shortcuts** button in
-  the footer, for the full list. `g i / f / k / p / s / o / c` hop to the
-  Inbox / Feed / Tickets / PRs / Favorite / Portfolio / Chat tab; `g b`
-  closes the panel; `.` focuses the Delegate bar; `j / k` walk the rows;
-  Enter / Space opens the focused row. Shortcuts never fire in a text
-  input.
+  the footer, for the full list. `g 1 / 2 / 3 / 4` open the Work /
+  Automation / Projects / Team section, on the tab you last used there
+  (1.48). `g i / f / k / p` hop to the Inbox / Feed / Tickets / PRs tab,
+  `g y / t` to Playbooks / Triggers, `g o / s` to Portfolio / Favorite and
+  `g c` to Chat, each in its section; `g b` closes the panel; `.` focuses
+  the Delegate bar; `j / k` walk the rows; Enter / Space opens the focused
+  row. Shortcuts never fire in a text input.
 
   <img src="../screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
 
@@ -126,15 +128,47 @@ The live page, the tabs, the palette, the keyboard, the Portfolio and the Operat
 
 ## Tabs, themes and reports
 
+- **Sections (1.48).** The tabs sit in four sections, on a slim rail
+  down the panel's left edge:
+
+  | Section | Its tabs |
+  |---|---|
+  | **Work** | Inbox, Feed, Tickets, PRs |
+  | **Automation** | Playbooks, Triggers |
+  | **Projects** | Portfolio, Favorite |
+  | **Team** | People, Chat, Settings |
+
+  Press a section for its own strip of tabs; it opens on the tab you last
+  used there. People shows for an administrator and Settings for an
+  administrator or a director, as before; Chat keeps Team for everyone.
+  "More ▾" is gone (it held what the sections now hold).
+
+  <img src="../screenshots/feature-sections.png" alt="The section rail: Work with its Inbox count, Automation chosen with its Playbooks and Triggers tabs, Projects and Team" width="400">
+
+- **A section's badge** is the most urgent of its tabs' counts, not their
+  sum: questions waiting for you (Work shows the Inbox count), then an
+  agent waiting on the chat (●), then questions waiting in your other
+  projects, then new Feed events. Counts of things that are simply there
+  (tickets, playbooks, triggers, favorites) stay on their tab.
+- **With a keyboard or a screen reader.** The rail is one Tab stop: the
+  arrow keys (and Home, End) move along it and Enter or Space opens a
+  section, which puts focus on that section's selected tab. In a strip the
+  arrow keys move between its tabs and stop at the section's ends. Each
+  rail button is a named button ("Work, 3 waiting for you"), the section
+  on show is marked as the current page, and every button has a tooltip.
+- **Motion.** A new section fades in, a new tab slides in, and the rail's
+  marker slides to its section, each in under a fifth of a second. None of
+  it runs if your system asks for reduced motion, and a live update never
+  animates.
 - **The panel's title names the tab (1.47).** The header reads
   "Inbox", "Feed", "People", "Triggers", "Playbooks" and so on, for the
-  tab you are on; through 1.46 it read "Inbox" on every tab. **← Back**
+  tab you are on; through 1.46 it read "Inbox" on every tab. The section
+  is on the rail beside it, so the title stays short (1.48). **← Back**
   beside it returns to the board.
-- **The tab bar.** Inbox, Feed, Tickets, PRs and Portfolio sit in the
-  bar; Playbooks, Triggers, Favorite and Chat (and People and Settings,
-  for the logins that may open them) sit under **More ▾**. `g y` opens
-  Playbooks and `g t` Triggers, as the shortcut sheet lists. Each tab's
-  name also works as a link: `#playbooks`, `#people`.
+- **Links.** The address follows you: `#feed&section=work`. A tab's name
+  alone works as a link too (`#playbooks`, `#people`, as before 1.48), and
+  so do `#tab=feed` and `#section=team` (a section's first tab);
+  `#item=ID` opens an item and `#qid=ID/Qn` the item a question is on.
 
   <img src="../screenshots/feature-footer-keys.png" alt="The console with the shortcuts sheet opened from the footer's Shortcuts button" width="720">
 
@@ -192,14 +226,24 @@ The live page, the tabs, the palette, the keyboard, the Portfolio and the Operat
 
 ## The panel on the page
 
-- **Dock width (1.24).** The panel opens 420 px wide; drag its left edge
+- **Dock width (1.24, 1.48).** The panel opens 576 px wide (480 px before 1.48, which added the section rail); drag its left edge
   (or focus the edge and use ← and →, Shift for bigger steps, Home and
   End for the limits) and the width is kept for this project.
 - **First run (1.24).** A console with nothing to show yet opens on a
   welcome that says what to do first, with a Copy button for the command.
-- **On a phone (1.22).** The panel fills the screen with the safe-area
-  insets of notched phones, every control is at least 36 px tall, the tab
-  bar scrolls sideways, and the Portfolio cards and dialogs stack to fit.
+- **On a phone (1.22, 1.48).** Below 640 px an open console is the whole
+  screen, whatever the page under it does: a page wider than the phone no
+  longer pushes it aside, and the page neither scrolls nor takes taps until
+  you close the console. The sections are a bottom bar of four buttons,
+  each at least 48 px and clear of the home indicator; the section's tabs
+  are a strip at the top that scrolls sideways; Back and × stay in the
+  header. Below 400 px the bar shows icons only, each with its name for a
+  screen reader and a tooltip. Every control is at least 36 px tall, and
+  the Portfolio cards and dialogs stack to fit. In the Inbox's Priority
+  list each row is two lines: which item, with its ⌛, then the question
+  and how long it has waited.
+
+  <img src="../screenshots/feature-phone.png" alt="The Inbox on a 390 px phone, full screen: the Work tabs at the top, Priority rows of two lines, and the bottom bar of four section icons" width="300">
 - **Toasts and visible confirmations (1.23).** Every confirmation and
   error the page announces to a screen reader also shows as a toast in
   the bottom-right corner, so a lock, a playbook run or a dismiss is

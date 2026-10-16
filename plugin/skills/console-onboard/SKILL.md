@@ -123,7 +123,7 @@ say plainly that each is theirs to run:
    then start the tunnel unit;
 5. check it: 403 on loopback without a token, then an Access login at the
    hostname;
-6. make themselves the **administrator**: People (under More) → "Make me
+6. make themselves the **administrator**: Team → People → "Make me
    the administrator", which takes the login they are signed in with. Until
    then everyone the Access policy lets in can do everything. After it, they
    add each other person there as a member of their areas, or a viewer.

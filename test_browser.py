@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -250,10 +251,11 @@ FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="
 
 # The open docked column's width with nothing stored. 1.24.0 replaced the 50vw default (it "ate half of
 # a 27" monitor on first open") with a fixed one, clamped to [320px, 60vw] (DOCK_W_MIN / DOCK_W_MAX_FRAC);
-# the Unreleased fixes after 1.31.0 widened it from 420px to 480px, where the eight-tab strip fits.
+# the Unreleased fixes after 1.31.0 widened it from 420px to 480px, where the eight-tab strip fits; 1.48 (U1) to
+# 576px, so the content beside the section rail keeps the room it had.
 # console.js DOCK_W_DEFAULT and console.css --ck-col. Every docked width the tests use (1024px and up)
 # has 60vw >= 614px, so the clamp never bites and the column is exactly this wide.
-DOCK_COL = 480
+DOCK_COL = 576
 
 
 def _expand(page, qid=None) -> None:
@@ -386,7 +388,7 @@ class DockTests(unittest.TestCase):
     # Owner, 2026-09-29: "on big monitors can you make it 50% of the screen until
     # closed"; 1.24.0 reversed that (the 50vw dock "ate half of a 27" monitor on first
     # open, which operators closed reflexively") for a fixed default the owner can drag,
-    # 480px since the fixes after 1.31.0. Catches: a column that still scales with the
+    # 480px since the fixes after 1.31.0, 576px since 1.48 (the rail). Catches: a column that still scales with the
     # screen, a column whose width and the page's margin disagree (board text under the
     # column), and a state chip that keeps its own column beside the question and
     # squeezes the text into a strip.
@@ -570,6 +572,9 @@ class DockTests(unittest.TestCase):
                 for button, done in (("Create research ticket", "Research ticket created."),
                                      ("Spawn deliberate round", "Deliberate round queued.")):
                     page.click(opener)
+                    # The pane focuses its title on the next frame; filling before that frame raced it, and a late
+                    # focus took the description's text into the title (flaky since 1.34.7, seen again in 1.48).
+                    _wait_for(page, "document.activeElement && document.activeElement.getAttribute('aria-label') === 'Topic title'")
                     page.fill("input[aria-label='Topic title']", "Dig here")
                     page.fill("textarea[aria-label='Topic description']", "A topic long enough to dig into.")
                     page.click("text=Dig in →")
@@ -1790,11 +1795,14 @@ class LiveConsoleTests(unittest.TestCase):
         p = self.cfg.inbox
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
-    def page(self, kind, width, url, reduced=False, block_live=False, init=None):
+    def page(self, kind, width, url, reduced=False, block_live=False, init=None, mobile=False, height=900):
         browser = getattr(self.pw, kind).launch()
         self.addCleanup(browser.close)
-        ctx = browser.new_context(viewport={"width": width, "height": 900},
-                                  reduced_motion="reduce" if reduced else "no-preference")
+        # `mobile` (1.48): a phone's layout viewport, which grows to a host page wider than the screen (uxshot 02).
+        # Firefox has no mobile emulation; there it is the narrow window alone.
+        extra = {"is_mobile": True, "has_touch": True} if mobile and kind != "firefox" else {}
+        ctx = browser.new_context(viewport={"width": width, "height": height},
+                                  reduced_motion="reduce" if reduced else "no-preference", **extra)
         ctx.add_init_script(INBOX_CLOSED_THIS_SESSION)
         if init:
             ctx.add_init_script(init)
@@ -1833,14 +1841,13 @@ class LiveConsoleTests(unittest.TestCase):
         page.click(".ck-dock-strip" if width >= 1024 else ".ck-inbox-btn")
         page.wait_for_selector(".ck-tabs")
 
-    def open_more_tab(self, page, label):
-        # 1.25.0: Favorite and Chat sit behind the tab bar's "More ▾" menu (no #ck-tab-chat any more); once
-        # chosen, "More" stands in for the tab, named after it and selected.
-        page.click(".ck-tab-more")
-        page.locator(".ck-more-menu .ck-more-item", has_text=label).click()
-        _wait_for(page, "label => { const b = document.querySelector('.ck-tab-more');"
-                        " return !!b && b.getAttribute('aria-selected') === 'true'"
-                        " && b.getAttribute('aria-label') === 'More tabs — currently in ' + label; }", label)
+    def open_section_tab(self, page, section, tab):
+        # 1.48 (U1): a tab outside Work sits in its section; the rail button shows the section's strip, and the
+        # tab is then a tab like any other, selected once chosen.
+        page.click(f".ck-rail-btn[data-section='{section}']")
+        page.click(f"#ck-tab-{tab}")
+        _wait_for(page, "t => { const b = document.getElementById('ck-tab-' + t);"
+                        " return !!b && b.getAttribute('aria-selected') === 'true'; }", tab)
 
     def assert_not_reloaded(self, page):
         self.assertTrue(page.evaluate("window.__notReloaded === true"), "the page reloaded")
@@ -2334,11 +2341,14 @@ class LiveConsoleTests(unittest.TestCase):
                     url = self.serve()
                     page = self.page(kind, width, url)
                     self.open_inbox(page, width)
-                    self.open_more_tab(page, "Chat")
+                    self.open_section_tab(page, "team", "chat")
                     page.fill("#ck-chat-input", "Is the project build green?")
                     page.keyboard.press("Enter")
                     page.wait_for_selector(".ck-chat-msg[data-by='owner']")
-                    _wait_for(page, "(document.querySelector('.ck-tab-more .ck-tab-note') || {}).textContent === ' ●'")
+                    # The ● waits on the Chat tab and, since 1.48 (U1), on Team's rail badge (it rode on "More").
+                    _wait_for(page, "(document.querySelector('#ck-tab-chat .ck-tab-note') || {}).textContent === ' ●'"
+                                    " && (document.querySelector('.ck-rail-btn[data-section=team] .ck-rail-badge')"
+                                    " || {}).textContent === '●'")
                     woke = D.watch(self.cfg.inbox, 0, poll=0.05, timeout=5)
                     self.assertEqual([(w["intent"], w["item"]) for w in woke], [("chat", "@chat")])
                     msg = [r for r in self.console.store.records() if r["type"] == "message"][-1]
@@ -2348,7 +2358,8 @@ class LiveConsoleTests(unittest.TestCase):
                                                  "nonce": "chatreply01"})
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']", timeout=10000)
                     self.assertIn("Green at abc123.", page.locator(".ck-chat-msg[data-by='agent']").text_content())
-                    _wait_for(page, "!document.querySelector('.ck-tab-more .ck-tab-note')")  # no longer waiting
+                    _wait_for(page, "!document.querySelector('#ck-tab-chat .ck-tab-note')"
+                                    " && !document.querySelector('.ck-rail-btn[data-section=team] .ck-rail-badge')")
                     self.assertFalse(page.evaluate(OVERFLOW))
                     if os.environ.get("OVERTURE_SHOTS"):
                         page.locator(".ck-panel").screenshot(
@@ -2387,7 +2398,7 @@ class LiveConsoleTests(unittest.TestCase):
                     self.assertFalse(page.evaluate(OVERFLOW))
                     page = self.page(kind, width, url)       # a fresh page for the chat tab
                     self.open_inbox(page, width)
-                    self.open_more_tab(page, "Chat")
+                    self.open_section_tab(page, "team", "chat")
                     page.wait_for_selector(".ck-chat-msg[data-by='agent']")
                     who = page.locator(".ck-chat-msg[data-by='agent'] .ck-chat-who").all_text_contents()
                     self.assertTrue(any(w.startswith("agent-6 · ") for w in who), who)
@@ -3323,10 +3334,9 @@ class InboxUXTests(unittest.TestCase):
                 page.evaluate("ConsoleKit.openTab('people')")
                 page.wait_for_selector("text=Only an administrator manages people.")
                 page.evaluate("ConsoleKit.openTab('inbox')")
-                page.click(".ck-tab-more")   # People lives behind More
-                page.wait_for_selector(".ck-more-menu")
-                self.assertGreater(page.locator(".ck-more-item").count(), 0)
-                self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
+                page.click(".ck-rail-btn[data-section='team']")   # People lives in Team (1.48, U1)
+                page.wait_for_selector("#ck-tab-chat")
+                self.assertEqual(page.locator("#ck-tab-people").count(), 0)
 
     def test_a_director_sets_a_limit_and_a_short_name_and_sees_the_two_key_areas_read_only(self):
         # Catches (1.44.0): the Settings tab never shown to a director (or shown to any viewer), a Save posting
@@ -3343,9 +3353,9 @@ class InboxUXTests(unittest.TestCase):
                 RO.set_role(self.cfg.state, "owner@example.com", "viewer", director=True)   # the page's login
                 page = self.page(kind, 1280, url)
                 page.evaluate("ConsoleKit.openTab('inbox')")
-                page.click(".ck-tab-more")
-                page.click(".ck-more-item:has-text('Settings')")
-                self.assertEqual(page.locator(".ck-more-item", has_text="People").count(), 0)
+                page.click(".ck-rail-btn[data-section='team']")
+                page.click("#ck-tab-settings")
+                self.assertEqual(page.locator("#ck-tab-people").count(), 0)
                 page.fill("#ck-setting-chat_per_minute", "3")
                 page.click(".ck-settings-row[data-key='chat_per_minute'] button:has-text('Save')")
                 page.wait_for_selector(".ck-settings-row[data-key='chat_per_minute'] >> text=set here; the default is 6")
@@ -3367,9 +3377,9 @@ class InboxUXTests(unittest.TestCase):
                 page.evaluate("ConsoleKit.openTab('settings')")
                 page.wait_for_selector("text=Only an administrator or a director changes settings.")
                 page.evaluate("ConsoleKit.openTab('inbox')")
-                page.click(".ck-tab-more")
-                page.wait_for_selector(".ck-more-menu")
-                self.assertEqual(page.locator(".ck-more-item", has_text="Settings").count(), 0)
+                page.click(".ck-rail-btn[data-section='team']")
+                page.wait_for_selector("#ck-tab-chat")
+                self.assertEqual(page.locator("#ck-tab-settings").count(), 0)
 
     def test_settings_turns_notifications_on_and_shows_the_webhook_by_host_only(self):
         # Catches (1.45.0): the Notifications section never drawn, the switch or the quiet hours posting
@@ -4296,6 +4306,354 @@ class LayoutFixTests(unittest.TestCase):
                     self.assertEqual(over, 0)
                     page.check("input[name='ck-del-kind'][value='round']")
                     self.assertTrue(page.is_visible("#ck-del-item"))
+
+
+# A phone's host page (1.48, U2): a viewport meta, as a real page has (without one a phone lays the page out 980px
+# wide), and content wider than the phone, as the showcase spilled to 554px in uxshot 02.
+PHONE_HOST = LIVE_HOST.replace('<meta charset="utf-8">', '<meta charset="utf-8">'
+                               '<meta name="viewport" content="width=device-width, initial-scale=1">').replace(
+    '<body>', '<body>\n<div id="host-spill" style="width:554px;height:40px;background:#ccc">wide host content</div>', 1)
+RAIL = "() => [...document.querySelectorAll('.ck-rail .ck-rail-btn')].map(b => b.dataset.section)"
+STRIP = "() => [...document.querySelectorAll('.ck-tabs .ck-tab')].map(b => b.id.replace('ck-tab-', ''))"
+CURRENT = """() => { const s = document.querySelector('.ck-rail-btn[aria-current="page"]');
+  const t = document.querySelector('.ck-tab[aria-selected="true"]');
+  return [s && s.dataset.section, t && t.id.replace('ck-tab-', '')]; }"""
+# WCAG contrast of two computed colours, as rgb()/rgba() or color(srgb …) (what color-mix computes to).
+CONTRAST_JS = """([fg, bg]) => {
+  const parse = c => { const n = (c.match(/[\\d.]+/g) || []).map(Number);
+    return c.startsWith('color(') ? n.slice(0, 3).map(v => v * 255) : n.slice(0, 3); };
+  const lum = c => { const [r, g, b] = parse(c).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05); }"""
+
+
+class SectionTests(unittest.TestCase):
+    """1.48 (U1, U2, U8, U9): the section rail, the console full screen on a phone, labels at the narrowest widths,
+    and motion that only a real change of section or tab sets off. In a real browser on the real server."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+    serve = LiveConsoleTests.serve
+    agent_post = LiveConsoleTests.agent_post
+    ask = LiveConsoleTests.ask
+    page = LiveConsoleTests.page
+    open_inbox = LiveConsoleTests.open_inbox
+
+    def g(self, page, key):
+        page.keyboard.press("g")
+        page.keyboard.press(key)
+
+    def test_the_rail_shows_each_role_its_sections_and_sub_tabs(self):
+        # Catches: role visibility lost in the move to sections (People shown to a director or a member, Settings to
+        # a member or a plain viewer); Team dropped for a login that may not see People or Settings (Chat alone
+        # keeps it); a section shown with an empty strip; and the rail without its landmark name or aria-current.
+        from overture import roles as RO
+        cases = (("owner", {}, ["people", "chat", "settings"]),
+                 ("director", {"director": True}, ["chat", "settings"]),
+                 ("member", {}, ["chat"]),
+                 ("viewer", {}, ["chat"]))
+        for kind in BROWSERS:
+            for role, extra, team in cases:
+                with self.subTest(browser=kind, role=role):
+                    url = self.serve()
+                    RO.set_role(self.cfg.state, "boss@example.com", "owner")
+                    if role == "owner":
+                        RO.set_role(self.cfg.state, "owner@example.com", "owner")
+                    elif role == "member":
+                        RO.set_role(self.cfg.state, "owner@example.com", "member", ["LANE"])
+                    else:
+                        RO.set_role(self.cfg.state, "owner@example.com", "viewer", **extra)
+                    page = self.page(kind, 1280, url)
+                    self.open_inbox(page, 1280)
+                    self.assertEqual(page.locator("nav.ck-rail[aria-label='Sections']").count(), 1)
+                    self.assertEqual(page.evaluate(RAIL), ["work", "automation", "projects", "team"])
+                    self.assertEqual(page.evaluate(CURRENT), ["work", "inbox"])
+                    self.assertEqual(page.evaluate(STRIP), ["inbox", "feed", "tickets", "prs"])
+                    self.assertEqual(page.locator(".ck-tabs[role='tablist']").get_attribute("aria-label"), "Work views")
+                    strips = {}
+                    for sec in ("automation", "projects", "team"):
+                        page.click(f".ck-rail-btn[data-section='{sec}']")
+                        _wait_for(page, "s => document.querySelector('.ck-rail-btn[aria-current=\"page\"]').dataset.section === s",
+                                  sec)
+                        strips[sec] = page.evaluate(STRIP)
+                    self.assertEqual(strips, {"automation": ["playbooks", "triggers"],
+                                              "projects": ["portfolio", "favorite"], "team": team})
+                    self.assertEqual(page.locator(".ck-rail-btn[aria-current='page']").count(), 1)
+                    self.assertEqual(page.locator(".ck-tab-more, .ck-more-menu").count(), 0)
+
+    def test_every_g_shortcut_reaches_its_tab_and_section(self):
+        # Catches: a `g X` lost in the move (each must still open its tab), one that opens the tab but leaves the rail
+        # on the old section, `g 1`–`g 4` going anywhere but the section's last-used sub-tab (or its first, before
+        # any), the fragment not following, and `g b` no longer closing the panel.
+        keys = (("i", "work", "inbox"), ("f", "work", "feed"), ("k", "work", "tickets"), ("p", "work", "prs"),
+                ("y", "automation", "playbooks"), ("t", "automation", "triggers"), ("o", "projects", "portfolio"),
+                ("s", "projects", "favorite"), ("c", "team", "chat"))
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("document.activeElement.blur()")
+                self.g(page, "2")   # before any use: the section's first sub-tab
+                _wait_for(page, "document.querySelector('.ck-panel').dataset.open === 'true'")
+                self.assertEqual(page.evaluate(CURRENT), ["automation", "playbooks"])
+                for key, sec, tab in keys:
+                    self.g(page, key)
+                    _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT, [sec, tab])
+                    self.assertEqual(page.evaluate("location.hash"), f"#{tab}&section={sec}")
+                for key, want in (("1", ["work", "prs"]), ("2", ["automation", "triggers"]),
+                                  ("3", ["projects", "favorite"]), ("4", ["team", "chat"])):
+                    self.g(page, key)
+                    _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT, want)
+                self.g(page, "b")
+                _wait_for(page, "document.querySelector('.ck-panel').dataset.open === 'false'")
+                page.keyboard.press("?")
+                text = page.locator("#ck-shortcut-help").text_content()
+                for k in ("g 1", "g 2", "g 3", "g 4", "Work section", "Team section", "Open Chat tab (Team)"):
+                    self.assertIn(k, text)
+
+    def test_deep_links_open_their_tab_and_say_the_section(self):
+        # Catches: a 1.47 link (#feed, #chat) that no longer opens its tab now that tabs sit in sections; #tab= and
+        # #section= not understood; a link to a section not landing on its first sub-tab; and a fragment that does
+        # not name the section once the console has opened. #item= and #qid= keep opening the item.
+        cases = (("#tickets", ["work", "tickets"]), ("#chat", ["team", "chat"]),
+                 ("#tab=triggers", ["automation", "triggers"]), ("#section=projects", ["projects", "portfolio"]),
+                 ("#favorite&section=projects", ["projects", "favorite"]))
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                for frag, want in cases:
+                    page = self.page(kind, 1280, url + frag)
+                    _wait_for(page, "w => { const c = (%s)(); return c[0] === w[0] && c[1] === w[1]; }" % CURRENT, want)
+                    self.assertEqual(page.evaluate("location.hash"), f"#{want[1]}&section={want[0]}")
+                    page.close()
+                for frag in ("#item=LANE.1", "#qid=LANE.1%2FQ1"):
+                    page = self.page(kind, 1280, url + frag)
+                    page.wait_for_selector(".ck-questions-heading")
+                    self.assertEqual(page.locator(".ck-rail").count(), 0)   # an item view, not the tabs
+                    page.close()
+
+    def test_changing_section_moves_focus_to_its_active_sub_tab(self):
+        # Catches: focus left on the rail button the redraw threw away (it falls to <body>, and the next Tab starts
+        # from the top of the page), or put anywhere but the new section's selected sub-tab; by mouse and by keyboard.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.click(".ck-rail-btn[data-section='projects']")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-portfolio'")
+                self.assertEqual(page.evaluate("document.activeElement.getAttribute('aria-selected')"), "true")
+                page.click("#ck-tab-favorite")
+                page.focus(".ck-rail-btn[data-section='projects']")
+                page.keyboard.press("ArrowUp")
+                page.keyboard.press("ArrowUp")
+                page.keyboard.press("Enter")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-inbox'")
+                # And back: the section's last-used sub-tab, focused.
+                page.focus(".ck-rail-btn[data-section='work']")
+                page.keyboard.press("End")
+                page.keyboard.press("ArrowUp")
+                page.keyboard.press(" ")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-favorite'")
+
+    def test_arrow_keys_rove_the_rail_and_walk_only_the_sections_strip(self):
+        # Catches: a rail with one Tab stop per button (roving tabindex lost), arrows that open a section instead of
+        # moving focus, no wrap or no Home/End, and sub-tab arrows that walk into another section's tabs.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                stops = "() => [...document.querySelectorAll('.ck-rail-btn')].filter(b => b.tabIndex === 0).map(b => b.dataset.section)"
+                focused = "() => document.activeElement && (document.activeElement.dataset.section || document.activeElement.id)"
+                self.assertEqual(page.evaluate(stops), ["work"])
+                page.focus(".ck-rail-btn[data-section='work']")
+                for key, want in (("ArrowDown", "automation"), ("ArrowRight", "projects"), ("ArrowDown", "team"),
+                                  ("ArrowDown", "work"), ("ArrowUp", "team"), ("Home", "work"), ("End", "team"),
+                                  ("ArrowLeft", "projects")):
+                    page.keyboard.press(key)
+                    self.assertEqual(page.evaluate(focused), want, key)
+                    self.assertEqual(page.evaluate(stops), [want])
+                self.assertEqual(page.evaluate(CURRENT), ["work", "inbox"])   # moving focus opened nothing
+                page.focus("#ck-tab-inbox")
+                page.keyboard.press("ArrowLeft")    # wraps within Work, never into Automation
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-prs'")
+                page.keyboard.press("ArrowRight")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-inbox'")
+                page.keyboard.press("End")
+                _wait_for(page, "document.activeElement && document.activeElement.id === 'ck-tab-prs'")
+                self.assertEqual(page.evaluate(CURRENT), ["work", "prs"])
+
+    def test_on_a_phone_the_console_is_the_whole_screen_with_a_bottom_bar(self):
+        # Catches (U2, uxshot 02): the console pinned to the right of a host page wider than the phone, so it started
+        # 164px in and was cut off; the host scrolling or taking taps underneath; the scroll lock not lifted on
+        # close; bottom-bar targets under 48px or not at the bottom; a strip that wraps; and sideways overflow
+        # anywhere in the console.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(page=PHONE_HOST)
+                self.ask(1)
+                page = self.page(kind, 390, url, mobile=True, height=844)
+                self.assertGreater(page.evaluate("document.documentElement.scrollWidth"), 500)   # the spill is real
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-panel[data-open='true'] .ck-rail")
+                page.wait_for_timeout(400)   # the slide-in
+                box = page.evaluate("""() => { const r = document.querySelector('.ck-panel').getBoundingClientRect();
+                  return [r.left, r.top, r.width, r.height, innerWidth, innerHeight]; }""")
+                self.assertAlmostEqual(box[0], 0, delta=1)
+                self.assertAlmostEqual(box[1], 0, delta=1)
+                self.assertAlmostEqual(box[2], 390, delta=1)
+                self.assertAlmostEqual(box[3], box[5], delta=1)
+                self.assertTrue(page.evaluate("document.documentElement.classList.contains('ck-phone-open')"))
+                self.assertEqual(page.evaluate("getComputedStyle(document.body).overflowX"), "hidden")
+                hits = page.evaluate("""() => { const p = document.querySelector('.ck-panel'); const out = [];
+                  for (const x of [2, 100, 200, 300, 388]) for (const y of [2, 200, 420, 640, 842])
+                    out.push(p.contains(document.elementFromPoint(x, y))); return out; }""")
+                self.assertEqual(hits, [True] * 25)
+                bar = page.evaluate("""() => [...document.querySelectorAll('.ck-rail-btn')].map(b => {
+                  const r = b.getBoundingClientRect(); return [r.width, r.height, r.bottom]; })""")
+                self.assertEqual(len(bar), 4)
+                for w, h, bottom in bar:
+                    self.assertGreaterEqual(w, 48)
+                    self.assertGreaterEqual(h, 48)
+                    self.assertAlmostEqual(bottom, box[5], delta=1)
+                self.assertEqual(len(set(page.evaluate("() => [...document.querySelectorAll('.ck-tabs .ck-tab')]"
+                                                       ".map(t => Math.round(t.getBoundingClientRect().top))"))), 1)
+                for sel in (".ck-panel", ".ck-section-main", ".ck-body"):
+                    self.assertTrue(page.evaluate("s => { const e = document.querySelector(s); return e.scrollWidth <= e.clientWidth; }",
+                                                  sel), sel)
+                self.assertTrue(page.is_visible(".ck-header .ck-back-btn"))
+                self.assertTrue(page.is_visible(".ck-header .ck-close-btn"))
+                page.click(".ck-rail-btn[data-section='team']")
+                page.wait_for_selector(".ck-rail-btn[data-section='team'][aria-current='page']")
+                page.click(".ck-header .ck-close-btn")
+                _wait_for(page, "!document.documentElement.classList.contains('ck-phone-open')")
+                self.assertEqual(page.evaluate("getComputedStyle(document.body).overflowX"), "visible")
+
+    def test_below_400px_the_rail_shows_icons_with_names_and_labels_elsewhere(self):
+        # Catches (U8, amends D9): labels left on show below 400px; labels hidden with display:none or no aria-label
+        # (the buttons lose their names); no tooltip; and labels hidden at 400px and wider, where D9 still wants them.
+        for kind in BROWSERS:
+            for width, labelled in ((390, False), (400, True), (1280, True)):
+                with self.subTest(browser=kind, width=width):
+                    url = self.serve()
+                    self.ask(1)
+                    page = self.page(kind, width, url)
+                    self.open_inbox(page, width)
+                    widths = page.evaluate("() => [...document.querySelectorAll('.ck-rail-label')]"
+                                           ".map(l => l.getBoundingClientRect().width)")
+                    self.assertEqual(len(widths), 4)
+                    for w in widths:
+                        (self.assertGreater if labelled else self.assertLessEqual)(w, 1 if not labelled else 10)
+                    if labelled:   # D9: a shown label is whole, never "Automat…" (the current one is bold, so wider)
+                        page.click(".ck-rail-btn[data-section='automation']")
+                        page.wait_for_selector(".ck-rail-btn[data-section='automation'][aria-current='page']")
+                        self.assertTrue(page.evaluate("() => [...document.querySelectorAll('.ck-rail-label')]"
+                                                      ".every(l => l.scrollWidth <= l.clientWidth)"))
+                    for label in ("Work", "Automation", "Projects", "Team"):
+                        btn = page.get_by_role("button", name=re.compile("^" + label))
+                        self.assertEqual(btn.count(), 1, label)
+                        self.assertTrue(btn.get_attribute("title").startswith(label))
+                    self.assertEqual(page.locator(".ck-rail-btn[data-section='work']").get_attribute("aria-label"),
+                                     "Work, 1 waiting for you")
+
+    def test_motion_runs_on_a_real_change_and_never_under_reduced_motion(self):
+        # Catches (U9): a section or sub-tab change with no motion wired; motion that ignores prefers-reduced-motion
+        # (the body's fade and slide, and the rail indicator's slide).
+        for kind in BROWSERS:
+            for reduced in (False, True):
+                with self.subTest(browser=kind, reduced=reduced):
+                    url = self.serve()
+                    page = self.page(kind, 1280, url, reduced=reduced)
+                    self.open_inbox(page, 1280)
+                    names = """() => [getComputedStyle(document.querySelector('.ck-body')).animationName,
+                      getComputedStyle(document.querySelector('.ck-rail-btn[aria-current="page"]'), '::before').animationName,
+                      getComputedStyle(document.querySelector('.ck-body')).transitionDuration]"""
+                    page.click(".ck-rail-btn[data-section='projects']")
+                    page.wait_for_selector("#ck-tab-portfolio[aria-selected='true']")
+                    got = page.evaluate(names)
+                    self.assertEqual(got, ["none", "none", "0s"] if reduced else ["ck-section-in", "ck-rail-mark-y", "0s"])
+                    page.click("#ck-tab-favorite")
+                    page.wait_for_selector("#ck-tab-favorite[aria-selected='true']")
+                    self.assertEqual(page.evaluate(names)[:2], ["none", "none"] if reduced else ["ck-subtab-in", "none"])
+
+    def test_a_redraw_on_the_same_tab_never_replays_the_motion(self):
+        # Catches (U9): the switch's animation replaying on every long-poll redraw (each one rebuilds the body; the
+        # 1.47 fade on .ck-body did exactly this), and a count or badge change animated.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                page.click("#ck-tab-feed")
+                page.wait_for_selector(".ck-body.ck-enter-tab")
+                page.wait_for_timeout(400)   # past the 140 ms slide
+                page.evaluate("window.__body = document.querySelector('.ck-body')")
+                self.ask(1)   # the agent asks: liveLoop's wait answers and the panel redraws on the same tab
+                _wait_for(page, "document.querySelector('.ck-body') !== window.__body"
+                                " && !!document.querySelector('.ck-rail-btn[data-section=work] .ck-rail-badge')", timeout=15000)
+                still = page.evaluate("""() => { const b = document.querySelector('.ck-body');
+                  return [b.className, getComputedStyle(b).animationName, b.getAnimations().length,
+                    document.querySelector('.ck-rail').classList.contains('ck-rail-moved'),
+                    getComputedStyle(document.querySelector('.ck-rail-badge')).animationName,
+                    getComputedStyle(document.querySelector('#ck-tab-inbox .ck-tab-note')).animationName]; }""")
+                self.assertEqual(still, ["ck-body", "none", 0, False, "none", "none"])
+                self.assertEqual(page.evaluate(CURRENT), ["work", "feed"])
+
+    def test_an_inbox_row_at_390_is_two_lines_not_three(self):
+        # Catches (U2, uxshot 02): the priority row wrapping into the lane/id line, the ⌛ alone on a second line and
+        # the clipped question on a third.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(page=PHONE_HOST)
+                for n in (1, 2):
+                    self.ask(n, text=f"Question {n}: how many times should a failed job retry before it is dead-lettered?")
+                page = self.page(kind, 390, url, mobile=True, height=844)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-priority-row")
+                # Lines are told apart by each part's vertical centre: the ⌛ button is taller than the words beside it.
+                lines = page.evaluate("""() => { const row = document.querySelector('.ck-priority-row');
+                  const mid = r => Math.round(r.top + r.height / 2);
+                  const top = s => { const e = row.querySelector(s); return e ? mid(e.getBoundingClientRect()) : null; };
+                  const tops = [...row.children].filter(c => c.getBoundingClientRect().height > 0)
+                    .map(c => mid(c.getBoundingClientRect()));
+                  const distinct = [...new Set(tops)].sort((a, b) => a - b).filter((t, i, a) => i === 0 || t - a[i - 1] > 6);
+                  return [distinct.length, top('.ck-priority-project'), top('.ck-snooze'), top('.ck-priority-when'),
+                          top('.ck-priority-text'), row.scrollWidth <= row.clientWidth + 1]; }""")
+                n, project, snooze, when, text, fits = lines
+                self.assertEqual(n, 2)
+                self.assertLessEqual(abs(snooze - project), 6)   # line one: which, and its ⌛
+                self.assertGreater(text, project + 6)            # line two: the question and its age
+                self.assertLessEqual(abs(when - text), 6)
+                self.assertTrue(fits)
+                qid = page.evaluate("() => { const e = document.querySelector('.ck-priority-qid'); return e.scrollWidth <= e.clientWidth; }")
+                self.assertTrue(qid)   # the id is never cut
+
+    def test_the_rail_reads_in_every_theme_and_skin(self):
+        # Catches: rail labels, the indicator or the badge too faint on a palette: text under 4.5:1, the indicator
+        # under 3:1 against the rail (WCAG 1.4.3, 1.4.11). Plain --c-fg-muted and --c-accent fail Solarized and Nord.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.ask(1)
+                page = self.page(kind, 1280, url)
+                self.open_inbox(page, 1280)
+                for skin in ("", "solarized", "nord", "contrast"):
+                    for theme in ("light", "dark"):
+                        page.evaluate("([s, t]) => { const r = document.documentElement;"
+                                      " if (s) r.dataset.skin = s; else delete r.dataset.skin; r.dataset.theme = t; }",
+                                      [skin, theme])
+                        pairs = page.evaluate("""() => { const rail = getComputedStyle(document.querySelector('.ck-rail')).backgroundColor;
+                          const cs = (s, p) => getComputedStyle(document.querySelector(s), p || null);
+                          return { label: [cs('.ck-rail-btn:not([aria-current])').color, rail],
+                                   current: [cs('.ck-rail-btn[aria-current="page"]').color, cs('.ck-rail-btn[aria-current="page"]').backgroundColor],
+                                   mark: [cs('.ck-rail-btn[aria-current="page"]', '::before').backgroundColor, cs('.ck-rail-btn[aria-current="page"]').backgroundColor],
+                                   badge: [cs('.ck-rail-badge').color, cs('.ck-rail-badge').backgroundColor] }; }""")
+                        for what, need in (("label", 4.5), ("current", 4.5), ("mark", 3.0), ("badge", 4.5)):
+                            ratio = page.evaluate(CONTRAST_JS, pairs[what])
+                            self.assertGreaterEqual(ratio, need, f"{skin or 'primer'} {theme} {what} {pairs[what]}")
 
 
 if __name__ == "__main__":

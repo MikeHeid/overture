@@ -2990,6 +2990,81 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Sections (1.48.0)
+
+The owner's choices of 2026-10-16 (OPEN-DECISIONS.md, "Sections, pop-outs and
+a calmer Inbox", U1 U2 U8 U9; U1 amends D14 and U8 amends D9): the console's
+eleven tabs sit in four sections, a phone gets the whole screen, and moving
+between sections and tabs has a little motion. Pop-outs (U3), grouping the
+Inbox by lane (U5) and its outline with `j`/`k` (U6) are 1.49.
+
+- **Four sections, each with its own sub-tabs** (U1): **Work** (Inbox, Feed,
+  Tickets, PRs), **Automation** (Playbooks, Triggers), **Projects**
+  (Portfolio, Favorite) and **Team** (People, Chat, Settings). Chat sits in
+  Team (U9). The sections are a slim rail of icon and label on the column's
+  leading edge, one `<nav aria-label="Sections">` with `aria-current` on the
+  section on show; the section's own tabs are the strip above its view,
+  today's tabs with their icons and counts. **"More ▾" is gone.** The docked
+  column now opens 576px wide (was 480px), so the content beside the rail
+  keeps its room; a width you dragged and the console kept is unchanged.
+- **Who sees what is unchanged:** People for an administrator, Settings for
+  an administrator or a director. A section none of whose tabs a login sees
+  is not shown; Chat keeps Team for everyone.
+- **A section's badge** shows the most urgent of its tabs' counts, not their
+  sum: questions waiting for you (so Work shows the Inbox count), an agent
+  waiting on the chat (the ● "More" carried), questions waiting in other
+  projects, new Feed events. Counts of things that merely exist (tickets,
+  playbooks, triggers, favorites) stay on their own tab.
+- **Shortcuts:** every `g` shortcut still opens its tab, and now its section
+  too. New: `g 1` Work, `g 2` Automation, `g 3` Projects, `g 4` Team, each on
+  the tab you last used there (else its first). The help sheet and the
+  footer's Shortcuts button say so.
+- **Keyboard and screen readers:** the rail is one Tab stop; the arrow keys
+  (and Home, End) move between its buttons, and Enter or Space opens the
+  section. Opening a section puts focus on its selected tab, so the arrow
+  keys work at once and a screen reader names where you are. A tab strip's
+  arrows stay within its section. Each rail button is named with its count
+  ("Work, 3 waiting for you"), and has a tooltip.
+- **Links:** the address names the tab and the section, `#feed&section=work`.
+  A 1.47 link (`#feed`) opens the same view, and so do `#tab=feed` and
+  `#section=team` (a section's first tab). `#item=` and `#qid=` are
+  unchanged. The panel title names the tab alone: the rail already says the
+  section, and on a phone "Automation · Playbooks" would not fit.
+- **Phones** (U2): below 640px, an open console is the whole screen, whatever
+  the host page does; a page wider than the phone no longer pushes it 164px in
+  and cuts it off. The page underneath neither scrolls nor takes taps until
+  you close it. The sections are a bottom bar of four buttons, each at least
+  48px and clear of the home indicator; the tabs are a strip at the top that
+  scrolls sideways. Back and close stay in the header. 640px is where the
+  console's phone layout already began; a second breakpoint at 600px would
+  have left 600–640px half done.
+- **Narrowest widths** (U8): below 400px the rail shows icons only, with a
+  tooltip, and the label stays each button's name for a screen reader; from
+  400px up, icon and label as D9 requires.
+- **A calmer Inbox row on a phone:** a Priority row is two lines, which item
+  and its ⌛ above, the question and its age below. It was three at 390px,
+  the ⌛ alone on the middle one.
+- **Motion** (U9): a new section crossfades (160 ms), a new tab slides in
+  (140 ms), and the rail's marker slides to its section (180 ms). All of it is
+  CSS, and none of it runs under `prefers-reduced-motion`. A live update never
+  animates, nor does a count or a badge: the motion is keyed to a real change
+  of section or tab. The 0.18 s fade every redraw used to replay is gone.
+- **Contrast:** the rail's words, its marker and its badges read at 4.5:1 or
+  better (the marker 3:1 at least) on every theme and skin; the marker is the
+  accent drawn a little toward the text colour, as plain accent falls under
+  3:1 on Solarized and Nord light.
+- **Fixed:** two quick moves (`g 2`, then `g f`) left the address on the first
+  tab; every move now updates it.
+- **Documentation and screenshots:** `docs/features/navigation.md` and the
+  README describe the sections; the screenshots were rendered again, with
+  `feature-sections.png` (the rail) and `feature-phone.png` (the Inbox on a
+  390px phone).
+
+**Going back to 1.47.** Nothing is stored differently: 1.48 writes no new
+state, and a 1.47 console reads everything 1.48 leaves. Its tab bar and
+"More ▾" come back. A 1.48 link such as `#feed&section=work` opens the Feed in
+1.47 too (the tab comes first); 1.47 ignores `#tab=feed` and `#section=team`.
+
 ## Listening on ZeroTier and Tailscale (1.47.0)
 
 The owner's choices of 2026-10-15 (OPEN-DECISIONS.md, "Without Cloudflare",
