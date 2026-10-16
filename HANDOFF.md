@@ -7,6 +7,9 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.47.0 released — --listen on ZeroTier/Tailscale, onboarding without Cloudflare, UI fixes, docs** (PR #174, `bb531aa`, zip sha b0051a53…35e2): owner menus L13–L18, U4, U7; "merge when ready".
+  Owner door on 127.0.0.1 + ZT/Tailscale address (netif.py, rtnetlink); per-socket origin/Host; 2-min ZT wait; overlap warning; server listen; onboard detect/verify.
+  README is an overview + 13 docs/features pages; all screenshots re-rendered. Decided next: U1–U9 redesign (section rail, phone full-screen, pop-outs, Inbox by lane); then launchd/Docker.
 - **v1.46.0 released — sign-in links, run without Cloudflare** (PR #173, `1bb1a33`, zip sha 3807a9d9…b765): owner "Defaults" (L1–L12) + Z1 approve.
   `--auth link`: `agent.py invite EMAIL` one-use 24 h link → device cookie; People → Signed-in browsers + Revoke; devices.py, machine-level devices.json.
   Security review F1–F10 cleared (sign-ins scoped per project). Next: 1.47 ZeroTier on WSL, decided Z2–Z7 (L13–L18).
@@ -137,7 +140,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.46.0 (PR #173), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.47.0 (PR #174), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
