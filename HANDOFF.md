@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.48.0 released — Sections** (PR #175, `9c1739a`, zip sha 6c6e15a5…de52): owner menu U1, U2, U8, U9; "continue when ready. merge when ready".
+  Rail Work/Automation/Projects/Team replaces More; g 1–4; phone ≤640px full-screen + bottom bar; icons only <400px; CSS motion never on liveLoop.
+  Lost-access tab clamp; 1206 tests; mutation 74 (all real gaps tested). Next: 1.49 = U3 pop-outs, U5 Inbox by lane, U6 outline/j/k/Mine; then launchd/Docker.
+
 - **v1.47.0 released — --listen on ZeroTier/Tailscale, onboarding without Cloudflare, UI fixes, docs** (PR #174, `bb531aa`, zip sha b0051a53…35e2): owner menus L13–L18, U4, U7; "merge when ready".
   Owner door on 127.0.0.1 + ZT/Tailscale address (netif.py, rtnetlink); per-socket origin/Host; 2-min ZT wait; overlap warning; server listen; onboard detect/verify.
   README is an overview + 13 docs/features pages; all screenshots re-rendered. Decided next: U1–U9 redesign (section rail, phone full-screen, pop-outs, Inbox by lane); then launchd/Docker.
@@ -140,7 +144,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.47.0 (PR #174), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.48.0 (PR #175), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
