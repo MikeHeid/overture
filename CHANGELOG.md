@@ -2990,6 +2990,93 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Sign-in links (1.46.0)
+
+The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Without Cloudflare",
+"Defaults": L1 L2 L5 L6, this machine only of L8, L10 L11 L12): a console
+can run with no Cloudflare in front of it. The network only decides who can
+reach it; the console itself proves who is at the browser.
+
+- **One way in per console** (L5, L6): `server.py --auth cloudflare` (the
+  default, unchanged) or `--auth link`. For the one server, `agent.py server
+  auth link` sets it for every project in `server.json` (`"auth"`, absent
+  means cloudflare; `server add` and `token rotate` keep it). In link mode
+  `--team-domain`, `--aud` and `--hostname` are not needed, and `--origin`
+  names the console's address as the browser sees it (default
+  `http://127.0.0.1:PORT`).
+- **Invite in the terminal:** `agent.py invite EMAIL` prints a link once:
+  `ORIGIN/signin?t=ovi_…`. It works once and lapses after 24 hours. Only its
+  SHA-256 is kept; the token is never stored, logged or put in an error, and
+  the server's log shows `/signin?…` (the whole query, however it is
+  spelled) and `t=…` elsewhere, and any `ovi_` token anywhere in a log line
+  is cut. A Claude Code session is refused, as for
+  `access`. A login with no role is warned that it will only read.
+- **Opening the link asks, the button signs in.** `GET /signin` never spends
+  the invite (link previews and mail scanners open every link); its page has
+  no script and posts the token back. `POST /signin` must come from the
+  console's own origin (login CSRF), spends the invite under a lock (two
+  presses: one browser), and sets the device cookie `overture-device`:
+  HttpOnly, SameSite=Lax (Strict would drop it when the console is opened
+  from a notification), Path=/, 400 days, Secure on an https origin. Each
+  opening of the console re-sends it, so a browser stays signed in until
+  revoked. The form's page uses `Referrer-Policy: same-origin`, every other
+  sign-in answer `no-referrer`: a browser sends `Origin: null` from a
+  no-referrer page, and the button could never sign in.
+- **Every other request meets the gate first**, as before (D5): without a
+  device cookie, `GET /` is a short page saying how to get a link (naming no
+  project, email or path) and everything else today's 403. A Cf-Access header
+  is never read in link mode, and a device cookie never in cloudflare mode,
+  where `/signin` does not exist. External triggers (`/api/trigger/…`) need a
+  signed-in browser in link mode, so a webhook cannot call them there.
+- **Devices** live beside your registry, `~/.config/overture/devices.json`
+  (0600), one file for the machine (`server.py`, the one server and
+  `agent.py` all read the same one, whatever `--server-file` says). **A
+  sign-in link opens the project it was made from, plus every project whose
+  roles list that email; with roles off, only the projects it was invited
+  from** (architect default amending L6, from the security review: one
+  machine-wide sign-in would otherwise open every console, as its owner where
+  roles are off). A second project's link opened in a signed-in browser of
+  the same email adds that project to the same device and cookie. A link
+  works only on the console it was made from: on another project's port it
+  reads as expired (no email shown) and is not spent. Each
+  project's roles decide what that login may do. Every field is checked on
+  every read (dates parsed, not only matched), and a damaged file signs
+  nobody in, named once in the server log; sign-in and Revoke answer a clean
+  503 then. A revoke takes effect on the next request. At most 200 waiting
+  invites, 500 browsers, 100 projects per browser.
+- **The cookie reaches every port of the host.** Browsers send cookies per
+  host name, not per port, so any other program served on the same name (a
+  dev server on another `127.0.0.1` port, another service on the tailnet
+  name) receives `overture-device` whenever that browser visits it, for its
+  400 days. Prefer the Tailscale https name (`tailscale serve`), don't browse
+  untrusted local dev servers on the same host name in that browser profile,
+  and if in doubt revoke under People. (A `__Host-` prefix is not used: it
+  would break `http://127.0.0.1` and the one sign-in shared across ports.)
+- **People** (administrators) lists exactly the signed-in browsers the gate
+  lets into this project ("Firefox on Linux · signed in 2 h ago · bob@…"), with
+  **Revoke**, confirmed in the page; revoking the browser you are using says
+  so and signs the page out; Revoke reaches no other browser. `agent.py
+  devices` lists every browser on the machine with the projects it was
+  invited from (emails masked in a session), and `--revoke ID` signs any one
+  out. Invites, sign-ins and revokes are
+  lines of the role log, shown in People's log.
+- **Tailscale works today** through `tailscale serve` (HTTPS to 127.0.0.1):
+  `--origin https://MACHINE.TAILNET.ts.net`. `--listen` on a Tailscale or
+  ZeroTier address and onboarding come in 1.47.
+- **Two-key areas are an administrator's again** (L10, amends S1): a
+  director sees them under Settings, read-only, and `POST /api/two-key`
+  refuses them.
+- **The two 1.45 LOWs** (L12): a notification error logged once is logged
+  again if it comes back after a send went through; and a Settings redraw
+  keeps what you typed and have not saved, and the focus.
+- Notifications honour `HTTPS_PROXY` (L11), now said in the README.
+
+**Going back to 1.45.** A 1.45 kit refuses a role log holding a device line
+by its shape: its People log then says "the role log cannot be read" (roles
+and writes are unaffected). It ignores `"auth"` in `server.json`, so a
+link-mode one server comes back behind Cloudflare Access, and a project added
+with no hostname and AUD is refused until `agent.py server add` gives it them.
+
 ## Notifications (1.45.0)
 
 The owner's choice of 2026-10-15 (OPEN-DECISIONS.md, "Notifications", N1a

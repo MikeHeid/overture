@@ -6341,5 +6341,463 @@ class LessonMatchTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
 
 
+class DevicesTests(unittest.TestCase):
+    """1.46.0 (devices.py, L1 L2): invites and signed-in browsers, checked on every read, failing closed."""
+
+    def setUp(self):
+        import datetime as dt
+        from overture import devices as DV
+        from overture import roles as RO
+        self.dt, self.DV, self.RO = dt, DV, RO
+        self.tmp = tempfile.TemporaryDirectory()
+        t = Path(self.tmp.name)
+        self.path = t / "cfg" / "overture" / "devices.json"
+        self.state = t / "state"
+        self.state.mkdir()
+        self.now = dt.datetime(2026, 10, 15, 12, 0, tzinfo=dt.timezone.utc)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def invite(self, email="bob@example.com", hours=0):
+        return self.DV.invite(self.path, email, self.state, now=self.now + self.dt.timedelta(hours=hours))
+
+    def redeem(self, token, hours=0, label="Firefox on Linux"):
+        return self.DV.redeem(self.path, token, label, self.state, now=self.now + self.dt.timedelta(hours=hours))
+
+    def test_an_invite_keeps_only_its_hash_in_a_private_file_and_its_line_names_no_token(self):
+        # Catches: the token itself written to devices.json or the role log (anyone who reads STATE or the config
+        # dir could sign in), a token not of the "ovi_" + 256-bit shape, and the file or its folder readable by others.
+        token, ident = self.invite("Bob@Example.com")
+        self.assertRegex(token, r"^ovi_[A-Za-z0-9_-]{43}\Z")
+        self.assertRegex(ident, r"^[0-9a-f]{8}\Z")
+        raw = self.path.read_text()
+        self.assertNotIn(token, raw)
+        self.assertNotIn(token[4:], raw)
+        doc = json.loads(raw)
+        self.assertEqual(doc["invites"], [{"id": ident, "email": "bob@example.com",
+                                           "sha256": hashlib.sha256(token.encode()).hexdigest(),
+                                           "expires": "2026-10-16T12:00:00Z",
+                                           "project": os.path.realpath(self.state)}])
+        self.assertEqual(stat_mode(self.path), 0o600)
+        self.assertEqual(stat_mode(self.path.parent), 0o700)
+        log = (self.state / self.RO.LOG_FILE).read_text()
+        self.assertNotIn(token, log)
+        line = self.RO.history(self.state)[0][0]
+        self.assertEqual((line["by"], line["device"]),
+                         (None, {"action": "invite", "email": "bob@example.com", "id": ident}))
+
+    def test_a_link_works_once_and_lapses_after_24_hours_and_peek_spends_nothing(self):
+        # Catches: a GET-side peek that spends the invite (a link previewer would burn it), a second sign-in from
+        # one link, an expiry off by its boundary, and a lapsed invite still signing in.
+        token, _ = self.invite()
+        for _ in range(3):
+            self.assertEqual(self.DV.peek(self.path, token, self.state, now=self.now), "bob@example.com")
+        self.assertEqual(self.DV.peek(self.path, token, self.state, now=self.now + self.dt.timedelta(hours=23, minutes=59)),
+                         "bob@example.com")
+        self.assertIsNone(self.DV.peek(self.path, token, self.state, now=self.now + self.dt.timedelta(hours=24)))
+        self.assertIsNone(self.redeem(token, hours=24))   # lapsed exactly at 24 h
+        ident, value, email = self.redeem(token, hours=23)
+        self.assertEqual(email, "bob@example.com")
+        self.assertRegex(value, rf"^{ident}\.[A-Za-z0-9_-]{{43}}\Z")
+        self.assertIsNone(self.redeem(token, hours=23))   # used
+        self.assertIsNone(self.DV.peek(self.path, token, self.state, now=self.now))
+        self.assertEqual(self.DV.who(self.path, value), "bob@example.com")
+        doc = json.loads(self.path.read_text())
+        self.assertEqual(doc["invites"], [])
+        self.assertNotIn(value.split(".")[1], self.path.read_text())   # the secret: only its hash is kept
+        self.assertEqual(doc["devices"][0]["label"], "Firefox on Linux")
+        line = self.RO.history(self.state)[0][0]
+        self.assertEqual((line["by"], line["device"]), ("bob@example.com", {"action": "signin",
+                                                                            "email": "bob@example.com", "id": ident}))
+
+    def test_who_refuses_a_wrong_secret_a_bad_shape_and_a_revoked_device(self):
+        # Catches: a device id alone accepted (the secret unchecked), a cookie value of the wrong shape read
+        # anyway, and a revoke that the very next lookup does not see (a parse cache keyed on something stale).
+        ident, value, _ = self.redeem(self.invite()[0])
+        for bad in (ident + "." + "A" * 43, ident, value + "x", "zz" + value[2:], None, 7, ""):
+            self.assertIsNone(self.DV.who(self.path, bad), bad)
+        self.assertEqual(self.DV.who(self.path, value), "bob@example.com")
+        self.assertEqual(self.DV.revoke(self.path, ident, self.state, by="owner@example.com"), "bob@example.com")
+        self.assertIsNone(self.DV.who(self.path, value))
+        self.assertIsNone(self.DV.revoke(self.path, ident, self.state))   # gone already
+        line = self.RO.history(self.state)[0][0]
+        self.assertEqual((line["by"], line["device"]), ("owner@example.com", {"action": "revoke",
+                                                                              "email": "bob@example.com", "id": ident}))
+        # `here`: a console revokes only the devices it admits (devices.admitted), never another project's.
+        ident2, value2, _ = self.redeem(self.invite("carol@example.com")[0])
+        self.assertIsNone(self.DV.revoke(self.path, ident2, self.state, here=("/elsewhere", {"bob@example.com": {}})))
+        self.assertEqual(self.DV.who(self.path, value2), "carol@example.com")
+
+    def test_a_damaged_file_signs_nobody_in_and_is_named_once_per_change(self):
+        # Catches: a damaged file read past (a hand edit that adds a device with any hash), a refused file named
+        # in the log on every request, and a symlink at the path followed.
+        _, value, _ = self.redeem(self.invite()[0])
+        good = self.path.read_text()
+        doc = json.loads(good)
+        said = []
+        bad_docs = [
+            "{not json", "[]", json.dumps({"devices": doc["devices"]}),
+            json.dumps({**doc, "extra": 1}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "admin": True}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "id": "XYZ"}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "email": "not-an-email"}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "label": "<script>"}]}),
+            json.dumps({**doc, "devices": doc["devices"] * 2}),
+            # F1/F2 (security review of 1.46): the project fields, and dates that match the regex but are no date.
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": []}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": ["/a", "/a"]}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": ["relative"]}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": ["/" + "x" * 4096]}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": ["/a\nb"]}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "projects": "/a"}]}),
+            json.dumps({**doc, "devices": [{k: v for k, v in doc["devices"][0].items() if k != "projects"}]}),
+            json.dumps({**doc, "devices": [{**doc["devices"][0], "created": "2099-13-45T99:99:99Z"}]}),
+            json.dumps({**doc, "invites": [{"id": "0123abcd", "email": "a@example.com", "sha256": "0" * 64,
+                                            "expires": "2026-02-30T00:00:00Z", "project": "/p"}]}),
+            json.dumps({**doc, "invites": [{"id": "0123abcd", "email": "a@example.com", "sha256": "0" * 64,
+                                            "expires": "2026-10-16T00:00:00Z", "project": ""}]}),
+            json.dumps({**doc, "invites": [{"id": "0123abcd", "email": "a@example.com", "sha256": "0" * 64,
+                                            "expires": "2026-10-16T00:00:00Z"}]}),
+        ]
+        for n, text in enumerate(bad_docs):
+            with self.subTest(text=text[:40]):
+                self.path.write_text(text)
+                stamp = (1_800_000_000 + n) * 10**9   # each write its own stamp, whatever the clock's granularity
+                os.utime(self.path, ns=(stamp, stamp))
+                said.clear()
+                for _ in range(3):
+                    with self.assertRaises(self.DV.DevicesError):
+                        self.DV.who(self.path, value, log=said.append)
+                self.assertEqual(len(said), 1, said)
+        self.path.write_text(good)
+        self.assertEqual(self.DV.who(self.path, value), "bob@example.com")
+        real = self.path.with_name("real.json")
+        real.write_text(good)
+        self.path.unlink()
+        self.path.symlink_to(real)
+        with self.assertRaises(self.DV.DevicesError):
+            self.DV.who(self.path, value)
+
+    def test_the_caps_hold_and_expired_invites_are_pruned_on_every_write(self):
+        # Catches: an unbounded file (a script minting invites forever), the cap counting invites that lapsed
+        # long ago (so it fills for good), and the 501st device let in.
+        for n in range(self.DV.MAX_INVITES):
+            self.invite(f"u{n}@example.com")
+        with self.assertRaises(self.DV.DevicesError) as cm:
+            self.invite("one-more@example.com")
+        self.assertIn("200 invites", str(cm.exception))
+        self.invite("later@example.com", hours=25)   # every earlier one lapsed: pruned, so this one fits
+        self.assertEqual([i["email"] for i in json.loads(self.path.read_text())["invites"]], ["later@example.com"])
+        doc = json.loads(self.path.read_text())
+        doc["devices"] = [{"id": f"{n:012x}", "email": f"d{n}@example.com", "sha256": f"{n:064x}",
+                           "created": "2026-10-15T00:00:00Z", "label": "Chrome on Linux", "projects": ["/p"]}
+                          for n in range(self.DV.MAX_DEVICES)]
+        self.path.write_text(json.dumps(doc))
+        full = self.invite("full@example.com", hours=25)[0]
+        with self.assertRaises(self.DV.DevicesError) as cm:
+            self.redeem(full, hours=25)
+        self.assertIn("500 browsers", str(cm.exception))
+        self.assertEqual(self.DV.peek(self.path, full, self.state, now=self.now + self.dt.timedelta(hours=25)),
+                         "full@example.com")   # refused, so not spent
+
+    def test_two_redeems_of_one_token_at_once_sign_in_exactly_one_browser(self):
+        # Catches: the invite checked and spent outside one lock (both threads read it live, both sign in).
+        import threading
+        token, _ = self.invite()
+        got, barrier = [], threading.Barrier(8)
+
+        def go():
+            barrier.wait()
+            got.append(self.redeem(token))
+        threads = [threading.Thread(target=go) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(sum(1 for g in got if g is not None), 1, got)
+        self.assertEqual(len(json.loads(self.path.read_text())["devices"]), 1)
+
+    def test_a_label_is_short_words_never_the_raw_user_agent(self):
+        # Catches: the raw User-Agent stored or shown (version strings, extension junk, markup), and Edge or an
+        # iPhone named as Chrome or macOS because the more general word was tested first.
+        cases = {
+            "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0": "Firefox on Linux",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 "
+            "Safari/537.36 Edg/120.0": "Edge on Windows",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Safari/605.1.15": "Safari on macOS",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "CriOS/120.0 Mobile/15E148 Safari/604.1": "Chrome on iOS",
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile "
+            "Safari/537.36": "Chrome on Android",
+            "<script>alert(1)</script>": "a browser on another system", None: "a browser on another system",
+        }
+        for ua, want in cases.items():
+            self.assertEqual(self.DV.label(ua), want, ua)
+            self.assertRegex(self.DV.label(ua), self.DV.LABEL)
+
+    def test_the_origin_rule_and_the_cookie_reader(self):
+        # Catches: an origin with a path, user name, uppercase or http on a public name taken (it is compared
+        # byte for byte with Origin and put in a link), and a cookie header with two device cookies or a bad
+        # one read as a sign-in.
+        from email.message import Message
+        for good in ("https://box.tailnet.ts.net", "https://box.tailnet.ts.net:8443", "http://127.0.0.1:4793",
+                     "http://localhost", "https://box.example.com/"):
+            self.assertIsNone(self.DV.origin_problem(good), good)
+        for bad in ("https://Box.example.com", "http://box.example.com", "https://box.example.com/x",
+                    "https://u@box.example.com", "https://box.example.com?x", "http://127.0.0.1:99999",
+                    "https://localhost", "ftp://box.example.com", "", None, "http://127.0.0.2"):
+            self.assertIsNotNone(self.DV.origin_problem(bad), bad)
+        good = "0123456789ab." + "A" * 43
+
+        def headers(*lines):
+            m = Message()
+            for line in lines:
+                m["Cookie"] = line
+            return m
+        self.assertEqual(self.DV.credential(headers(f"theme=dark; overture-device={good}")), good)
+        self.assertIsNone(self.DV.credential(headers(f"overture-device={good}; overture-device={good}")))
+        self.assertIsNone(self.DV.credential(headers(f"overture-device={good}", f"overture-device={good}")))
+        self.assertIsNone(self.DV.credential(headers("overture-device=0123.short")))
+        self.assertIsNone(self.DV.credential(headers()))
+        self.assertEqual(self.DV.cookie_header(good, "https://box.example.com"),
+                         f"overture-device={good}; HttpOnly; SameSite=Lax; Path=/; Max-Age=34560000; Secure")
+        self.assertNotIn("Secure", self.DV.cookie_header(good, "http://127.0.0.1:4793"))
+
+    def test_device_lines_are_their_own_kind_in_the_role_log(self):
+        # Catches: a device line counted as a role change (role_line), a malformed device line accepted, and an
+        # invite's 8-digit id taken for a device's.
+        self.redeem(self.invite()[0])
+        rows = self.RO.history(self.state)[0]
+        self.assertTrue(rows and all(self.RO.device_line(r) and not self.RO.role_line(r)
+                                     and not self.RO.settings_line(r) for r in rows))
+        log = self.state / self.RO.LOG_FILE
+        before = log.read_bytes()
+        for bad in ({"action": "login", "email": "a@example.com", "id": "0123456789ab"},
+                    {"action": "invite", "email": "a@example.com", "id": "0123456789ab"},
+                    {"action": "signin", "email": "a@example.com", "id": "01234567"},
+                    {"action": "revoke", "email": "nope", "id": "0123456789ab"},
+                    {"action": "revoke", "email": "a@example.com", "id": "0123456789ab", "x": 1}):
+            with self.subTest(bad=bad):
+                log.write_bytes(before + (json.dumps({"at": "2026-10-15T00:00:00Z", "by": None, "device": bad})
+                                          + "\n").encode())
+                with self.assertRaises(self.RO.RolesError):
+                    self.RO.history(self.state)
+        log.write_bytes(before)
+
+    # -- F1 (security review of 1.46): a sign-in opens the project it was made from, not the machine ------------
+
+    def other_state(self, name="other"):
+        s = Path(self.tmp.name) / name
+        s.mkdir(exist_ok=True)
+        return s
+
+    def test_admitted_is_invited_from_here_or_listed_in_roles_here(self):
+        # Catches (F1): the machine-wide file read as "any device opens any console": a browser invited to
+        # project B let into A (as A's owner when A's roles are off), an unlisted login let in where roles are on,
+        # and a listed login refused where roles are on although it was invited elsewhere.
+        b = self.other_state("b")
+        tok, _ = self.DV.invite(self.path, "bob@example.com", b, now=self.now)
+        _, value, _ = self.DV.redeem(self.path, tok, "Firefox on Linux", b, now=self.now)
+        dev = self.DV.device(self.path, value)
+        a, key_b = self.DV.project_key(self.state), self.DV.project_key(b)
+        self.assertEqual(dev["projects"], [key_b])
+        self.assertTrue(self.DV.admitted(dev, key_b, None))                          # b: invited from there
+        self.assertFalse(self.DV.admitted(dev, a, None))                             # a, roles off: refused
+        self.assertTrue(self.DV.admitted(dev, a, {"bob@example.com": {"role": "viewer"}}))   # a, listed
+        self.assertFalse(self.DV.admitted(dev, a, {"carol@example.com": {"role": "owner"}}))  # a, not listed
+        self.assertTrue(self.DV.admitted(dev, key_b, {"carol@example.com": {"role": "owner"}}))  # b: invited
+        # The key is the STATE's real path, so a symlinked or dotted spelling of one state is one project.
+        link = Path(self.tmp.name) / "b-link"
+        link.symlink_to(b)
+        self.assertEqual(self.DV.project_key(link), key_b)
+        self.assertEqual(self.DV.project_key(f"{b}/../b"), key_b)
+
+    def test_a_second_projects_link_in_the_same_browser_extends_its_device(self):
+        # Catches (F1): re-inviting the same login from project A making a second device (People then lists two
+        # browsers for one), or dropping B; a cookie of ANOTHER email extended (it would hand that login a project
+        # it was never invited to); and a bad or revoked cookie treated as one to extend.
+        b = self.other_state("b")
+        tok_b, _ = self.DV.invite(self.path, "bob@example.com", b, now=self.now)
+        ident, value, _ = self.DV.redeem(self.path, tok_b, "Firefox on Linux", b, now=self.now)
+        tok_a, _ = self.invite()
+        got = self.DV.redeem(self.path, tok_a, "Firefox on Linux", self.state, now=self.now, current=value)
+        self.assertEqual(got, (ident, value, "bob@example.com"))
+        self.assertEqual(self.DV.device(self.path, value)["projects"],
+                         [self.DV.project_key(b), self.DV.project_key(self.state)])
+        self.assertEqual(len(self.DV.listing(self.path)), 1)
+        self.assertIsNone(self.DV.peek(self.path, tok_a, self.state, now=self.now))   # spent
+        line = self.RO.history(self.state)[0][0]
+        self.assertEqual(line["device"], {"action": "signin", "email": "bob@example.com", "id": ident})
+        # Another email's link in this browser: a new device, the old one untouched.
+        tok_c, _ = self.invite("carol@example.com")
+        ident_c, value_c, _ = self.DV.redeem(self.path, tok_c, "Firefox on Linux", self.state, now=self.now,
+                                             current=value)
+        self.assertNotEqual(ident_c, ident)
+        self.assertEqual(self.DV.device(self.path, value_c)["projects"], [self.DV.project_key(self.state)])
+        self.assertEqual(len(self.DV.device(self.path, value)["projects"]), 2)
+        # A forged cookie (right id, wrong secret) is no device: a new one is made.
+        tok_f, _ = self.invite()
+        forged = ident + "." + "A" * 43
+        ident_f, value_f, _ = self.DV.redeem(self.path, tok_f, "Firefox on Linux", self.state, now=self.now,
+                                             current=forged)
+        self.assertNotEqual(ident_f, ident)
+        self.assertNotEqual(value_f, forged)
+
+    def test_peek_and_redeem_know_only_the_invites_made_from_their_own_project(self):
+        # Catches (F10): peek naming, or redeem spending, an invite made from another project, which a caller
+        # could only prevent by remembering to compare projects itself.
+        b = self.other_state("b")
+        tok, _ = self.DV.invite(self.path, "bob@example.com", b, now=self.now)
+        before = self.path.read_bytes()
+        log = self.state / self.RO.LOG_FILE
+        self.assertIsNone(self.DV.peek(self.path, tok, self.state, now=self.now))
+        self.assertIsNone(self.redeem(tok))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(log.exists() and log.read_text())
+        self.assertEqual(self.DV.peek(self.path, tok, b, now=self.now), "bob@example.com")
+        self.assertIsNotNone(self.DV.redeem(self.path, tok, "Firefox on Linux", b, now=self.now))
+
+    def test_a_damaged_date_is_a_refused_file_never_a_bare_value_error(self):
+        # Catches (F2): a date that matches the regex but is no date (month 13) passing the read check, then
+        # raising ValueError mid-comparison in peek, redeem, invite or revoke: a dropped connection on every
+        # sign-in and a revoke that cannot run until the file is fixed by hand.
+        tok, _ = self.invite()
+        ident, value, _ = self.redeem(self.invite()[0])
+        doc = json.loads(self.path.read_text())
+        for n, (field, rows) in enumerate((("expires", "invites"), ("created", "devices"))):
+            with self.subTest(field=field):
+                bad = {**doc, rows: [{**doc[rows][0], field: "2099-13-45T99:99:99Z"}]}
+                self.path.write_text(json.dumps(bad))
+                stamp = (1_800_000_000 + n) * 10**9   # each write its own stamp, whatever the clock's granularity
+                os.utime(self.path, ns=(stamp, stamp))
+                for call in (lambda: self.DV.load(self.path), lambda: self.DV.peek(self.path, tok, self.state, now=self.now),
+                             lambda: self.redeem(tok), lambda: self.invite("x@example.com"),
+                             lambda: self.DV.revoke(self.path, ident, self.state),
+                             lambda: self.DV.who(self.path, value)):
+                    with self.assertRaises(self.DV.DevicesError):
+                        call()
+        self.path.write_text(json.dumps(doc))
+        self.assertEqual(self.DV.who(self.path, value), "bob@example.com")
+
+    # -- F7: the role log's line and the devices write land together, in one lock order ----------------------------
+
+    def test_a_failed_role_log_write_leaves_the_devices_file_and_the_invite_as_they_were(self):
+        # Catches (F7): a sign-in, invite or revoke written to devices.json although its role-log line could not
+        # be (an unlogged sign-in), or the invite spent by a sign-in that never happened.
+        from unittest import mock
+        tok, _ = self.invite()
+        ident, _, _ = self.redeem(self.invite("carol@example.com")[0])
+        before = self.path.read_bytes()
+        real_write = os.write
+
+        def failing(fd, data):
+            if b'"device"' in data:   # the role log's line, not the devices file's temp write (that uses fdopen)
+                raise OSError(28, "No space left on device")
+            return real_write(fd, data)
+        with mock.patch("overture.roles.os.write", failing):
+            for call in (lambda: self.redeem(tok), lambda: self.invite("dee@example.com"),
+                         lambda: self.DV.revoke(self.path, ident, self.state)):
+                with self.assertRaises(OSError):
+                    call()
+                self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.DV.peek(self.path, tok, self.state, now=self.now), "bob@example.com")   # unspent
+        self.assertIsNotNone(self.redeem(tok))
+
+    def test_the_devices_lock_is_always_taken_before_the_role_logs(self):
+        # Catches (F7): a path that takes the role log's lock first and the devices lock second (the console and
+        # agent.py take both, so two orders can deadlock the two for good).
+        import fcntl
+        from unittest import mock
+        if not Path("/proc/self/fd").is_dir():
+            self.skipTest("needs /proc to name a descriptor's file")
+        order, real = [], fcntl.flock
+
+        def recording(fd, op):
+            if op & fcntl.LOCK_EX:
+                order.append(os.path.basename(os.readlink(f"/proc/self/fd/{fd}")))
+            return real(fd, op)
+        tok, _ = self.invite()
+        with mock.patch("fcntl.flock", recording):
+            self.invite("carol@example.com")
+            ident, _, _ = self.redeem(tok)
+            self.DV.revoke(self.path, ident, self.state)
+        self.assertEqual(order, [self.DV.FILE + ".lock", self.RO.LOG_FILE] * 3, order)
+
+
+class ServerAuthTests(unittest.TestCase):
+    """1.46.0 (L5, L6): server.json's one "auth", kept by every writer; link-mode entries need no Access values."""
+
+    TEAM = ServerAddTests.TEAM
+    setUp, tearDown, add = ServerAddTests.setUp, ServerAddTests.tearDown, ServerAddTests.add
+
+    def cli(self, *args, env=None):
+        e = {**os.environ, "XDG_CONFIG_HOME": str(self.cfg), **(env or {})}
+        e.pop("OVERTURE_AGENT", None)
+        if "CLAUDECODE" not in (env or {}):
+            e.pop("CLAUDECODE", None)
+        return subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.state), *args],
+                              capture_output=True, text=True, env=e, cwd=self.root, timeout=60)
+
+    def test_a_cloudflare_file_is_unchanged_and_auth_survives_add_and_rotate(self):
+        # Catches: a writer (add, rotate) that rewrites only team_domain and projects and so drops "auth" (the
+        # server would come back up behind Cloudflare it is not behind), and a cloudflare file gaining a key.
+        self.assertEqual(self.add().returncode, 0)
+        self.assertNotIn("auth", json.loads(self.sfile.read_text()))
+        r = self.cli("server", "auth")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "server auth: cloudflare (Cloudflare Access)"))
+        r = self.cli("server", "auth", "link")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.sfile.read_text())["auth"], "link")
+        self.assertEqual(self.add("alpha", "--slug", "lane-x").returncode, 0)
+        self.assertEqual(json.loads(self.sfile.read_text())["auth"], "link")
+        r = self.cli("server", "token", "rotate", "alpha")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.sfile.read_text())["auth"], "link")
+        self.assertIn("server auth: link", self.cli("server", "auth").stdout)
+
+    def test_link_mode_needs_no_access_values_and_checks_the_origin(self):
+        # Catches: link mode still demanding --hostname/--aud/--team-domain (no Cloudflare to give them), a bad
+        # --origin taken, cloudflare mode losing its requirement, and switching back to cloudflare with entries
+        # that could not be served there.
+        bare = ("server", "add", "alpha", "--port", "4801")
+        r = self.cli(*bare)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--hostname, --aud, --team-domain required", r.stderr)
+        self.assertFalse(self.sfile.exists())
+        self.assertEqual(self.cli("server", "auth", "link").returncode, 0)
+        for bad in ("https://Box.example.com", "http://box.example.com", "https://box.example.com/path"):
+            r = self.cli(*bare, "--origin", bad)
+            self.assertEqual(r.returncode, 1, bad)
+            self.assertIn("refused, nothing written", r.stderr)
+        r = self.cli(*bare, "--origin", "https://box.tailnet.ts.net/")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(https://box.tailnet.ts.net)", r.stdout)
+        e = json.loads(self.sfile.read_text())["projects"]["alpha"]
+        self.assertEqual(e["origin"], "https://box.tailnet.ts.net")
+        self.assertNotIn("hostname", e)
+        from overture import serverfile as SF
+        self.assertEqual(SF.entry_problems("alpha", e, "link"), [])
+        self.assertTrue(SF.entry_problems("alpha", e, "cloudflare"))
+        r = self.cli("server", "auth", "cloudflare")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("behind Cloudflare every project needs a hostname", r.stderr)
+        self.assertEqual(json.loads(self.sfile.read_text())["auth"], "link")
+        doc = json.loads(self.sfile.read_text())
+        self.sfile.write_text(json.dumps({**doc, "auth": "Link"}))
+        with self.assertRaises(SF.ServerFileError):
+            SF.load(self.sfile)
+
+    def test_a_session_may_show_the_mode_but_not_change_it(self):
+        # Catches: a Claude Code session able to switch the server's way in (from Access to links it could mint).
+        self.assertEqual(self.add().returncode, 0)
+        r = self.cli("server", "auth", "link", env={"CLAUDECODE": "1"})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("refused inside a Claude Code session", r.stderr)
+        self.assertNotIn("auth", json.loads(self.sfile.read_text()))
+        self.assertEqual(self.cli("server", "auth", env={"CLAUDECODE": "1"}).returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
