@@ -9564,7 +9564,7 @@
     if (panelEl && popChip.parentNode !== panelEl) panelEl.appendChild(popChip);
     const n = pops.length;
     popChip.textContent = 'Pop-outs (' + n + ')';
-    popChip.setAttribute('aria-label', 'Show ' + n + (n === 1 ? ' pop-out' : ' pop-outs'));
+    popChip.setAttribute('aria-label', 'Pop-outs (' + n + '): show ' + (n === 1 ? 'it' : 'them'));  // starts with its text (2.5.3)
   }
   function closePop(key, returnFocus) {
     const p = pops.find(x => x.key === key);

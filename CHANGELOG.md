@@ -3058,7 +3058,7 @@ and keys to move through it.
   and a click in a chart *stow* it rather than close the pop-out on show: every
   pop-out is kept, pinned or not, the sheet leaves the screen (and the Tab
   order, and the accessibility tree), focus goes to what the console now shows,
-  and a **Pop-outs (2)** chip in the console's corner (named "Show 2 pop-outs",
+  and a **Pop-outs (2)** chip in the console's corner (named "Pop-outs (2): show them",
   44px on touch) brings the sheet back on the pop-out you were reading. Opening
   another pop-out brings it back too, and a window that grows wide enough shows
   the whole stack beside the console as usual. While it is stowed the console

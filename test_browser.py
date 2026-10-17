@@ -5816,7 +5816,8 @@ class PopoutTests(unittest.TestCase):
     def test_on_the_sheet_show_in_the_console_stows_it_and_the_chip_brings_it_back(self):
         # Catches (R2): "Show in the console" on the phone's sheet closing the pop-out on show (the sheet is stowed:
         # the whole stack kept, pinned and not); the sheet left over the console, or focus left behind it; no
-        # "Pop-outs (n)" chip, one without its name "Show N pop-outs" or smaller than a 44px touch target; the chip
+        # "Pop-outs (n)" chip, one whose name doesn't start with that visible text ("Pop-outs (N): show them", WCAG
+        # 2.5.3) or smaller than a 44px touch target; the chip
         # not bringing the sheet back on the one that was on show; shortcuts still inert while nothing covers the
         # console; a new pop-out leaving the sheet stowed; and Esc in the console while stowed not closing the
         # console as it always does (the unpinned go with it, the pinned one is shown again, focus in it).
@@ -5836,7 +5837,7 @@ class PopoutTests(unittest.TestCase):
                                               " return document.querySelector('.ck-panel').contains(a) && a.getClientRects().length > 0; }"))
                 chip = page.locator(".ck-panel .ck-pop-chip")
                 self.assertTrue(chip.is_visible())
-                self.assertEqual((chip.text_content(), chip.get_attribute("aria-label")), ("Pop-outs (2)", "Show 2 pop-outs"))
+                self.assertEqual((chip.text_content(), chip.get_attribute("aria-label")), ("Pop-outs (2)", "Pop-outs (2): show them"))
                 box = chip.bounding_box()
                 self.assertGreaterEqual(round(min(box["width"], box["height"])), 44)
                 page.keyboard.press("?")   # nothing covers the console: its shortcuts work
