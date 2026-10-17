@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.49.0 released — Pop-outs and a calmer Inbox** (PR #176, `0ab37f8`, zip sha 8b035622…1ca0): owner menu U3, U5, U6; "continue when ready. merge when ready".
+  Pop-outs over the dashboard (stack of 3, Pin, Esc incl. ck-escape from chart frames, #pop= links, 480px room else a stowable sheet); Inbox by lane, outline, j/k, sticky Mine.
+  1261 tests; mutation 75 (all testable gaps tested). Power failure mid-build: work saved as WIP, scratchpad rebuilt. Next: 1.50 agent worktrees (owner W1–W4, all ★), then launchd/Docker (Docker optional).
+
 - **v1.48.0 released — Sections** (PR #175, `9c1739a`, zip sha 6c6e15a5…de52): owner menu U1, U2, U8, U9; "continue when ready. merge when ready".
   Rail Work/Automation/Projects/Team replaces More; g 1–4; phone ≤640px full-screen + bottom bar; icons only <400px; CSS motion never on liveLoop.
   Lost-access tab clamp; 1206 tests; mutation 74 (all real gaps tested). Next: 1.49 = U3 pop-outs, U5 Inbox by lane, U6 outline/j/k/Mine; then launchd/Docker.
@@ -144,7 +148,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.48.0 (PR #175), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.49.0 (PR #176), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
