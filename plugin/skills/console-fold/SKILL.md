@@ -31,7 +31,16 @@ project the user registered.
 with `/overture:as NAME` (0.8.4), else `OVERTURE_AGENT`) is not the
 steward's. If you are not the steward, stop: the steward folds.
 
-1. **Branch.** Work on a branch of its own, never the main branch.
+1. **Branch.** Work in a worktree of its own, never on the main branch
+   (1.50.0):
+
+       WT=$(A worktree new --kind round --item ITEM)
+       cd "$WT"
+
+   ITEM is the item whose locked answers you fold (the first, if several:
+   the PR lists them all). Run every step below from `$WT`, push its branch
+   (`git push -u origin HEAD`) and open the PR from it. The steward removes
+   the worktree once the PR merges or closes.
 2. **Export.**
 
        python3 KIT/fold.py export --store STATE/store.jsonl --out <fold.locked>

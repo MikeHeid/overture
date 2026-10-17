@@ -88,9 +88,15 @@ written there blocks the next fast-forward. The command refuses it anyway,
 naming why.
 
     # from the repository YOU work in (your clone), not the server's checkout
-    git fetch origin
-    git worktree add <scratch>/visuals-<item> -b visuals/<item> origin/main
-    A visual-export --project <scratch>/visuals-<item> --visual VISUAL_RECORD_ID
+    WT=$(A worktree new --kind visual --item ITEM)
+    A visual-export --project "$WT" --visual VISUAL_RECORD_ID
+
+`A worktree new` (1.50.0) fetches origin, makes your own worktree under
+`~/.overture/worktrees/<project>/` on the branch `overture/visual/<item>`
+(cut from `origin/main`), marks the item worked on with that branch, and
+prints its path. Run it again for the same item and it gives the same
+worktree back. If it names another agent on the item (an overlap), go on,
+and say so in your reply. Never make a worktree by hand.
 
 `--project` must be the TOP of that worktree, never a folder inside it.
 `--visual` may repeat; without it every stored visual is exported, and one
@@ -101,8 +107,10 @@ the reply which one was not), and 1 when nothing was written. It writes
 `<visuals_dir>/<item>/<name>.*` and regenerates `<visuals_dir>/INDEX.md` from
 what is in that folder. It refuses, writing nothing, a different file already
 at a target path, or an `INDEX.md` it did not generate: look, move the file
-aside if it is stale, and run it again. Then commit those paths only and open
-a pull request; never commit to the main branch. A decision-log or digest
+aside if it is stale, and run it again. Then, in `$WT`, commit those paths
+only, push the branch (`git -C "$WT" push -u origin HEAD`) and open a pull
+request from it; never commit to the main branch. Leave the worktree: the
+steward removes it once the PR merges or closes. A decision-log or digest
 line about the visual, if the project keeps one, is added at merge time.
 Reply once on the item:
 

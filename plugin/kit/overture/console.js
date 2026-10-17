@@ -1062,6 +1062,78 @@
     const names = activeNames(itemId);
     return names.length ? names.join(', ') + ' active' : 'agent active';
   }
+  // 1.50.0 (W4): where the agents on an item work, from cursor.branches (no new server call): the branch each
+  // fresh mark carries, and the agent holding it. Two marks on one item with different branches are an overlap:
+  // the console warns, never blocks.
+  function itemBranches(itemId) {
+    const by = (cursor && cursor.branches) || {};
+    const out = [];
+    for (const [who, marks] of Object.entries(by)) {
+      const b = marks && Object.prototype.hasOwnProperty.call(marks, itemId) ? marks[itemId] : null;
+      if (b && typeof b.branch === 'string') out.push({ agent: who, branch: b.branch });
+    }
+    return out.sort((x, y) => x.branch.localeCompare(y.branch));
+  }
+  function branchWho(name) { return name === 'agent' ? 'unnamed session' : name; }
+  function branchChip(b) {
+    return el('span', { className: 'ck-branch-chip', dataBranch: b.branch,
+      title: branchWho(b.agent) + ' works on the branch ' + b.branch }, [
+      icon('git-branch') || '',
+      el('span', { className: 'ck-branch-name' }, [b.branch]),
+      el('span', { className: 'ck-branch-agent' }, [' · ' + branchWho(b.agent)])
+    ]);
+  }
+  function branchOverlapWords(itemId) {
+    const bs = itemBranches(itemId);
+    const names = Array.from(new Set(bs.map(b => b.branch)));
+    return names.length < 2 ? null : bs.length + ' agents on ' + itemId + ': ' + names.join(', ');
+  }
+  function renderBranchOverlap(itemId) {
+    const words = branchOverlapWords(itemId);
+    if (!words) return null;
+    return el('p', { className: 'ck-branch-overlap', role: 'note' }, [
+      icon('triangle-alert') || '', el('span', {}, [words + '. Both may go on; agree on the item before you touch the same files.'])]);
+  }
+  // The chips and, when two branches meet, the warning: on an item, its tickets and a PR row (`where` names which).
+  function renderBranchStrip(itemId, where, only) {
+    const bs = itemBranches(itemId).filter(b => !only || b.branch === only);
+    if (!bs.length) return null;
+    const strip = el('div', { className: 'ck-branches', dataWhere: where, role: 'group',
+      'aria-label': 'Where agents work on ' + itemId });
+    for (const b of bs) strip.appendChild(branchChip(b));
+    const warn = renderBranchOverlap(itemId);
+    if (warn) strip.appendChild(warn);
+    return strip;
+  }
+  // The item a branch is active on, for a PR row: the first fresh mark carrying that branch.
+  function branchItem(branch) {
+    const by = (cursor && cursor.branches) || {};
+    for (const marks of Object.values(by)) {
+      for (const [item, b] of Object.entries(marks || {})) if (b && b.branch === branch) return item;
+    }
+    return null;
+  }
+  // W3: the steward's last list of stale worktrees (no PR for 14 days). The server sends it to an owner only.
+  function renderStaleWorktrees() {
+    const st = cursor && cursor.stale_worktrees;
+    const rows = st && Array.isArray(st.worktrees) ? st.worktrees : [];
+    if (!rows.length) return null;
+    const n = rows.length;
+    const d = el('details', { className: 'ck-stale-worktrees' });
+    d.appendChild(el('summary', { className: 'ck-muted' }, [icon('git-branch') || '',
+      ' ' + n + ' stale worktree' + (n === 1 ? '' : 's')]));
+    const ul = el('ul', { className: 'ck-stale-worktrees-list' });
+    for (const r of rows) {
+      ul.appendChild(el('li', {}, [el('span', { className: 'ck-branch-name' }, [r.branch]),
+        el('span', { className: 'ck-muted' }, [' · ' + r.age_days + ' day' + (r.age_days === 1 ? '' : 's') + ', no PR'
+          + (r.agent ? ' · ' + branchWho(r.agent) : '')])]));
+    }
+    d.appendChild(ul);
+    d.appendChild(el('p', { className: 'ck-muted ck-stale-worktrees-hint' }, [
+      'Kept, never removed silently: open its PR, or remove it with git worktree remove. Listed '
+      + relTime(st.at) + ' by the steward.']));
+    return d;
+  }
   // 0.8.2: who wrote an agent record: its name when it gave one, else the word it always had.
   function agentLabel(rec, fallback) { return (rec && rec.by === 'agent' && rec.agent) ? rec.agent : fallback; }
 
@@ -1134,6 +1206,9 @@
     }
     if (d.type !== 'ck-chart-click' || typeof d.target !== 'string' || typeof d.kind !== 'string') return;
     if (!panelEl || panelEl.getAttribute('data-open') !== 'true') return;
+    // 1.50.0 (L1): a kind the console does not act on is ignored before anything moves: stowing the sheet for it
+    // would leave nothing on show and focus on <body>.
+    if (!CHART_CLICK_KINDS.includes(d.kind)) return;
     // U3: a click in a chart on the phone's sheet goes to the console under it, so the sheet makes way: it is stowed
     // (R2), every pop-out kept, and the "Pop-outs (n)" chip brings it back.
     if (popSheet && popEl && Array.from(popEl.querySelectorAll('iframe')).some(f => f.contentWindow === e.source)) {
@@ -1163,6 +1238,8 @@
       if (node) focusCard(node);
     }
   });
+
+  const CHART_CLICK_KINDS = ['item', 'question', 'fork'];   // what a chart click may steer the console to
 
   // scrollIntoView + focus for keyboard follow-through; adds tabindex=-1 so a plain <div> can receive focus.
   function focusCard(node) {
@@ -3388,7 +3465,9 @@
 
   function backToInbox() {
     const left = currentItem;
-    if (left) revealInInbox(left);   // R6: back onto its row, in its group even if that group is shut
+    // R6: back onto its row, in its group even if that group is shut. 1.50.0 (L4): only when this lands on the
+    // Inbox; queued from another tab it would open a group on some later, unrelated visit.
+    if (left && currentTab === 'inbox') revealInInbox(left);
     currentItem = null;
     currentMode = 'inbox';
     fromInbox = false;
@@ -3451,6 +3530,8 @@
       // Dashboard section links: `.overture.json` can map this item to one or more #anchors on the host page.
       const laneTrail = renderLaneTrail(itemId);
       if (laneTrail) body.appendChild(laneTrail);
+      const branches = renderBranchStrip(itemId, 'item');   // 1.50.0 (W4)
+      if (branches) body.appendChild(branches);
       const sectionLinks = renderSectionLinks(itemId);
       if (sectionLinks) body.appendChild(sectionLinks);
       body.appendChild(renderItemTools(itemId));
@@ -6518,7 +6599,8 @@
     const rows = [];
     for (const [bucket, marks] of Object.entries(by)) {
       if (marks && Object.prototype.hasOwnProperty.call(marks, itemId)) {
-        rows.push({ name: bucket, since: marks[itemId] });
+        const b = ((cursor && cursor.branches) || {})[bucket];
+        rows.push({ name: bucket, since: marks[itemId], branch: b && b[itemId] ? b[itemId].branch : null });
       }
     }
     if (!rows.length) return null;
@@ -6536,7 +6618,8 @@
       const label = r.name === 'agent' ? 'unnamed session' : r.name;
       list.appendChild(el('li', { className: 'ck-active-agents-row' }, [
         el('span', { className: 'ck-active-agents-name' }, [label]),
-        el('span', { className: 'ck-active-agents-since ck-muted' }, [' · since ' + relTime(r.since)])
+        el('span', { className: 'ck-active-agents-since ck-muted' }, [' · since ' + relTime(r.since)]),
+        r.branch ? el('span', { className: 'ck-active-agents-branch ck-muted' }, [' · on ' + r.branch]) : ''
       ]));
     }
     details.appendChild(list);
@@ -6554,6 +6637,8 @@
       [openCount ? openCount + ' open' : 'none open']));
     details.appendChild(summary);
     const body = el('div', { className: 'ck-tickets-body' });
+    const branchStrip = renderBranchStrip(itemId, 'tickets');   // 1.50.0 (W4)
+    if (branchStrip) body.appendChild(branchStrip);
     const open = list.filter(t => t.status === 'open');
     const blocked = list.filter(t => t.status === 'blocked');
     const closed = list.filter(t => t.status === 'closed');
@@ -6658,6 +6743,10 @@
         chip.addEventListener('click', () => openPanel(t.parent_item, 'item'));
         const head = card.querySelector('.ck-ticket-head');
         (head || card).insertBefore(chip, (head || card).firstChild);
+        if (t.status !== 'closed') {   // 1.50.0 (W4): where agents work on its item
+          const strip = renderBranchStrip(t.parent_item, 'ticket');
+          if (strip && head) head.after(strip);
+        }
         col.appendChild(card);
       }
       if (more) col.appendChild(el('p', { className: 'ck-muted' }, ['+' + more + ' older']));
@@ -9222,6 +9311,7 @@
   let popSeq = 0;
   let dockDragging = false;     // C1: a dock drag in progress; the pop-outs' mode is settled when it ends
   let popStowed = false;        // R2: the sheet stowed so the console under it shows; every pop-out is kept
+  let popStowedWide = false;    // 1.50.0 (L2): stowed when the window went wide, so it stays stowed coming back
   let popChip = null;           // R2: the "Pop-outs (n)" chip that brings a stowed sheet back
 
   function popKey(kind, id) { return kind + ':' + id; }
@@ -9494,6 +9584,7 @@
   function openPop(kind, id, opener, focusKey) {
     const src = popSource(kind, id);
     if (!src) return false;
+    popStowedWide = false;   // L2: a pop-out opened since the stow is one the owner wants shown
     if (popStowed) { unstowPops(); layoutPops(); }   // R2: opening one brings a stowed sheet back
     const key = popKey(kind, id);
     if (pops.some(x => x.key === key)) { activatePop(key, true); return true; }   // already open: its tab, not a twin
@@ -9617,6 +9708,7 @@
   // `now`: gone at once (a phone's sheet giving way to the next one). Otherwise the stack slides out (CSS, 150 ms,
   // none under reduced motion) and is removed after; it leaves the accessibility tree and the Tab order at once.
   function teardownPopEl(now) {
+    popStowedWide = false;
     const gone = popEl;
     const wasStowed = popStowed;
     popEl = null;
@@ -9675,7 +9767,16 @@
     const became = sheet && !popSheet;
     const changed = sheet !== popSheet;
     popSheet = sheet;
-    if (!sheet) unstowPops();   // R2: going wide shows the stack as usual, and the chip goes
+    if (!sheet && popStowed) { unstowPops(); popStowedWide = true; }   // R2: going wide shows the stack as usual
+    // 1.50.0 (L2): back to the sheet, a stack that was stowed before it went wide is stowed again, with its chip,
+    // rather than the modal sheet coming back over the console with focus pulled into it.
+    const restow = became && popStowedWide;
+    if (sheet) popStowedWide = false;
+    if (restow) {
+      popStowed = true;
+      popEl.hidden = true;
+      popEl.inert = true;
+    }
     syncPopCount();
     popEl.classList.toggle('ck-pop-sheet', sheet);
     document.documentElement.classList.toggle('ck-pop-sheet-open', sheet && !popStowed);
@@ -9687,7 +9788,7 @@
       if (p) popEl.setAttribute('aria-labelledby', p.titleEl.id);
       popEl.style.right = '';
       popEl.style.width = '';
-      if (became && p && !hadFocus) { try { p.closeBtn.focus(); } catch (_e) {} }
+      if (became && p && !hadFocus && !restow) { try { p.closeBtn.focus(); } catch (_e) {} }
     } else {
       popEl.setAttribute('role', 'region');
       popEl.removeAttribute('aria-modal');
@@ -9697,7 +9798,9 @@
       popEl.style.right = (pw + 16) + 'px';
       popEl.style.width = Math.max(POP_W_MIN, Math.min(POP_W_MAX, window.innerWidth - pw - 32)) + 'px';
     }
-    if (changed && hadFocus) {
+    if (changed && hadFocus && restow) {   // L2: focus was in the stack that went away: to its chip in the console
+      if (popChip) { try { popChip.focus(); } catch (_e) {} }
+    } else if (changed && hadFocus) {
       const now = document.activeElement;
       if (!now || !popEl.contains(now) || !now.getClientRects().length) {
         const p = pops.find(x => x.key === popActive);
@@ -9896,6 +9999,8 @@
   }
 
   function renderPRs(body) {
+    const stale = renderStaleWorktrees();   // 1.50.0 (W3): owner-only, the server sends it to no one else
+    if (stale) body.appendChild(stale);
     const box = el('div', { className: 'ck-prs' });
     body.appendChild(box);
     if (prsState.data || prsState.error) fillPRs(box);
@@ -10781,6 +10886,11 @@
       el('span', { className: 'ck-feed-time', title: ts ? new Date(ts).toLocaleString() : '' }, [verb + relTime(ts)])
     ]);
     row.appendChild(meta);
+    const onItem = pr.state === 'open' ? branchItem(String(pr.head)) : null;   // 1.50.0 (W4): an agent's branch
+    if (onItem) {
+      const strip = renderBranchStrip(onItem, 'pr', String(pr.head));   // its chip; the warning names every branch
+      if (strip) row.appendChild(strip);
+    }
     const mergeBox = renderPRMerge(pr);
     if (mergeBox) row.appendChild(mergeBox);
     const links = prLinks(pr);

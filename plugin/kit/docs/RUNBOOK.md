@@ -208,7 +208,8 @@ names the file to move.
   to `.overture.json` (by pull request) and restart the server.
 - **`visual-export` says "the directory the console server runs from"**: by
   design. Export into your own worktree on a branch
-  (`git worktree add ../visuals -b visuals origin/main`), then open a PR.
+  (`agent.py worktree new --kind visual --item ITEM` makes one and prints its
+  path, 1.50.0), then open a PR.
 - **`visual-export` says "... is already there with other content"**: a file
   in your worktree at that path differs from the stored visual. Nothing was
   written. Look at it; move it aside if it is stale, then export again.

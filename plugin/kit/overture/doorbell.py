@@ -21,6 +21,7 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -124,10 +125,17 @@ def _parse_ts(v: object) -> float | None:
         return None
 
 
-def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: float | None = None) -> None:
-    """Record whether a watch is waiting now; `every` is how soon it promises to write again."""
+def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: float | None = None,
+                stale: list | None = None) -> None:
+    """Record whether a watch is waiting now; `every` is how soon it promises to write again.
+
+    1.50.0: `stale` is the steward's last list of stale agent worktrees (W3), branch and age only, folded into
+    this heartbeat so no new route was needed; an older server reads the file and ignores the key.
+    """
     t = time.time() if now is None else now
     rec = {"watching": watching, "at": _ts(t), "until": _ts(t + every + BEAT_GRACE) if watching else None}
+    if stale is not None:
+        rec["stale_worktrees"] = _stale_rows(stale)
     p = Path(state) / WATCH_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".watch.", suffix=".tmp")  # 0600 from creation
     try:
@@ -183,6 +191,50 @@ def listening(state: Path, *, now: float | None = None) -> dict:
     return {"state": "idle", "last_seen": rec["at"]}
 
 
+STALE_BRANCH = re.compile(r"^overture/[a-z]+/[A-Za-z0-9._-]{1,120}\Z")   # worktrees.BRANCH, the server's check
+MAX_STALE = 12
+
+
+def _stale_rows(rows: object) -> list[dict]:
+    """The stale-worktree rows worth keeping: a branch of the shape, a whole number of days, an agent name."""
+    from . import names as N
+    out: list[dict] = []
+    for r in rows if isinstance(rows, list) else []:
+        if not (isinstance(r, dict) and isinstance(r.get("branch"), str) and STALE_BRANCH.match(r["branch"])
+                and isinstance(r.get("age_days"), int) and not isinstance(r["age_days"], bool)
+                and 0 <= r["age_days"] <= 36500):
+            continue
+        row = {"branch": r["branch"], "age_days": r["age_days"]}
+        a = r.get("agent")
+        if isinstance(a, str) and (a == N.UNNAMED or N.problem(a) is None):
+            row["agent"] = a
+        out.append(row)
+        if len(out) >= MAX_STALE:
+            break
+    return out
+
+
+def stale_worktrees(state: Path, *, now: float | None = None) -> dict | None:
+    """{"at": ts, "worktrees": [...]} from the steward's last heartbeat, or None when it reported none.
+
+    The file is the agent's, so every row is checked again here: a branch of the
+    worktree shape and a number of days, never a path; a stamp from the future
+    or anything malformed reads as nothing.
+    """
+    t = time.time() if now is None else now
+    try:
+        data = _read_watch(Path(state) / WATCH_FILE)
+        rec = json.loads(data.decode("utf-8")) if data is not None else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict) or "stale_worktrees" not in rec:
+        return None
+    at = _parse_ts(rec.get("at"))
+    if at is None or at > t + 60:
+        return None
+    return {"at": rec["at"], "worktrees": _stale_rows(rec.get("stale_worktrees"))}
+
+
 class Heartbeat:
     """Write `watch.json` on the first call, then at most once per `every` seconds.
 
@@ -190,8 +242,9 @@ class Heartbeat:
     """
 
     def __init__(self, state: Path, poll: float, *, clock: Callable[[], float] = time.monotonic,
-                 warn: Callable[[str], None] | None = None) -> None:
+                 warn: Callable[[str], None] | None = None, stale: list | None = None) -> None:
         self.state = Path(state)
+        self.stale = stale      # 1.50.0: the steward's stale worktrees, carried on every beat (None: say nothing)
         self.every = max(BEAT_EVERY, poll)  # a slow poll promises its own, longer, interval
         self.clock = clock
         self.warn = warn or (lambda m: sys.stderr.write(m + "\n"))
@@ -200,7 +253,8 @@ class Heartbeat:
 
     def _write(self, watching: bool) -> None:
         try:
-            write_watch(self.state, watching, every=self.every)
+            extra = {} if self.stale is None else {"stale": self.stale}   # unchanged when there is nothing to say
+            write_watch(self.state, watching, every=self.every, **extra)
         except OSError as e:
             if not self._warned:
                 self._warned = True

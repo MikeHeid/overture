@@ -21,6 +21,14 @@ The file is the repository's DATA, never a path anything executes from
                  installed user skill is refused by name (`resolve_skill`, run by
                  `agent.py next-step`).
 
+    worktree_setup  (1.50.0) ["make", "deps"]: one command, as an argv list (never a
+                 shell string), that `agent.py worktree new` runs inside a NEW agent
+                 worktree to set up what git does not carry (a virtualenv, node_modules).
+                 The server never runs it; it is checked here so a bad value is named at
+                 start-up. It is read from the new worktree's own copy (the branch it was
+                 made from), run only for a project in the user's registry, with a
+                 timeout; a failure is reported, never fatal. Unset: nothing runs.
+
 Each directory is jailed like an evidence path: relative, plain characters, at
 least one real folder (never "." or the root itself), no `..`, never a
 secrets directory, and it must resolve inside the project root (no symlink
@@ -55,6 +63,8 @@ LANE_COLORS = ("blue", "teal", "green", "amber", "orange", "red", "purple", "pin
 LANE = re.compile(r"^lane-[a-z0-9][a-z0-9._-]{0,58}\Z")
 MAX_LANES = 64
 MAX_LANE_LABEL = 40
+MAX_SETUP_ARGS = 32       # worktree_setup (1.50.0): an argv of at most this many words
+MAX_SETUP_ARG = 4096
 
 
 class ConfigError(ValueError):
@@ -78,6 +88,8 @@ class ProjectConfig:
     items_require_parent: bool = False
     # D10: {lane: {"color"?: palette name, "label"?: str, "ux"?: bool}}
     lanes: dict = field(default_factory=dict)
+    # 1.50.0: the argv `agent.py worktree new` runs in a new agent worktree; () when unset. Never run by the server.
+    worktree_setup: tuple = ()
 
 
 def _dir(root: Path, v: object, key: str) -> str:
@@ -137,7 +149,18 @@ def load(root: Path) -> ProjectConfig:
     return ProjectConfig(specs_dir=specs, visuals_dir=visuals, next_step=dict(steps), sections=sections,
                          items_auto_ref=items_opts.get("auto_ref", True),
                          items_require_parent=items_opts.get("require_parent", False),
-                         lanes=_lanes(doc.get("lanes")))
+                         lanes=_lanes(doc.get("lanes")), worktree_setup=_setup(doc.get("worktree_setup")))
+
+
+def _setup(v: object) -> tuple:
+    """Parse an optional `worktree_setup` argv (1.50.0); refused by name unless a list of plain strings."""
+    if v is None:
+        return ()
+    if not (isinstance(v, list) and 0 < len(v) <= MAX_SETUP_ARGS
+            and all(isinstance(a, str) and a and len(a) <= MAX_SETUP_ARG and "\0" not in a for a in v)):
+        raise ConfigError(f"{FILE}: worktree_setup must be a command as a list of 1 to {MAX_SETUP_ARGS} non-empty "
+                          f'strings, e.g. ["make", "deps"]; a shell string is refused (nothing is run through a shell)')
+    return tuple(v)
 
 
 def _lanes(v: object) -> dict:
