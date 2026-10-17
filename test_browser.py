@@ -4641,7 +4641,7 @@ class SectionTests(unittest.TestCase):
                   const tops = [...row.children].filter(c => c.getBoundingClientRect().height > 0)
                     .map(c => mid(c.getBoundingClientRect()));
                   const distinct = [...new Set(tops)].sort((a, b) => a - b).filter((t, i, a) => i === 0 || t - a[i - 1] > 6);
-                  return [distinct.length, top('.ck-priority-project'), top('.ck-snooze'), top('.ck-priority-when'),
+                  return [distinct.length, top('.ck-priority-qid'), top('.ck-snooze'), top('.ck-priority-when'),
                           top('.ck-priority-text'), row.scrollWidth <= row.clientWidth + 1]; }""")
                 n, project, snooze, when, text, fits = lines
                 self.assertEqual(n, 2)
@@ -5253,6 +5253,8 @@ POP = ".ck-pop:not(.ck-pop-leaving)"
 POP_TABS = "() => [...document.querySelectorAll('.ck-pop:not(.ck-pop-leaving) .ck-pop-tab')].map(t => t.dataset.pop)"
 POP_ON = "() => { const t = document.querySelector('.ck-pop:not(.ck-pop-leaving) .ck-pop-tab[aria-selected=\"true\"]'); return t && t.dataset.pop; }"
 # The stack's motion has finished (a box measured mid-slide is 24px off).
+POP_STOWED = ("() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)'); return !!r && r.hidden"
+              " && !document.documentElement.classList.contains('ck-pop-sheet-open'); }")
 POP_SETTLED = "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)'); return !!r && r.getAnimations().length === 0; }"
 FRAME_ATTRS = """f => f && { sandbox: f.getAttribute('sandbox'), chart: f.hasAttribute('data-ck-chart'),
   referrer: f.getAttribute('referrerpolicy'), src: new URL(f.src).pathname + new URL(f.src).search,
@@ -5807,6 +5809,306 @@ class PopoutTests(unittest.TestCase):
                 self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-pop-go')"))
 
 
+    def pop_width(self, page):
+        return page.evaluate("() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)').getBoundingClientRect();"
+                             " return [Math.round(r.width), Math.round(r.left), innerWidth]; }")
+
+    def test_on_the_sheet_show_in_the_console_stows_it_and_the_chip_brings_it_back(self):
+        # Catches (R2): "Show in the console" on the phone's sheet closing the pop-out on show (the sheet is stowed:
+        # the whole stack kept, pinned and not); the sheet left over the console, or focus left behind it; no
+        # "Pop-outs (n)" chip, one without its name "Show N pop-outs" or smaller than a 44px touch target; the chip
+        # not bringing the sheet back on the one that was on show; shortcuts still inert while nothing covers the
+        # console; a new pop-out leaving the sheet stowed; and Esc in the console while stowed not closing the
+        # console as it always does (the unpinned go with it, the pinned one is shown again, focus in it).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=390, height=844, mobile=True)
+                flow, vis = "flow:LANE.1", f"visual:{self.visual}"
+                self.pop(page, flow)
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-pin").click()
+                page.evaluate("f => { location.hash = f; }", "#pop=" + vis)
+                _wait_for(page, "() => (%s)().length === 2" % POP_TABS)
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-go").click()
+                _wait_for(page, POP_STOWED)
+                self.assertEqual(page.evaluate(POP_TABS), [flow, vis])
+                self.assertEqual(page.evaluate(POP_ON), vis)
+                self.assertTrue(page.evaluate("() => { const a = document.activeElement;"
+                                              " return document.querySelector('.ck-panel').contains(a) && a.getClientRects().length > 0; }"))
+                chip = page.locator(".ck-panel .ck-pop-chip")
+                self.assertTrue(chip.is_visible())
+                self.assertEqual((chip.text_content(), chip.get_attribute("aria-label")), ("Pop-outs (2)", "Show 2 pop-outs"))
+                box = chip.bounding_box()
+                self.assertGreaterEqual(round(min(box["width"], box["height"])), 44)
+                page.keyboard.press("?")   # nothing covers the console: its shortcuts work
+                page.wait_for_selector("#ck-shortcut-help")
+                page.keyboard.press("Escape")
+                _wait_for(page, "!document.getElementById('ck-shortcut-help')")
+                chip.click()
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return !r.hidden && document.documentElement.classList.contains('ck-pop-sheet-open'); }")
+                self.assertEqual(page.evaluate(POP_ON), vis)
+                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-pop-close')"
+                                              " && document.activeElement.getClientRects().length > 0"))
+                self.assertEqual(page.locator(".ck-pop-chip").count(), 0)
+                # Stowed again; a new pop-out brings the sheet back with it.
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-go").click()
+                _wait_for(page, POP_STOWED)
+                page.evaluate("f => { location.hash = f; }", "#item=LANE.1&pop=impact:LANE.1")
+                _wait_for(page, "() => !document.querySelector('.ck-pop:not(.ck-pop-leaving)').hidden")
+                self.assertEqual(page.evaluate(POP_TABS), [flow, vis, "impact:LANE.1"])
+                self.assertEqual(page.locator(".ck-pop-chip").count(), 0)
+                # Stowed, then Esc in the console: the console closes, the unpinned go, the pinned one shows.
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-go").click()
+                _wait_for(page, POP_STOWED)
+                page.keyboard.press("Escape")
+                _wait_for(page, "document.querySelector('.ck-panel').dataset.open === 'false'")
+                _wait_for(page, "() => (%s)().join() === 'flow:LANE.1'" % POP_TABS)
+                _wait_for(page, "() => !document.querySelector('.ck-pop:not(.ck-pop-leaving)').hidden"
+                                " && document.activeElement.classList.contains('ck-pop-close')")
+
+    def test_a_chart_click_on_the_sheet_stows_it_and_going_wide_shows_the_stack(self):
+        # Catches (R2): a click in a chart on the sheet closing the pop-out it came from, or leaving the modal sheet
+        # over the console it just steered (focus sent behind it); and going wide while stowed not showing the
+        # whole stack again as usual (it stays hidden, or the chip stays).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=1040)   # docked: 464px of room, the sheet
+                flow, impact = "flow:LANE.1", "impact:LANE.1"
+                self.pop(page, flow)
+                page.wait_for_selector(".ck-pop.ck-pop-sheet:not(.ck-pop-leaving)")
+                page.evaluate("f => { location.hash = f; }", "#item=LANE.1&pop=" + impact)
+                _wait_for(page, "() => (%s)().length === 2" % POP_TABS)
+                frame = page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-chart iframe").element_handle().content_frame()
+                frame.wait_for_load_state()
+                frame.evaluate("parent.postMessage({type: 'ck-chart-click', kind: 'item', target: 'LANE'}, '*')")
+                _wait_for(page, POP_STOWED)
+                _wait_for(page, "document.querySelector('.ck-panel .ck-title-id').textContent === 'LANE'")
+                self.assertEqual(page.evaluate(POP_TABS), [flow, impact])
+                self.assertTrue(page.evaluate("document.querySelector('.ck-panel').contains(document.activeElement)"))
+                self.assertTrue(page.is_visible(".ck-panel .ck-pop-chip"))
+                page.set_viewport_size({"width": 1280, "height": 900})
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return !r.hidden && r.getAttribute('role') === 'region'; }")
+                self.assertEqual(page.evaluate(POP_TABS), [flow, impact])
+                self.assertEqual(page.locator(".ck-pop-chip").count(), 0)
+
+    def test_the_sheet_keeps_the_three_limit_and_the_pin_rule(self):
+        # Catches (C1 gap): the sheet holding more than three, replacing the newest or a pinned one instead of the
+        # oldest unpinned, or opening a fourth when all three are pinned; (R3) the sheet's Pin smaller than a 44px
+        # touch target.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=390, height=844, mobile=True)
+                flow, impact, vis, rnd = "flow:LANE.1", "impact:LANE.1", f"visual:{self.visual}", f"round:{self.fork}"
+                self.pop(page, flow)
+                pin = page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-pin")
+                box = pin.bounding_box()
+                self.assertGreaterEqual(round(min(box["width"], box["height"])), 44)
+                pin.click()
+                for key in (impact, vis, rnd):
+                    page.evaluate("f => { location.hash = f; }", "#pop=" + key)
+                    _wait_for(page, "k => (%s)().includes(k)" % POP_TABS, key)
+                self.assertEqual(page.evaluate(POP_TABS), [flow, vis, rnd])   # impact: the oldest not pinned
+                for key in (vis, rnd):
+                    page.click(f"{POP} .ck-pop-tab[data-pop='{key}']")
+                    page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-pin").click()
+                page.evaluate("f => { location.hash = f; }", "#pop=ruling:LANE.1%2FQ5")
+                _wait_for(page, "document.querySelector('.ck-live').textContent.includes('All 3 pop-outs are pinned')")
+                self.assertEqual(page.evaluate(POP_TABS), [flow, vis, rnd])
+
+    def test_a_window_resize_lays_the_stack_out_again(self):
+        # Catches: a window resize that crosses no layout breakpoint (the console closed, a pinned pop-out over the
+        # dashboard) leaving the stack at its old width, wider than the window and off its left edge.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                self.pop(page, "flow:LANE.1")
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-pin").click()
+                page.click(".ck-panel .ck-close-btn")
+                _wait_for(page, "document.querySelector('.ck-panel').dataset.open === 'false'")
+                page.set_viewport_size({"width": 1000, "height": 900})
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return Math.round(r.getBoundingClientRect().width) === 960; }")
+                page.set_viewport_size({"width": 800, "height": 900})   # no breakpoint crossed: only the resize
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return Math.round(r.getBoundingClientRect().width) === innerWidth - 32; }", timeout=3000)
+                self.assertEqual(self.pop_width(page), [768, 16, 800])
+
+    def test_the_console_turning_overlay_or_reloading_leaves_focus_in_a_pop_out(self):
+        # Catches: a window narrowed past the dock breakpoint pulling focus out of a pop-out into the console's
+        # overlay (the stack still has room beside it); and an item link opening a pop-out over the overlay, whose
+        # focus the view's fetch then pulls back to the console's Close.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=1100)
+                self.pop(page, "flow:LANE.1")
+                page.set_viewport_size({"width": 1000, "height": 900})   # the overlay, 480px: 520px of room
+                _wait_for(page, "() => document.querySelector('.ck-panel').getAttribute('role') === 'dialog'")
+                page.wait_for_timeout(300)
+                self.assertEqual(page.evaluate("[document.activeElement.getAttribute('role'), document.activeElement.dataset.pop]"),
+                                 ["tab", "flow:LANE.1"])
+                page.evaluate("f => { location.hash = f; }", "#item=LANE.1&pop=impact:LANE.1")
+                _wait_for(page, "document.activeElement.dataset.pop === 'impact:LANE.1'")
+                page.wait_for_timeout(1500)   # the view's fetch lands, and its focus check runs after it
+                self.assertEqual(page.evaluate("[document.activeElement.getAttribute('role'), document.activeElement.dataset.pop]"),
+                                 ["tab", "impact:LANE.1"])
+
+    def test_becoming_the_sheet_takes_focus_into_it(self):
+        # Catches (C5 gap): a window narrowed into the modal sheet while focus is in the console leaving focus behind
+        # the sheet (aria-modal hides the console from a screen reader, and Tab would start there).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=1280)
+                self.pop(page, "flow:LANE.1")
+                page.focus(".ck-panel .ck-close-btn")
+                page.set_viewport_size({"width": 1040, "height": 900})
+                page.wait_for_selector(".ck-pop.ck-pop-sheet:not(.ck-pop-leaving)")
+                _wait_for(page, "() => document.querySelector('.ck-pop:not(.ck-pop-leaving)').contains(document.activeElement)"
+                                " && document.activeElement.classList.contains('ck-pop-close')")
+
+    def test_closing_one_shows_its_neighbour_and_the_console_closing_keeps_the_pinned_one_on_show(self):
+        # Catches: closing a pop-out in the middle showing the first one instead of its neighbour; and the console
+        # closing (C6) switching away from the pinned one that was on show (to the first pinned one).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                flow, impact, vis, rnd = "flow:LANE.1", "impact:LANE.1", f"visual:{self.visual}", f"round:{self.fork}"
+                for key in (flow, impact, vis):
+                    self.pop(page, key)
+                page.click(f"{POP} .ck-pop-tab[data-pop='{impact}']")
+                page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-close").click()
+                _wait_for(page, "() => (%s)().length === 2" % POP_TABS)
+                self.assertEqual(page.evaluate(POP_ON), vis)
+                for key in (flow, vis):
+                    page.click(f"{POP} .ck-pop-tab[data-pop='{key}']")
+                    page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-pin").click()
+                self.pop(page, rnd)
+                page.click(f"{POP} .ck-pop-tab[data-pop='{vis}']")
+                page.click(".ck-panel .ck-close-btn")
+                _wait_for(page, "() => (%s)().length === 2" % POP_TABS)
+                self.assertEqual(page.evaluate(POP_TABS), [flow, vis])
+                self.assertEqual(page.evaluate(POP_ON), vis)
+
+    def test_focus_goes_back_to_the_redrawn_twin_of_the_control_that_opened_it(self):
+        # Catches: closing a pop-out after the console redrew (the control that opened it replaced by its twin)
+        # sending focus to the console's tab or Close instead of the redrawn Pop out control.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                page.evaluate("window.__op = document.querySelector(\".ck-panel .ck-pop-btn[data-pop='flow:LANE.1']\")")
+                self.pop(page, "flow:LANE.1")
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "!window.__op.isConnected")
+                page.focus(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-close")
+                page.keyboard.press("Escape")
+                _wait_for(page, "!document.querySelector('.ck-pop:not(.ck-pop-leaving)')")
+                self.assertEqual(page.evaluate("[document.activeElement.dataset.pop, document.activeElement.isConnected,"
+                                               " document.activeElement === window.__op]"), ["flow:LANE.1", True, False])
+
+    def test_a_frame_replaced_before_it_loads_never_blanks_the_one_on_show(self):
+        # Catches: a replacement frame dropped by a second live update (C3) still swapping itself in when its
+        # fallback timer fires, removing the frame on show while the newest one is still loading: a blank pop-out.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                self.pop(page, "flow:LANE.1")
+                page.frame_locator(f"{POP} .ck-pop-chart iframe").locator("#ck-stage").wait_for()
+                held = []
+                page.route("**/api/item-chart*", lambda route: held.append(route))
+                frames = f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-chart > iframe"
+                t0 = None
+                for n, want in ((13, 1), (14, 2)):   # each a change on LANE.1: the flowchart's frame is replaced
+                    if t0 is not None:
+                        page.wait_for_timeout(4000)   # the first buffer's 8 s fallback falls well before the second's
+                    self.ask(n)
+                    deadline = time.monotonic() + 15
+                    while len(held) < want and time.monotonic() < deadline:
+                        page.wait_for_timeout(100)
+                    self.assertEqual(len(held), want)
+                    t0 = t0 or time.monotonic()
+                page.wait_for_timeout(max(0, (t0 + 9.5 - time.monotonic()) * 1000))   # past the first one's fallback
+                self.assertEqual(page.locator(frames + ":not(.ck-pop-buffer)").count(), 1)
+                for r in held:
+                    r.fallback()
+                _wait_for(page, "s => document.querySelectorAll(s).length === 1"
+                                " && !document.querySelector(s + '.ck-pop-buffer')", frames, timeout=15000)
+
+    def test_a_reopened_ruling_says_so_once_and_a_ruling_link_needs_a_ruling(self):
+        # Catches (C9): a ruling whose lock was replaced by a new answer saying the neutral "no longer in the view"
+        # (or still showing the old ruling: a pop-out kept for a question that is no longer locked or stale); the
+        # gone line redrawn on every later live update (a screen reader hears its status again each time); and a
+        # `#pop=ruling:` link to a question answered but never locked opening a "ruling".
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                self.console.write("answer", {"qid": "LANE.1/Q1", "picks": ["fix"], "own_text": "",
+                                              "nonce": "popunl0001"}, "owner")
+                page.evaluate("ConsoleKit.refresh()")   # the page holds Q1 as answered, not locked
+                self.assertEqual(page.evaluate("ConsoleKit.refresh().then(() => document.querySelector("
+                                               "\".ck-question[data-qid='LANE.1/Q1'] .ck-q-state\").dataset.state)"), "unlocked")
+                page.evaluate("f => { location.hash = f; }", "#item=LANE.1&pop=ruling:LANE.1%2FQ1")
+                page.wait_for_timeout(300)
+                self.assertEqual(page.locator(POP).count(), 0)
+                self.pop(page, "ruling:LANE.1/Q5")
+                head = self.console.store.head("LANE.1/Q5")["id"]   # a new answer supersedes the lock
+                self.console.write("answer", {"qid": "LANE.1/Q5", "picks": ["leave"], "own_text": "",
+                                              "supersedes": head, "reason": "the budget changed",
+                                              "nonce": "popreopen5"}, "owner")
+                gone = f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-gone[role='status']"
+                page.wait_for_selector(gone, timeout=15000)
+                self.assertEqual(page.text_content(gone), "This ruling was reopened.")
+                page.evaluate("s => { window.__gone = document.querySelector(s); }", gone)
+                for _ in range(2):   # two more redraws of the console, each refreshing the pop-outs
+                    page.evaluate("ConsoleKit.refresh()")
+                    page.wait_for_timeout(300)
+                self.assertTrue(page.evaluate("window.__gone.isConnected"))
+
+    def test_a_dock_drag_never_draws_the_stack_narrower_than_its_floor(self):
+        # Catches: a stack drawn narrower than 240px while a dock drag holds its mode (here the window narrows under
+        # the drag, so the console turns overlay and the room beside it falls to 188px).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind, width=1100)
+                self.pop(page, "flow:LANE.1")
+                _wait_for(page, POP_SETTLED)
+                h = page.locator(".ck-dock-handle").bounding_box()
+                x, y = h["x"] + h["width"] / 2, h["y"] + h["height"] / 2
+                page.mouse.move(x, y)
+                page.mouse.down()
+                page.mouse.move(x - 10, y, steps=2)
+                page.set_viewport_size({"width": 700, "height": 900})
+                _wait_for(page, "() => document.querySelector('.ck-panel').getAttribute('role') === 'dialog'")
+                self.assertEqual(page.evaluate("document.querySelector('.ck-pop:not(.ck-pop-leaving)').getAttribute('role')"),
+                                 "region")   # the drag holds the mode
+                self.assertEqual(self.pop_width(page)[0], 240)
+
+    def test_close_is_one_shift_tab_from_inside_an_html_mock(self):
+        # Catches (R7): an HTML mock-up's frame (an empty sandbox: no script, so Esc inside it cannot reach the page)
+        # with anything but the pop-out's Close just before it in the Tab order, so the way out from inside it is
+        # lost.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                self.pop(page, f"visual:{self.mock}")
+                frame = f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-chart iframe"
+                page.locator(frame).element_handle().content_frame().wait_for_load_state()
+                page.focus(frame)
+                page.keyboard.press("Shift+Tab")
+                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-pop-close')"))
+
+    def test_a_chart_folds_pop_out_comes_before_it_and_names_its_chart(self):
+        # Catches (R4): a chart fold's Pop out after the <details> in the DOM (Tab reached it only after an open
+        # chart's own controls), and a name that does not say which chart it pops out.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.item_page(kind)
+                got = page.evaluate("""() => [...document.querySelectorAll('.ck-panel .ck-chart-fold')].map(f => {
+                  const b = f.querySelector('.ck-pop-btn'), d = f.querySelector('details');
+                  return [b.getAttribute('aria-label'), !!(b.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING)]; })""")
+                self.assertIn(["Pop out Status flowchart", True], got)
+                self.assertIn(["Pop out Impact graph", True], got)
+                self.assertTrue(all(after for _, after in got), got)
+
 # 1.49 (U5, U6): items in lanes, for the Inbox grouped by lane. MISC has no lane ("Other").
 GROUP_ITEMS = {"LANE": {"title": "a lane", "parent": None, "status": "open"},
                "LANE.1": {"title": "first lane", "parent": "LANE", "status": "open"},
@@ -6048,14 +6350,17 @@ class InboxGroupTests(unittest.TestCase):
 
     def test_the_outline_explains_its_counts_and_names_the_j_k_keys(self):
         # Catches (X4): the outline's bare "2/2" left unexplained (no legend, or a control's name or title without
-        # both counts), the phone's option without them; (X5) no hint for j / k on a wide screen, or one on a phone.
+        # both counts), the phone's option without them; (X5) no hint for j / k on a wide screen, or one on a phone;
+        # (R1, WCAG 2.5.3) a control whose accessible name does not start with the "UI 2/2" it shows, so a voice
+        # user saying what they see does not reach it.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 page = self.inbox(kind)
                 names = page.evaluate("[...document.querySelectorAll('.ck-outline-btn')].map(b => [b.getAttribute('aria-label'), b.title])")
                 want = ["UI: 2 awaiting you, 2 open", "API: 1 awaiting you, 2 open", "WEB: 1 awaiting you, 1 open",
                         "Other: 1 awaiting you, 1 open", "Data: 0 awaiting you, 1 open"]
-                self.assertEqual(names, [[w, w] for w in want])
+                shown = ["UI 2/2", "API 1/2", "WEB 1/1", "Other 1/1", "Data 0/1"]
+                self.assertEqual(names, [[s + w[w.index(":"):], w] for s, w in zip(shown, want)])
                 self.assertTrue(page.is_visible(".ck-outline .ck-outline-legend"))
                 self.assertEqual(page.text_content(".ck-outline .ck-outline-legend"), "awaiting you / open")
                 self.assertTrue(page.is_visible(".ck-outline .ck-outline-hint"))
@@ -6093,6 +6398,160 @@ class InboxGroupTests(unittest.TestCase):
                 self.assertEqual(page.get_attribute(".ck-lane-group[data-lane='lane-data'] .ck-group-toggle", "aria-expanded"), "false")
                 self.assertEqual(page.evaluate(stored), '{"lane-web":true,"lane-data":true}')
 
+
+    def test_a_round_counts_as_awaiting_and_a_tie_goes_by_lane_name(self):
+        # Catches: a round's questions awaiting the owner left out of its group's "awaiting you" (so the lane sorts
+        # below lanes with less waiting, and its heading says 0), a round card that is not a j / k stop, and two
+        # lanes tied on both counts sorted by arrival or reverse name instead of by name.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(adapter=_GroupAdapter())
+                self.ask(1, item="UI")       # UI first to arrive, API second: a tie the name decides
+                self.ask(1, item="API.1")
+                f = self.console.write("message", {"item": "WEB", "text": "tighten it", "intent": "fork",
+                                                   "mode": "tighten", "nonce": "grpfork0001"}, "owner")
+                for n in (2, 3):
+                    self.ask(n, item="WEB", forked_from=f["id"], star_by="panel")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-lane-group")
+                self.assertEqual(page.evaluate(GROUPS), ["lane-web", "lane-api", "lane-ui"])
+                self.assertEqual(page.text_content(".ck-lane-group[data-lane='lane-web'] .ck-group-counts"),
+                                 "2 awaiting you · 2 open")
+                page.evaluate("document.activeElement.blur()")
+                order = []
+                for _ in range(3):
+                    page.keyboard.press("j")
+                    order.append(page.evaluate(FOCUSED_JK))
+                self.assertEqual(order, [f["id"], "API.1/Q1", "UI/Q1"])
+
+    def test_opening_a_shut_group_by_its_heading_forgets_that_it_was_shut(self):
+        # Catches: a heading click that opens a collapsed group but leaves it saved as collapsed, so it comes back
+        # shut on the next reload.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                head = ".ck-lane-group[data-lane='lane-api'] .ck-group-toggle"
+                page.click(head)
+                stored = "localStorage.getItem('ck:live-test:inbox-collapsed')"
+                self.assertEqual(page.evaluate(stored), '{"lane-api":true}')
+                page.click(head)
+                self.assertIsNone(page.evaluate(stored))
+                page.reload()
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-lane-group")
+                self.assertEqual(page.locator(".ck-group-toggle[aria-expanded='false']").count(), 0)
+
+    def test_a_group_opened_by_navigation_stays_open_for_this_visit_only(self):
+        # Catches (R6, C7): a group `j` opened shutting again on the next live redraw while the owner is still on
+        # the Inbox; the same group still open on a later visit to the Inbox (another tab, then back), though its
+        # saved state is shut; and Back from an item opened from that group landing on a hidden row.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                web = ".ck-lane-group[data-lane='lane-web'] .ck-group-toggle"
+                page.click(web)   # shut, and saved so
+                page.evaluate("document.activeElement.blur()")
+                for _ in range(8):
+                    page.keyboard.press("j")
+                    if page.evaluate(FOCUSED_JK) == "WEB/Q1":
+                        break
+                self.assertEqual(page.evaluate(FOCUSED_JK), "WEB/Q1")
+                self.assertEqual(page.get_attribute(web, "aria-expanded"), "true")
+                self.ask(9, item="UI")   # a live redraw of the same visit
+                _wait_for(page, "!!document.querySelector('.ck-inbox-item[data-qid=\"UI/Q9\"]')", timeout=15000)
+                self.assertEqual(page.get_attribute(web, "aria-expanded"), "true")
+                page.evaluate("ConsoleKit.openTab('feed')")
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(web + "[aria-expanded='false']")   # a new visit: shut, as saved
+                # An item opened from the group (opened by `j`), and Back: onto its row, its group open.
+                page.evaluate("document.activeElement.blur()")
+                for _ in range(8):
+                    page.keyboard.press("j")
+                    if page.evaluate(FOCUSED_JK) == "WEB/Q1":
+                        break
+                page.keyboard.press("Enter")
+                page.wait_for_selector(".ck-back-btn")
+                page.click(".ck-back-btn")
+                page.wait_for_selector(web + "[aria-expanded='true']")
+                self.assertEqual(page.evaluate("document.activeElement.dataset.qid"), "WEB/Q1")
+                self.assertEqual(page.evaluate("localStorage.getItem('ck:live-test:inbox-collapsed')"), '{"lane-web":true}')
+
+    def test_the_phone_outline_goes_back_to_its_prompt_after_a_jump(self):
+        # Catches: the phone's lane dropdown left on the lane just chosen, so choosing that lane again (after
+        # scrolling away) fires no change and does nothing.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind, width=390, height=844, mobile=True, long=True)
+                page.select_option("select.ck-outline-select", "lane-data")
+                _wait_for(page, "document.activeElement === document.querySelector('.ck-lane-group[data-lane=\"lane-data\"] .ck-group-toggle')")
+                self.assertEqual(page.eval_on_selector("select.ck-outline-select", "s => [s.value, s.selectedIndex]"), ["", 0])
+
+    def test_the_sticky_height_counts_the_outline_strip(self):
+        # Catches: the sticky offset (--ck-sticky-h, every group heading's scroll margin) leaving out the outline
+        # strip above the groups, so a jumped-to heading lands under it.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                got = page.evaluate("""() => { const b = document.querySelector('.ck-panel .ck-body');
+                  const nav = b.querySelector(':scope > .ck-inbox-nav'), o = b.querySelector('.ck-outline');
+                  const want = Math.round((nav ? nav.getBoundingClientRect().height : 0) + o.getBoundingClientRect().height);
+                  return [parseInt(b.style.getPropertyValue('--ck-sticky-h'), 10), want, o.getBoundingClientRect().height > 0]; }""")
+                self.assertEqual(got[0], got[1])
+                self.assertTrue(got[2])
+
+    def test_j_and_k_walk_rows_on_other_tabs_and_never_act_behind_a_dialog(self):
+        # Catches: j / k on another tab (Chat) walking the Inbox's questions (it finds none there and does nothing)
+        # instead of that tab's rows; and j / k pressed while a modal dialog (the shortcut help) is open
+        # moving focus out of it onto a question behind it.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                page.keyboard.press("?")
+                page.wait_for_selector("#ck-shortcut-help")
+                page.keyboard.press("j")
+                self.assertTrue(page.evaluate("document.getElementById('ck-shortcut-help').contains(document.activeElement)"))
+                page.keyboard.press("Escape")
+                _wait_for(page, "!document.getElementById('ck-shortcut-help')")
+                page.evaluate("ConsoleKit.openTab('chat')")
+                page.wait_for_selector(".ck-panel .ck-chat-log[tabindex='0']")
+                page.evaluate("ConsoleKit.refresh()")   # the view's fetch has landed, and its focus fix-up run
+                page.wait_for_timeout(300)
+                page.focus(".ck-panel .ck-close-btn")
+                page.keyboard.press("j")
+                self.assertEqual(page.evaluate("[document.querySelector('.ck-panel').contains(document.activeElement),"
+                                               " document.activeElement.getAttribute('tabindex')]"), [True, "0"])   # a row
+
+    def test_a_cluster_in_its_own_lanes_group_does_not_repeat_its_chip(self):
+        # Catches (X1): one agent's questions offered together (a cluster card) inside their own lane's group
+        # repeating the lane chip its heading already shows.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve(adapter=_GroupAdapter())
+                self.seed()
+                for n, at in ((3, "2026-10-02T10:00:00Z"), (4, "2026-10-02T10:02:00Z")):
+                    self.console.store.clock = lambda at=at: at
+                    self.console.write("question", {"qid": f"UI/Q{n}", "item": "UI", "text": f"Question {n}: which way?",
+                                                    "kind": "single", "options": [{"id": "fix", "label": "Fix now"},
+                                                                                  {"id": "leave", "label": "Leave it"}],
+                                                    "star": "fix", "source": "docs/spec.md:1", "valid_if": [],
+                                                    "nonce": f"grpcl{n:04d}"}, "agent", agent="agent-5")
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(".ck-lane-group[data-lane='lane-ui'] .ck-cluster")
+                self.assertEqual(page.locator(".ck-groups .ck-group-body .ck-lane-chip").count(), 0)
+
+    def test_priority_rows_do_not_repeat_the_one_projects_name(self):
+        # Catches (R5): with one project connected, every Priority row repeating its name ("live-test · UI/Q1 …"),
+        # which crowds the question out at 390px; and the id then led by a stray "·".
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                page.wait_for_selector(".ck-priority-row")
+                self.assertEqual(page.locator(".ck-priority-row .ck-priority-project").count(), 0)
+                first = page.locator(".ck-priority-row").first
+                self.assertEqual(first.locator(".ck-priority-qid").text_content(), "UI/Q1")
+                self.assertFalse(first.get_attribute("aria-label").startswith("live-test"))
 
 if __name__ == "__main__":
     unittest.main()

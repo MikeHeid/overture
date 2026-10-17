@@ -111,7 +111,8 @@ The live page, the sections and their tabs, pop-outs, moving through a long Inbo
   the Delegate bar; on the Inbox `j / k` go to the next or previous
   unanswered question (1.49), and on other tabs they walk the rows; Enter /
   Space opens the focused row; Esc closes the pop-out you are in, from
-  inside one of its charts too. Shortcuts never fire in a text input, nor
+  inside one of its charts too (not inside an HTML mock-up: see
+  [Pop-outs](#pop-outs-149)). Shortcuts never fire in a text input, nor
   behind a pop-out's full-screen sheet.
 
   <img src="../screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
@@ -238,7 +239,8 @@ over the dashboard, instead of stretching the column.
   console shows it; the screenshot viewer has one too. A ruling gets one when
   the question, its options and your words come to 280 characters or more.
   A chart's Pop out sits beside its fold's heading, so you can pop it out
-  without opening the fold.
+  without opening the fold; it comes before the chart in the Tab order and
+  says which chart it is ("Pop out Status flowchart").
 - **Where.** In the room beside the docked console, never over it: the
   dashboard keeps its place and the console stays usable, so the stack is
   not a dialog and Tab moves in and out of it freely. It needs 480 px
@@ -250,9 +252,19 @@ over the dashboard, instead of stretching the column.
   With less room, or on a phone, the same stack is a full-screen sheet
   instead: the one on show, with the tabs above it to switch when more
   than one is open, a Close button at the top, Esc to close and focus kept
-  inside it until you do. Resizing the window, turning the phone or
-  dragging the column never closes a pop-out; a drag settles the layout
-  when you let go.
+  inside it until you do; its Pin and Close are 44 px touch targets.
+  Resizing the window, turning the phone or dragging the column never
+  closes a pop-out; a drag settles the layout when you let go.
+- **Back to the console from the sheet.** On the sheet, **Show in the
+  console**, or a click on something in a chart, puts the sheet away
+  rather than closing anything: every pop-out is kept, pinned or not, the
+  console shows what you asked for (with focus on it), and a **Pop-outs
+  (2)** chip in the console's corner brings the sheet back on the pop-out
+  you were reading. Opening another pop-out brings it back too, and if the
+  window grows wide enough the whole stack shows beside the console as
+  usual. While the sheet is put away the console works as ever: its
+  shortcuts, and Esc to close it (the pop-outs not pinned close with it; a
+  pinned one comes back on screen).
 - **A stack of three.** Each pop-out is a tab (the arrow keys move between
   them) with its title, **Pin** and **Close**. Opening a fourth closes the
   oldest one you have not pinned, and says so; with all three pinned, it
@@ -267,6 +279,10 @@ over the dashboard, instead of stretching the column.
   button that opened it (or the console's tab, if that button is gone).
   It works with focus inside a pop-out's chart too; Esc in a chart in the
   console itself does nothing.
+- **Esc inside an HTML mock-up** does nothing: a mock-up runs no script at
+  all (it is sandboxed with nothing allowed, in the console as in a
+  pop-out), so it cannot pass the key on. Click outside it, or use Close:
+  from inside the mock-up it is one Shift+Tab away.
 - **Live.** When what a pop-out shows changes, it is redrawn in place: its
   scroll stays, nothing animates, and a chart's frame is swapped only once
   the new drawing has loaded; focus stays on the control you were on. If
@@ -292,14 +308,17 @@ over the dashboard, instead of stretching the column.
   items with no lane are under **Other**. A row in its own lane's group
   does not repeat the lane's chip. Press a heading to fold the group away;
   this browser remembers it per project. Moving to a question in a folded
-  group (a link, the outline, `j` / `k`) opens it for now without changing
-  what is remembered: only the heading does that. More in
+  group (a link, the outline, `j` / `k`) opens it for this visit to the
+  Inbox, through its live updates, without changing what is remembered:
+  leave the Inbox (another tab, an item, the console closed) and come back,
+  and it is folded again. Back from an item opens the group of the row you
+  return to. Only the heading changes what is remembered. More in
   [The inbox and rulings](inbox-and-rulings.md#around-the-inbox).
 - **The outline.** A strip of the groups, with their counts ("2/3": waiting
   for you, of open), stays at the top of the Inbox as you scroll. It starts
   with a legend, "awaiting you / open", and each lane's control says it in
-  full to a screen reader and as a tooltip ("Infra: 3 awaiting you, 4
-  open"); on a wide screen it ends with a "j / k next question" hint. Press one
+  full to a screen reader, after what it shows ("Infra 3/4: 3 awaiting you, 4
+  open"), and as a tooltip ("Infra: 3 awaiting you, 4 open"); on a wide screen it ends with a "j / k next question" hint. Press one
   to open that group, bring it to the top and put focus on its heading. When
   the column is dragged wide enough (the Inbox 720 px or more), the outline
   is a column beside the groups instead. On a phone it is a **Go to a lane**
@@ -349,7 +368,8 @@ over the dashboard, instead of stretching the column.
   of its icon. Every control is at least 36 px tall, and the Portfolio
   cards and dialogs stack to fit. In the Inbox's Priority
   list each row is two lines: which item, with its ⌛, then the question
-  (with no "·" before it) and how long it has waited. A pop-out opens as
+  (with no "·" before it) and how long it has waited; with one project
+  connected the rows do not repeat its name (1.49). A pop-out opens as
   a full-screen sheet over the console (1.49), and the Inbox's outline is
   a **Go to a lane** menu.
 

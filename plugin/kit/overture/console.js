@@ -1134,9 +1134,10 @@
     }
     if (d.type !== 'ck-chart-click' || typeof d.target !== 'string' || typeof d.kind !== 'string') return;
     if (!panelEl || panelEl.getAttribute('data-open') !== 'true') return;
-    // U3: a click in a chart on the phone's sheet goes to the console under it, so the sheet makes way.
+    // U3: a click in a chart on the phone's sheet goes to the console under it, so the sheet makes way: it is stowed
+    // (R2), every pop-out kept, and the "Pop-outs (n)" chip brings it back.
     if (popSheet && popEl && Array.from(popEl.querySelectorAll('iframe')).some(f => f.contentWindow === e.source)) {
-      closePop(popActive, false);
+      stowPops();
     }
     if (d.kind === 'item') {
       openFromInbox(d.target);
@@ -1713,8 +1714,9 @@
 
   let shortcutGpfx = 0;
   function handleShortcut(e) {
-    // C4 (1.49): the pop-out sheet is modal: no shortcut acts behind it (its own keydown handles Esc and Tab).
-    if (popSheet) return;
+    // C4 (1.49): the pop-out sheet is modal: no shortcut acts behind it (its own keydown handles Esc and Tab). A
+    // stowed sheet (R2) covers nothing.
+    if (popSheet && !popStowed) return;
     // Cmd+K / Ctrl+K opens the command palette. Captured before the ctrl/meta skip
     // so it works everywhere, including inside a text input — the standard app shortcut.
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
@@ -2165,6 +2167,15 @@
     // Default-open stays dismissed for the session once the owner closes it.
     try { sessionStorage.setItem('ck-inbox-closed', '1'); } catch (e) { /* storage blocked */ }
     syncLocationHash('');
+    inboxVisitOn = false;                // R6: the Inbox view is left
+    // R2: a pinned pop-out stowed on the phone's sheet stays open, so it is shown again (its chip went with the
+    // console), and focus goes into it.
+    if (popStowed && pops.length) {
+      unstowPops();
+      layoutPops();
+      if (popActive) activatePop(popActive, true);
+      return;
+    }
     // Back to what opened it; when that was the strip, it is the strip again.
     if (lastFocused && lastFocused.focus && document.contains(lastFocused)) lastFocused.focus();
   }
@@ -2192,6 +2203,7 @@
     if (statusChip) panelEl.appendChild(statusChip);
     if (dockHandle) panelEl.appendChild(dockHandle);
     pendingLive = false;
+    syncInboxVisit();
     if (currentMode === 'inbox') {
       clampTab();
       renderInbox();
@@ -2212,6 +2224,7 @@
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
     placeStatusChip();
     refreshPops();   // U3: an open pop-out follows the view, in place
+    syncPopChip();   // R2: the chip of a stowed sheet, back in the redrawn console
     if (typingKey) {
       const twin = panelEl.querySelector('[data-focus-key="' + CSS.escape(typingKey) + '"]');
       if (twin) {
@@ -3013,10 +3026,24 @@
     memSet('inbox-collapsed', Object.keys(c).length ? c : null);
   }
   // C7 (1.49): navigation (a deep link #item= / #qid=, an outline jump, `j` / `k`) opens a collapsed group for this
-  // page's view only: the saved state is unchanged, and only a click on the group's heading changes it.
+  // view only: the saved state is unchanged, and only a click on the group's heading changes it.
+  // R6: "this view" is one visit to the Inbox tab. A group opened by navigation stays open through its live redraws,
+  // and is shut again once the owner leaves the Inbox (another tab or section, an item, the console closed) and comes
+  // back. A deep link, or the row an item was opened from, opens its group on the next visit (laneRevealNext).
   const laneRevealed = new Set();
+  const laneRevealNext = new Set();
+  let inboxVisitOn = false;
   function revealLane(key) { laneRevealed.add(key); }
-  function revealInInbox(itemId) { revealLane(laneKey(laneOf(itemId))); }
+  function revealInInbox(itemId) { laneRevealNext.add(laneKey(laneOf(itemId))); }
+  function syncInboxVisit() {
+    const on = panelEl.getAttribute('data-open') === 'true' && currentMode === 'inbox' && currentTab === 'inbox';
+    if (on && !inboxVisitOn) {
+      laneRevealed.clear();
+      for (const k of laneRevealNext) laneRevealed.add(k);
+      laneRevealNext.clear();
+    }
+    inboxVisitOn = on;
+  }
   function laneGroups(roundIds, rounds, looseKept) {
     const by = new Map();
     const get = lane => {
@@ -3111,6 +3138,10 @@
   // X4 (1.49): the compact "3/4" is explained once, by a legend at the outline's start, and in full in each control's
   // name and title ("Infra: 3 awaiting you, 4 open"). X5: a hint for `j` / `k` at its end (hidden on a phone).
   function outlineWords(g) { return laneLabel(g.lane) + ': ' + g.awaiting + ' awaiting you, ' + g.open + ' open'; }
+  // R1 (WCAG 2.5.3, label in name): the name starts with what the control shows ("Infra 3/4"), then explains it.
+  function outlineName(g) {
+    return laneLabel(g.lane) + ' ' + g.awaiting + '/' + g.open + ': ' + g.awaiting + ' awaiting you, ' + g.open + ' open';
+  }
   function renderOutline(groups) {
     const nav = el('nav', { className: 'ck-outline', 'aria-label': 'Inbox outline' });
     nav.appendChild(el('span', { className: 'ck-outline-legend', 'aria-hidden': 'true' }, ['awaiting you / open']));
@@ -3118,7 +3149,7 @@
     for (const g of groups) {
       const key = laneKey(g.lane);
       const b = el('button', { type: 'button', className: 'ck-outline-btn', dataLane: key,
-        'aria-label': outlineWords(g) }, [
+        'aria-label': outlineName(g) }, [
         el('span', { className: 'ck-outline-label' }, [laneLabel(g.lane)]),
         el('span', { className: 'ck-outline-count', dataAwaiting: g.awaiting ? 'true' : 'false' },
           [g.awaiting + '/' + g.open])
@@ -3357,6 +3388,7 @@
 
   function backToInbox() {
     const left = currentItem;
+    if (left) revealInInbox(left);   // R6: back onto its row, in its group even if that group is shut
     currentItem = null;
     currentMode = 'inbox';
     fromInbox = false;
@@ -4354,7 +4386,7 @@
   // C10 (1.49): a chart fold's Pop out sits beside its <summary>, outside the <details>, so it is there (and can take
   // focus back) while the fold is shut; inside the <summary> it would toggle the fold instead.
   function chartFold(details, popBtn) {
-    return el('div', { className: 'ck-chart-fold' }, [details, el('div', { className: 'ck-pop-row ck-chart-fold-pop' }, [popBtn])]);
+    return el('div', { className: 'ck-chart-fold' }, [el('div', { className: 'ck-pop-row ck-chart-fold-pop' }, [popBtn]), details]);
   }
   function flowFrame(itemId) {
     return chartFrame(config.api + '/item-chart?item=' + encodeURIComponent(itemId), 'Status flowchart: ' + itemId,
@@ -4384,7 +4416,7 @@
       else { openCharts.delete(itemId); }
     });
     if (openCharts.has(itemId)) load();
-    return chartFold(wrap, popButton('flow', itemId, 'the status flowchart of ' + itemId));
+    return chartFold(wrap, popButton('flow', itemId, 'Status flowchart'));
   }
 
   // Trigger log (0.16.0): the Inbox shows configured triggers + the last N firings so webhook / cron are
@@ -5196,7 +5228,7 @@
       if (wrap.open) { openImpact.add(itemId); load(); } else { openImpact.delete(itemId); }
     });
     if (openImpact.has(itemId)) load();
-    return chartFold(wrap, popButton('impact', itemId, 'the impact graph of ' + itemId));
+    return chartFold(wrap, popButton('impact', itemId, 'Impact graph'));
   }
 
   // 0.8.19: whole-project map, parent -> child, coloured by status roll-up per item. Lazy and collapsible.
@@ -6586,8 +6618,7 @@
       if (wrap.open) load();
     });
     if (wrap.open) load();
-    return chartFold(wrap, popButton('tickets', itemId || '*',
-      'what blocks what' + (itemId ? ' on ' + itemId : ' across the tickets')));
+    return chartFold(wrap, popButton('tickets', itemId || '*', 'What blocks what'));
   }
   function renderTicketsTab(body) {
     const byItem = (view && view.tickets && view.tickets.by_item) || {};
@@ -9190,6 +9221,8 @@
   let popSheet = false;
   let popSeq = 0;
   let dockDragging = false;     // C1: a dock drag in progress; the pop-outs' mode is settled when it ends
+  let popStowed = false;        // R2: the sheet stowed so the console under it shows; every pop-out is kept
+  let popChip = null;           // R2: the "Pop-outs (n)" chip that brings a stowed sheet back
 
   function popKey(kind, id) { return kind + ':' + id; }
   function hasOwn(o, k) { return !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k); }
@@ -9348,12 +9381,12 @@
     ]);
   }
   // "Show in the console": the item (or round, or Tickets) behind a pop-out, in the console. The phone's sheet covers
-  // the console, so there it closes first.
+  // the console, so there it is stowed first (R2): the stack is kept and the "Pop-outs (n)" chip brings it back.
   function popGoButton(p, src) {
     const b = el('button', { type: 'button', className: 'ck-btn ck-pop-go' },
       [p.kind === 'round' ? 'Open the round in the console' : 'Show in the console']);
     b.addEventListener('click', () => {
-      if (popSheet) closePop(p.key, false);
+      if (popSheet) stowPops();
       if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
       if (p.kind === 'round') { openFromInbox(src.item); return; }
       if (p.kind === 'tickets' && !src.item) { goTab('tickets', true); return; }
@@ -9461,6 +9494,7 @@
   function openPop(kind, id, opener, focusKey) {
     const src = popSource(kind, id);
     if (!src) return false;
+    if (popStowed) { unstowPops(); layoutPops(); }   // R2: opening one brings a stowed sheet back
     const key = popKey(kind, id);
     if (pops.some(x => x.key === key)) { activatePop(key, true); return true; }   // already open: its tab, not a twin
     let replaced = null;
@@ -9493,7 +9527,45 @@
     syncPopCount();
   }
   // How many are open, for the sheet's CSS: one alone needs no tab strip.
-  function syncPopCount() { if (popEl) popEl.setAttribute('data-count', String(pops.length)); }
+  function syncPopCount() { if (popEl) popEl.setAttribute('data-count', String(pops.length)); syncPopChip(); }
+  // R2 (1.49): on the sheet, "Show in the console" and a click in a chart STOW it rather than close the one on show:
+  // every pop-out is kept (pinned or not), the sheet leaves the screen, the Tab order and the accessibility tree,
+  // and a "Pop-outs (n)" chip in the console brings it back on the one that was on show. Opening a pop-out brings it
+  // back too, and going wide shows the stack as usual (the chip goes).
+  function stowPops() {
+    if (!popEl || !popSheet || popStowed) return;
+    popStowed = true;
+    popEl.hidden = true;
+    popEl.inert = true;
+    document.documentElement.classList.remove('ck-pop-sheet-open');
+    syncPopChip();
+  }
+  function unstowPops() {
+    if (!popStowed) return;
+    popStowed = false;
+    if (popEl) { popEl.hidden = false; popEl.inert = false; }
+    syncPopChip();
+  }
+  // The chip lives in the console (re-attached on every redraw, like the status chip), so the console's own focus
+  // trap on a phone reaches it.
+  function syncPopChip() {
+    if (!popStowed || !pops.length) {
+      if (popChip) { popChip.remove(); popChip = null; }
+      return;
+    }
+    if (!popChip) {
+      popChip = el('button', { type: 'button', className: 'ck-btn ck-pop-chip', dataFocusKey: 'pop-chip' });
+      popChip.addEventListener('click', () => {
+        unstowPops();
+        layoutPops();
+        if (popActive) activatePop(popActive, true);
+      });
+    }
+    if (panelEl && popChip.parentNode !== panelEl) panelEl.appendChild(popChip);
+    const n = pops.length;
+    popChip.textContent = 'Pop-outs (' + n + ')';
+    popChip.setAttribute('aria-label', 'Show ' + n + (n === 1 ? ' pop-out' : ' pop-outs'));
+  }
   function closePop(key, returnFocus) {
     const p = pops.find(x => x.key === key);
     if (!p) return;
@@ -9546,9 +9618,12 @@
   // none under reduced motion) and is removed after; it leaves the accessibility tree and the Tab order at once.
   function teardownPopEl(now) {
     const gone = popEl;
+    const wasStowed = popStowed;
     popEl = null;
     popTabsEl = null;
     popActive = null;
+    popStowed = false;
+    syncPopChip();
     if (popSheet) { popSheet = false; document.documentElement.classList.remove('ck-pop-sheet-open'); }
     if (!gone) return;
     gone.removeAttribute('id');
@@ -9556,7 +9631,7 @@
     gone.removeAttribute('aria-modal');
     gone.setAttribute('aria-hidden', 'true');
     gone.inert = true;
-    if (now || (reducedMotion && reducedMotion.matches)) { gone.remove(); return; }
+    if (now || wasStowed || (reducedMotion && reducedMotion.matches)) { gone.remove(); return; }
     gone.classList.remove('ck-pop-enter');
     gone.classList.add('ck-pop-leaving');
     setTimeout(() => gone.remove(), 170);
@@ -9600,9 +9675,10 @@
     const became = sheet && !popSheet;
     const changed = sheet !== popSheet;
     popSheet = sheet;
+    if (!sheet) unstowPops();   // R2: going wide shows the stack as usual, and the chip goes
     syncPopCount();
     popEl.classList.toggle('ck-pop-sheet', sheet);
-    document.documentElement.classList.toggle('ck-pop-sheet-open', sheet);
+    document.documentElement.classList.toggle('ck-pop-sheet-open', sheet && !popStowed);
     if (sheet) {
       popEl.setAttribute('role', 'dialog');
       popEl.setAttribute('aria-modal', 'true');
@@ -10418,6 +10494,7 @@
     all.sort((a, b) => a.ts.localeCompare(b.ts));   // oldest-first = most urgent
     const top = all.slice(0, 6);
     const projCount = new Set(all.map(r => r.project)).size;
+    const oneProject = projCount <= 1;   // R5: then every row would repeat the one name, and crowd out the question
     const wrap = el('details', { className: 'ck-priority-ribbon', open: 'open' });
     const sum = el('summary', { className: 'ck-priority-summary' }, [
       el('span', { className: 'ck-priority-title' }, ['Priority']),
@@ -10432,10 +10509,10 @@
       const hrs = r.ts ? (Date.now() - Date.parse(r.ts)) / 3_600_000 : 0;
       const health = Number.isNaN(hrs) ? 'warn' : (hrs < 1 ? 'warn' : hrs < 24 ? 'late' : 'overdue');
       const li = el('li', { className: 'ck-priority-row', dataHealth: health, tabindex: '0',
-        'aria-label': r.project + ' · ' + r.qid + ' · ' + relTime(r.ts) }, [
+        'aria-label': (oneProject ? '' : r.project + ' · ') + r.qid + ' · ' + relTime(r.ts) }, [
         el('span', { className: 'ck-priority-dot', dataHealth: health }, []),
-        el('span', { className: 'ck-priority-project' }, [r.project]),
-        el('span', { className: 'ck-priority-qid' }, [' · ' + r.qid]),
+        oneProject ? null : el('span', { className: 'ck-priority-project' }, [r.project]),
+        el('span', { className: 'ck-priority-qid' }, [(oneProject ? '' : ' · ') + r.qid]),
         r.isSelf !== false ? renderLaneChip(r.item || qidItem(r.qid)) : null,
         // X2: the separator in its own span, which the two-line phone row hides (console.css): there the question
         // starts a line, and a leading "·" read as a stray mark.

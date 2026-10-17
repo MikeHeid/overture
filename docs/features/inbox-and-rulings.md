@@ -63,14 +63,17 @@ Answer what your agents ask, lock it into a ruling, and keep each ruling honest 
   in its item's lane, and a row in its own lane's group does not repeat the
   lane's chip. Folded groups are remembered in this browser, per project. A
   link to a question in a folded group, the outline or `j` / `k` opens it for
-  now, without changing what is remembered; only pressing the heading does.
+  this visit to the Inbox (it stays open through live updates, and is folded
+  again once you leave the Inbox and come back), without changing what is
+  remembered; only pressing the heading does.
   Each row works as before: open, snooze, filter, Mine, the palette and
   links.
 
   <img src="../screenshots/feature-inbox-groups.png" alt="The Inbox: the Priority list, the outline strip of lanes with its legend, counts and j / k hint, then the lane groups, each headed by its lane chip and counts" width="400">
 
 - **The outline and j / k (1.49).** The outline of the groups stays at the
-  top as you scroll ("2/3": awaiting you / open, as its legend says), and
+  top as you scroll ("2/3": awaiting you / open, as its legend says; a
+  control is named "Infra 3/4: 3 awaiting you, 4 open"), and
   `j` / `k` walk the questions waiting for you
   across them; see [Moving through a long Inbox](navigation.md#moving-through-a-long-inbox-149).
 - **Filter chips (1.1).** A row of four chips sits above the Inbox's
@@ -85,7 +88,9 @@ Answer what your agents ask, lock it into a ruling, and keep each ruling honest 
   scrolls into view. The stale banner on the card itself is tagged
   **Living ruling**.
 - **Priority's count (1.49).** "6 of 8 awaiting you" names the projects
-  only when there are several ("across 2 projects").
+  only when there are several ("across 2 projects"). With one project its
+  rows do not repeat the project's name either: each starts at the question's
+  id, which leaves the question room on a phone.
 - **Snooze (0.26).** Each row of the Priority ribbon has a ⌛ button
   with three choices: **1h**, **til tmrw** (9:00 tomorrow, local time)
   and **1w**. A snoozed question leaves the ribbon at once and comes back

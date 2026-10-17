@@ -3003,7 +3003,9 @@ and keys to move through it.
   button (icon and label, D9) where the console shows them; the screenshot
   viewer has one too. A ruling has one when its question, options and your own
   words come to 280 characters or more. A chart fold's Pop out sits beside its
-  heading, so it is there while the fold is shut. A pop-out opens over the
+  heading, so it is there while the fold is shut, and comes before the chart in
+  the Tab order; it is named for its chart ("Pop out Status flowchart", "Pop out
+  Impact graph", "Pop out What blocks what"). A pop-out opens over the
   dashboard, in the room beside the docked console, never over the console
   itself.
 - **A tabbed stack of up to three.** Each pop-out is a tab, with its title,
@@ -3025,7 +3027,10 @@ and keys to move through it.
   server builds tell the console when Esc is pressed in them (a bare
   `{type: 'ck-escape'}` message, accepted only from the console's own chart
   frames, in exactly that shape; the frames' sandbox and CSP are unchanged).
-  Esc in a chart in the console itself does nothing new.
+  Esc in a chart in the console itself does nothing new. An HTML mock-up is
+  the exception: it runs no script at all (an empty sandbox, as in the
+  console), so Esc inside one does nothing; click outside it, or use Close,
+  one Shift+Tab away.
 - **Links:** the address names the pop-out on show, `#item=API-2&pop=flow:API-2`,
   and such a link opens it. The kinds are `flow`, `impact`, `tickets`,
   `visual`, `round`, `ruling` and `asset`. A link is checked as 1.48 checks the
@@ -3048,7 +3053,18 @@ and keys to move through it.
   layout when it ends rather than flipping while you drag; focus on a control
   the switch hides moves to the same pop-out's visible one. While the sheet is
   open the console's shortcuts (`.`, `g …`, `?`, `j` / `k`) do nothing behind
-  it.
+  it. Its Pin, like Close, is a 44px touch target.
+- **Back to the console from the sheet.** On the sheet, **Show in the console**
+  and a click in a chart *stow* it rather than close the pop-out on show: every
+  pop-out is kept, pinned or not, the sheet leaves the screen (and the Tab
+  order, and the accessibility tree), focus goes to what the console now shows,
+  and a **Pop-outs (2)** chip in the console's corner (named "Show 2 pop-outs",
+  44px on touch) brings the sheet back on the pop-out you were reading. Opening
+  another pop-out brings it back too, and a window that grows wide enough shows
+  the whole stack beside the console as usual. While it is stowed the console
+  is the console: its shortcuts work, and Esc closes it as always (the
+  pop-outs not pinned go with it; a pinned one is shown again, with focus in
+  it).
 - **The same sandbox.** A popped-out chart, diagram or mock is made by the very
   function the console uses for its own (`chartFrame`: `sandbox="allow-scripts"`,
   never `allow-same-origin`, `data-ck-chart`, `referrerpolicy="no-referrer"`;
@@ -3077,14 +3093,21 @@ and keys to move through it.
   links. Folded groups are remembered per viewer, per project and lane, and a
   stored value of the wrong shape counts as nothing folded. A link to a
   question (or item) in a folded group, an outline jump, or `j` / `k` opens the
-  group for this view only: navigation never changes what is remembered, and
-  only pressing the group's heading does.
+  group for this visit to the Inbox: it stays open through live updates, and is
+  folded again once you leave the Inbox (another tab or section, an item, the
+  console closed) and come back. Back from an item opens the group of the row
+  you return to. Navigation never changes what is remembered; only pressing the
+  group's heading does.
 - **Priority's count** no longer says "across 1 project": the projects are
-  named only when there are several (the 1.48 UX review).
+  named only when there are several (the 1.48 UX review). Its rows follow
+  suit: with one project they no longer repeat its name ("northwind · API-2/Q1
+  · …"), which on a phone left the question a few characters.
 - **The outline** (U6): the groups with their counts ("2/3", awaiting you of
   open) as a one-line strip that stays at the top of the Inbox while it
   scrolls. A short legend, "awaiting you / open", starts it; each control is
-  named and titled in full ("Infra: 3 awaiting you, 4 open"); and on a wide
+  named with what it shows first, then in full ("Infra 3/4: 3 awaiting you, 4
+  open", so a voice user can say what they see: WCAG 2.5.3) and titled "Infra:
+  3 awaiting you, 4 open"; and on a wide
   screen it ends with a hint, "j / k next question". Pressing one opens its
   group, brings its heading to the top, clear of the sticky bars, and focuses
   it. At the default column the Inbox is about
@@ -3109,7 +3132,9 @@ and keys to move through it.
   README; new `feature-popout.png` (a flowchart popped out beside the console,
   two tabs), `feature-popout-laptop.png` (the same on a 1280px window) and
   `feature-inbox-groups.png` (Priority, the outline with its legend and hint,
-  the groups), and `feature-phone.png` rendered again.
+  the groups), and `feature-phone.png`, `feature-priority.png`,
+  `feature-snooze.png` and `feature-inbox-top.png` rendered again (Priority
+  rows without the one project's name).
 
 **Going back to 1.48.** 1.49 adds one key to this browser's localStorage,
 `ck:<project>:inbox-collapsed` (the folded lane groups), which 1.48 never reads.

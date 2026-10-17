@@ -3952,7 +3952,20 @@ html.ck-footer-on .ck-pop:not(.ck-pop-sheet) { bottom: calc(var(--ck-footer-h, 2
 .ck-pop-sheet .ck-pop-tab { min-height: 44px; }
 .ck-pop-sheet .ck-pop-head { position: sticky; top: 0; background: var(--c-surface); }
 .ck-pop-sheet .ck-pop-close { min-height: 44px; min-width: 44px; font-weight: 600; }
+.ck-pop-sheet .ck-pop-pin { min-height: 44px; min-width: 44px; }   /* R3: a touch target, as Close is */
 html.ck-pop-sheet-open, html.ck-pop-sheet-open body { overflow: hidden; }
+/* R2: a sheet stowed by "Show in the console" or a chart click is hidden (display: flex above would beat [hidden]),
+   and the "Pop-outs (n)" chip in the console brings it back. Above the phone's bottom bar of sections. */
+.ck-pop[hidden] { display: none; }
+.ck-pop-chip {
+  position: fixed; right: 12px; bottom: 16px; z-index: 6; min-height: 44px; min-width: 44px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; font-weight: 600;
+  background: var(--c-surface); border: 1px solid var(--ck-rail-mark, var(--c-border));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+}
+@media (max-width: 640px) {
+  .ck-pop-chip { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+}
 @media (prefers-reduced-motion: no-preference) {
   .ck-pop.ck-pop-enter { animation: ck-pop-in 150ms ease-out; }
   .ck-pop.ck-pop-leaving { animation: ck-pop-out 150ms ease-in forwards; }
