@@ -2147,6 +2147,32 @@ class TicketRouteTests(_Live, unittest.TestCase):
         self.assertEqual(code, 404)
 
 
+class ChartEscapeTests(unittest.TestCase):
+    """1.49 (X3): every chart page the server builds tells its parent when Esc is pressed inside it."""
+
+    def test_every_chart_page_posts_one_bare_escape_message_from_its_nonced_script(self):
+        # Catches: a chart page (a Mermaid one: flowchart, ticket graph, project map, visual; or the impact graph)
+        # without the Esc handler, so Esc inside a pop-out's frame does nothing (the keydown never reaches the
+        # console); the handler outside the nonced script (the CSP would block it) or posting anything but the bare
+        # {type:'ck-escape'}; and the CSP changed on the way (no new source, still sandboxed, still nonce-only).
+        nonce = "n0nce" + os.urandom(4).hex()
+        pages = {"mermaid": SV._mermaid_wrapper("graph TD\n  A-->B\n", "t", nonce),
+                 "mermaid-clickable": SV._mermaid_wrapper("graph TD\n  A-->B\n", "t", nonce, clickable=True),
+                 "impact": SV._impact_wrapper({"nodes": [], "edges": []}, "t", nonce)}
+        for name, (body, ctype, csp) in pages.items():
+            with self.subTest(page=name):
+                html = body.decode()
+                scripts = re.findall(r'<script nonce="' + nonce + r'">(.*?)</script>', html, re.S)
+                with_glue = [sc for sc in scripts if SV.CHART_ESCAPE_GLUE in sc]
+                self.assertEqual(len(with_glue), 1)
+                self.assertEqual(html.count("ck-escape"), 1)
+                self.assertIn("e.key==='Escape'", SV.CHART_ESCAPE_GLUE)
+                self.assertIn("postMessage({type:'ck-escape'},'*')", SV.CHART_ESCAPE_GLUE)
+                self.assertEqual(csp, SV.VISUAL_RENDER_CSP_TMPL.format(nonce=nonce))
+                self.assertIn(f"script-src 'nonce-{nonce}'", csp)
+                self.assertNotIn("allow-same-origin", csp)
+
+
 class FeedTests(_Live, unittest.TestCase):
     """GET /api/feed: every store record as an event, newest first, filterable."""
 

@@ -1100,6 +1100,98 @@ class PublishTests(unittest.TestCase):
         for ms in re.findall(r"ck-(?:section-in|subtab-in|rail-mark-[xy]) (\d+)ms", motion):
             self.assertTrue(100 <= int(ms) <= 180, ms)
 
+    def test_pop_outs_draw_through_the_consoles_own_frames_and_no_new_door(self):
+        # 1.49 (U3). Catches: a pop-out making its own iframe (a second sandbox to keep in step, and the first place a
+        # weaker one creeps in), writing markup with innerHTML, calling the server itself (a new endpoint, or one the
+        # console does not already use for that content), or chartFrame / mockFrame granting more than they did.
+        js = (KIT / "overture" / "console.js").read_text()
+        start = js.index("  // U3 (1.49, owner 2026-10-16): pop-outs.")
+        end = js.index("  function fillFeedList(list) {")
+        module = js[start:end]
+        for banned in ("createElement('iframe')", "innerHTML", "insertAdjacentHTML", "setAttribute('sandbox'",
+                       "fetch(", "apiPost(", "outerHTML", "document.write"):
+            self.assertNotIn(banned, module)
+        chart = re.search(r"\n  function chartFrame\(src, title, className\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        mock = re.search(r"\n  function mockFrame\(src, title\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("frame.setAttribute('sandbox', 'allow-scripts');", chart)
+        self.assertIn("frame.setAttribute('data-ck-chart', '');", chart)
+        self.assertIn("frame.setAttribute('sandbox', '');", mock)
+        self.assertNotIn("data-ck-chart", mock)
+        for body in (chart, mock):
+            self.assertNotIn("allow-same-origin", body)
+            self.assertIn("frame.setAttribute('referrerpolicy', 'no-referrer');", body)
+        # The kinds a pop-out draws as a frame get it from the same builders the console uses.
+        pop_frame = re.search(r"\n  function popFrame\(kind, id, src\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        for builder in ("flowFrame(id)", "impactFrame(id)", "ticketFrame(", "visualFrame(src.v)"):
+            self.assertIn(builder, pop_frame)
+        for builder, user in (("flowFrame(itemId)", "renderItemChart"), ("impactFrame(itemId)", "renderItemImpact"),
+                              ("ticketFrame(itemId)", "renderTicketChart"), ("visualFrame(v)", "renderVisual")):
+            fn = js[js.index("  function " + user + "("):]
+            self.assertIn(builder, fn[:fn.index("\n  }\n")])
+
+    def test_a_pop_link_is_checked_against_a_known_kind_and_what_the_page_holds(self):
+        # 1.49 (U3). Catches: a `#pop=` kind looked up without an allow-list (an id such as __proto__ or a kind no
+        # one wrote a renderer for), an id not shape-checked, and a pop-out opened for anything popSource did not find
+        # in this page's own view (another login's item, a deleted visual).
+        js = (KIT / "overture" / "console.js").read_text()
+        parse = re.search(r"\n  function parsePopToken\(tok\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("hasOwn(POP_KINDS, kind)", parse)
+        self.assertIn("POP_ID.test(id)", parse)
+        open_pop = re.search(r"\n  function openPop\(kind, id, opener, focusKey\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        first = [line.strip() for line in open_pop.strip().splitlines()[:2]]
+        self.assertEqual(first, ["const src = popSource(kind, id);", "if (!src) return false;"])
+        link = js[js.index("  function applyLocationHash() {"):js.index("  function applyViewLink(kv, bare) {")]
+        self.assertIn("const kv = Object.create(null);", link)
+        self.assertIn("if (pop && popSource(pop.kind, pop.id)) {", link)
+
+    def test_pop_out_and_group_motion_sit_under_no_preference(self):
+        # 1.49 (U3). Catches: the pop-out's slide or fade written outside prefers-reduced-motion: no-preference (it
+        # would run for a viewer who asked for less), or a duration outside the decided 120–180 ms.
+        css = (KIT / "overture" / "console.css").read_text()
+        bare = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        motion = "".join(re.findall(r"@media \(prefers-reduced-motion: no-preference\)[^{]*\{.*?\n\}", bare, re.S))
+        outside = re.sub(r"@media \(prefers-reduced-motion: no-preference\)[^{]*\{.*?\n\}", "", bare, flags=re.S)
+        for sel, body in re.findall(r"([^{}]*)\{([^{}]*)\}", outside):
+            if "ck-pop" in sel:
+                self.assertNotRegex(body, r"\banimation(-name)?\s*:", sel.strip())
+        uses = re.findall(r"animation: (ck-pop-[a-z-]+|ck-section-in) (\d+)ms", motion[motion.index(".ck-pop.ck-pop-enter"):])
+        self.assertGreaterEqual(len(uses), 4)
+        for name, ms in uses:
+            self.assertTrue(120 <= int(ms) <= 180, (name, ms))
+
+    def test_the_inbox_grouping_reads_its_stored_state_defensively(self):
+        # 1.49 (U5). Catches: the collapsed-groups memory trusted as stored (a string, an array or a truthy non-true
+        # value collapsing groups, or a throw on a value that is not an object), and a group toggle that redraws the
+        # whole panel (it would reset the list's scroll).
+        js = (KIT / "overture" / "console.js").read_text()
+        body = re.search(r"\n  function collapsedLanes\(\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("Array.isArray(v)", body)
+        self.assertIn("v[k] === true", body)
+        toggle = re.search(r"\n  function setGroupOpen\(sec, open, remember\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertNotIn("renderPanel", toggle)
+        self.assertIn("memGet('inbox-collapsed')", body)
+
+    def test_the_collapsed_lanes_map_has_no_prototype_and_is_read_by_own_keys(self):
+        # 1.49 (C8). Catches: the collapsed-groups map built as `{}` and read as `shut[key]`, so a key such as
+        # `constructor` or `toString` is found on Object.prototype and its group draws collapsed for good.
+        js = (KIT / "overture" / "console.js").read_text()
+        body = re.search(r"\n  function collapsedLanes\(\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("const out = Object.create(null);", body)
+        self.assertNotIn("const out = {};", body)
+        shut = re.search(r"\n  function isLaneShut\(shut, key\) \{(.*?)\}\n", js, re.S).group(1)
+        self.assertIn("Object.prototype.hasOwnProperty.call(shut, key)", shut)
+        groups = js[js.index("  function renderLaneGroups("):js.index("  function setGroupOpen(")]
+        self.assertIn("isLaneShut(shut, key)", groups)
+        self.assertNotRegex(groups, r"shut\[key\]")
+
+    def test_a_pop_out_is_drawn_beside_the_console_with_480px_of_room(self):
+        # 1.49 (X2, lead decision). Catches: the room threshold moved off 480px (at 720px a 1280px window with the
+        # default 576px column, 704px of room, drew a sheet over the console instead of a pop-out beside it).
+        js = (KIT / "overture" / "console.js").read_text()
+        self.assertRegex(js, r"\n  const POP_ROOM_MIN = 480;")
+        wants = re.search(r"\n  function popWantsSheet\(\) \{\n(.*?)\n  \}\n", js, re.S).group(1)
+        self.assertIn("window.innerWidth - consoleWidth() < POP_ROOM_MIN", wants)
+
     def test_lane_palette_is_one_list_and_readable_in_both_themes(self):
         # D10: the console and the config parser agree on the palette, and every lane colour is
         # at least 3:1 against the surfaces it sits on (WCAG 1.4.11), in light and in dark.
