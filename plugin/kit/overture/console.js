@@ -48,7 +48,10 @@
     // U1 (1.48): the section rail's icons, from lucide 0.469.0 (the same ISC set; these three are unchanged since 0.460).
     'briefcase': [["path",{"d":"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"}],["rect",{"width":"20","height":"14","x":"2","y":"6","rx":"2"}]],
     'workflow': [["rect",{"width":"8","height":"8","x":"3","y":"3","rx":"2"}],["path",{"d":"M7 11v4a2 2 0 0 0 2 2h4"}],["rect",{"width":"8","height":"8","x":"13","y":"13","rx":"2"}]],
-    'folder-kanban': [["path",{"d":"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"}],["path",{"d":"M8 10v4"}],["path",{"d":"M12 10v2"}],["path",{"d":"M16 10v6"}]]
+    'folder-kanban': [["path",{"d":"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"}],["path",{"d":"M8 10v4"}],["path",{"d":"M12 10v2"}],["path",{"d":"M16 10v6"}]],
+    // U3 (1.49): the pop-out control and its Pin toggle, from the same lucide set.
+    'external-link': [["path",{"d":"M15 3h6v6"}],["path",{"d":"M10 14 21 3"}],["path",{"d":"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}]],
+    'pin': [["line",{"x1":"12","x2":"12","y1":"17","y2":"22"}],["path",{"d":"M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"}]]
 
   };
   const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1097,6 +1100,15 @@
     const d = e && e.data;
     if (!d || typeof d !== 'object' || !d.type) return;
     if (!fromChartFrame(e)) return;
+    if (d.type === 'ck-escape') {
+      // 1.49 (X3): Esc pressed inside a chart frame (a keydown there never reaches this page) closes the pop-out
+      // holding that frame and gives focus back to its opener. Exactly this shape and nothing else: the message
+      // carries no data. A chart in the console itself does nothing new.
+      if (Object.keys(d).length !== 1) return;
+      const p = pops.find(x => Array.from(x.panel.querySelectorAll('iframe[data-ck-chart]')).some(f => f.contentWindow === e.source));
+      if (p) closePop(p.key, true);
+      return;
+    }
     if (d.type === 'ck-chart-size') {
       // 1.47 (U9): the impact graph asks for the height its nodes need. Only an impact frame is resized,
       // to a bounded number; its slot scrolls beyond its own maximum (console.css .ck-impact-slot).
@@ -1122,6 +1134,11 @@
     }
     if (d.type !== 'ck-chart-click' || typeof d.target !== 'string' || typeof d.kind !== 'string') return;
     if (!panelEl || panelEl.getAttribute('data-open') !== 'true') return;
+    // U3: a click in a chart on the phone's sheet goes to the console under it, so the sheet makes way: it is stowed
+    // (R2), every pop-out kept, and the "Pop-outs (n)" chip brings it back.
+    if (popSheet && popEl && Array.from(popEl.querySelectorAll('iframe')).some(f => f.contentWindow === e.source)) {
+      stowPops();
+    }
     if (d.kind === 'item') {
       openFromInbox(d.target);
       return;
@@ -1354,6 +1371,8 @@
       dockHandle.setAttribute('aria-valuemin', String(dockWidthMin()));
       dockHandle.setAttribute('aria-valuemax', String(dockWidthMax()));
     }
+    layoutPops();
+    fitInboxSticky();
     return width;
   }
   function saveDockWidth(w) {
@@ -1365,6 +1384,7 @@
     let pointerId = null;
     const onMove = e => {
       if (!dragging) return;
+      dockDragging = true;   // C1 (1.49): the pop-outs keep their mode until the drag ends
       // Panel is anchored to the right; width = viewport right - pointer X.
       const next = window.innerWidth - e.clientX;
       applyDockWidth(next);
@@ -1375,6 +1395,7 @@
       try { handle.releasePointerCapture(pointerId); } catch (_e) {}
       pointerId = null;
       handle.classList.remove('ck-dock-handle-active');
+      if (dockDragging) { dockDragging = false; layoutPops(); }
       // Persist whatever width ended up applied.
       const curr = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ck-col'), 10);
       saveDockWidth(curr || DOCK_W_DEFAULT);
@@ -1442,10 +1463,11 @@
     if (dockStrip) dockStrip.setAttribute('aria-expanded', open ? 'true' : 'false');
     // Narrowing the window turns an open column into a modal overlay: focus
     // left out on the board would sit behind the backdrop, so bring it in.
-    if (open && !docked && !panelEl.contains(document.activeElement)) {
+    if (open && !docked && !panelEl.contains(document.activeElement) && !(popEl && popEl.contains(document.activeElement))) {
       const closeBtn = panelEl.querySelector('.ck-close-btn');
       if (closeBtn) closeBtn.focus();
     }
+    layoutPops();   // U3: the room beside the console changed
   }
 
   // Locked questions of all questions, per item and everything under it (0.7.0):
@@ -1682,6 +1704,9 @@
       closePanel();
     });
 
+    // U3/U6: the room beside the console, and the Inbox's sticky bars, follow the window.
+    window.addEventListener('resize', () => { layoutPops(); fitInboxSticky(); });
+
     // Keyboard shortcuts: `g <letter>` tab-hop, `?` help, `.` Delegate bar focus, `j/k` row walk.
     // Never fires in a text input; `g` is a sticky prefix for 1500ms.
     document.addEventListener('keydown', handleShortcut);
@@ -1689,6 +1714,9 @@
 
   let shortcutGpfx = 0;
   function handleShortcut(e) {
+    // C4 (1.49): the pop-out sheet is modal: no shortcut acts behind it (its own keydown handles Esc and Tab). A
+    // stowed sheet (R2) covers nothing.
+    if (popSheet && !popStowed) return;
     // Cmd+K / Ctrl+K opens the command palette. Captured before the ctrl/meta skip
     // so it works everywhere, including inside a text input — the standard app shortcut.
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
@@ -1740,8 +1768,13 @@
       return;
     }
     if ((e.key === 'j' || e.key === 'k') && panelEl.getAttribute('data-open') === 'true') {
+      // Never behind a modal (the help, the palette, a viewer, the phone's pop-out sheet): focus would leave it.
+      const a = document.activeElement;
+      if (a && a.closest && a.closest('[aria-modal="true"]:not(.ck-panel)')) return;
       e.preventDefault();
-      walkFocus(e.key === 'j' ? 1 : -1);
+      // U6 (1.49): on the Inbox, the next or previous unanswered question across the lane groups; elsewhere, rows.
+      if (currentMode === 'inbox' && currentTab === 'inbox' && view) walkQuestions(e.key === 'j' ? 1 : -1);
+      else walkFocus(e.key === 'j' ? 1 : -1);
     }
   }
 
@@ -1772,10 +1805,10 @@
       ['g b', 'Close panel (back to board)'],
       ['.',   'Focus the Delegate bar'],
       ['u',   'Open UX View (on a UX item)'],
-      ['j / k', 'Next / previous row'],
+      ['j / k', 'Next / previous unanswered question (Inbox); next / previous row elsewhere'],
       ['Enter / Space', 'Open the focused row'],
       ['?',   'Show this help'],
-      ['Esc', 'Close panel or this help']
+      ['Esc', 'Close the pop-out on show, the panel, or this help']
     ];
     const dl = el('dl', { className: 'ck-shortcut-list' });
     for (const [k, v] of rows) {
@@ -2099,6 +2132,7 @@
     else if (mode === 'item' && itemId) syncLocationHash('item=' + encodeURIComponent(itemId));
     // Fix #2: Focus the close button reliably after render
     requestAnimationFrame(() => {
+      if (popEl && popEl.contains(document.activeElement)) return;   // a linked pop-out took focus (U3)
       const closeBtn = panelEl.querySelector('.ck-close-btn');
       if (closeBtn) closeBtn.focus();
     });
@@ -2109,7 +2143,7 @@
       requestAnimationFrame(() => {
         // Docked, the owner may already be back on the board: only recover focus
         // the re-render dropped (onto <body>), never pull it out of the page.
-        const lost = !isDocked() || document.activeElement === document.body;
+        const lost = (!isDocked() && !(popEl && popEl.contains(document.activeElement))) || document.activeElement === document.body;
         if (panelEl.getAttribute('data-open') === 'true' && lost && !panelEl.contains(document.activeElement)) {
           const closeBtn = panelEl.querySelector('.ck-close-btn');
           if (closeBtn) closeBtn.focus();
@@ -2120,6 +2154,7 @@
 
   // Close panel
   function closePanel() {
+    closeUnpinnedPops();                 // U3/C6: unpinned pop-outs go with the console; pinned ones stay
     panelEl.setAttribute('data-open', 'false');
     dropLocksNotOnShow();
     closeStatusPop();                    // tear down the status drawer if it was open
@@ -2132,6 +2167,15 @@
     // Default-open stays dismissed for the session once the owner closes it.
     try { sessionStorage.setItem('ck-inbox-closed', '1'); } catch (e) { /* storage blocked */ }
     syncLocationHash('');
+    inboxVisitOn = false;                // R6: the Inbox view is left
+    // R2: a pinned pop-out stowed on the phone's sheet stays open, so it is shown again (its chip went with the
+    // console), and focus goes into it.
+    if (popStowed && pops.length) {
+      unstowPops();
+      layoutPops();
+      if (popActive) activatePop(popActive, true);
+      return;
+    }
     // Back to what opened it; when that was the strip, it is the strip again.
     if (lastFocused && lastFocused.focus && document.contains(lastFocused)) lastFocused.focus();
   }
@@ -2159,6 +2203,7 @@
     if (statusChip) panelEl.appendChild(statusChip);
     if (dockHandle) panelEl.appendChild(dockHandle);
     pendingLive = false;
+    syncInboxVisit();
     if (currentMode === 'inbox') {
       clampTab();
       renderInbox();
@@ -2178,6 +2223,8 @@
     // closePanel() when the whole panel is dismissed.
     if (auxPaneEl) panelEl.appendChild(auxPaneEl);
     placeStatusChip();
+    refreshPops();   // U3: an open pop-out follows the view, in place
+    syncPopChip();   // R2: the chip of a stowed sheet, back in the redrawn console
     if (typingKey) {
       const twin = panelEl.querySelector('[data-focus-key="' + CSS.escape(typingKey) + '"]');
       if (twin) {
@@ -2278,6 +2325,7 @@
       renderInboxList(body);
     }
     main.appendChild(body);
+    if (currentTab === 'inbox') fitInboxSticky();
     if (currentTab === 'chat') {
       const log = body.querySelector('.ck-chat-log');
       if (log) log.scrollTop = log.scrollHeight;
@@ -2705,16 +2753,7 @@
       body.appendChild(list);
     }
     const scope = renderInboxScope();
-    if (scope) body.appendChild(scope);
     const elsewhere = (view.inbox || []).length;
-    if (scope && inboxScope === 'mine' && !inboxQids().length && elsewhere) {
-      // Not a blank Inbox: say the questions are outside Mine, and how to see them.
-      const line = el('p', { className: 'ck-muted ck-mine-empty' }, ['Nothing in Mine. ']);
-      const all = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet' }, ['See All (' + elsewhere + ')']);
-      all.addEventListener('click', () => { inboxScope = 'all'; renderPanel(); updateInboxButton(); });
-      line.appendChild(all);
-      body.appendChild(line);
-    }
     const rounds = new Map();
     const loose = [];
     for (const qid of inboxQids()) {
@@ -2729,12 +2768,6 @@
       } else {
         loose.push(q);
       }
-    }
-    if (rounds.size && F.awaiting_you) {
-      body.appendChild(el('div', { className: 'ck-section-heading' }, ['Rounds to answer']));
-      const list = el('div', { className: 'ck-inbox-list' });
-      for (const fid of rounds.keys()) list.appendChild(renderRoundCard(fid));
-      body.appendChild(list);
     }
     // 0.8.19: for every item with open questions here, nest its locked rulings underneath as a collapsible,
     // so the owner sees direction (what was asked → what you answered) without leaving the Inbox.
@@ -2751,24 +2784,23 @@
     }
     const footerShown = new Set();
 
+    // U5/U6 (1.49): the Inbox's questions, grouped by lane under the Priority block, with the sticky Mine switch and
+    // an outline of the groups. A round is filed under its item's lane, and shown while "you" is on, as before.
     const looseKept = loose.filter(q => F[q.state]);
-    if (looseKept.length) {
-      body.appendChild(el('div', { className: 'ck-section-heading' }, ['Questions for you']));
-      const list = el('div', { className: 'ck-inbox-list' });
-      const clusters = looseClusters(looseKept);
-      const inCluster = new Set(clusters.flatMap(c => c.qs.map(q => q.question.qid)));
-      // Walk in the order that produced the inbox; after the last row for an item, append its "N answered".
-      const emit = (itemId, node) => {
-        list.appendChild(node);
-        if (F.locked && !footerShown.has(itemId) && rulingsByItem[itemId] && rulingsByItem[itemId].length) {
-          list.appendChild(renderAnsweredFooter(itemId, rulingsByItem[itemId]));
-          footerShown.add(itemId);
-        }
-      };
-      for (const c of clusters) emit(c.item, renderClusterCard(c));
-      for (const q of looseKept) if (!inCluster.has(q.question.qid)) emit(q.question.item, looseRow(q));
-      body.appendChild(list);
+    const groups = laneGroups(F.awaiting_you ? Array.from(rounds.keys()) : [], rounds, looseKept);
+    const nav = el('div', { className: 'ck-inbox-nav' });
+    if (scope) nav.appendChild(scope);
+    if (groups.length) nav.appendChild(renderOutlineSelect(groups));
+    if (nav.childNodes.length) body.appendChild(nav);
+    if (scope && inboxScope === 'mine' && !inboxQids().length && elsewhere) {
+      // Not a blank Inbox: say the questions are outside Mine, and how to see them.
+      const line = el('p', { className: 'ck-muted ck-mine-empty' }, ['Nothing in Mine. ']);
+      const all = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet' }, ['See All (' + elsewhere + ')']);
+      all.addEventListener('click', () => { inboxScope = 'all'; renderPanel(); updateInboxButton(); });
+      line.appendChild(all);
+      body.appendChild(line);
     }
+    if (groups.length) body.appendChild(renderLaneGroups(groups, rulingsByItem, footerShown, F));
 
     // Items whose questions are all locked (nothing open), surfaced within the last 24h: shows "direction" too.
     const RECENT_MS = 24 * 60 * 60 * 1000;
@@ -2964,18 +2996,257 @@
     return bar;
   }
 
-  function looseRow(q) {
+  // ---------------------------------------------------------------------------------------------------------------
+  // U5 (1.49, owner 2026-10-16): the Inbox's questions grouped by lane, each group a heading button (aria-expanded)
+  // over its rows, with the lane's chip and its counts. Order: lanes with questions awaiting you first, by how many
+  // await you, then by how many are open, then by name; "Other" (items with no lane) sorts as a lane would, after a
+  // named lane it ties with. A group's collapsed state is this viewer's, per project and lane (localStorage,
+  // `inbox-collapsed`), and a link to a question in a collapsed group opens the group.
+  // U6: an outline of the groups (beside the list when the Inbox is at least OUTLINE_BESIDE_MIN wide, a sticky strip
+  // above it otherwise, a <select> on a phone), and `j` / `k` through the unanswered questions across the groups.
+  // ---------------------------------------------------------------------------------------------------------------
+  const OTHER_LANE = '_other';
+  const OUTLINE_BESIDE_MIN = 720;
+  function laneKey(lane) { return lane || OTHER_LANE; }
+  function laneLabel(lane) { return lane ? segWords(lane) : 'Other'; }
+  // The stored value is checked, not trusted: an object of lane keys whose value is exactly true. Anything else
+  // (a string, an array, a number, a key with a false) counts as nothing collapsed.
+  // C8: a prototype-less map read with hasOwn, so a key such as `constructor` is never found on Object.prototype.
+  function collapsedLanes() {
+    const v = memGet('inbox-collapsed');
+    const out = Object.create(null);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    for (const k of Object.keys(v)) if (v[k] === true && typeof k === 'string' && k.length <= 200) out[k] = true;
+    return out;
+  }
+  function isLaneShut(shut, key) { return Object.prototype.hasOwnProperty.call(shut, key) && !laneRevealed.has(key); }
+  function setLaneCollapsed(key, shut) {
+    const c = collapsedLanes();
+    if (shut) c[key] = true; else delete c[key];
+    memSet('inbox-collapsed', Object.keys(c).length ? c : null);
+  }
+  // C7 (1.49): navigation (a deep link #item= / #qid=, an outline jump, `j` / `k`) opens a collapsed group for this
+  // view only: the saved state is unchanged, and only a click on the group's heading changes it.
+  // R6: "this view" is one visit to the Inbox tab. A group opened by navigation stays open through its live redraws,
+  // and is shut again once the owner leaves the Inbox (another tab or section, an item, the console closed) and comes
+  // back. A deep link, or the row an item was opened from, opens its group on the next visit (laneRevealNext).
+  const laneRevealed = new Set();
+  const laneRevealNext = new Set();
+  let inboxVisitOn = false;
+  function revealLane(key) { laneRevealed.add(key); }
+  function revealInInbox(itemId) { laneRevealNext.add(laneKey(laneOf(itemId))); }
+  function syncInboxVisit() {
+    const on = panelEl.getAttribute('data-open') === 'true' && currentMode === 'inbox' && currentTab === 'inbox';
+    if (on && !inboxVisitOn) {
+      laneRevealed.clear();
+      for (const k of laneRevealNext) laneRevealed.add(k);
+      laneRevealNext.clear();
+    }
+    inboxVisitOn = on;
+  }
+  function laneGroups(roundIds, rounds, looseKept) {
+    const by = new Map();
+    const get = lane => {
+      if (!by.has(lane)) by.set(lane, { lane, rounds: [], qs: [], awaiting: 0, open: 0 });
+      return by.get(lane);
+    };
+    for (const fid of roundIds) {
+      const g = get(laneOf(view.forks[fid].message.item));
+      g.rounds.push(fid);
+      for (const q of rounds.get(fid)) { g.open++; if (q.state === 'awaiting_you') g.awaiting++; }
+    }
+    for (const q of looseKept) {
+      const g = get(laneOf(q.question.item));
+      g.qs.push(q);
+      g.open++;
+      if (q.state === 'awaiting_you') g.awaiting++;
+    }
+    return Array.from(by.values()).sort((a, b) =>
+      ((b.awaiting > 0) - (a.awaiting > 0)) || (b.awaiting - a.awaiting) || (b.open - a.open)
+      || ((a.lane ? 0 : 1) - (b.lane ? 0 : 1)) || laneLabel(a.lane).localeCompare(laneLabel(b.lane)));
+  }
+  function groupWords(g) {
+    return g.awaiting + ' awaiting you · ' + g.open + ' open';
+  }
+  function laneChipFor(lane) {
+    if (!lane) return el('span', { className: 'ck-lane-chip ck-lane-other' }, ['Other']);
+    return el('span', { className: 'ck-lane-chip', dataLane: lane, dataLaneColor: laneColor(lane) }, [segWords(lane)]);
+  }
+  function renderLaneGroups(groups, rulingsByItem, footerShown, F) {
+    const shut = collapsedLanes();
+    const wrap = el('div', { className: 'ck-groups-wrap' });
+    wrap.appendChild(renderOutline(groups));
+    const list = el('div', { className: 'ck-groups' });
+    groups.forEach((g, n) => {
+      const key = laneKey(g.lane);
+      const closed = isLaneShut(shut, key);
+      const bodyId = 'ck-group-body-' + n;
+      const toggle = el('button', { type: 'button', className: 'ck-group-toggle', id: 'ck-group-' + n,
+        'aria-expanded': closed ? 'false' : 'true', 'aria-controls': bodyId, dataFocusKey: 'group-' + key,
+        'aria-label': laneLabel(g.lane) + ': ' + groupWords(g) }, [
+        el('span', { className: 'ck-group-caret', 'aria-hidden': 'true' }, [closed ? '▸' : '▾']),
+        laneChipFor(g.lane),
+        el('span', { className: 'ck-group-counts', 'aria-hidden': 'true' }, [groupWords(g)])
+      ]);
+      const gbody = el('div', { className: 'ck-group-body', id: bodyId, role: 'group', 'aria-labelledby': 'ck-group-' + n,
+        hidden: closed ? 'hidden' : null });
+      const sec = el('section', { className: 'ck-lane-group', dataLane: key }, [
+        el('h3', { className: 'ck-group-head' }, [toggle]), gbody]);
+      toggle.addEventListener('click', () => {
+        laneRevealed.delete(key);
+        setGroupOpen(sec, toggle.getAttribute('aria-expanded') !== 'true', true);
+      });
+      if (g.rounds.length) {
+        const rl = el('div', { className: 'ck-inbox-list ck-group-rounds' });
+        for (const fid of g.rounds) rl.appendChild(renderRoundCard(fid));
+        gbody.appendChild(rl);
+      }
+      if (g.qs.length) {
+        const ql = el('div', { className: 'ck-inbox-list' });
+        const clusters = looseClusters(g.qs);
+        const inCluster = new Set(clusters.flatMap(c => c.qs.map(q => q.question.qid)));
+        // After the last row for an item, its "N answered" (0.8.19).
+        const emit = (itemId, node) => {
+          ql.appendChild(node);
+          if (F.locked && !footerShown.has(itemId) && rulingsByItem[itemId] && rulingsByItem[itemId].length) {
+            ql.appendChild(renderAnsweredFooter(itemId, rulingsByItem[itemId]));
+            footerShown.add(itemId);
+          }
+        };
+        // X1: the group's heading names the lane, so its rows do not repeat the lane's chip.
+        for (const c of clusters) emit(c.item, renderClusterCard(c, true));
+        for (const q of g.qs) if (!inCluster.has(q.question.qid)) emit(q.question.item, looseRow(q, true));
+        gbody.appendChild(ql);
+      }
+      list.appendChild(sec);
+    });
+    wrap.appendChild(list);
+    return wrap;
+  }
+  // Open or close a group in place: no redraw, so the list keeps its scroll and the focus stays where it is.
+  function setGroupOpen(sec, open, remember) {
+    const toggle = sec.querySelector('.ck-group-toggle');
+    const gbody = sec.querySelector('.ck-group-body');
+    if (!toggle || !gbody) return;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const caret = toggle.querySelector('.ck-group-caret');
+    if (caret) caret.textContent = open ? '▾' : '▸';
+    gbody.hidden = !open;
+    if (remember !== false) setLaneCollapsed(sec.getAttribute('data-lane'), !open);
+    else if (open) revealLane(sec.getAttribute('data-lane'));
+  }
+  // X4 (1.49): the compact "3/4" is explained once, by a legend at the outline's start, and in full in each control's
+  // name and title ("Infra: 3 awaiting you, 4 open"). X5: a hint for `j` / `k` at its end (hidden on a phone).
+  function outlineWords(g) { return laneLabel(g.lane) + ': ' + g.awaiting + ' awaiting you, ' + g.open + ' open'; }
+  // R1 (WCAG 2.5.3, label in name): the name starts with what the control shows ("Infra 3/4"), then explains it.
+  function outlineName(g) {
+    return laneLabel(g.lane) + ' ' + g.awaiting + '/' + g.open + ': ' + g.awaiting + ' awaiting you, ' + g.open + ' open';
+  }
+  function renderOutline(groups) {
+    const nav = el('nav', { className: 'ck-outline', 'aria-label': 'Inbox outline' });
+    nav.appendChild(el('span', { className: 'ck-outline-legend', 'aria-hidden': 'true' }, ['awaiting you / open']));
+    const ul = el('ul', { className: 'ck-outline-list' });
+    for (const g of groups) {
+      const key = laneKey(g.lane);
+      const b = el('button', { type: 'button', className: 'ck-outline-btn', dataLane: key,
+        'aria-label': outlineName(g) }, [
+        el('span', { className: 'ck-outline-label' }, [laneLabel(g.lane)]),
+        el('span', { className: 'ck-outline-count', dataAwaiting: g.awaiting ? 'true' : 'false' },
+          [g.awaiting + '/' + g.open])
+      ]);
+      b.title = outlineWords(g);
+      b.addEventListener('click', () => jumpToGroup(key));
+      ul.appendChild(el('li', {}, [b]));
+    }
+    nav.appendChild(ul);
+    nav.appendChild(el('span', { className: 'ck-outline-hint' }, [el('kbd', {}, ['j']), ' / ', el('kbd', {}, ['k']),
+      ' next question']));
+    return nav;
+  }
+  // On a phone the outline is a native <select> at the top of the Inbox: one control, the platform's own picker.
+  function renderOutlineSelect(groups) {
+    const sel = el('select', { className: 'ck-outline-select', 'aria-label': 'Go to a lane' });
+    sel.appendChild(el('option', { value: '' }, ['Go to a lane…']));
+    for (const g of groups) sel.appendChild(el('option', { value: laneKey(g.lane) },
+      [laneLabel(g.lane) + ' — ' + g.awaiting + ' awaiting you, ' + g.open + ' open']));
+    sel.addEventListener('change', () => {
+      const k = sel.value;
+      sel.value = '';
+      if (k) jumpToGroup(k);
+    });
+    return sel;
+  }
+  // The outline's jump: the group opens, its heading comes to the top (clear of the sticky bars, by its
+  // scroll-margin), and focus goes to it, so a screen reader hears which group and its counts.
+  function jumpToGroup(key) {
+    const sec = panelEl.querySelector('.ck-lane-group[data-lane="' + CSS.escape(key) + '"]');
+    if (!sec) return;
+    setGroupOpen(sec, true, false);
+    const head = sec.querySelector('.ck-group-toggle');
+    sec.scrollIntoView({ block: 'start' });
+    try { head.focus({ preventScroll: true }); } catch (_e) { head.focus(); }
+  }
+  // The sticky bars' heights, for the outline's place under the Mine bar and for every scroll-margin: measured after
+  // each draw and when the window or the dock changes width (no ResizeObserver: it would observe its own changes).
+  function fitInboxSticky() {
+    const body = panelEl && panelEl.querySelector('.ck-body');
+    if (!body) return;
+    const nav = body.querySelector(':scope > .ck-inbox-nav');
+    const wrap = body.querySelector(':scope > .ck-groups-wrap');
+    if (!nav && !wrap) return;
+    let beside = false;
+    if (wrap) {
+      beside = wrap.getBoundingClientRect().width >= OUTLINE_BESIDE_MIN;
+      wrap.classList.toggle('ck-outline-beside', beside);
+    }
+    const navH = nav ? nav.getBoundingClientRect().height : 0;
+    const outline = wrap && wrap.querySelector('.ck-outline');
+    const oh = outline && !beside ? outline.getBoundingClientRect().height : 0;
+    body.style.setProperty('--ck-nav-h', Math.round(navH) + 'px');
+    body.style.setProperty('--ck-sticky-h', Math.round(navH + oh) + 'px');
+  }
+  // `j` / `k` (U6): the next or previous unanswered question across the groups, in the order they are listed. A
+  // round's card is one stop (its form walks its questions). A collapsed group on the way opens. At either end it
+  // stops and says so, rather than wrapping: a jump from the last question to the first reads as the list
+  // starting over, and the owner would lose their place.
+  function walkQuestions(dir) {
+    const stops = Array.from(panelEl.querySelectorAll('.ck-groups [data-jk]'));
+    if (!stops.length) { announce('No unanswered questions in the Inbox.', { silent: true }); return; }
+    const a = document.activeElement;
+    const at = stops.findIndex(s => s === a || s.contains(a));
+    let to;
+    if (at >= 0) to = at + dir;
+    else if (a && a !== document.body && panelEl.contains(a)) {
+      // From elsewhere in the Inbox: the first stop after it (j), or the last before it (k).
+      const after = stops.findIndex(s => a.compareDocumentPosition(s) & Node.DOCUMENT_POSITION_FOLLOWING);
+      to = dir > 0 ? (after < 0 ? stops.length : after) : (after < 0 ? stops.length - 1 : after - 1);
+    } else to = dir > 0 ? 0 : stops.length - 1;
+    if (to < 0 || to >= stops.length) {
+      const n = at >= 0 ? at + 1 : (dir > 0 ? stops.length : 1);
+      announce((dir > 0 ? 'No more below: question ' : 'No more above: question ') + n + ' of ' + stops.length + '.', { silent: true });
+      return;
+    }
+    const t = stops[to];
+    const sec = t.closest('.ck-lane-group');
+    if (sec) setGroupOpen(sec, true, false);
+    t.scrollIntoView({ block: 'nearest' });
+    try { t.focus({ preventScroll: true }); } catch (_e) { t.focus(); }
+    announce('Question ' + (to + 1) + ' of ' + stops.length, { silent: true });
+  }
+
+  // `inLane`: the row sits in its own lane's group (X1), whose heading already names the lane.
+  function looseRow(q, inLane) {
     const itemData = items[q.question.item];
     const qid = q.question.qid;
     const waiting = staleWaiting(q);
     const item = el('div', { className: 'ck-inbox-item' + (arrived.has(qid) ? ' ck-arrived' : ''),
-      tabindex: '0', dataQid: qid,
+      tabindex: '0', dataQid: qid, dataJk: q.state === 'awaiting_you' ? qid : null,
       'aria-label': q.state.replace('_', ' ') + ': ' + qid + (itemData ? ', ' + itemData.title : '')
         + (waiting ? '. ' + waiting : '') }, [
       el('span', { className: 'ck-q-state', dataState: q.state }, [
         stateMark(q.state), ' ', q.state.replace('_', ' ')
       ]),
-      renderItemRefTag(q.question.item), renderLaneChip(q.question.item),
+      renderItemRefTag(q.question.item), inLane ? null : renderLaneChip(q.question.item),
       el('span', { className: 'ck-inbox-item-id' }, [q.question.item]),
       el('span', { className: 'ck-inbox-item-qnum', title: qid }, ['Q' + qNum(qid)]),
       el('span', { className: 'ck-inbox-item-title' }, [itemData ? itemData.title : '']),
@@ -3067,7 +3338,7 @@
     return out;
   }
 
-  function renderClusterCard(c) {
+  function renderClusterCard(c, inLane) {
     const n = c.qs.length;
     const btn = el('button', { className: 'ck-btn ck-btn-primary ck-cluster-go', type: 'button', dataFocusKey: c.id,
       'aria-label': 'Answer these ' + n + ' questions from ' + c.agent + ' on ' + c.item + ' together' },
@@ -3075,13 +3346,13 @@
     btn.addEventListener('click', () => openLooseRound(c));
     const card = el('div', { className: 'ck-cluster', dataCluster: c.id }, [
       el('div', { className: 'ck-cluster-head' }, [
-        renderItemRefTag(c.item), renderLaneChip(c.item),
+        renderItemRefTag(c.item), inLane ? null : renderLaneChip(c.item),
         el('span', { className: 'ck-inbox-item-id' }, [c.item]),
         ' ' + n + ' questions from ' + c.agent + ' · asked ' + relTime(c.qs[n - 1].question.ts)]),
       btn
     ]);
     const rows = el('div', { className: 'ck-cluster-rows' });
-    for (const q of c.qs) rows.appendChild(looseRow(q));
+    for (const q of c.qs) rows.appendChild(looseRow(q, inLane));
     card.appendChild(rows);
     return card;
   }
@@ -3117,6 +3388,7 @@
 
   function backToInbox() {
     const left = currentItem;
+    if (left) revealInInbox(left);   // R6: back onto its row, in its group even if that group is shut
     currentItem = null;
     currentMode = 'inbox';
     fromInbox = false;
@@ -3598,6 +3870,8 @@
         bodyEl.appendChild(renderAnswerForm(q, true, headAnswer.id));
       });
       actions.appendChild(changeBtn);
+      // U3 (1.49): a long ruling can be read beside the console.
+      if (isLongRuling(q)) actions.appendChild(popButton('ruling', qData.qid, 'the ruling on ' + qData.qid));
       // "Next step ▾" (0.8.0): follow up with seats (0.4.0; roar among them), refine or drill.
       const target = { item: qData.item, about_qid: qData.qid };
       const [nextBtn, nextPanel] = nextStepMenu('next-' + qData.qid, truncText, [
@@ -4084,6 +4358,45 @@
     return wrap;
   }
 
+  // The ONE way a chart frame (Mermaid diagram, status flowchart, impact graph, project map) is made, in the console
+  // and in a pop-out alike (U3, 1.49): sandbox="allow-scripts" and never allow-same-origin, so the vendored library
+  // runs in an opaque origin; marked data-ck-chart, the only frames whose messages fromChartFrame accepts.
+  function chartFrame(src, title, className) {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('data-ck-chart', '');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.setAttribute('title', title);
+    frame.className = className;
+    frame.src = src;
+    return frame;
+  }
+  // And the ONE way an HTML mock is shown: a sandbox that grants nothing (no scripts, no same-origin, no forms, no
+  // popups, no top navigation). The server's CSP on the response says the same, even if the URL is opened alone.
+  function mockFrame(src, title) {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', '');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.setAttribute('title', title);
+    frame.className = 'ck-visual-frame';
+    frame.src = src;
+    return frame;
+  }
+  const FLOW_FRAME_CLASS = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
+  // C10 (1.49): a chart fold's Pop out sits beside its <summary>, outside the <details>, so it is there (and can take
+  // focus back) while the fold is shut; inside the <summary> it would toggle the fold instead.
+  function chartFold(details, popBtn) {
+    return el('div', { className: 'ck-chart-fold' }, [el('div', { className: 'ck-pop-row ck-chart-fold-pop' }, [popBtn]), details]);
+  }
+  function flowFrame(itemId) {
+    return chartFrame(config.api + '/item-chart?item=' + encodeURIComponent(itemId), 'Status flowchart: ' + itemId,
+      FLOW_FRAME_CLASS);
+  }
+  function impactFrame(itemId) {
+    return chartFrame(config.api + '/impact-graph?item=' + encodeURIComponent(itemId), 'Impact graph: ' + itemId,
+      FLOW_FRAME_CLASS);
+  }
+
   function renderItemChart(itemId) {
     const wrap = el('details', { className: 'ck-item-chart', dataItem: itemId });
     if (openCharts.has(itemId)) wrap.setAttribute('open', '');
@@ -4096,21 +4409,14 @@
     wrap.appendChild(slot);
     const load = () => {
       if (slot.querySelector('iframe')) return;
-      const frame = document.createElement('iframe');
-      frame.setAttribute('sandbox', 'allow-scripts');
-      frame.setAttribute('data-ck-chart', '');
-      frame.setAttribute('referrerpolicy', 'no-referrer');
-      frame.setAttribute('title', 'Status flowchart: ' + itemId);
-      frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
-      frame.src = config.api + '/item-chart?item=' + encodeURIComponent(itemId);
-      slot.appendChild(frame);
+      slot.appendChild(flowFrame(itemId));
     };
     wrap.addEventListener('toggle', () => {
       if (wrap.open) { openCharts.add(itemId); load(); }
       else { openCharts.delete(itemId); }
     });
     if (openCharts.has(itemId)) load();
-    return wrap;
+    return chartFold(wrap, popButton('flow', itemId, 'Status flowchart'));
   }
 
   // Trigger log (0.16.0): the Inbox shows configured triggers + the last N firings so webhook / cron are
@@ -4916,20 +5222,13 @@
     wrap.appendChild(slot);
     const load = () => {
       if (slot.querySelector('iframe')) return;
-      const frame = document.createElement('iframe');
-      frame.setAttribute('sandbox', 'allow-scripts');
-      frame.setAttribute('data-ck-chart', '');
-      frame.setAttribute('referrerpolicy', 'no-referrer');
-      frame.setAttribute('title', 'Impact graph: ' + itemId);
-      frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
-      frame.src = config.api + '/impact-graph?item=' + encodeURIComponent(itemId);
-      slot.appendChild(frame);
+      slot.appendChild(impactFrame(itemId));
     };
     wrap.addEventListener('toggle', () => {
       if (wrap.open) { openImpact.add(itemId); load(); } else { openImpact.delete(itemId); }
     });
     if (openImpact.has(itemId)) load();
-    return wrap;
+    return chartFold(wrap, popButton('impact', itemId, 'Impact graph'));
   }
 
   // 0.8.19: whole-project map, parent -> child, coloured by status roll-up per item. Lazy and collapsible.
@@ -5033,6 +5332,13 @@
     if (btn && btn.focus) try { btn.focus(); } catch (_e) {}
   }
 
+  // A visual's frame, in the console and in a pop-out alike: an HTML mock in mockFrame, a Mermaid diagram in chartFrame.
+  function visualFrame(v) {
+    if (v.format === 'html') return mockFrame(config.api + '/visual?id=' + encodeURIComponent(v.id), 'Visual: ' + v.title);
+    return chartFrame(config.api + '/visual-render?id=' + encodeURIComponent(v.id), 'Mermaid diagram: ' + v.title,
+      'ck-visual-frame ck-visual-frame-mermaid');
+  }
+
   function renderVisual(v, idx, total, walkOrder) {
     const box = el('div', { className: 'ck-visual', dataFormat: v.format, dataVisual: v.id });
     const titleBits = [el('div', { className: 'ck-visual-title' }, [v.title])];
@@ -5053,6 +5359,7 @@
       next.addEventListener('click', () => walkToVariant(walkOrder, idx + 1));
       titleBits.push(prev, next);
     }
+    titleBits.push(popButton('visual', v.id, v.title));
     titleBits.push(renderStarButton('visual:' + v.id, 'this visual'));
     const titleRow = el('div', { className: 'ck-visual-title-row' }, titleBits);
     box.appendChild(titleRow);
@@ -5068,29 +5375,12 @@
         'aria-label': 'Open ' + v.title + ' in UX View' }, ['Open in UX View']);
       uxOpen.addEventListener('click', () => openUxView(v.item || currentItem));
       box.appendChild(uxOpen);
-      // The ONLY way a mock reaches the page: an iframe whose sandbox grants nothing
-      // (no scripts, no same-origin, no forms, no popups, no top navigation). The
-      // server's CSP on the response says the same, even if the URL is opened alone.
-      const frame = document.createElement('iframe');
-      frame.setAttribute('sandbox', '');
-      frame.setAttribute('referrerpolicy', 'no-referrer');
-      frame.setAttribute('title', 'Visual: ' + v.title);
-      frame.className = 'ck-visual-frame';
-      frame.src = src;
-      box.appendChild(frame);
+      box.appendChild(visualFrame(v));
     } else {
       // 0.8.19: Mermaid is rendered as a diagram inside a sandboxed iframe (allow-scripts, NOT
       // allow-same-origin). The vendored lib runs in an opaque origin: no parent cookies, no storage,
       // no network to this origin. A "View source" toggle still shows the raw .mmd text when wanted.
-      const renderSrc = config.api + '/visual-render?id=' + encodeURIComponent(v.id);
-      const frame = document.createElement('iframe');
-      frame.setAttribute('sandbox', 'allow-scripts');
-      frame.setAttribute('data-ck-chart', '');
-      frame.setAttribute('referrerpolicy', 'no-referrer');
-      frame.setAttribute('title', 'Mermaid diagram: ' + v.title);
-      frame.className = 'ck-visual-frame ck-visual-frame-mermaid';
-      frame.src = renderSrc;
-      box.appendChild(frame);
+      box.appendChild(visualFrame(v));
       const pre = el('pre', { className: 'ck-visual-code ck-visual-code-collapsed',
         'aria-label': 'Mermaid source: ' + v.title, hidden: 'hidden' });
       pre.textContent = 'Loading…';
@@ -6306,6 +6596,10 @@
     for (const c of Object.values(counts)) n += (c.open || 0) + (c.blocked || 0);
     return n;
   }
+  function ticketFrame(itemId) {
+    return chartFrame(config.api + '/ticket-chart' + (itemId ? '?item=' + encodeURIComponent(itemId) : ''),
+      'Ticket graph' + (itemId ? ': ' + itemId : ''), FLOW_FRAME_CLASS);
+  }
   function renderTicketChart(itemId) {
     const wrap = el('details', { className: 'ck-item-chart ck-ticket-chart' });
     if (!itemId && ticketChartOpen) wrap.setAttribute('open', '');
@@ -6317,21 +6611,14 @@
     wrap.appendChild(slot);
     const load = () => {
       if (slot.querySelector('iframe')) return;
-      const frame = document.createElement('iframe');
-      frame.setAttribute('sandbox', 'allow-scripts');
-      frame.setAttribute('data-ck-chart', '');
-      frame.setAttribute('referrerpolicy', 'no-referrer');
-      frame.setAttribute('title', 'Ticket graph' + (itemId ? ': ' + itemId : ''));
-      frame.className = 'ck-visual-frame ck-visual-frame-mermaid ck-item-chart-frame';
-      frame.src = config.api + '/ticket-chart' + (itemId ? '?item=' + encodeURIComponent(itemId) : '');
-      slot.appendChild(frame);
+      slot.appendChild(ticketFrame(itemId));
     };
     wrap.addEventListener('toggle', () => {
       if (!itemId) ticketChartOpen = wrap.open;
       if (wrap.open) load();
     });
     if (wrap.open) load();
-    return wrap;
+    return chartFold(wrap, popButton('tickets', itemId || '*', 'What blocks what'));
   }
   function renderTicketsTab(body) {
     const byItem = (view && view.tickets && view.tickets.by_item) || {};
@@ -7680,6 +7967,7 @@
       else if (m.roles) bits.push(m.roles.map(r => ROSTER_LABEL[r] || r.replace(/^other:/, '')).join(', '));
       else bits.push('default committee');
       card.appendChild(el('div', { className: 'ck-fork-head' }, [bits.join(' · ') + ' · ' + relTime(m.ts)]));
+      card.appendChild(el('div', { className: 'ck-pop-row' }, [popButton('round', m.id, 'this round on ' + itemId)]));
       const chips = tagChips(forkTags(m.id));
       if (chips) card.appendChild(chips);
       const t = el('div', { className: 'ck-message-text' });
@@ -7809,6 +8097,7 @@
     const done = draftedCount(forkId);
     const isNew = steps.some(q => arrived.has(q.question.qid));
     const btn = el('button', { className: 'ck-btn ck-btn-primary', type: 'button',
+      dataJk: steps.some(q => q.state === 'awaiting_you') ? forkId : null,
       'aria-label': 'Answer this round on ' + m.item + ': ' + steps.length + ' questions, ' + done + ' drafted' },
     [done ? 'Continue this round' : 'Answer this round']);
     btn.addEventListener('click', () => openRound(forkId));
@@ -8780,6 +9069,7 @@
     if (group.length > 1) card.appendChild(el('p', { className: 'ck-asset-caption' }, [main.caption]));
     card.appendChild(assetMeta(main));
     const actions = el('div', { className: 'ck-asset-actions' });
+    actions.appendChild(popButton('asset', main.id, main.caption));
     // One star per card: a pair is starred by its "after", the one worth keeping.
     actions.appendChild(renderStarButton('asset:' + main.id, group.length > 1 ? 'this before and after'
       : 'this ' + (ASSET_KIND[main.kind] || 'screenshot').toLowerCase()));
@@ -8831,6 +9121,14 @@
     const next = el('button', { type: 'button', className: 'ck-btn', 'aria-label': 'Next screenshot' }, ['▸']);
     const close = el('button', { type: 'button', className: 'ck-btn ck-btn-primary' }, ['Close']);
     const open = el('button', { type: 'button', className: 'ck-btn' }, ['Open item']);
+    // U3 (1.49): the screenshot on show moves beside the console; focus later returns to its card's Pop out.
+    const popOut = el('button', { type: 'button', className: 'ck-btn ck-pop-btn', 'aria-label': 'Pop out this screenshot' },
+      [icon('external-link', 'ck-pop-btn-icon'), ' Pop out']);
+    popOut.addEventListener('click', () => {
+      const r = rows[i];
+      closeAssetViewer();
+      openPop('asset', r.id, null, 'pop-' + popKey('asset', r.id));
+    });
     const paint = () => {
       const r = rows[i];
       title.textContent = r.caption;
@@ -8856,7 +9154,7 @@
     box.appendChild(el('div', { className: 'ck-asset-view-head' }, [title, counter]));
     box.appendChild(el('div', { className: 'ck-asset-view-stage' }, [img]));
     box.appendChild(meta);
-    box.appendChild(el('div', { className: 'ck-asset-view-actions' }, [prev, next, open, close]));
+    box.appendChild(el('div', { className: 'ck-asset-view-actions' }, [prev, next, popOut, open, close]));
     dlg.appendChild(box);
     document.body.appendChild(dlg);
     assetViewerTeardown = attachDialogAccessibility(dlg);
@@ -8890,6 +9188,601 @@
     for (const g of pairAssets(rows)) grid.appendChild(renderAssetCard(g, rows));
     det.appendChild(grid);
     return det;
+  }
+
+  // ===============================================================================================================
+  // U3 (1.49, owner 2026-10-16): pop-outs. A flowchart, an impact or ticket graph, a visual, a deliberation round, a
+  // long ruling or a screenshot opens beside the docked console, over the host's dashboard, in a tabbed stack of up
+  // to three. Each is the console's own content drawn again from `view` (so it shows only what this login already
+  // sees there) with the console's own frames (chartFrame, mockFrame: the same sandbox, no new sink, no new
+  // endpoint). Opening a fourth closes the oldest unpinned one; Pin only protects from that. A pop-out stays open
+  // until it is closed, across tab, section and item changes: the owner opened it to read beside other work, and
+  // closing it under them when they moved on would undo that. Closing the console closes the unpinned ones; a pinned
+  // one stays open over the dashboard (C6). Below 480px of room beside the console (X2), or on a phone, the stack is
+  // drawn as one full-screen modal sheet showing the one on show, with its tabs to switch; a change of layout never
+  // closes one (C1). Esc closes the one on show, from a chart frame inside it too (X3), and focus goes back to the
+  // control that opened it. A live update redraws one in place, never animating, and
+  // one whose source has gone says so instead of vanishing. `#pop=<kind>:<id>` opens one from a link.
+  // ===============================================================================================================
+  const POP_KINDS = { flow: 'Status flowchart', impact: 'Impact graph', tickets: 'What blocks what', visual: 'Visual',
+    round: 'Round', ruling: 'Ruling', asset: 'Screenshot' };
+  const POP_FRAME_KINDS = ['flow', 'impact', 'tickets', 'visual'];
+  const POP_MAX = 3;
+  const POP_ROOM_MIN = 480;     // px beside the console below which the stack is drawn as the phone's sheet (X2)
+  const POP_W_MIN = 240;        // the narrowest a wide stack is drawn, mid dock-drag (the mode waits for the drag's end)
+  const POP_W_MAX = 960;
+  const POP_ID = /^[A-Za-z0-9*][A-Za-z0-9._:\/-]{0,199}$/;
+  const RULING_STATES = ['locked', 'stale'];
+  const LONG_RULING_CHARS = 280;   // the question, its options and the owner's words together
+  let pops = [];                // open pop-outs, oldest first: { key, kind, id, pinned, opener, focusKey, tab, panel, … }
+  let popActive = null;         // the key of the one on show
+  let popEl = null;             // the stack (a region) or the sheet (a modal dialog); on <body>, outside every redraw
+  let popTabsEl = null;
+  let popSheet = false;
+  let popSeq = 0;
+  let dockDragging = false;     // C1: a dock drag in progress; the pop-outs' mode is settled when it ends
+  let popStowed = false;        // R2: the sheet stowed so the console under it shows; every pop-out is kept
+  let popChip = null;           // R2: the "Pop-outs (n)" chip that brings a stowed sheet back
+
+  function popKey(kind, id) { return kind + ':' + id; }
+  function hasOwn(o, k) { return !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k); }
+  // A link's `pop=` value: a known kind and an id of the shape ids have. Anything else is null and ignored.
+  function parsePopToken(tok) {
+    if (typeof tok !== 'string') return null;
+    const i = tok.indexOf(':');
+    if (i <= 0) return null;
+    const kind = tok.slice(0, i), id = tok.slice(i + 1);
+    if (!hasOwn(POP_KINDS, kind) || !POP_ID.test(id)) return null;
+    return { kind, id };
+  }
+  function headOf(q) { return q && Array.isArray(q.answers) && q.answers.length ? q.answers[q.answers.length - 1] : null; }
+  function isLongRuling(q) {
+    const a = headOf(q);
+    if (!a || !RULING_STATES.includes(q.state)) return false;
+    const opts = (q.question.options || []).map(o => (o && o.label) || '').join('');
+    return (q.question.text || '').length + (a.own_text || '').length + opts.length >= LONG_RULING_CHARS;
+  }
+  function findAsset(id) {
+    const a = (view && view.assets) || {};
+    const pools = [a.recent || []].concat(Object.values(a.by_item || {}));
+    for (const rows of pools) for (const r of (Array.isArray(rows) ? rows : [])) if (r && r.id === id) return r;
+    return null;
+  }
+  // What a pop-out shows, found only in what this page already holds (the view and the items this login was sent),
+  // or null: an unknown id, one this login cannot see, or one that has gone since.
+  function popSource(kind, id) {
+    if (!view || !hasOwn(POP_KINDS, kind) || typeof id !== 'string' || !POP_ID.test(id)) return null;
+    if (kind === 'flow' || kind === 'impact') return hasOwn(items, id) ? { title: POP_KINDS[kind] + ' · ' + id, item: id } : null;
+    if (kind === 'tickets') {
+      if (id === '*') {
+        // S1: the board-wide graph is the Tickets tab's: only when this login has that tab.
+        if (!visibleTabs().some(t => t[0] === 'tickets')) return null;
+        return { title: 'What blocks what · all tickets', item: null };
+      }
+      return hasOwn(items, id) ? { title: 'What blocks what · ' + id, item: id } : null;
+    }
+    if (kind === 'visual') { const v = findVisual(id); return v ? { title: v.title || 'Visual', item: v.item, v } : null; }
+    if (kind === 'round') {
+      const f = hasOwn(view.forks, id) ? view.forks[id] : null;
+      return f && f.message ? { title: 'Round · ' + f.message.item + ' · ' + f.message.mode, item: f.message.item, f } : null;
+    }
+    if (kind === 'ruling') {
+      const q = hasOwn(view.questions, id) ? view.questions[id] : null;
+      return q && RULING_STATES.includes(q.state) && headOf(q) ? { title: 'Ruling · ' + id, item: q.question.item, q } : null;
+    }
+    if (kind === 'asset') { const r = findAsset(id); return r ? { title: r.caption || 'Screenshot', item: r.item, r } : null; }
+    return null;
+  }
+  // What the content was drawn from: a live update redraws a pop-out only when this changes.
+  function popSig(kind, id, src) {
+    if (kind === 'flow' || kind === 'impact') {
+      const under = subtree(id);
+      const qs = Object.values(view.questions || {}).filter(q => under.has(q.question.item))
+        .map(q => [q.question.qid, q.state, (q.answers || []).length]);
+      const fs = Object.keys(view.forks || {}).filter(k => under.has(view.forks[k].message.item));
+      return JSON.stringify([qs, fs]);
+    }
+    if (kind === 'tickets') return JSON.stringify((view && view.tickets) || null);
+    if (kind === 'round') {
+      const f = src.f;
+      return JSON.stringify([f.message, (f.questions || []).map(qid => {
+        const q = view.questions[qid];
+        return q ? [q.state, q.answers || []] : null;
+      }), hasOwn(view.transcripts, id) ? view.transcripts[id].bytes : 0]);
+    }
+    if (kind === 'ruling') {
+      const q = src.q, a = headOf(q);
+      return JSON.stringify([q.state, q.answers, q.failing || null, (view.locked_by || {})[a.id] || null,
+        (view.confirmed_by || {})[a.id] || null]);
+    }
+    return kind + ':' + id;   // a visual or a screenshot is a stored file, never rewritten
+  }
+
+  // The Pop out control, beside the thing it pops out (D9: icon and label). Its focus key brings focus back to its
+  // redrawn twin when the pop-out closes.
+  function popButton(kind, id, what) {
+    const key = popKey(kind, id);
+    const b = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-pop-btn', dataPop: key,
+      dataFocusKey: 'pop-' + key, 'aria-label': 'Pop out ' + what, title: 'Open beside the console (Esc closes it)' },
+    [icon('external-link', 'ck-pop-btn-icon'), ' Pop out']);
+    b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); openPop(kind, id, b); });
+    return b;
+  }
+
+  function popFrame(kind, id, src) {
+    if (kind === 'flow') return flowFrame(id);
+    if (kind === 'impact') return impactFrame(id);
+    if (kind === 'tickets') return ticketFrame(id === '*' ? null : id);
+    return visualFrame(src.v);
+  }
+  function popRound(f) {
+    const m = f.message;
+    const box = el('div', { className: 'ck-pop-round' });
+    const who = m.step ? (STEP_WORDS[m.step] ? STEP_WORDS[m.step].title : m.step)
+      : m.roles ? m.roles.map(r => ROSTER_LABEL[r] || r.replace(/^other:/, '')).join(', ') : 'default committee';
+    box.appendChild(el('p', { className: 'ck-muted' }, ['⑂ ' + m.mode + ' · ' + (m.focus || 'whole') + ' · ' + who +
+      ' · on ' + m.item + ' · ' + relTime(m.ts)]));
+    if (m.text) {
+      const t = el('div', { className: 'ck-message-text' });
+      renderAgentText(t, m.text);
+      box.appendChild(t);
+    }
+    const qs = (f.questions || []).map(qid => view.questions[qid]).filter(Boolean);
+    if (!qs.length) box.appendChild(el('p', { className: 'ck-muted' }, ['Waiting for the committee\'s questions.']));
+    for (const q of qs) {
+      const card = el('div', { className: 'ck-pop-q', dataQid: q.question.qid }, [
+        el('div', { className: 'ck-pop-q-head' }, [
+          el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' + (STATE_WORDS[q.state] || q.state)]),
+          ' ', el('span', { className: 'ck-inbox-item-id' }, [q.question.qid])]),
+        el('p', { className: 'ck-pop-q-text' }, [q.question.text || ''])
+      ]);
+      const head = headOf(q);
+      if (head) card.appendChild(renderReceipt(q.question, head));
+      box.appendChild(card);
+    }
+    const t = hasOwn(view.transcripts, m.id) ? view.transcripts[m.id] : null;
+    if (t) {
+      box.appendChild(el('h3', { className: 'ck-pop-sub' }, ['Roar transcript']));
+      const pre = el('pre', { className: 'ck-transcript-text' });
+      pre.textContent = t.text;
+      box.appendChild(pre);
+    }
+    return box;
+  }
+  function popRuling(q) {
+    const qd = q.question;
+    const box = el('div', { className: 'ck-pop-ruling' }, [
+      el('div', { className: 'ck-pop-q-head' }, [
+        el('span', { className: 'ck-q-state', dataState: q.state }, [stateMark(q.state), ' ' + (STATE_WORDS[q.state] || q.state)]),
+        ' ', el('span', { className: 'ck-inbox-item-id' }, [qd.qid])]),
+      el('p', { className: 'ck-pop-q-text' }, [qd.text || ''])
+    ]);
+    if (qd.source) box.appendChild(el('p', { className: 'ck-q-source' }, [qd.source]));
+    if (qd.agent) box.appendChild(el('p', { className: 'ck-q-agent' }, ['asked by ' + qd.agent]));
+    if (q.state === 'stale' && Array.isArray(q.failing) && q.failing.length) {
+      const list = el('ul', { className: 'ck-stale-list' });
+      for (const c of q.failing) {
+        list.appendChild(el('li', {}, [c.kind === 'file_sha256' ? 'File ' + c.path + ' changed'
+          : c.kind === 'excerpt' ? 'The text cited from ' + c.path + ' changed or is gone'
+          : c.kind === 'item_status' ? c.item + ' is no longer ' + c.status : String(c.kind || '')]));
+      }
+      box.appendChild(el('div', { className: 'ck-stale-banner' }, [
+        el('strong', {}, ['Assumptions changed since you locked this']), list]));
+    }
+    box.appendChild(renderReceipt(qd, headOf(q)));
+    return box;
+  }
+  function popAsset(r) {
+    return el('figure', { className: 'ck-pop-asset' }, [
+      el('img', { src: assetUrl(r), alt: r.caption || '', decoding: 'async' }),
+      el('figcaption', {}, [r.caption || '', el('span', { className: 'ck-muted' }, [' · ' + r.item +
+        (r.agent ? ' · by ' + r.agent : '') + ' · ' + relTime(r.at)])]),
+      assetMeta(r)
+    ]);
+  }
+  // "Show in the console": the item (or round, or Tickets) behind a pop-out, in the console. The phone's sheet covers
+  // the console, so there it is stowed first (R2): the stack is kept and the "Pop-outs (n)" chip brings it back.
+  function popGoButton(p, src) {
+    const b = el('button', { type: 'button', className: 'ck-btn ck-pop-go' },
+      [p.kind === 'round' ? 'Open the round in the console' : 'Show in the console']);
+    b.addEventListener('click', () => {
+      if (popSheet) stowPops();
+      if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
+      if (p.kind === 'round') { openFromInbox(src.item); return; }
+      if (p.kind === 'tickets' && !src.item) { goTab('tickets', true); return; }
+      if (p.kind === 'ruling') openForms.add('expand-' + p.id);
+      openFromInbox(src.item, p.kind === 'ruling' ? p.id : undefined);
+    });
+    return b;
+  }
+  function buildPopContent(p, src) {
+    const box = el('div', { className: 'ck-pop-content', dataKind: p.kind });
+    if (POP_FRAME_KINDS.includes(p.kind)) {
+      if (p.kind === 'visual') {
+        box.appendChild(el('p', { className: 'ck-muted ck-pop-note' }, [(src.v.format === 'html' ? 'HTML mock' : 'Mermaid diagram') +
+          ' on ' + src.item + ' · ' + relTime(src.v.ts) + (src.v.agent ? ' · by ' + src.v.agent : '')]));
+      }
+      const slot = el('div', { className: 'ck-pop-chart' + (p.kind === 'impact' ? ' ck-impact-slot' : '') });
+      slot.appendChild(popFrame(p.kind, p.id, src));
+      box.appendChild(slot);
+    } else if (p.kind === 'round') {
+      box.appendChild(popRound(src.f));
+    } else if (p.kind === 'ruling') {
+      box.appendChild(popRuling(src.q));
+    } else if (p.kind === 'asset') {
+      box.appendChild(popAsset(src.r));
+    }
+    if (src.item || p.kind === 'tickets') box.appendChild(el('div', { className: 'ck-actions ck-pop-actions' }, [popGoButton(p, src)]));
+    return box;
+  }
+
+  function ensurePopEl() {
+    if (popEl) return popEl;
+    popEl = el('section', { id: 'ck-pop', className: 'ck-pop ck-pop-enter', role: 'region', 'aria-label': 'Pop-outs' });
+    popTabsEl = el('div', { className: 'ck-pop-tabs', role: 'tablist', 'aria-label': 'Pop-outs' });
+    popEl.appendChild(popTabsEl);
+    popEl.addEventListener('keydown', onPopKey);
+    const stack = popEl;
+    stack.addEventListener('animationend', e => { if (e.target === stack) stack.classList.remove('ck-pop-enter'); });
+    document.body.appendChild(popEl);
+    return popEl;
+  }
+  // Esc closes the pop-out on show (and nothing else: the console behind it stays as it is). On the phone's sheet,
+  // Tab and Shift+Tab stay inside it.
+  function onPopKey(e) {
+    if (e.key === 'Escape') {
+      if (!popActive) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closePop(popActive, true);
+      return;
+    }
+    if (popSheet) trapFocusIn(popEl, e);
+  }
+  function setPopTitle(p, title) {
+    p.titleText = title;
+    p.titleEl.textContent = title;
+    p.tabTitle.textContent = title;
+    p.pinBtn.setAttribute('aria-label', 'Pin ' + title);
+    p.closeBtn.setAttribute('aria-label', 'Close ' + title);
+  }
+  function makePopPanel(p, src) {
+    const n = ++popSeq;
+    const tabId = 'ck-pop-tab-' + n, panelId = 'ck-pop-panel-' + n;
+    p.tabTitle = el('span', { className: 'ck-pop-tab-title' });
+    p.pinNote = el('span', { className: 'ck-sr-only' });
+    p.tab = el('button', { type: 'button', role: 'tab', id: tabId, className: 'ck-pop-tab', dataPop: p.key,
+      'aria-controls': panelId, 'aria-selected': 'false', tabindex: '-1', dataPinned: 'false' },
+    [el('span', { className: 'ck-pop-tab-pin', 'aria-hidden': 'true' }, [icon('pin')]), p.tabTitle, p.pinNote]);
+    p.tab.addEventListener('click', () => activatePop(p.key, true));
+    p.tab.addEventListener('keydown', e => {
+      const n2 = pops.indexOf(p);
+      let to = -1;
+      if (e.key === 'ArrowRight') to = (n2 + 1) % pops.length;
+      else if (e.key === 'ArrowLeft') to = (n2 + pops.length - 1) % pops.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = pops.length - 1;
+      if (to < 0) return;
+      e.preventDefault();
+      activatePop(pops[to].key, true);
+    });
+    p.titleEl = el('h2', { className: 'ck-pop-title', id: panelId + '-title' });
+    p.pinBtn = el('button', { type: 'button', className: 'ck-btn ck-btn-quiet ck-pop-pin', 'aria-pressed': 'false',
+      title: 'Pinned, it is never the one closed to make room for a fourth' }, [icon('pin'), ' Pin']);
+    p.pinBtn.addEventListener('click', () => togglePin(p));
+    p.closeBtn = el('button', { type: 'button', className: 'ck-btn ck-pop-close', title: 'Close (Esc)' }, [icon('x'), ' Close']);
+    p.closeBtn.addEventListener('click', () => closePop(p.key, true));
+    p.body = el('div', { className: 'ck-pop-body' });
+    p.panel = el('div', { className: 'ck-pop-panel ck-pop-enter', role: 'tabpanel', id: panelId, 'aria-labelledby': tabId,
+      hidden: 'hidden' }, [el('div', { className: 'ck-pop-head' }, [p.titleEl, p.pinBtn, p.closeBtn]), p.body]);
+    const panel = p.panel;
+    panel.addEventListener('animationend', e => { if (e.target === panel) panel.classList.remove('ck-pop-enter'); });
+    setPopTitle(p, src.title);
+    p.body.appendChild(buildPopContent(p, src));
+    p.sig = popSig(p.kind, p.id, src);
+    popTabsEl.appendChild(p.tab);
+    popEl.appendChild(p.panel);
+  }
+  function togglePin(p) {
+    p.pinned = !p.pinned;
+    p.pinBtn.setAttribute('aria-pressed', p.pinned ? 'true' : 'false');
+    p.tab.setAttribute('data-pinned', p.pinned ? 'true' : 'false');
+    p.pinNote.textContent = p.pinned ? ', pinned' : '';
+    announce((p.pinned ? 'Pinned ' : 'Unpinned ') + p.titleText + '.', { silent: true });
+  }
+
+  function openPop(kind, id, opener, focusKey) {
+    const src = popSource(kind, id);
+    if (!src) return false;
+    if (popStowed) { unstowPops(); layoutPops(); }   // R2: opening one brings a stowed sheet back
+    const key = popKey(kind, id);
+    if (pops.some(x => x.key === key)) { activatePop(key, true); return true; }   // already open: its tab, not a twin
+    let replaced = null;
+    // C1: the sheet keeps the same stack as the wide layout, with the same limit of three and the same Pin.
+    if (pops.length >= POP_MAX) {
+      replaced = pops.find(x => !x.pinned);
+      if (!replaced) {
+        announce('All ' + POP_MAX + ' pop-outs are pinned. Unpin or close one to open another.');
+        return false;
+      }
+      removePop(replaced);
+    }
+    ensurePopEl();
+    const p = { key, kind, id, pinned: false, opener: opener || null, sig: null, gone: false,
+      focusKey: focusKey || (opener && opener.getAttribute ? opener.getAttribute('data-focus-key') : null) };
+    makePopPanel(p, src);
+    pops.push(p);
+    syncPopCount();
+    layoutPops();
+    activatePop(key, true);
+    announce('Opened ' + p.titleText + ' beside the console' + (replaced ? '; closed ' + replaced.titleText +
+      ', the oldest one not pinned, to make room' : '') + '.', { silent: true });
+    return true;
+  }
+  function removePop(p) {
+    p.tab.remove();
+    p.panel.remove();
+    pops = pops.filter(x => x !== p);
+    if (popActive === p.key) popActive = null;
+    syncPopCount();
+  }
+  // How many are open, for the sheet's CSS: one alone needs no tab strip.
+  function syncPopCount() { if (popEl) popEl.setAttribute('data-count', String(pops.length)); syncPopChip(); }
+  // R2 (1.49): on the sheet, "Show in the console" and a click in a chart STOW it rather than close the one on show:
+  // every pop-out is kept (pinned or not), the sheet leaves the screen, the Tab order and the accessibility tree,
+  // and a "Pop-outs (n)" chip in the console brings it back on the one that was on show. Opening a pop-out brings it
+  // back too, and going wide shows the stack as usual (the chip goes).
+  function stowPops() {
+    if (!popEl || !popSheet || popStowed) return;
+    popStowed = true;
+    popEl.hidden = true;
+    popEl.inert = true;
+    document.documentElement.classList.remove('ck-pop-sheet-open');
+    syncPopChip();
+  }
+  function unstowPops() {
+    if (!popStowed) return;
+    popStowed = false;
+    if (popEl) { popEl.hidden = false; popEl.inert = false; }
+    syncPopChip();
+  }
+  // The chip lives in the console (re-attached on every redraw, like the status chip), so the console's own focus
+  // trap on a phone reaches it.
+  function syncPopChip() {
+    if (!popStowed || !pops.length) {
+      if (popChip) { popChip.remove(); popChip = null; }
+      return;
+    }
+    if (!popChip) {
+      popChip = el('button', { type: 'button', className: 'ck-btn ck-pop-chip', dataFocusKey: 'pop-chip' });
+      popChip.addEventListener('click', () => {
+        unstowPops();
+        layoutPops();
+        if (popActive) activatePop(popActive, true);
+      });
+    }
+    if (panelEl && popChip.parentNode !== panelEl) panelEl.appendChild(popChip);
+    const n = pops.length;
+    popChip.textContent = 'Pop-outs (' + n + ')';
+    popChip.setAttribute('aria-label', 'Pop-outs (' + n + '): show ' + (n === 1 ? 'it' : 'them'));  // starts with its text (2.5.3)
+  }
+  function closePop(key, returnFocus) {
+    const p = pops.find(x => x.key === key);
+    if (!p) return;
+    if (pops.length === 1) { pops = []; teardownPopEl(false); }
+    else {
+      const at = pops.indexOf(p);
+      removePop(p);
+      if (!popActive) activatePop(pops[Math.min(at, pops.length - 1)].key, false);
+    }
+    syncPopHash();
+    if (!returnFocus) return;
+    // The sheet is modal: while others are open in it, focus stays in it (on the one now on show).
+    const next = popSheet && pops.find(x => x.key === popActive);
+    if (next) { try { next.closeBtn.focus(); } catch (_e) {} return; }
+    returnPopFocus(p);
+  }
+  function closeAllPops() {
+    if (!popEl && !pops.length) return;
+    pops = [];
+    teardownPopEl(false);
+  }
+  // C6 (1.49): the console closing (by any route) takes its unpinned pop-outs with it; a pinned one stays open over
+  // the dashboard, the one on show among them if it was pinned.
+  function closeUnpinnedPops() {
+    if (!pops.some(x => !x.pinned)) return;
+    const kept = pops.filter(x => x.pinned);
+    if (!kept.length) { closeAllPops(); return; }
+    const was = popActive;
+    for (const o of pops.slice()) if (!o.pinned) removePop(o);
+    if (!popActive) activatePop((kept.find(x => x.key === was) || kept[0]).key, false);
+  }
+  // Back to the control that opened it; else its redrawn twin; else the console's selected tab, or its Close.
+  function returnPopFocus(p) {
+    const tries = [];
+    if (p.opener && document.contains(p.opener)) tries.push(p.opener);
+    if (p.focusKey && panelEl) tries.push(panelEl.querySelector('[data-focus-key="' + CSS.escape(p.focusKey) + '"]'));
+    if (panelEl) {
+      tries.push(panelEl.querySelector('[role="tab"][aria-selected="true"]'));
+      tries.push(panelEl.querySelector('.ck-close-btn'));
+    }
+    if (pops.length) tries.push(pops.find(x => x.key === popActive) ? pops.find(x => x.key === popActive).tab : null);
+    tries.push(dockStrip);
+    for (const t of tries) {
+      if (!t || !t.focus) continue;
+      try { t.focus(); } catch (_e) { continue; }
+      if (document.activeElement === t) return;
+    }
+  }
+  // `now`: gone at once (a phone's sheet giving way to the next one). Otherwise the stack slides out (CSS, 150 ms,
+  // none under reduced motion) and is removed after; it leaves the accessibility tree and the Tab order at once.
+  function teardownPopEl(now) {
+    const gone = popEl;
+    const wasStowed = popStowed;
+    popEl = null;
+    popTabsEl = null;
+    popActive = null;
+    popStowed = false;
+    syncPopChip();
+    if (popSheet) { popSheet = false; document.documentElement.classList.remove('ck-pop-sheet-open'); }
+    if (!gone) return;
+    gone.removeAttribute('id');
+    gone.removeAttribute('role');
+    gone.removeAttribute('aria-modal');
+    gone.setAttribute('aria-hidden', 'true');
+    gone.inert = true;
+    if (now || wasStowed || (reducedMotion && reducedMotion.matches)) { gone.remove(); return; }
+    gone.classList.remove('ck-pop-enter');
+    gone.classList.add('ck-pop-leaving');
+    setTimeout(() => gone.remove(), 170);
+  }
+  function activatePop(key, focus) {
+    const p = pops.find(x => x.key === key);
+    if (!p) return;
+    popActive = key;
+    for (const o of pops) {
+      const on = o === p;
+      o.tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      o.tab.setAttribute('tabindex', on ? '0' : '-1');
+      o.panel.hidden = !on;
+    }
+    if (popEl && popSheet) popEl.setAttribute('aria-labelledby', p.titleEl.id);
+    syncPopHash();
+    if (focus) {
+      // On the sheet, its Close; but a switch made from the tab strip keeps focus on the tabs.
+      const a = document.activeElement;
+      const onTab = !!(a && popTabsEl && popTabsEl.contains(a));
+      const t = popSheet && !onTab ? p.closeBtn : p.tab;
+      try { t.focus(); } catch (_e) { /* best effort */ }
+    }
+  }
+  function consoleWidth() {
+    return panelEl && panelEl.getAttribute('data-open') === 'true' ? Math.round(panelEl.getBoundingClientRect().width) : 0;
+  }
+  function popWantsSheet() {
+    return !!(phoneMedia && phoneMedia.matches) || window.innerWidth - consoleWidth() < POP_ROOM_MIN;
+  }
+  // Wide: a region beside the console (docked or not), as wide as the room allows up to 960px. Narrow: the sheet.
+  // C1: a change of layout (a resize, a rotation, a dock drag) never closes a pop-out: the sheet shows the one on show
+  // with the tab strip to switch, and going wide shows the stack again. Mid dock-drag the mode waits for the drag's
+  // end, so crossing the line back and forth does not flip it. C5: focus inside the stack that a switch would hide
+  // moves to the same pop-out's visible control.
+  function layoutPops() {
+    if (!popEl) return;
+    const sheet = dockDragging ? popSheet : popWantsSheet();
+    const a = document.activeElement;
+    const hadFocus = !!(a && popEl.contains(a));
+    const became = sheet && !popSheet;
+    const changed = sheet !== popSheet;
+    popSheet = sheet;
+    if (!sheet) unstowPops();   // R2: going wide shows the stack as usual, and the chip goes
+    syncPopCount();
+    popEl.classList.toggle('ck-pop-sheet', sheet);
+    document.documentElement.classList.toggle('ck-pop-sheet-open', sheet && !popStowed);
+    if (sheet) {
+      popEl.setAttribute('role', 'dialog');
+      popEl.setAttribute('aria-modal', 'true');
+      popEl.removeAttribute('aria-label');
+      const p = pops.find(x => x.key === popActive);
+      if (p) popEl.setAttribute('aria-labelledby', p.titleEl.id);
+      popEl.style.right = '';
+      popEl.style.width = '';
+      if (became && p && !hadFocus) { try { p.closeBtn.focus(); } catch (_e) {} }
+    } else {
+      popEl.setAttribute('role', 'region');
+      popEl.removeAttribute('aria-modal');
+      popEl.removeAttribute('aria-labelledby');
+      popEl.setAttribute('aria-label', 'Pop-outs');
+      const pw = consoleWidth();
+      popEl.style.right = (pw + 16) + 'px';
+      popEl.style.width = Math.max(POP_W_MIN, Math.min(POP_W_MAX, window.innerWidth - pw - 32)) + 'px';
+    }
+    if (changed && hadFocus) {
+      const now = document.activeElement;
+      if (!now || !popEl.contains(now) || !now.getClientRects().length) {
+        const p = pops.find(x => x.key === popActive);
+        if (p) { try { (sheet ? p.closeBtn : p.tab).focus(); } catch (_e) {} }
+      }
+    }
+  }
+  // A redraw of the console (a live update among them) redraws an open pop-out only if what it shows changed, in
+  // place: the panel and its scroll position stay, a frame is swapped only once its replacement has loaded, and no
+  // motion runs. One whose source has gone says so, and comes back if it does.
+  function refreshPops() {
+    for (const p of pops.slice()) {
+      const src = popSource(p.kind, p.id);
+      if (!src) {
+        const why = popGoneWords(p);
+        if (p.gone === why) continue;
+        const refocus = popFocusMark(p);
+        p.gone = why;
+        p.sig = null;
+        p.tab.setAttribute('data-gone', 'true');
+        p.body.textContent = '';
+        p.body.appendChild(el('p', { className: 'ck-pop-gone', role: 'status' }, [why]));
+        popFocusRestore(p, refocus);
+        continue;
+      }
+      const sig = popSig(p.kind, p.id, src);
+      if (!p.gone && sig === p.sig) continue;
+      const wasGone = p.gone;
+      p.gone = false;
+      p.sig = sig;
+      p.tab.removeAttribute('data-gone');
+      setPopTitle(p, src.title);
+      const frame = !wasGone && POP_FRAME_KINDS.includes(p.kind) && p.body.querySelector('.ck-pop-chart > iframe:not(.ck-pop-buffer)');
+      if (frame) { swapPopFrame(frame, popFrame(p.kind, p.id, src)); continue; }
+      const top = p.body.scrollTop;
+      const refocus = popFocusMark(p);
+      p.body.textContent = '';
+      p.body.appendChild(buildPopContent(p, src));
+      p.body.scrollTop = top;
+      popFocusRestore(p, refocus);
+    }
+  }
+  // C9: what became of a pop-out's source, when that can be told from the view; else a neutral line.
+  function popGoneWords(p) {
+    if (p.kind === 'ruling' && view && hasOwn(view.questions, p.id) && !RULING_STATES.includes(view.questions[p.id].state)) {
+      return 'This ruling was reopened.';
+    }
+    return 'This is no longer in the view.';
+  }
+  // C11: a redraw of a pop-out's body keeps focus on the same control (by its place among the body's controls).
+  const POP_FOCUSABLE = 'button, a[href], summary, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  function popFocusMark(p) {
+    const a = document.activeElement;
+    if (!a || !p.body.contains(a)) return -1;
+    return Array.from(p.body.querySelectorAll(POP_FOCUSABLE)).indexOf(a);
+  }
+  function popFocusRestore(p, at) {
+    if (at < 0) return;
+    const all = Array.from(p.body.querySelectorAll(POP_FOCUSABLE));
+    const t = all[Math.min(at, all.length - 1)] || p.closeBtn;
+    try { t.focus({ preventScroll: true }); } catch (_e) { try { t.focus(); } catch (_e2) {} }
+  }
+  // The new frame loads out of sight and takes the old one's place once it has drawn: no blank flash.
+  // C3: a second update before the first frame has loaded drops that one first, so one frame is ever on show.
+  function swapPopFrame(old, fresh) {
+    for (const stale of old.parentNode.querySelectorAll(':scope > iframe.ck-pop-buffer')) stale.remove();
+    fresh.classList.add('ck-pop-buffer');
+    if (old.style.height) fresh.style.height = old.style.height;   // the impact graph's asked-for height, until it asks again
+    let done = false;
+    const swap = () => {
+      if (done || !fresh.isConnected) return;   // replaced in turn before it loaded
+      done = true;
+      old.remove();
+      fresh.classList.remove('ck-pop-buffer');
+    };
+    fresh.addEventListener('load', swap, { once: true });
+    setTimeout(swap, 8000);
+    old.after(fresh);
+  }
+  // The address names the pop-out on show beside the view (`#item=X&pop=flow:X`), so a copied link reopens both.
+  function popHashToken() {
+    return popActive ? encodeURIComponent(popActive).replace(/%3A/gi, ':').replace(/%2F/gi, '/') : null;
+  }
+  function syncPopHash() {
+    if (panelEl && panelEl.getAttribute('data-open') === 'true') syncLocationHash(hashBase);
   }
 
   function fillFeedList(list) {
@@ -9601,12 +10494,14 @@
     all.sort((a, b) => a.ts.localeCompare(b.ts));   // oldest-first = most urgent
     const top = all.slice(0, 6);
     const projCount = new Set(all.map(r => r.project)).size;
+    const oneProject = projCount <= 1;   // R5: then every row would repeat the one name, and crowd out the question
     const wrap = el('details', { className: 'ck-priority-ribbon', open: 'open' });
     const sum = el('summary', { className: 'ck-priority-summary' }, [
       el('span', { className: 'ck-priority-title' }, ['Priority']),
       el('span', { className: 'ck-muted ck-priority-count' },
-        [' · ' + top.length + ' of ' + all.length + ' awaiting you across ' + projCount
-         + ' project' + (projCount === 1 ? '' : 's')])
+        // U5 (1.49): "across 1 project" said nothing; the projects are named only when there are several.
+        [' · ' + top.length + ' of ' + all.length + ' awaiting you' +
+         (projCount > 1 ? ' across ' + projCount + ' projects' : '')])
     ]);
     wrap.appendChild(sum);
     const list = el('ol', { className: 'ck-priority-list' });
@@ -9614,10 +10509,10 @@
       const hrs = r.ts ? (Date.now() - Date.parse(r.ts)) / 3_600_000 : 0;
       const health = Number.isNaN(hrs) ? 'warn' : (hrs < 1 ? 'warn' : hrs < 24 ? 'late' : 'overdue');
       const li = el('li', { className: 'ck-priority-row', dataHealth: health, tabindex: '0',
-        'aria-label': r.project + ' · ' + r.qid + ' · ' + relTime(r.ts) }, [
+        'aria-label': (oneProject ? '' : r.project + ' · ') + r.qid + ' · ' + relTime(r.ts) }, [
         el('span', { className: 'ck-priority-dot', dataHealth: health }, []),
-        el('span', { className: 'ck-priority-project' }, [r.project]),
-        el('span', { className: 'ck-priority-qid' }, [' · ' + r.qid]),
+        oneProject ? null : el('span', { className: 'ck-priority-project' }, [r.project]),
+        el('span', { className: 'ck-priority-qid' }, [(oneProject ? '' : ' · ') + r.qid]),
         r.isSelf !== false ? renderLaneChip(r.item || qidItem(r.qid)) : null,
         // X2: the separator in its own span, which the two-line phone row hides (console.css): there the question
         // starts a line, and a leading "·" read as a stray mark.
@@ -10422,7 +11317,8 @@
     footerEl.textContent = parts.join(' · ');
     // The shortcut sheet is one press of `?` away, but nobody finds `?`: give it a button.
     const keys = el('button', { type: 'button', className: 'ck-footer-keys',
-      title: 'Keyboard shortcuts (?): g 1–4 switch section, g i, g f, … open a tab', 'aria-label': 'Show keyboard shortcuts' }, [icon('keyboard'), ' Shortcuts']);
+      title: 'Keyboard shortcuts (?): g 1–4 switch section, g i, g f, … open a tab, j / k next or previous question',
+      'aria-label': 'Show keyboard shortcuts' }, [icon('keyboard'), ' Shortcuts']);
     keys.addEventListener('click', () => openShortcutHelp());
     footerEl.appendChild(keys);
     footerEl.setAttribute('data-stale', stale ? 'true' : 'false');
@@ -10572,7 +11468,7 @@
     const raw = (location.hash || '').replace(/^#/, '');
     if (!raw) return false;
     const parts = raw.split('&');
-    let kv = {};
+    const kv = Object.create(null);   // a key such as __proto__ is a plain key here, never the prototype
     for (const p of parts) {
       const i = p.indexOf('=');
       if (i < 0) { kv[p] = true; continue; }
@@ -10582,6 +11478,18 @@
       try { kv[p.slice(0, i)] = decodeURIComponent(p.slice(i + 1)); } catch (e) { /* ignored: not a valid value */ }
     }
     const bare = parts[0] && parts[0].indexOf('=') < 0 ? parts[0] : null;
+    let did = applyViewLink(kv, bare);
+    // 1.49 (U3): `pop=<kind>:<id>` opens that pop-out over the view the rest of the link chose (the Inbox when it
+    // chose none). Only a known kind with an id this page already holds: anything else is ignored, as above.
+    const pop = parsePopToken(kv.pop);
+    if (pop && popSource(pop.kind, pop.id)) {
+      if (panelEl.getAttribute('data-open') !== 'true') openPanel(null, 'inbox');
+      openPop(pop.kind, pop.id, null, 'pop-' + popKey(pop.kind, pop.id));
+      did = true;
+    }
+    return did;
+  }
+  function applyViewLink(kv, bare) {
     let tab = bare && TABS.some(t => t[0] === bare) ? bare
       : (typeof kv.tab === 'string' && TABS.some(t => t[0] === kv.tab) ? kv.tab : null);
     let sectionOnly = null;
@@ -10598,14 +11506,16 @@
     }
     if (kv.item) {
       if (items && Object.prototype.hasOwnProperty.call(items, kv.item)) {
+        revealInInbox(kv.item);
         openPanel(kv.item, 'item');
         return true;
       }
     }
     if (kv.qid) {
       const qs = (view && view.questions) || {};
-      const q = qs[kv.qid];
+      const q = Object.prototype.hasOwnProperty.call(qs, kv.qid) ? qs[kv.qid] : null;
       if (q && q.question && q.question.item && items && Object.prototype.hasOwnProperty.call(items, q.question.item)) {
+        revealInInbox(q.question.item);
         openPanel(q.question.item, 'item');
         return true;
       }
@@ -10618,10 +11528,17 @@
   // 1.48: every write lands. Through 1.47 a write set a flag that a setTimeout(0) cleared, and every write until then
   // was dropped; a timer can run late (it measured 100 ms just after the panel opened), so `g 1` then `g f` left the
   // address on the first tab. replaceState never fires hashchange, so there is no loop for a flag to break.
+  // 1.49 (U3): the pop-out on show rides along as `pop=` after the view's own part (hashBase), so moving the console
+  // keeps it in the address and closing it takes it out.
+  let hashBase = '';
   function syncLocationHash(frag) {
+    hashBase = frag || '';
+    // A pinned pop-out left open after the console closed (C6) is not put in the address: the link names a view.
+    const pop = panelEl && panelEl.getAttribute('data-open') === 'true' ? popHashToken() : null;
+    const full = pop ? (hashBase ? hashBase + '&' : '') + 'pop=' + pop : hashBase;
     try {
-      const next = frag ? '#' + frag : location.pathname + location.search;
-      if (frag ? location.hash !== '#' + frag : location.hash) history.replaceState(null, '', next);
+      const next = full ? '#' + full : location.pathname + location.search;
+      if (full ? location.hash !== '#' + full : location.hash) history.replaceState(null, '', next);
     } catch (e) { /* some browsers refuse replaceState with a hash — ignore */ }
   }
 

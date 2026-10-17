@@ -2990,6 +2990,158 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Pop-outs and a calmer Inbox (1.49.0)
+
+The rest of the owner's choices of 2026-10-16 (OPEN-DECISIONS.md, "Sections,
+pop-outs and a calmer Inbox", U3 U5 U6): what you read at length opens beside
+the console instead of stretching it, and a long Inbox gets lanes, an outline
+and keys to move through it.
+
+- **Pop-outs** (U3): an item's status flowchart and impact graph, What blocks
+  what (the ticket graph), a visual (a Mermaid diagram or an HTML mock), a
+  deliberation round, a long ruling and a screenshot each have a **Pop out**
+  button (icon and label, D9) where the console shows them; the screenshot
+  viewer has one too. A ruling has one when its question, options and your own
+  words come to 280 characters or more. A chart fold's Pop out sits beside its
+  heading, so it is there while the fold is shut, and comes before the chart in
+  the Tab order; it is named for its chart ("Pop out Status flowchart", "Pop out
+  Impact graph", "Pop out What blocks what"). A pop-out opens over the
+  dashboard, in the room beside the docked console, never over the console
+  itself.
+- **A tabbed stack of up to three.** Each pop-out is a tab, with its title,
+  **Pin** (`aria-pressed`) and **Close** on its panel. Opening a fourth closes
+  the oldest one not pinned, and says so; with all three pinned it opens
+  nothing and says to unpin or close one. Opening one already open brings its
+  tab forward instead of a twin.
+- **How long a pop-out stays: until you close it.** Moving to another tab,
+  section or item leaves it open: you opened it to read beside other work, and
+  closing it when you moved on would undo that. **Pin keeps a pop-out open
+  when the console closes, and protects it from replacement** (it is never the
+  one closed to make room for a fourth). Closing the console, by Esc, Close or
+  `g b`, closes the ones not pinned; a pinned one stays over the dashboard
+  until you close it.
+- **Esc** closes the pop-out on show and puts focus back on the Pop out button
+  that opened it (its redrawn twin, if the console was redrawn meanwhile; the
+  console's tab, or its Close, if that button is gone). The console stays
+  open. Esc works with focus inside a pop-out's chart too: the chart pages the
+  server builds tell the console when Esc is pressed in them (a bare
+  `{type: 'ck-escape'}` message, accepted only from the console's own chart
+  frames, in exactly that shape; the frames' sandbox and CSP are unchanged).
+  Esc in a chart in the console itself does nothing new. An HTML mock-up is
+  the exception: it runs no script at all (an empty sandbox, as in the
+  console), so Esc inside one does nothing; click outside it, or use Close,
+  one Shift+Tab away.
+- **Links:** the address names the pop-out on show, `#item=API-2&pop=flow:API-2`,
+  and such a link opens it. The kinds are `flow`, `impact`, `tickets`,
+  `visual`, `round`, `ruling` and `asset`. A link is checked as 1.48 checks the
+  rest of the fragment: an unknown kind, an id of the wrong shape, a value that
+  does not decode, or anything this page's own view does not hold (another
+  login's item, a deleted visual, a ruling not yet locked) is ignored, and the
+  rest of the link still works. A pop-out draws only from what the console was
+  already sent, so it shows nothing the login cannot see there.
+- **Room and phones.** With 480px or more beside the console the stack is a
+  `role="region"` named "Pop-outs" with a tablist, as wide as the room allows
+  (up to 960px); it is not modal, so Tab moves in and out of it and the console
+  stays usable. A docked console at its default 576px leaves 480px on a window
+  1056px wide or more, so a 1280px laptop gets a pop-out beside the console.
+  With less room, or on a phone (640px and under), the same stack is a
+  full-screen sheet over the console: `role="dialog"` with `aria-modal`, focus
+  kept inside, Close at the top and Esc to close, showing the pop-out on show
+  with its tab strip to switch when more than one is open. The sheet keeps the
+  same limit of three and the same Pin. A change of layout (a resize, a
+  rotation, a dock drag) never closes a pop-out, and a dock drag settles the
+  layout when it ends rather than flipping while you drag; focus on a control
+  the switch hides moves to the same pop-out's visible one. While the sheet is
+  open the console's shortcuts (`.`, `g …`, `?`, `j` / `k`) do nothing behind
+  it. Its Pin, like Close, is a 44px touch target.
+- **Back to the console from the sheet.** On the sheet, **Show in the console**
+  and a click in a chart *stow* it rather than close the pop-out on show: every
+  pop-out is kept, pinned or not, the sheet leaves the screen (and the Tab
+  order, and the accessibility tree), focus goes to what the console now shows,
+  and a **Pop-outs (2)** chip in the console's corner (named "Pop-outs (2): show them",
+  44px on touch) brings the sheet back on the pop-out you were reading. Opening
+  another pop-out brings it back too, and a window that grows wide enough shows
+  the whole stack beside the console as usual. While it is stowed the console
+  is the console: its shortcuts work, and Esc closes it as always (the
+  pop-outs not pinned go with it; a pinned one is shown again, with focus in
+  it).
+- **The same sandbox.** A popped-out chart, diagram or mock is made by the very
+  function the console uses for its own (`chartFrame`: `sandbox="allow-scripts"`,
+  never `allow-same-origin`, `data-ck-chart`, `referrerpolicy="no-referrer"`;
+  `mockFrame`: an empty sandbox), from the same URL. No new HTML sink and no
+  new server endpoint: rounds, rulings and screenshots are drawn from the view
+  with the console's own text-only builders.
+- **Live updates** redraw a pop-out in place, only when what it shows changed:
+  the panel and its scroll position stay, nothing animates, and a chart's frame
+  is swapped only once its replacement has loaded (a second update before then
+  replaces that replacement: one frame is ever drawn). Focus on a control
+  inside a redrawn pop-out stays on it. A pop-out whose source has gone says
+  so instead of vanishing: "This ruling was reopened." when that is what
+  happened, otherwise "This is no longer in the view."
+- **Motion:** the stack slides in and out (150 ms) and a new tab's panel fades
+  in (120 ms), all CSS and none of it under `prefers-reduced-motion`; a live
+  update never replays it.
+- **The Inbox grouped by lane** (U5): below the Priority list, which stays the
+  cross-project "awaiting you" list, the questions and rounds sit in a group
+  per lane, each headed by a button (`aria-expanded`) with the lane's chip and
+  "2 awaiting you · 3 open". Lanes with questions awaiting you come first, the
+  most awaiting first, then the most open, then by name; items with no lane are
+  under **Other**, after a named lane it ties with. A round goes in its item's
+  lane. A row inside its own lane's group does not repeat the lane's chip (the
+  heading names the lane); the Priority list and search keep theirs. Each row
+  does what it did: open, snooze, the filter chips, Mine, the palette and
+  links. Folded groups are remembered per viewer, per project and lane, and a
+  stored value of the wrong shape counts as nothing folded. A link to a
+  question (or item) in a folded group, an outline jump, or `j` / `k` opens the
+  group for this visit to the Inbox: it stays open through live updates, and is
+  folded again once you leave the Inbox (another tab or section, an item, the
+  console closed) and come back. Back from an item opens the group of the row
+  you return to. Navigation never changes what is remembered; only pressing the
+  group's heading does.
+- **Priority's count** no longer says "across 1 project": the projects are
+  named only when there are several (the 1.48 UX review). Its rows follow
+  suit: with one project they no longer repeat its name ("northwind · API-2/Q1
+  · …"), which on a phone left the question a few characters.
+- **The outline** (U6): the groups with their counts ("2/3", awaiting you of
+  open) as a one-line strip that stays at the top of the Inbox while it
+  scrolls. A short legend, "awaiting you / open", starts it; each control is
+  named with what it shows first, then in full ("Infra 3/4: 3 awaiting you, 4
+  open", so a voice user can say what they see: WCAG 2.5.3) and titled "Infra:
+  3 awaiting you, 4 open"; and on a wide
+  screen it ends with a hint, "j / k next question". Pressing one opens its
+  group, brings its heading to the top, clear of the sticky bars, and focuses
+  it. At the default column the Inbox is about
+  480px wide, and an outline beside it would leave the rows some 300px, cutting
+  their ids and questions, so the outline sits above; once the column is
+  dragged wide enough for the Inbox to be 720px, it moves beside the groups. On
+  a phone it is a native **Go to a lane** menu, each option in full
+  ("Infra — 3 awaiting you, 4 open").
+- **`j` / `k`** on the Inbox go to the next or previous question waiting for
+  you, across the groups in their order, opening a folded group on the way (for
+  this view only) and
+  scrolling the question into view, and announce "Question 3 of 7". A round's
+  card is one stop (its form walks its own questions). At either end they stop
+  and say so ("No more below: question 7 of 7."): wrapping round would read as
+  the list starting over. They do nothing in a text field or behind a dialog,
+  and on other tabs `j` / `k` walk the rows as before. The help sheet and the
+  footer's Shortcuts button list them.
+- **Mine** (1.41) is sticky at the top of the Inbox while it scrolls, with
+  `aria-pressed` as before, and keeps your choice as it did.
+- **Documentation and screenshots:** `docs/features/navigation.md` ("Pop-outs",
+  "Moving through a long Inbox"), `docs/features/inbox-and-rulings.md` and the
+  README; new `feature-popout.png` (a flowchart popped out beside the console,
+  two tabs), `feature-popout-laptop.png` (the same on a 1280px window) and
+  `feature-inbox-groups.png` (Priority, the outline with its legend and hint,
+  the groups), and `feature-phone.png`, `feature-priority.png`,
+  `feature-snooze.png` and `feature-inbox-top.png` rendered again (Priority
+  rows without the one project's name).
+
+**Going back to 1.48.** 1.49 adds one key to this browser's localStorage,
+`ck:<project>:inbox-collapsed` (the folded lane groups), which 1.48 never reads.
+On the server only the chart pages change: each gains the Esc message above,
+which a 1.48 console ignores. A 1.49 link with `&pop=…` opens the same view in
+1.48, without the pop-out.
+
 ## Sections (1.48.0)
 
 The owner's choices of 2026-10-16 (OPEN-DECISIONS.md, "Sections, pop-outs and

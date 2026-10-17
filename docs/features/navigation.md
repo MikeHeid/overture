@@ -2,7 +2,7 @@
 
 [← Back to README](../../README.md)
 
-The live page, the sections and their tabs, the palette, the keyboard, phones, the Portfolio and the Operator Shift report.
+The live page, the sections and their tabs, pop-outs, moving through a long Inbox, the palette, the keyboard, phones, the Portfolio and the Operator Shift report.
 
 ## See what's happening
 
@@ -17,7 +17,7 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
 
 - The status bar says whether an agent session is listening right now.
 - **The footer (0.8.14).** A thin bar at the bottom of the page always
-  names the running kit, "overture 1.47.0", the same version `/health`
+  names the running kit, "overture 1.49.0", the same version `/health`
   reports, and carries a **Shortcuts** button. When the server is started
   with `--usage-file`, it also shows your Claude usage for the 5-hour and
   7-day windows.
@@ -108,8 +108,12 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   (1.48). `g i / f / k / p` hop to the Inbox / Feed / Tickets / PRs tab,
   `g y / t` to Playbooks / Triggers, `g o / s` to Portfolio / Favorite and
   `g c` to Chat, each in its section; `g b` closes the panel; `.` focuses
-  the Delegate bar; `j / k` walk the rows; Enter / Space opens the focused
-  row. Shortcuts never fire in a text input.
+  the Delegate bar; on the Inbox `j / k` go to the next or previous
+  unanswered question (1.49), and on other tabs they walk the rows; Enter /
+  Space opens the focused row; Esc closes the pop-out you are in, from
+  inside one of its charts too (not inside an HTML mock-up: see
+  [Pop-outs](#pop-outs-149)). Shortcuts never fire in a text input, nor
+  behind a pop-out's full-screen sheet.
 
   <img src="../screenshots/feature-shortcuts.png" alt="The keyboard shortcuts sheet" width="400">
 
@@ -174,7 +178,8 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   alone works as a link too (`#playbooks`, `#people`, as before 1.48), and
   so do `#tab=feed` and `#section=team` (a section's first tab you can
   see, worked out again once the page has loaded if the link came first);
-  `#item=ID` opens an item and `#qid=ID/Qn` the item a question is on. A
+  `#item=ID` opens an item and `#qid=ID/Qn` the item a question is on;
+  `&pop=flow:ID` adds a pop-out (1.49, [below](#pop-outs-149)). A
   link to a tab you do not see (`#people` for anyone but an
   administrator) opens its section's first tab you do, and says why; so
   does a tab you lose while it is open (made a viewer, say). A value the
@@ -218,6 +223,116 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
 
   <img src="../screenshots/feature-portfolio.png" alt="The Portfolio tab: this console's card with its tallies" width="400">
 
+## Pop-outs (1.49)
+
+On a wide screen, the things you read at length open beside the console,
+over the dashboard, instead of stretching the column.
+
+<img src="../screenshots/feature-popout.png" alt="A status flowchart popped out over the dashboard beside the docked console, in a stack of two tabs" width="720">
+
+- **What pops out.** An item's **status flowchart** and **impact graph**,
+  **What blocks what** (the ticket graph), a **visual** (a Mermaid diagram or
+  an HTML mock), a **deliberation round** (its brief, every question with its
+  state and your answer, and a roar panel's transcript), a **long ruling**
+  (the question, your pick and your own words, and what changed if it went
+  stale) and a **screenshot**. Each has a **Pop out** button where the
+  console shows it; the screenshot viewer has one too. A ruling gets one when
+  the question, its options and your words come to 280 characters or more.
+  A chart's Pop out sits beside its fold's heading, so you can pop it out
+  without opening the fold; it comes before the chart in the Tab order and
+  says which chart it is ("Pop out Status flowchart").
+- **Where.** In the room beside the docked console, never over it: the
+  dashboard keeps its place and the console stays usable, so the stack is
+  not a dialog and Tab moves in and out of it freely. It needs 480 px
+  beside the console, so a 1280 px laptop with the column at its default
+  576 px has a pop-out beside it:
+
+  <img src="../screenshots/feature-popout-laptop.png" alt="On a 1280 px window, a status flowchart popped out over the dashboard beside the docked console" width="640">
+
+  With less room, or on a phone, the same stack is a full-screen sheet
+  instead: the one on show, with the tabs above it to switch when more
+  than one is open, a Close button at the top, Esc to close and focus kept
+  inside it until you do; its Pin and Close are 44 px touch targets.
+  Resizing the window, turning the phone or dragging the column never
+  closes a pop-out; a drag settles the layout when you let go.
+- **Back to the console from the sheet.** On the sheet, **Show in the
+  console**, or a click on something in a chart, puts the sheet away
+  rather than closing anything: every pop-out is kept, pinned or not, the
+  console shows what you asked for (with focus on it), and a **Pop-outs
+  (2)** chip in the console's corner brings the sheet back on the pop-out
+  you were reading. Opening another pop-out brings it back too, and if the
+  window grows wide enough the whole stack shows beside the console as
+  usual. While the sheet is put away the console works as ever: its
+  shortcuts, and Esc to close it (the pop-outs not pinned close with it; a
+  pinned one comes back on screen).
+- **A stack of three.** Each pop-out is a tab (the arrow keys move between
+  them) with its title, **Pin** and **Close**. Opening a fourth closes the
+  oldest one you have not pinned, and says so; with all three pinned, it
+  says to unpin or close one first. Opening one already open brings its tab
+  forward instead of opening it twice.
+- **How long they stay.** Until you close them: moving to another tab,
+  section or item leaves them open, since you opened them to read beside
+  other work. **Pin keeps a pop-out open when the console closes, and
+  protects it from replacement** (it is never the one closed to make
+  room). Closing the console closes the others.
+- **Esc** closes the pop-out on show and puts focus back on the **Pop out**
+  button that opened it (or the console's tab, if that button is gone).
+  It works with focus inside a pop-out's chart too; Esc in a chart in the
+  console itself does nothing.
+- **Esc inside an HTML mock-up** does nothing: a mock-up runs no script at
+  all (it is sandboxed with nothing allowed, in the console as in a
+  pop-out), so it cannot pass the key on. Click outside it, or use Close:
+  from inside the mock-up it is one Shift+Tab away.
+- **Live.** When what a pop-out shows changes, it is redrawn in place: its
+  scroll stays, nothing animates, and a chart's frame is swapped only once
+  the new drawing has loaded; focus stays on the control you were on. If
+  what it showed is gone, it says so instead of vanishing: "This ruling was
+  reopened." when that is what happened, otherwise "This is no longer in
+  the view."
+- **Links.** The address names the pop-out on show: `#item=API-2&pop=flow:API-2`
+  opens the item with its flowchart popped out. The kinds are `flow`,
+  `impact`, `tickets`, `visual`, `round`, `ruling` and `asset`. A link to
+  something this console does not hold is ignored.
+- **The same sandbox.** A popped-out chart, diagram or mock is drawn by the
+  same code, in the same sandboxed frame, as the one in the console. Nothing
+  new reaches the server.
+- **Motion.** The stack slides in (150 ms) and a new tab fades in (120 ms);
+  none of it runs if your system asks for reduced motion.
+
+## Moving through a long Inbox (1.49)
+
+- **Grouped by lane.** Under the Priority list, the Inbox's questions and
+  rounds sit in one group per lane, each headed by the lane's chip and its
+  counts ("2 awaiting you · 3 open"). Lanes with questions waiting for you
+  come first, the most waiting first, then the most open, then by name;
+  items with no lane are under **Other**. A row in its own lane's group
+  does not repeat the lane's chip. Press a heading to fold the group away;
+  this browser remembers it per project. Moving to a question in a folded
+  group (a link, the outline, `j` / `k`) opens it for this visit to the
+  Inbox, through its live updates, without changing what is remembered:
+  leave the Inbox (another tab, an item, the console closed) and come back,
+  and it is folded again. Back from an item opens the group of the row you
+  return to. Only the heading changes what is remembered. More in
+  [The inbox and rulings](inbox-and-rulings.md#around-the-inbox).
+- **The outline.** A strip of the groups, with their counts ("2/3": waiting
+  for you, of open), stays at the top of the Inbox as you scroll. It starts
+  with a legend, "awaiting you / open", and each lane's control says it in
+  full to a screen reader, after what it shows ("Infra 3/4: 3 awaiting you, 4
+  open"), and as a tooltip ("Infra: 3 awaiting you, 4 open"); on a wide screen it ends with a "j / k next question" hint. Press one
+  to open that group, bring it to the top and put focus on its heading. When
+  the column is dragged wide enough (the Inbox 720 px or more), the outline
+  is a column beside the groups instead. On a phone it is a **Go to a lane**
+  menu ("Infra — 3 awaiting you, 4 open").
+- **`j` and `k`** go to the next and previous question waiting for you,
+  across the groups in order, opening a folded group on the way, and say
+  "Question 3 of 7". A round's card is one stop (its form walks its own
+  questions). At the last one `j` stays put and says "No more below", and
+  at the first `k` says "No more above". They do nothing while you type in
+  a field.
+- **Mine stays in view.** For a member whose Inbox opens on **Mine** (1.41),
+  the Mine · All switch sits at the top of the Inbox as you scroll, and
+  keeps your choice as before.
+
 ## Agent text: fragments and item refs
 
 - **Code blocks open as fragments (1.6, 1.13).** When an agent's reply
@@ -253,7 +368,10 @@ The live page, the sections and their tabs, the palette, the keyboard, phones, t
   of its icon. Every control is at least 36 px tall, and the Portfolio
   cards and dialogs stack to fit. In the Inbox's Priority
   list each row is two lines: which item, with its ⌛, then the question
-  (with no "·" before it) and how long it has waited.
+  (with no "·" before it) and how long it has waited; with one project
+  connected the rows do not repeat its name (1.49). A pop-out opens as
+  a full-screen sheet over the console (1.49), and the Inbox's outline is
+  a **Go to a lane** menu.
 
   <img src="../screenshots/feature-phone.png" alt="The Inbox on a 390 px phone, full screen: the Work tabs at the top, Priority rows of two lines, and the bottom bar of four section icons" width="300">
 - **Toasts and visible confirmations (1.23).** Every confirmation and
