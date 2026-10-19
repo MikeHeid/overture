@@ -7568,5 +7568,418 @@ class PlaybookWhenWordsTests(unittest.TestCase):
         self.assertEqual(PB.evaluate_when(when, {}, {}), (True, ""))
 
 
+# -- 1.50.0: agent worktrees (OPEN-DECISIONS.md W1-W4) ---------------------------------------------------
+
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+           "GIT_TERMINAL_PROMPT": "0"}
+
+
+def wt_repo(root: Path, branch: str = "main", files: dict | None = None) -> tuple[Path, Path]:
+    """A bare "origin" with one commit on `branch`, and a clone of it: (origin, checkout). No network."""
+    env = {**os.environ, **GIT_ENV}
+    origin, work = root / "origin.git", root / "proj"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", branch, str(origin)], check=True, env=env)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(work)], check=True, env=env)
+    for rel, text in {"README.md": "hello\n", **(files or {})}.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(text)
+    for args in (["add", "-A"], ["commit", "-qm", "first"], ["remote", "add", "origin", str(origin)],
+                 ["push", "-q", "origin", branch]):
+        subprocess.run(["git", *args], cwd=work, check=True, env=env, capture_output=True)
+    return origin, work
+
+
+def wt_git(cwd: Path, *args) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+                          env={**os.environ, **GIT_ENV}).stdout
+
+
+class WorktreeTests(unittest.TestCase):
+    """`agent.py worktree` and overture/worktrees.py (1.50.0): temp repos with a bare origin, a temp HOME."""
+
+    DAY = 86400.0
+
+    def setUp(self):
+        from unittest import mock
+        from overture import worktrees as WT
+        self.WT = WT
+        self._td = tempfile.TemporaryDirectory()
+        self.dir = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        self.home = self.dir / "home"
+        self.home.mkdir()
+        env = mock.patch.dict(os.environ, {**GIT_ENV, "HOME": str(self.home)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.origin, self.repo = wt_repo(self.dir)
+        self.t0 = 1_800_000_000.0
+
+    def new(self, item="API-3", kind="ticket", agent="agent-5", **kw):
+        return self.WT.new(self.repo, "proj", kind, item, agent, home=self.home, now=kw.pop("now", self.t0), **kw)
+
+    def root(self):   # agent.py names the project after the checkout's folder when nothing else names it
+        return self.home / ".overture" / "worktrees" / "proj"
+
+    def test_new_makes_the_worktree_on_its_branch_from_origin_main(self):
+        # Catches: a worktree made next to the repository or under /tmp instead of ~/.overture/worktrees/<project>
+        # (W1); a branch not named overture/<kind>/<item>; one cut from the local checkout's HEAD instead of
+        # origin/main (a dirty or behind main checkout would leak in); and a worktree git does not know.
+        wt_git(self.repo, "commit", "--allow-empty", "-qm", "local only, never pushed")
+        r = self.new()
+        path = self.root() / "overture" / "ticket" / "API-3"
+        self.assertEqual((Path(r["path"]), r["branch"], r["kind"], r["item"], r["base"], r["worktree"]),
+                         (path, "overture/ticket/API-3", "ticket", "API-3", "origin/main", "API-3"))
+        self.assertFalse(r["reused"])
+        self.assertEqual(wt_git(path, "rev-parse", "HEAD"), wt_git(self.repo, "rev-parse", "origin/main"))
+        self.assertEqual(wt_git(path, "rev-parse", "--abbrev-ref", "HEAD").strip(), "overture/ticket/API-3")
+        self.assertIn(str(path), wt_git(self.repo, "worktree", "list"))
+        reg = json.loads((self.root() / ".registry.json").read_text())["worktrees"]
+        self.assertEqual([(e["branch"], e["item"], e["kind"], e["agent"]) for e in reg],
+                         [("overture/ticket/API-3", "API-3", "ticket", "agent-5")])
+
+    def test_kinds_are_an_allow_list_and_items_follow_the_id_rules(self):
+        # Catches: any word taken as a kind (a branch overture/anything/...), and an item that is not an item id
+        # or cannot be a git branch (a slash would nest the path, '..' would climb out of it), made anyway.
+        for kind in ("chat", "Ticket", "../x", ""):
+            with self.subTest(kind=kind), self.assertRaisesRegex(self.WT.WorktreeError, "is not one of"):
+                self.new(kind=kind)
+        for item in ("a/b", "../up", "API..3", "x.lock", "-a", "a b", "A" * 113, ""):
+            with self.subTest(item=item), self.assertRaisesRegex(self.WT.WorktreeError, "item"):
+                self.new(item=item)
+        self.assertFalse((self.home / ".overture").exists())
+        self.assertEqual(wt_git(self.repo, "worktree", "list").count("\n"), 1)
+        for kind in self.WT.KINDS:
+            self.assertTrue(self.WT.BRANCH.match(self.WT.branch_name(kind, "API-3", 2)))
+
+    def test_a_home_under_mnt_is_refused(self):
+        # Catches (W1): worktrees made on a Windows drive under WSL (/mnt/c), where git is slow, because ~ resolved
+        # there; and a project folder that is a symlink onto one.
+        with self.assertRaisesRegex(self.WT.WorktreeError, "under /mnt/"):
+            self.WT.new(self.repo, "proj", "ticket", "API-3", "agent-5", home=Path("/mnt/c/Users/me"))
+        (self.home / ".overture" / "worktrees").mkdir(parents=True)
+        os.symlink("/mnt/c/Users/me/wt", self.home / ".overture" / "worktrees" / "proj")
+        with self.assertRaisesRegex(self.WT.WorktreeError, "under /mnt/"):
+            self.new()
+
+    def test_the_same_agent_gets_its_worktree_back(self):
+        # Catches: a second `new` for the same agent, kind and item making overture/ticket/API-3-2 (every retry
+        # of a skill would leave another worktree), or a second registry line.
+        a = self.new()
+        b = self.new(now=self.t0 + 60)
+        self.assertEqual((b["path"], b["branch"], b["reused"]), (a["path"], a["branch"], True))
+        self.assertEqual(len(json.loads((self.root() / ".registry.json").read_text())["worktrees"]), 1)
+        self.assertEqual(self.new(kind="fix")["branch"], "overture/fix/API-3")   # another kind is another branch
+
+    def test_another_agent_gets_the_next_branch_and_is_told_of_the_overlap(self):
+        # Catches (W4): a second agent handed the first agent's worktree (two sessions in one tree), refused
+        # (W4 warns, never blocks), or not told; and the CLI exiting non-zero or keeping quiet about it.
+        self.new()
+        r = self.new(agent="agent-6")
+        self.assertEqual(r["branch"], "overture/ticket/API-3-2")
+        self.assertEqual(r["overlap"], [{"branch": "overture/ticket/API-3", "agent": "agent-5", "kind": "ticket"}])
+        self.assertEqual(self.new(agent="agent-5")["overlap"],
+                         [{"branch": "overture/ticket/API-3-2", "agent": "agent-6", "kind": "ticket"}])
+        state = self.dir / "st"
+        state.mkdir()
+        p = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(state), "--as", "agent-7",
+                            "worktree", "new", "--item", "API-3", "--kind", "ticket"], cwd=self.repo,
+                           capture_output=True, text=True, timeout=120, env={**os.environ})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(p.stdout.strip().endswith("overture/ticket/API-3-3"), p.stdout)
+        self.assertIn("overlap: agent-5 is also on API-3, in overture/ticket/API-3", p.stderr)
+        self.assertIn("overlap: agent-6 is also on API-3, in overture/ticket/API-3-2", p.stderr)
+
+    def test_with_no_main_it_branches_from_the_default_branch_and_says_so(self):
+        # Catches: a hard-coded origin/main (refused, or a worktree of nothing) on a project whose only branch is
+        # dev, and a fallback taken silently.
+        _o, repo = wt_repo(self.dir / "devonly", branch="dev")
+        r = self.WT.new(repo, "devonly", "ticket", "API-3", "agent-5", home=self.home)
+        self.assertEqual(r["base"], "origin/dev")
+        self.assertTrue(any("no main branch" in n and "origin/dev" in n for n in r["notes"]), r["notes"])
+        self.assertEqual(wt_git(Path(r["path"]), "rev-parse", "HEAD"), wt_git(repo, "rev-parse", "origin/dev"))
+
+    def test_a_path_that_is_not_a_registered_worktree_is_refused(self):
+        # Catches: `new` writing into (or over) a folder that happens to sit where the worktree goes.
+        squat = self.root() / "overture" / "ticket" / "API-3"
+        squat.mkdir(parents=True)
+        (squat / "mine.txt").write_text("keep me")
+        with self.assertRaisesRegex(self.WT.WorktreeError, "not a registered worktree"):
+            self.new()
+        self.assertEqual((squat / "mine.txt").read_text(), "keep me")
+
+    def setup_repo(self, argv):
+        _o, repo = wt_repo(self.dir / "setup", files={".overture.json": json.dumps({"worktree_setup": argv}),
+                                                       "setup.py": SETUP_SCRIPT})
+        R.register(repo, self.dir / "setup-state", KIT)
+        return repo
+
+    def test_worktree_setup_runs_its_argv_in_the_new_worktree_never_a_shell(self):
+        # Catches: the setup command joined into a shell string (a ';' in an argument would run a second
+        # command), run in the main checkout instead of the new worktree, run for a project the user never
+        # registered, or a shell string accepted as config.
+        repo = self.setup_repo([sys.executable, "setup.py", "ok", "a; touch pwned"])
+        r = self.WT.new(repo, "setup", "ticket", "API-3", "agent-5", home=self.home)
+        wt = Path(r["path"])
+        self.assertTrue(r["setup"]["ok"], r)
+        self.assertEqual(json.loads((wt / "setup-ran.json").read_text()), ["ok", "a; touch pwned"])
+        self.assertFalse((wt / "pwned").exists() or (repo / "pwned").exists())
+        self.assertFalse((repo / "setup-ran.json").exists())
+        from overture import projectcfg as PC
+        (self.dir / ".overture.json").write_text(json.dumps({"worktree_setup": "make deps; rm -rf ~"}))
+        with self.assertRaisesRegex(PC.ConfigError, "shell string is refused"):
+            PC.load(self.dir)
+        _o, other = wt_repo(self.dir / "unreg", files={".overture.json": json.dumps(
+            {"worktree_setup": [sys.executable, "setup.py", "ok"]}), "setup.py": SETUP_SCRIPT})
+        r = self.WT.new(other, "unreg", "ticket", "API-3", "agent-5", home=self.home)
+        self.assertFalse(r["setup"]["ran"])
+        self.assertIn("not in your registry", r["setup"]["note"])
+        self.assertFalse((Path(r["path"]) / "setup-ran.json").exists())
+
+    def test_worktree_setup_failure_and_timeout_are_reported_not_fatal(self):
+        # Catches: a failing or hanging setup aborting `new` (or leaving it hung), the worktree removed with it,
+        # and a failure not reported.
+        repo = self.setup_repo([sys.executable, "setup.py", "fail"])
+        r = self.WT.new(repo, "setup", "ticket", "API-3", "agent-5", home=self.home)
+        self.assertTrue(Path(r["path"]).is_dir())
+        self.assertEqual((r["setup"]["ok"], r["setup"]["exit"]), (False, 3))
+        self.assertIn("worktree_setup failed (exit 3): boom", r["setup"]["note"])
+        wt_git(repo, "commit", "--allow-empty", "-qm", "x")
+        (repo / ".overture.json").write_text(json.dumps({"worktree_setup": [sys.executable, "setup.py", "hang"]}))
+        wt_git(repo, "commit", "-qam", "hang")
+        wt_git(repo, "push", "-q", "origin", "main")
+        import time as _t
+        t = _t.monotonic()
+        r = self.WT.new(repo, "setup", "fix", "API-3", "agent-5", home=self.home, setup_timeout=1.0)
+        self.assertLess(_t.monotonic() - t, 30)
+        self.assertEqual(r["setup"]["exit"], 124)
+        self.assertIn("did not finish within 1 s", r["setup"]["note"])
+        self.assertTrue(Path(r["path"]).is_dir())
+
+    def test_the_registry_is_written_atomically_tolerates_corruption_and_defers_to_git(self):
+        # Catches: a registry written in place (a crash mid-write leaves half a file), a corrupt one that makes
+        # every command fail, and one trusted over `git worktree list` (an entry for a worktree removed by hand
+        # still listed, or one git knows left out).
+        from unittest import mock
+        a = self.new()
+        reg = self.root() / ".registry.json"
+        before = reg.read_bytes()
+        with mock.patch.object(os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.WT.write_registry(self.root(), [])
+        self.assertEqual(reg.read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in self.root().iterdir() if p.name.startswith(".registry")),
+                         [".registry.json", ".registry.lock"])
+        reg.write_text("{not json")
+        got = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None)
+        self.assertTrue(any("not JSON" in n for n in got["notes"]), got["notes"])
+        self.assertEqual([(w["branch"], w["registered"]) for w in got["worktrees"]], [(a["branch"], False)])
+        b = self.new(agent="agent-6")
+        wt_git(self.repo, "worktree", "remove", b["path"])
+        got = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None)
+        self.assertTrue(any(n.startswith("gone: overture/ticket/API-3-2") for n in got["notes"]), got["notes"])
+        self.assertNotIn(b["branch"], [w["branch"] for w in got["worktrees"]])
+        self.assertNotIn(b["branch"], reg.read_text())
+
+    def test_list_reports_each_worktree_and_stale_at_14_days(self):
+        # Catches: a field missing (ahead/behind, dirty, unpushed, PR, last commit), stale judged by the last
+        # commit or at the wrong age, stale claimed for a worktree that has a PR, and stale claimed when no PR
+        # state is known at all (no gh).
+        r = self.new()
+        wt = Path(r["path"])
+        (wt / "f.txt").write_text("x")
+        wt_git(wt, "add", "f.txt")
+        wt_git(wt, "commit", "-qm", "work")
+        (wt / "dirty.txt").write_text("y")
+        def at(days, prs):
+            return self.WT.list_worktrees(self.repo, "proj", home=self.home, now=self.t0 + days * self.DAY,
+                                          prs=prs)["worktrees"][0]
+        w = at(13.9, lambda b: None)
+        self.assertEqual((w["branch"], w["item"], w["kind"], w["agent"], w["ahead"], w["behind"], w["dirty"],
+                          w["unpushed"], w["pr"], w["age_days"], w["stale"]),
+                         ("overture/ticket/API-3", "API-3", "ticket", "agent-5", 1, 0, True, 1, None, 13, False))
+        self.assertEqual(w["last_commit"]["subject"], "work")
+        self.assertTrue(at(14, lambda b: None)["stale"])
+        self.assertFalse(at(30, lambda b: {"number": 7, "state": "open"})["stale"])
+        self.assertFalse(at(30, None)["stale"])
+        self.assertEqual(self.WT.stale_summary({"worktrees": [at(16, lambda b: None)]}),
+                         [{"branch": "overture/ticket/API-3", "age_days": 16, "agent": "agent-5"}])
+
+    def prune_world(self):
+        """Five worktrees: merged+clean+pushed, merged+dirty, closed+unpushed, open, and no PR (old)."""
+        done = self.new(item="API-1")
+        dirty = self.new(item="API-2")
+        unpushed = self.new(item="API-3")
+        opened = self.new(item="API-4")
+        nopr = self.new(item="API-5")
+        for r in (done, dirty, unpushed, opened):
+            wt = Path(r["path"])
+            (wt / "w.txt").write_text(r["item"])
+            wt_git(wt, "add", "w.txt")
+            wt_git(wt, "commit", "-qm", r["item"])
+            wt_git(wt, "push", "-q", "origin", "HEAD")
+        (Path(dirty["path"]) / "w.txt").write_text("changed")
+        wt_git(Path(unpushed["path"]), "commit", "--allow-empty", "-qm", "not pushed")
+        prs = {done["branch"]: {"number": 1, "state": "merged"}, dirty["branch"]: {"number": 2, "state": "merged"},
+               unpushed["branch"]: {"number": 3, "state": "closed"}, opened["branch"]: {"number": 4, "state": "open"}}
+        return (done, dirty, unpushed, opened, nopr), prs.get
+
+    def test_prune_removes_only_merged_or_closed_clean_and_fully_pushed_never_forcing(self):
+        # Catches (W3): a worktree removed with uncommitted changes, with commits on no remote, with its PR still
+        # open, or with no PR (stale is listed, never removed); `--force` anywhere; a remote branch deleted; and
+        # a dry run that removes.
+        from unittest import mock
+        (done, dirty, unpushed, opened, nopr), prs = self.prune_world()
+        calls = []
+        real = self.WT._git
+        def spy(args, cwd, timeout=self.WT.GIT_SECONDS):
+            calls.append(list(args))
+            return real(args, cwd, timeout)
+        later = self.t0 + 20 * self.DAY
+        with mock.patch.object(self.WT, "_git", side_effect=spy):
+            dry = self.WT.prune(self.repo, "proj", dry_run=True, home=self.home, now=later, prs=prs)
+            self.assertTrue(Path(done["path"]).is_dir())
+            res = self.WT.prune(self.repo, "proj", home=self.home, now=later, prs=prs)
+        self.assertEqual([r["branch"] for r in dry["removed"]], [done["branch"]])
+        self.assertEqual([r["branch"] for r in res["removed"]], [done["branch"]])
+        self.assertFalse(Path(done["path"]).exists())
+        why = {k["branch"]: k["why"] for k in res["kept"]}
+        self.assertIn("uncommitted changes", why[dirty["branch"]])
+        self.assertIn("1 commit on no remote ref", why[unpushed["branch"]])
+        self.assertIn("PR #4 is open", why[opened["branch"]])
+        self.assertIn("stale", why[nopr["branch"]])
+        self.assertEqual(res["stale"], [{"branch": nopr["branch"], "age_days": 20, "agent": "agent-5"}])
+        for r in (dirty, unpushed, opened, nopr):
+            self.assertTrue(Path(r["path"]).is_dir(), r["branch"])
+        flat = [a for c in calls for a in c]
+        self.assertNotIn("--force", flat)
+        self.assertNotIn("-f", flat)
+        self.assertNotIn("-D", flat)
+        self.assertFalse([c for c in calls if c[:1] == ["push"]])
+        self.assertIn(done["branch"], wt_git(self.repo, "ls-remote", "origin"))   # the remote branch stays
+
+    def test_prune_without_gh_keeps_everything_and_says_so(self):
+        # Catches: gh missing read as "no PR" for every worktree (so all are stale) or as merged (so all go).
+        from unittest import mock
+        from overture import gitseam as G
+        (done, *_rest), _prs = self.prune_world()
+        with mock.patch.object(G, "gh", return_value=(127, "", "gh (the GitHub CLI) is not installed")):
+            res = self.WT.prune(self.repo, "proj", home=self.home, now=self.t0 + 30 * self.DAY)
+        self.assertEqual(res["removed"], [])
+        self.assertEqual(len(res["kept"]), 5)
+        self.assertEqual(res["stale"], [])
+        self.assertTrue(Path(done["path"]).is_dir())
+        self.assertTrue(any("without gh" in n for n in res["notes"]), res["notes"])
+        self.assertTrue(all("PR state unknown" in k["why"] for k in res["kept"]))
+
+    def watch(self, state):
+        import contextlib
+        import io
+        import agent as AG
+        out, err = io.StringIO(), io.StringIO()
+        here = os.getcwd()
+        try:
+            os.chdir(self.repo)
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = AG.main(["--state", str(state), "watch", "--timeout", "0", "--poll", "0.05"])
+        finally:
+            os.chdir(here)
+        return rc, err.getvalue()
+
+    def test_the_stewards_watch_prunes_once_per_cycle_and_its_heartbeat_names_the_stale(self):
+        # Catches (W3): a watch that never prunes (worktrees pile up after their PRs merge), stale ones never
+        # reaching the console, a watch run for another console pruning this project, and "no gh" said on every
+        # cycle instead of once.
+        from unittest import mock
+        import time as _t
+        from overture import gitseam as G
+        state = self.dir / "state"
+        state.mkdir()
+        R.register(self.repo, state, KIT)
+        (done, _d, _u, _o, nopr), prs = self.prune_world()
+        e = json.loads((self.root() / ".registry.json").read_text())
+        for row in e["worktrees"]:
+            row["created"] = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(_t.time() - 20 * self.DAY))
+        self.WT.write_registry(self.root(), e["worktrees"])
+        other = self.dir / "other-state"
+        other.mkdir()
+        with mock.patch.object(self.WT, "gh_prs", return_value=(prs, None)):
+            self.assertEqual(self.watch(other)[0], 3)
+            self.assertTrue(Path(done["path"]).is_dir())          # not this console's watch: nothing touched
+            rc, err = self.watch(state)
+        self.assertEqual(rc, 3)
+        self.assertFalse(Path(done["path"]).exists())
+        self.assertIn("worktree prune: removed " + done["branch"], err)
+        self.assertEqual(D.stale_worktrees(state)["worktrees"],
+                         [{"branch": nopr["branch"], "age_days": 20, "agent": "agent-5"}])
+        with mock.patch.object(G, "gh", return_value=(127, "", "gh (the GitHub CLI) is not installed")):
+            first, second = self.watch(state)[1], self.watch(state)[1]
+        self.assertIn("worktree prune skipped", first)
+        self.assertNotIn("worktree prune skipped", second)
+        self.assertIsNone(D.stale_worktrees(state))   # nothing judged, nothing claimed
+
+    def test_the_heartbeat_carries_the_stale_list_and_only_its_shape(self):
+        # Catches: stale worktrees sent with a full path (a home directory on the owner's page), anything of
+        # another shape believed, and a heartbeat that drops the list.
+        D.write_watch(self.dir, True, stale=[
+            {"branch": "overture/ticket/API-3", "age_days": 16, "agent": "agent-5"},
+            {"branch": str(self.home / "x"), "age_days": 1}, {"branch": "overture/ticket/A", "age_days": "9"},
+            {"branch": "overture/fix/B", "age_days": 20, "path": "/home/someone/x", "agent": "Bad Name"}])
+        got = D.stale_worktrees(self.dir)
+        self.assertEqual(got["worktrees"], [{"branch": "overture/ticket/API-3", "age_days": 16, "agent": "agent-5"},
+                                            {"branch": "overture/fix/B", "age_days": 20}])
+        self.assertNotIn(str(self.home), (self.dir / D.WATCH_FILE).read_text())
+        D.write_watch(self.dir, True)
+        self.assertIsNone(D.stale_worktrees(self.dir))
+        self.assertEqual(D.listening(self.dir)["state"], "listening")
+
+    def test_the_seam_runs_argv_only_and_nothing_once_closed(self):
+        # Catches: a setup command passed as one string to a shell, and `proc` starting a process in the server.
+        from overture import gitseam as G
+        with self.assertRaises(ValueError):
+            G.proc("echo hi; touch x", self.dir, timeout=5)
+        self.assertEqual(G.proc([sys.executable, "-c", "print(1)"], self.dir, timeout=30)[:2], (0, "1\n"))
+        from unittest import mock
+        with mock.patch.object(G, "_OPEN", False):
+            self.assertIs(G.proc([sys.executable, "-c", "print(1)"], self.dir, timeout=30), G.NO_GIT)
+            self.assertIs(G.git_full(["status"], self.dir, timeout=30), G.NO_GIT)
+            with self.assertRaisesRegex(self.WT.WorktreeError, "no git in the server"):
+                self.new()
+
+
+SETUP_SCRIPT = '''import json, sys, time
+mode = sys.argv[1]
+if mode == "fail":
+    sys.stderr.write("boom\\n")
+    sys.exit(3)
+if mode == "hang":
+    time.sleep(120)
+open("setup-ran.json", "w").write(json.dumps(sys.argv[1:]))
+'''
+
+
+class WritingSkillWorktreeTests(unittest.TestCase):
+    """1.50.0 (W2): every skill whose request changes files starts with `agent.py worktree new`."""
+
+    WRITING = ("console-visual", "console-ux", "console-process", "console-fold")
+    UNCHANGED = ("console-fork", "roar", "refine", "drill", "deliberate", "grill-me")
+
+    def test_writing_skills_call_worktree_new_and_none_adds_a_worktree_by_hand(self):
+        # Catches: a writing skill still telling agents to `git worktree add` by hand (a worktree outside
+        # ~/.overture/worktrees that no list or prune knows, on a branch the console cannot show), or one that
+        # never makes a worktree; and deliberation skills sent to make one (W2: they change no files).
+        skills = HERE / "plugin" / "skills"
+        for name in self.WRITING:
+            text = (skills / name / "SKILL.md").read_text(encoding="utf-8")
+            with self.subTest(skill=name):
+                self.assertRegex(text, r"A worktree new --kind [A-Za-z]+ --item ITEM")
+        for p in sorted(skills.glob("*/SKILL.md")):
+            text = p.read_text(encoding="utf-8")
+            with self.subTest(skill=p.parent.name):
+                self.assertNotIn("git worktree add", text)
+                if p.parent.name in self.UNCHANGED:
+                    self.assertNotIn("worktree new", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.49.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.50.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1261-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1291-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -105,6 +105,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item · Portfolio · Operator Shift report · themes and skins | [Finding your way around](docs/features/navigation.md) |
 | **Sections and phones** (1.48) | Work, Automation, Projects and Team, each with its own tabs, on a rail · a badge per section · full screen on a phone with a bottom bar · motion that respects reduced motion | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Pop-outs and a calmer Inbox** (1.49) | Flowcharts, graphs, visuals, rounds, long rulings and screenshots pop out beside the console, three at a time, with Pin · the Inbox grouped by lane, with an outline · `j`/`k` through the unanswered questions · a sticky Mine | [Finding your way around](docs/features/navigation.md#pop-outs-149) |
+| **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR merges or closes · stale ones listed for the owner · `worktree_setup` | [Automation](docs/features/automation.md#agent-worktrees-150) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
@@ -181,7 +182,9 @@ playbook codifies several steps, each with an optional `when` condition, and
 **Preview** says which would run and why the rest would not. Webhook and cron
 triggers fire playbooks without you; the Triggers tab logs each firing and
 replays one. Playbooks run from the console: a Claude session that asks to
-run one is told so, before anything runs (1.47).
+run one is told so, before anything runs (1.47). Agent work that changes files
+gets its own worktree under `~/.overture/worktrees` (1.50); the item, its
+tickets and its PR show each agent's branch, and warn when two agents meet.
 
 <img src="docs/screenshots/feature-playbook-preview.png" alt="Preview of release-triage: would run 2 of 3 steps; the round on API-3 would skip on its when condition" width="720">
 
@@ -202,7 +205,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.49.0
+      - uses: MikeHeid/overture@v1.50.0
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)

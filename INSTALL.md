@@ -6,9 +6,30 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
   to process, fork and fold the owner's answers, and the committee agents;
 - the **server kit** the plugin sets up (in `plugins/overture/kit/`).
 
-You need Python 3.11 or newer, `systemd --user` (Linux or WSL2) to keep the
-server running, and `cloudflared` with a Cloudflare account to reach it from
-outside.
+**What you need:**
+
+- **Python 3.11 or newer.**
+- **`systemd --user`** (Linux or WSL2) to keep the server running.
+- **`git`**, which agents use for their own worktrees (1.50), and optionally
+  **`gh`**, the GitHub CLI, for the PR tab, merging from it, and removing an
+  agent's worktree once its PR merges or closes. Without `gh` everything else
+  works and agent worktrees are kept until you remove them.
+
+**Reaching the console from outside this machine** is your choice, and none
+of the routes needs the others:
+
+- **Cloudflare Access**, with `cloudflared` and a Cloudflare account (the free
+  tier is enough);
+- **sign-in links** (1.46), with no Cloudflare at all: on your Tailscale
+  tailnet through `tailscale serve`, or with `--listen` on a ZeroTier or
+  Tailscale address (1.47);
+- **this machine only**: the console on 127.0.0.1, nothing to set up.
+
+Onboarding asks which one and walks you through it (the repository's
+`docs/features/sign-in-and-networks.md` has the detail).
+
+**Docker is not required**, and no container image is offered yet: the
+console is one Python process under `systemd --user`.
 
 **WSL2 users:** run `loginctl enable-linger $USER` **once** on first install
 so `systemd --user` units keep running after you close every terminal (the
@@ -67,6 +88,12 @@ It asks for:
 | AUD tag | 64 hex characters | the Access application's Overview (`kit/docs/CLOUDFLARE.md`) |
 | Hostname | `acme-console.example.com` | a name in a zone on your Cloudflare account |
 | Port | `4793` | any free port on 127.0.0.1 |
+
+The team domain, AUD tag and hostname are for the Cloudflare route only. It
+first asks how you will reach the console; with sign-in links on Tailscale or
+ZeroTier, or this machine only, it asks only for the name and port, and its
+next steps end with `agent.py invite`, which you run in your own terminal for
+your first sign-in link. Steps 3 and 4 below are the Cloudflare route's.
 
 It then writes the project's settings (`.overture/console.env` and
 `.overture.json`, none of them secret), plus a starter page and adapter.

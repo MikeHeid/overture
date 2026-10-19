@@ -1878,6 +1878,7 @@ class Console:
         """
         ver = self.version()
         out = {**self.payload(), "ver": ver}
+        out["cursor"] = self.cursor_for(out["cursor"])   # 1.50.0: stale worktrees go to an owner's login only
         # 1.19.1: drafts are owner-only; they travel on the owner door's /api/view only.
         # 1.39.0: and only to an owner's login: they are the owner's unsent text (roles.py).
         you = self.you()
@@ -4030,8 +4031,20 @@ class Console:
         except (OSError, ValueError):
             cur = {}
         by = self.read_working_by()
-        return {"last_synced_at": cur.get("last_synced_at"), "last_error": cur.get("last_error"),
-                "working": self._merged(by), "working_by": by, "listening": D.listening(self.cfg.state)}
+        out = {"last_synced_at": cur.get("last_synced_at"), "last_error": cur.get("last_error"),
+               "working": self._merged(by), "working_by": by, "listening": D.listening(self.cfg.state),
+               "branches": self.read_branches(by)}
+        stale = D.stale_worktrees(self.cfg.state)   # 1.50.0 (W3): the steward's last list; owner-only on a page
+        if stale is not None:
+            out["stale_worktrees"] = stale
+        return out
+
+    def cursor_for(self, cursor: dict) -> dict:
+        """1.50.0: the cursor as this owner-door login may see it. Stale worktrees are the owner's alone (W3);
+        a member or viewer sees the marks and branches, as they saw the marks before."""
+        if "stale_worktrees" in cursor and self.you()["role"] != "owner":
+            return {k: v for k, v in cursor.items() if k != "stale_worktrees"}
+        return cursor
 
     def health(self) -> tuple[bool, dict]:
         """Whether the server can do its job, in words that hold no owner content and no secret.
@@ -4129,6 +4142,25 @@ class Console:
                     out[item] = ts
         return out
 
+    # 1.50.0 (W4): where each mark's agent works. Kept in working.json under BRANCHES_KEY, a key no agent name
+    # can be (so a 1.49 server reading the file skips it, and drops it on its next write: the marks stand,
+    # without branches). {bucket: {item: {"branch": "overture/ticket/API-3", "worktree": "API-3"}}}: a branch
+    # of the worktree shape and a basename, never a path. Shown only beside a fresh mark of the same bucket.
+    def read_branches(self, by: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, dict]]:
+        """{bucket: {item: {"branch", "worktree"?}}} for every fresh mark that carries a branch."""
+        by = self.read_working_by() if by is None else by
+        try:
+            raw = json.loads(self.cfg.working.read_text(encoding="utf-8")).get(BRANCHES_KEY)
+        except (OSError, ValueError, AttributeError):
+            return {}
+        out: dict[str, dict[str, dict]] = {}
+        for bucket, marks in (raw.items() if isinstance(raw, dict) else ()):
+            for item, b in (marks.items() if isinstance(marks, dict) else ()):
+                if item not in by.get(bucket, {}) or branch_problem(b) is not None:
+                    continue
+                out.setdefault(bucket, {})[item] = {k: b[k] for k in ("branch", "worktree") if k in b}
+        return out
+
     def read_working_by(self) -> dict[str, dict[str, str]]:
         """Every fresh mark by bucket: {agent name or "agent": {item: time}}; an empty bucket is left out."""
         try:
@@ -4159,12 +4191,17 @@ class Console:
             out[N.UNNAMED] = {**fresh(legacy), **out.get(N.UNNAMED, {})}
         return {b: m for b, m in sorted(out.items()) if m}
 
-    def _write_working(self, by: dict[str, dict[str, str]]) -> None:
+    def _write_working(self, by: dict[str, dict[str, str]], branches: dict | None = None) -> None:
         # route through `atfile.write_at` (O_NOFOLLOW on the dir fd + O_EXCL temp +
         # fsync'd rename) instead of a fixed `.tmp` sibling. Pre-1.30-dot-1 two concurrent writes
         # could race on `working.tmp` and a planted symlink would be followed. The caller holds
         # `_working_lock` already, so there is no race between the dir open and the write.
-        data = json.dumps({b: m for b, m in by.items() if m}, sort_keys=True).encode("utf-8")
+        doc: dict = {b: m for b, m in by.items() if m}
+        kept = {b: {i: v for i, v in (branches or {}).get(b, {}).items() if i in m} for b, m in doc.items()}
+        kept = {b: m for b, m in kept.items() if m}
+        if kept:
+            doc[BRANCHES_KEY] = kept
+        data = json.dumps(doc, sort_keys=True).encode("utf-8")
         sfd = os.open(self.cfg.state, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         try:
             AF.write_at(sfd, "working.json", data)
@@ -4172,14 +4209,22 @@ class Console:
             os.close(sfd)
 
     def set_working(self, body: object, agent: str | None = None) -> dict:
-        items = body.get("items") if isinstance(body, dict) and set(body) == {"items"} else None
+        items = body.get("items") if isinstance(body, dict) and set(body) <= WORKING_FIELDS else None
         if not (isinstance(items, list) and 0 < len(items) <= MAX_WORKING
                 and all(isinstance(i, str) and len(i) <= 128 and S.ITEM_ID.match(i) for i in items)):
-            raise RequestError(400, f"working takes {{\"items\": [1 to {MAX_WORKING} item ids]}}")
+            raise RequestError(400, f"working takes {{\"items\": [1 to {MAX_WORKING} item ids]}}, and optionally "
+                                    f"\"branch\" and \"worktree\"")
+        # 1.50.0 (W4): the branch the agent works on, and its worktree's basename. Never a path.
+        where = {k: body[k] for k in ("branch", "worktree") if k in body}
+        if where:
+            why = branch_problem(where)
+            if why:
+                raise RequestError(400, why)
         now = time.strftime(TS_FORMAT, time.gmtime())
         bucket = agent or N.UNNAMED
         with self._working_lock:
             by = self.read_working_by()
+            branches = self.read_branches(by)
             new_bucket = {**by.get(bucket, {}), **{i: now for i in items}}
             if len(new_bucket) > MAX_WORKING:  # one agent holds at most MAX_WORKING marks: its newest
                 new_bucket = dict(sorted(new_bucket.items(), key=lambda kv: kv[1])[-MAX_WORKING:])
@@ -4200,7 +4245,14 @@ class Console:
                         429, f"item {item!r} would have {holders} agents active; cap is {per_item}. "
                              f"Wait for one to sync before another starts.")
             by[bucket] = new_bucket
-            self._write_working(by)
+            mine = dict(branches.get(bucket, {}))
+            for i in items:   # this call says where the agent works on these items now: a branch, or none
+                if where:
+                    mine[i] = dict(where)
+                else:
+                    mine.pop(i, None)
+            branches[bucket] = mine
+            self._write_working(by, branches)
         self._bump()  # the page shows "agent active" without waiting out a poll
         return self._merged(by)
 
@@ -4227,8 +4279,9 @@ class Console:
                 os.close(sfd)
             # Synced or failed, THIS agent is no longer at work; every other agent's marks stay (0.8.2).
             by = self.read_working_by()
+            branches = self.read_branches(by)
             if by.pop(agent or N.UNNAMED, None) is not None:
-                self._write_working(by)
+                self._write_working(by, branches)   # its branches go with its marks
         self._bump()
         return cur
 
@@ -4813,7 +4866,8 @@ class OwnerHandler(SigninDoor, _Handler):
         raw = query.get("timeout", str(int(WAIT_MAX)))
         if not re.fullmatch(r"[0-9]{1,2}(\.[0-9]{1,3})?", raw) or float(raw) > WAIT_MAX:
             raise RequestError(400, f"timeout is 0 to {WAIT_MAX:g} seconds")
-        self._send(200, self.console.wait(since, ver, float(raw)))
+        got = self.console.wait(since, ver, float(raw))
+        self._send(200, {**got, "cursor": self.console.cursor_for(got["cursor"])})   # 1.50.0: as page_payload
 
     def _feed(self, query: dict[str, str]) -> None:
         self._only(query, {"kind", "item", "before", "limit"}, "/api/feed")
@@ -5101,7 +5155,9 @@ class AgentHandler(_Handler):
             if self.path == "/cursor":
                 return self._send(200, {"cursor": self.console.set_cursor(self._body(), agent)})
             if self.path == "/working":  # the agent socket only: the owner's side cannot set it
-                return self._send(200, {"working": self.console.set_working(self._body(), agent)})
+                working = self.console.set_working(self._body(), agent)
+                # 1.50.0 (W4): every branch on the marks, so `agent.py worktree new` can tell a second agent.
+                return self._send(200, {"working": working, "branches": self.console.read_branches()})
             if self.path == "/reanchor":
                 return self._send(200, self.console.reanchor(self._body()))
             if self.path == "/visual":  # 0.8.1: the server stores the file in STATE, never in the project
@@ -5356,6 +5412,28 @@ MAX_WORKING = 32           # per-bucket (per-agent) marks; also the input valida
 #   - MAX_WORKING_PER_ITEM — the number of distinct agents allowed to hold a mark on ONE item
 # A /working POST that would push either cap over is refused by name with 429.
 MAX_WORKING_GLOBAL = 64
+# 1.50.0 (W4): a working mark may say where the agent works. The branch has the shape `agent.py worktree new`
+# makes (worktrees.BRANCH); the worktree is its folder's last part only. A path, a home directory or anything
+# else is refused by name.
+WORKING_FIELDS = {"items", "branch", "worktree"}
+BRANCHES_KEY = "@branches"          # never an agent name (names.problem refuses "@"), so no bucket collides
+BRANCH = re.compile(r"^overture/[a-z]+/[A-Za-z0-9._-]{1,120}\Z")
+WORKTREE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,120}\Z")
+
+
+def branch_problem(b: object) -> str | None:
+    """Why {"branch", "worktree"?} is not where an agent works, or None."""
+    if not isinstance(b, dict) or set(b) - {"branch", "worktree"} or "branch" not in b:
+        return "a working mark's place is \"branch\" (and optionally \"worktree\"): a worktree needs its branch"
+    if not isinstance(b["branch"], str) or not BRANCH.match(b["branch"]):
+        return ("branch must look like overture/<kind>/<item>, as `agent.py worktree new` makes it "
+                "(letters, digits and '._-' after the kind, at most 120)")
+    w = b.get("worktree")
+    if w is not None and (not isinstance(w, str) or not WORKTREE_NAME.match(w) or w in (".", "..")):
+        return "worktree must be the worktree folder's name only, never a path"
+    return None
+
+
 MAX_WORKING_PER_ITEM = SET.LIMITS["working_per_item"][2]   # 1.44.0: the default; the setting applies
 TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 SOCKET_PATH_MAX = 107  # sun_path is 108 bytes on Linux, one of them the terminating NUL
