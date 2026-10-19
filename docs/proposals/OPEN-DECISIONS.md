@@ -19,7 +19,7 @@ what was weighed.
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | How the server runs | **A, amended.** One command runs the server in the foreground, detaches it as a daemon, installs or removes it as a service, and reports status and health (see "D1 as decided"). Same command shape as `lean-ctx`. |
-| D2 | When macOS gets a service installer | **B.** Right after Linux/WSL, as its own PR. |
+| D2 | When macOS gets a service installer | **B.** Right after Linux/WSL, as its own PR. *Shipped in 1.51* (see "D2 as decided"). |
 | D3 | One main server for new installs? | **A.** `--all` by default. |
 | D4 | What a saved UX component is | **A, amended.** One self-contained HTML document, scripts off by default. A switch turns scripts on for one component (see "D4 as decided"). |
 | D5 | Where components are saved | **A.** `components/<item>.md`, with backups in `components/.history/`. |
@@ -44,7 +44,7 @@ One entry point with five modes, modelled on `lean-ctx`:
 
     <py> <kit>/server.py --all                     # foreground; Ctrl+C stops it
     <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log file
-    <py> <kit>/server.py service install|uninstall # systemd user unit (Linux, WSL); launchd next (D2)
+    <py> <kit>/server.py service install|uninstall # systemd user unit (Linux, WSL); launchd (macOS, 1.51)
     <py> <kit>/server.py status                    # running? which mode? pid, port per project, last restart
     <py> <kit>/server.py health                    # per project: store lock, tunnel reachable, version skew, linger
 
@@ -57,6 +57,37 @@ One entry point with five modes, modelled on `lean-ctx`:
   process.
 - The SessionStart hook still only reads: when the server is down, it
   prints the one-line `status` hint.
+
+### D2 as decided (architect defaults, 1.51)
+
+The owner chose B and said "Go" on 2026-10-19; these are the lead's
+architect defaults for it.
+
+- **A1** Label `overture.console`, file `~/Library/LaunchAgents/overture.console.plist`,
+  a per-user LaunchAgent in the `gui/<uid>` domain.
+- **A2** Written with `plistlib`, never a text template. `ProgramArguments`
+  is an argv array, so a space in a path is fine; a path that is not
+  absolute or holds a control character is refused by name. The systemd
+  plain-path rule stays systemd's.
+- **A3** `RunAtLoad`, `KeepAlive = {SuccessfulExit: false}` (as
+  `Restart=on-failure`), `ThrottleInterval` 10 (launchd has no start limit,
+  so a failing server is retried every 10 s), stdout and stderr to the
+  daemon's log (rotated at install), `WorkingDirectory` the kit, no
+  `ProcessType` (Background is throttled), no environment.
+- **A4** One `_launchctl` helper. `--start`: boot out a loaded job first (an
+  upgrade), then `enable`, then `bootstrap`. Without `--start`, only the
+  plist is written. Uninstall boots out and removes.
+- **A5** `launchctl print`, matched by line name: not found → `inactive`;
+  `running` → `active` with its pid; `spawn scheduled` → `activating`; not
+  running → `failed` on a non-zero last exit code, else `inactive`; anything
+  else → `unavailable`. No start time.
+- **A6** Every hint names this platform's command (`launchctl kickstart -k`,
+  `bootout`, `print`) through one helper.
+- **A7** No linger on macOS; a LaunchAgent runs while you are logged in.
+- **A8** Docker stays optional; native Windows stays unsupported.
+- **A9** `deploy/install.sh` and onboarding's per-project units stay
+  systemd; `install.sh` refuses on macOS by name. A tunnel on a Mac uses
+  `cloudflared service install`.
 
 ### D4 as decided
 

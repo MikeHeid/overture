@@ -58,6 +58,31 @@ Cloudflare reached the tunnel but not the server, or not the tunnel at all.
 - Both running: the DNS record may point at another tunnel. Route it again
   with `--config` for this tunnel (`CLOUDFLARE.md`).
 
+## macOS: the launchd service (1.51.0)
+
+On a Mac the one server (`server.py --all`) runs as the LaunchAgent
+`overture.console` that `server.py service install` writes; there is no journal.
+
+    python3 <kit>/server.py health
+    launchctl print gui/$(id -u)/overture.console | grep -E 'state =|pid =|last exit code ='
+
+- **Where things are:** the plist is `~/Library/LaunchAgents/overture.console.plist`;
+  the server's output goes to `~/.local/state/overture/server.log` (the daemon's
+  log, rotated at install past 5 MiB).
+- **Restart** (after an upgrade, or on "version skew"):
+  `launchctl kickstart -k gui/$(id -u)/overture.console`.
+  **Stop:** `launchctl bootout gui/$(id -u)/overture.console` (it loads again at
+  your next login; `server.py service uninstall` removes it for good).
+- **`Could not find service "overture.console"`** (exit 113): the plist is
+  there but the job is not loaded, so `health` says `inactive`. Load it with
+  `server.py service install --start`.
+- **`failed`, and the log repeats the same error every 10 s:** launchd has no
+  start limit; with `KeepAlive` it starts a server that exits non-zero again
+  after `ThrottleInterval` (10 s), forever. Read the log, fix the cause (a bad
+  `server.json`, a missing dependency), then `kickstart -k`.
+- **Nothing after a reboot until you log in:** expected. A LaunchAgent lives in
+  your login session (the `gui` domain); there is no linger on macOS.
+
 ## The doorbell does not wake the session
 
 1. Is anything listening? The status bar, or `health`, says `listening`.

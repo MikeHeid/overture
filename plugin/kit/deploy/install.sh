@@ -21,6 +21,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$PROJECT" ] || { echo "install.sh: --project DIR is required" >&2; exit 2; }
+# 1.51.0 (D2): these are systemd units; on macOS the one server runs as a launchd LaunchAgent instead.
+if [ "$(uname -s)" = Darwin ]; then
+  echo "install.sh: macOS has no systemd; run the one console server as a launchd service with \`python3 $(cd "$(dirname "$0")/.." && pwd)/server.py service install --start\` (docs/features/hosting.md)" >&2
+  exit 2
+fi
 PROJECT=$(cd "$PROJECT" && pwd)
 ENV_FILE="$PROJECT/.overture/console.env"
 [ -f "$ENV_FILE" ] || { echo "install.sh: $ENV_FILE is missing; run onboard.py write first" >&2; exit 2; }

@@ -294,6 +294,22 @@ class InstallGuardTests(Base):
                 for d in ("share", "cfg", "st"):
                     self.assertFalse((self.home / d).exists(), f"{d} was written before the refusal")
 
+    def test_macos_is_refused_by_name_and_pointed_to_the_launchd_service(self):
+        # Catches (1.51, D2): install.sh on a Mac copying the kit and writing systemd units that nothing runs,
+        # instead of naming `server.py service install` (launchd), before anything is written.
+        O.write(self.project, GOOD, check_port=False)
+        fake = self.root / "fakebin"
+        fake.mkdir()
+        (fake / "uname").write_text("#!/bin/sh\necho Darwin\n")
+        (fake / "uname").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}"}):
+            r = self.run_install(self.project)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("macOS", r.stderr)
+        self.assertIn("server.py service install", r.stderr)
+        for d in ("share", "cfg", "st"):
+            self.assertFalse((self.home / d).exists(), f"{d} was written before the refusal")
+
 
 class ReadEnvTests(Base):
     def test_show_returns_only_validated_keys(self):

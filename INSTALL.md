@@ -9,7 +9,8 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
 **What you need:**
 
 - **Python 3.11 or newer.**
-- **`systemd --user`** (Linux or WSL2) to keep the server running.
+- **`systemd --user`** (Linux or WSL2) or **launchd** (macOS) to keep the
+  server running.
 - **`git`**, which agents use for their own worktrees, and optionally
   **`gh`**, the GitHub CLI, for the PR tab, merging from it, and removing an
   agent's worktree once its PR merges or closes. Without `gh` everything else
@@ -29,10 +30,21 @@ Onboarding asks which one and walks you through it (the repository's
 `docs/features/sign-in-and-networks.md` has the detail).
 
 *Since: sign-in links 1.46, `--listen` on ZeroTier or Tailscale 1.47, agent
-worktrees 1.50 (they use git).*
+worktrees 1.50 (they use git), the macOS launchd service 1.51.*
 
 **Docker is not required**, and no container image is offered yet: the
-console is one Python process under `systemd --user`.
+console is one Python process under `systemd --user`, or launchd on a Mac.
+
+**macOS users:** the one console server runs as a launchd LaunchAgent:
+
+    python3 ~/overture/plugins/overture/kit/server.py service install --start
+
+It writes `~/Library/LaunchAgents/overture.console.plist` and loads it. A
+LaunchAgent runs while you are logged in to the Mac: it survives sleep and
+closing every terminal, and starts again at your next login. `server.py
+status` and `server.py health` say how it is. The per-project
+`deploy/install.sh` is systemd only and refuses on a Mac. For a Cloudflare
+tunnel, `cloudflared service install` is Cloudflare's own launchd installer.
 
 **WSL2 users:** run `loginctl enable-linger $USER` **once** on first install
 so `systemd --user` units keep running after you close every terminal (the

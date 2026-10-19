@@ -1665,6 +1665,209 @@ class HostingTests(unittest.TestCase):
             self.assertIsNone(ss._server_down(self.t / "elsewhere", HERE / "plugin" / "kit"))
 
 
+class LaunchdTests(unittest.TestCase):
+    """1.51 (D2): `server.py service` on macOS, as a launchd LaunchAgent. No launchctl here, so a fake one on
+    PATH records its argv and answers `print` from a file; sys.platform reads "darwin"; HOME is a temp dir."""
+
+    # `launchctl print gui/<uid>/overture.console`, as macOS prints it (trimmed): the format is no stable API.
+    RUNNING = ("gui/501/overture.console = {\n\tactive count = 1\n\tpath = /Users/example/Library/LaunchAgents/"
+               "overture.console.plist\n\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = /usr/bin/python3\n"
+               "\targuments = {\n\t\t/usr/bin/python3\n\t}\n\n\tpid = 4242\n\tlast exit code = (never exited)\n"
+               "\tendpoints = {\n\t\tstate = active\n\t}\n}\n")
+    EXITED = ("gui/501/overture.console = {{\n\tactive count = 0\n\ttype = LaunchAgent\n\tstate = not running\n\n"
+              "\tprogram = /usr/bin/python3\n\truns = 3\n\tlast exit code = {code}\n}}\n")
+
+    def setUp(self):
+        from overture import serverfile as SF
+        from overture import registry as R
+        import hosting
+        self.H = hosting
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.t = Path(os.path.realpath(tmp.name))
+        self.home, self.cfg, self.st = self.t / "home", self.t / "cfg", self.t / "st"
+        self.home.mkdir()
+        reg = self.cfg / "overture" / "projects.json"
+        root, state = self.t / "root", self.t / "state"
+        root.mkdir()
+        state.mkdir()
+        R.register(root, state, KIT, path=reg)
+        self.sfile = self.t / "with space" / "server.json"        # an argv array carries a space; no unit could
+        SF.add("alpha", state, "a.example.com", AUD, 1, TEAM, registry=reg, path=self.sfile)
+        self.bin = self.t / "bin"
+        self.bin.mkdir()
+        self.log, self.state_file, self.code_file = self.t / "launchctl.log", self.t / "PRINT", self.t / "CODE"
+        (self.t / "RUNNING").write_text(self.RUNNING)
+        lc = self.bin / "launchctl"
+        lc.write_text("#!/bin/sh\n"
+                      f"echo \"$@\" >> '{self.log}'\n"
+                      "case \"$1\" in\n"
+                      f"  print) if [ -f '{self.state_file}' ]; then cat '{self.state_file}'; "
+                      f"[ -f '{self.code_file}' ] && exit $(cat '{self.code_file}'); exit 0; fi\n"
+                      "         echo 'Could not find service \"overture.console\" in domain for port' >&2; exit 113;;\n"
+                      f"  bootout) rm -f '{self.state_file}';;\n"
+                      f"  bootstrap) cp '{self.t / 'RUNNING'}' '{self.state_file}';;\n"
+                      "esac\nexit 0\n")
+        lc.chmod(0o755)
+        env = mock.patch.dict(os.environ, {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.cfg),
+                                           "XDG_STATE_HOME": str(self.st),
+                                           "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"})
+        env.start()
+        self.addCleanup(env.stop)
+        plat = mock.patch.object(sys, "platform", "darwin")
+        plat.start()
+        self.addCleanup(plat.stop)
+        self.plist = self.home / "Library" / "LaunchAgents" / "overture.console.plist"
+        self.domain = f"gui/{os.getuid()}"
+        self.target = f"{self.domain}/overture.console"
+
+    def run_h(self, fn, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = fn(*args)
+        return code, out.getvalue(), err.getvalue()
+
+    def calls(self) -> list[str]:
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def test_install_writes_exactly_the_launchd_keys_and_without_start_calls_nothing(self):
+        # Catches: a plist missing RunAtLoad/KeepAlive (the console would not come back after a crash or a login),
+        # a Background ProcessType (throttled CPU and IO), a shell string instead of an argv array (a space in a
+        # path splits it), a log the daemon does not share, and an install without --start that loads anything.
+        import plistlib
+        code, out, err = self.run_h(self.H.service_install, self.sfile, False)
+        self.assertEqual(code, 0, err)
+        log = str(self.st / "overture" / "server.log")
+        self.assertEqual(plistlib.loads(self.plist.read_bytes()), {
+            "Label": "overture.console",
+            "ProgramArguments": [sys.executable, str(KIT / "server.py"), "--all", "--server-file", str(self.sfile)],
+            "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False}, "ThrottleInterval": 10,
+            "StandardOutPath": log, "StandardErrorPath": log, "WorkingDirectory": str(KIT)})
+        self.assertEqual(stat.S_IMODE(self.plist.stat().st_mode), 0o644)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("next login", out)
+        self.assertIn(f"launchctl bootstrap {self.domain} {self.plist}", out)
+        self.assertNotIn("systemctl", out + err)
+
+    def test_a_control_character_or_a_relative_path_is_refused_by_name_and_nothing_is_written(self):
+        # Catches: a newline or DEL reaching the plist (XML escapes it, but launchd would then run a path nobody
+        # typed), a relative path launchd resolves against / instead of where the user stood, and a refusal that
+        # leaves a half-written plist behind.
+        bad = self.t / "tab\there"
+        bad.mkdir()
+        sf = bad / "server.json"
+        sf.write_bytes(self.sfile.read_bytes())
+        code, out, err = self.run_h(self.H.service_install, sf, True)
+        self.assertEqual(code, 1)
+        self.assertIn("server file path", err)
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.calls(), [])
+        for kw, want in (({"python": "/usr/bin/py\x7fthon"}, "python path"), ({}, "server file path")):
+            with self.subTest(want=want), self.assertRaises(ValueError) as cm:
+                self.H.render_plist(self.sfile if kw else Path("server.json"), **kw)
+            self.assertIn(want, str(cm.exception))
+
+    def test_start_enables_then_bootstraps_and_an_upgrade_boots_out_the_old_job_first(self):
+        # Catches: bootstrap before enable (a job once disabled never loads), a second bootstrap over a loaded
+        # job (launchd refuses it, so an upgrade would keep the old server), and the wrong domain or target.
+        code, out, err = self.run_h(self.H.service_install, self.sfile, True)
+        self.assertEqual(code, 0, err)
+        self.assertIn("started", out)
+        verbs = [c for c in self.calls() if not c.startswith("print")]
+        self.assertEqual(verbs, [f"enable {self.target}", f"bootstrap {self.domain} {self.plist}"])
+        self.log.unlink()
+        code, out, err = self.run_h(self.H.service_install, self.sfile, True)          # now loaded: an upgrade
+        self.assertEqual(code, 0, err)
+        verbs = [c for c in self.calls() if not c.startswith("print")]
+        self.assertEqual(verbs, [f"bootout {self.target}", f"enable {self.target}",
+                                 f"bootstrap {self.domain} {self.plist}"])
+
+    def test_uninstall_boots_out_and_removes_and_twice_refuses(self):
+        # Catches: an uninstall that leaves the job loaded (it would run until the next logout) or the plist
+        # behind (it would come back at the next login), and a second uninstall that claims success.
+        self.run_h(self.H.service_install, self.sfile, True)
+        self.log.unlink()
+        code, out, err = self.run_h(self.H.service_uninstall)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"bootout {self.target}", self.calls())
+        self.assertFalse(self.plist.exists())
+        self.assertIn("removed", out)
+        code, out, err = self.run_h(self.H.service_uninstall)
+        self.assertEqual(code, 1)
+        self.assertIn("not installed", err)
+
+    def test_launchctl_print_maps_to_the_systemd_words_and_the_pid_is_read(self):
+        # Catches: a parser that reads by position (the format changes between macOS releases), a nested
+        # "state = active" (an endpoint) read as the job's, an exited job with a non-zero code shown as merely
+        # inactive, a pending respawn shown as stopped (a daemon would start beside it), and a missing launchctl
+        # or an odd answer read as anything but "unavailable".
+        self.assertEqual(self.H.service_state(), "not installed")
+        self.plist.parent.mkdir(parents=True)
+        self.plist.write_bytes(b"")
+        self.assertEqual(self.H.service_state(), "inactive")                         # "Could not find service", 113
+        self.state_file.write_text(self.RUNNING)
+        self.assertEqual(self.H.service_state(), "active")
+        self.assertEqual(self.H.mode(), ("service", 4242))
+        for text, want in ((self.EXITED.format(code=1), "failed"), (self.EXITED.format(code=0), "inactive"),
+                           (self.EXITED.format(code="(never exited)"), "inactive"),
+                           ("gui/501/overture.console = {\n\tstate = spawn scheduled\n}\n", "activating"),
+                           ("something new\n", "unavailable")):
+            with self.subTest(want=want):
+                self.state_file.write_text(text)
+                self.assertEqual(self.H.service_state(), want)
+        self.state_file.write_text(self.RUNNING)
+        self.code_file.write_text("5")
+        self.assertEqual(self.H.service_state(), "unavailable")                      # an error that is not 113
+        self.code_file.unlink()
+        with mock.patch.dict(os.environ, {"PATH": str(self.t / "nowhere")}):
+            self.assertEqual(self.H.service_state(), "unavailable")
+            self.assertEqual(self.H.mode(), ("stopped", None))
+
+    def test_a_daemon_is_refused_while_the_job_runs_and_every_hint_names_launchctl(self):
+        # Catches: the one-server gate blind on macOS (two servers on one socket), and a hint that tells a Mac
+        # user to run systemctl, which is not there.
+        self.run_h(self.H.service_install, self.sfile, True)
+        code, out, err = self.run_h(self.H.daemon_start, self.sfile)
+        self.assertEqual(code, 1)
+        self.assertIn(f"`launchctl bootout {self.target}`", err)
+        self.assertNotIn("systemctl", err)
+        self.state_file.write_text("odd\n")
+        code, out, err = self.run_h(self.H.daemon_start, self.sfile)
+        self.assertEqual(code, 1)
+        self.assertIn(f"`launchctl print {self.target}`", err)
+        self.assertNotIn("systemctl", err)
+        for verb in ("start", "stop", "restart", "status"):
+            self.assertIn("launchctl", self.H.service_cmd(verb))
+        self.assertEqual(self.H.service_cmd("restart"), f"launchctl kickstart -k {self.target}")
+        with mock.patch.object(sys, "platform", "linux"):
+            self.assertEqual(self.H.service_cmd("stop"), "systemctl --user stop overture-console.service")
+
+    def test_health_on_macos_has_no_linger_check(self):
+        # Catches: health running loginctl on a Mac (there is none: every health would report a problem), or
+        # reporting the logged-in-only gui domain as a fault.
+        self.run_h(self.H.service_install, self.sfile, False)
+        self.state_file.write_text(self.EXITED.format(code=1))
+        with mock.patch.object(self.H.subprocess, "run", wraps=subprocess.run) as run:
+            doc = self.H.health(self.sfile)
+        self.assertNotIn("loginctl", json.dumps([c.args for c in run.call_args_list]))
+        self.assertEqual((doc["service"], doc["linger"]), ("failed", None))
+        self.assertTrue(any("not running" in p for p in doc["problems"]))
+        self.assertFalse(any("linger" in p or "systemctl" in p for p in doc["problems"]))
+
+    def test_the_rendered_plist_is_valid_and_plutil_agrees_when_present(self):
+        # Catches: bytes plistlib wrote that launchd's own parser rejects (checked with plutil on a Mac only).
+        import plistlib
+        import shutil
+        data = self.H.render_plist(self.sfile)
+        self.assertEqual(plistlib.loads(data)["Label"], "overture.console")
+        self.assertTrue(data.startswith(b"<?xml"))
+        if not shutil.which("plutil"):
+            self.skipTest("plutil is macOS only")
+        p = self.t / "x.plist"
+        p.write_bytes(data)
+        self.assertEqual(subprocess.run(["plutil", "-lint", str(p)], capture_output=True).returncode, 0)
+
+
 class DesignPickerTests(_Live, unittest.TestCase):
     """1.33: an agent lists a Claude Design project's artifacts; the owner references some in a UX request."""
     URL = "https://claude.ai/design/p/fee63c71-69b8-455c-bb5b-c7935342adc1"
@@ -3683,8 +3886,8 @@ def spec_question(v1: str) -> dict:
 SPAWN_ALLOWED = {
     "overture/gitseam.py": "the one door for git; it starts nothing once the server closes it",
     "agent.py": "run by an agent inside its own jail; the server process never imports it",
-    "hosting.py": "operator tool: `server.py daemon|service|status|health` run systemctl and detach the server; "
-                  "the server never imports it",
+    "hosting.py": "operator tool: `server.py daemon|service|status|health` run systemctl or launchctl and "
+                  "detach the server; the server never imports it",
     "onboard.py": "operator setup/verify tool (1.24.0 verify runs curl/systemctl); never imported by the server",
     "tools/": "operator tools (verify_vendor.py runs git on a kit clone); never imported by the server",
 }

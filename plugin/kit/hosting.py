@@ -3,7 +3,7 @@
 
     server.py --all                      foreground; Ctrl+C stops it (unchanged)
     server.py daemon start|stop          detached, with a pid file and a log file
-    server.py service install|uninstall  a systemd user unit (Linux, WSL); launchd comes next (D2)
+    server.py service install|uninstall  a systemd user unit (Linux, WSL) or a launchd LaunchAgent (macOS)
     server.py status                     running? which mode? pid, port per project, last start
     server.py health                     per project: door, agent socket, version skew; linger; stale files
 
@@ -19,6 +19,7 @@ import fcntl
 import http.client
 import json
 import os
+import plistlib
 import re
 import signal
 import socket
@@ -34,6 +35,8 @@ from overture import serverfile as SF  # noqa: E402
 UNIT = "overture-console.service"
 KIT = Path(__file__).resolve().parent
 PLAIN = re.compile(r"^/[A-Za-z0-9_./-]*\Z")   # a path a systemd unit can carry safely, as deploy/install.sh holds
+LABEL = "overture.console"                    # 1.51 (D2): the launchd LaunchAgent, in the gui domain (logged in)
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # what a launchd path refuses: an argv array takes anything else
 LOG_MAX = 5 << 20
 
 
@@ -51,6 +54,41 @@ def log_file() -> Path:
 
 def unit_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")) / "systemd" / "user" / UNIT
+
+
+def plist_path() -> Path:
+    return Path(os.path.expanduser("~/Library/LaunchAgents")) / f"{LABEL}.plist"
+
+
+def _is_mac() -> bool:
+    return sys.platform == "darwin"
+
+
+def _domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def _target() -> str:
+    return f"{_domain()}/{LABEL}"
+
+
+def service_cmd(verb: str) -> str:
+    """The command that starts, stops, restarts or shows the service on this platform, for a hint."""
+    if not _is_mac():
+        return f"systemctl --user {verb} {UNIT}"
+    return {"start": f"launchctl bootstrap {_domain()} {plist_path()}", "stop": f"launchctl bootout {_target()}",
+            "restart": f"launchctl kickstart -k {_target()}", "status": f"launchctl print {_target()}"}[verb]
+
+
+def _launchctl(*args: str) -> tuple[int, str]:
+    """`launchctl ARGS`: (exit code, output); 127 when launchctl is not there (anything but macOS)."""
+    try:
+        r = subprocess.run(["launchctl", *args], capture_output=True, text=True, timeout=20, check=False)
+    except FileNotFoundError:
+        return 127, "launchctl is not installed here"
+    except (OSError, subprocess.SubprocessError) as e:
+        return 126, str(e)
+    return r.returncode, (r.stdout + r.stderr).strip()
 
 
 def _systemctl(*args: str) -> tuple[int, str]:
@@ -108,8 +146,32 @@ STATES = ("active", "inactive", "failed", "activating", "deactivating", "reloadi
 BUSY = ("active", "activating", "reloading", "deactivating")     # the unit has, or is getting, a server
 
 
+def _launchd() -> tuple[str, int | None]:
+    """(state, pid) of the LaunchAgent in service_state()'s words. `launchctl print` is no stable format, so its
+    lines are matched by name (the first match is the job's own; nested blocks come later), never by position."""
+    if not plist_path().exists():
+        return "not installed", None
+    code, out = _launchctl("print", _target())
+    if code != 0:
+        loaded = not (code == 113 or "could not find service" in out.lower())
+        return ("unavailable" if loaded or code in (126, 127) else "inactive"), None
+    state = re.search(r"^\s*state = (.+?)\s*$", out, re.M)
+    word = state.group(1) if state else ""
+    if word == "running":
+        pid = re.search(r"^\s*pid = (\d+)\s*$", out, re.M)
+        return "active", int(pid.group(1)) if pid else None
+    if word == "spawn scheduled":                 # KeepAlive will start it again within ThrottleInterval
+        return "activating", None
+    if word == "not running":
+        last = re.search(r"^\s*last exit code = (-?\d+)", out, re.M)
+        return ("failed" if last and int(last.group(1)) != 0 else "inactive"), None
+    return "unavailable", None
+
+
 def service_state() -> str:
     """One of STATES, 'not installed', or 'unavailable' (no systemd, no user bus, a timeout, an odd answer)."""
+    if _is_mac():
+        return _launchd()[0]
     if not unit_path().exists():
         return "not installed"
     code, out = _systemctl("is-active", UNIT)
@@ -173,7 +235,11 @@ def port_open(port: int) -> bool:
 
 def mode() -> tuple[str, int | None]:
     """('service' | 'daemon' | 'stopped', pid)."""
-    if service_state() in BUSY:
+    if _is_mac():
+        svc, pid = _launchd()
+        if svc in BUSY:
+            return "service", pid
+    elif service_state() in BUSY:
         code, out = _systemctl("show", UNIT, "-p", "MainPID", "--value")
         try:
             pid = int(out.strip()) if code == 0 else None
@@ -207,12 +273,13 @@ def _locked():
 
 def _gate_service(verb: str) -> str | None:
     svc = service_state()
+    name, why = (LABEL, "launchd does not say whether it is running") if _is_mac() else (
+        UNIT, "systemd does not say whether it is running (no user bus?)")
     if svc in BUSY:
-        return (f"the service {UNIT} is {svc}; stop it first (`systemctl --user stop {UNIT}`) or use "
+        return (f"the service {name} is {svc}; stop it first (`{service_cmd('stop')}`) or use "
                 f"`server.py service uninstall`. One server at a time")
     if svc == "unavailable":
-        return (f"{UNIT} is installed but systemd does not say whether it is running (no user bus?), so nothing "
-                f"will {verb}; run `systemctl --user status {UNIT}`")
+        return f"{name} is installed but {why}, so nothing will {verb}; run `{service_cmd('status')}`"
     return None
 
 
@@ -316,9 +383,58 @@ def render_unit(sf: Path, python: str | None = None) -> str:
     return tpl
 
 
+def render_plist(sf: Path, python: str | None = None) -> bytes:
+    """The LaunchAgent, written by plistlib (it escapes the XML): an argv array, so a space is fine; a path that is
+    not absolute or holds a control character is refused by name."""
+    vals = {"PYTHON": python or sys.executable, "KIT": str(KIT), "SERVER_FILE": str(sf), "LOG": str(log_file())}
+    for k, v in vals.items():
+        if not v.startswith("/") or CONTROL.search(v):
+            raise ValueError(f"the {k.lower().replace('_', ' ')} path {v!r} is not absolute or holds a control "
+                             f"character, which a launchd job cannot take")
+    return plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": [vals["PYTHON"], f"{vals['KIT']}/server.py", "--all", "--server-file", vals["SERVER_FILE"]],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},   # Restart=on-failure; launchd has no burst limit, only this spacing
+        "ThrottleInterval": 10,
+        "StandardOutPath": vals["LOG"], "StandardErrorPath": vals["LOG"],   # the daemon's log, rotated at install
+        "WorkingDirectory": vals["KIT"]})           # no ProcessType: a Background job is CPU- and IO-throttled
+
+
+def _launchd_install(sf: Path, start: bool) -> int:
+    try:
+        data = render_plist(sf)
+    except ValueError as e:
+        return _refuse(str(e))
+    log = log_file()                              # run_dir() exists: _locked() made it
+    if log.exists() and log.stat().st_size > LOG_MAX:
+        log.replace(log.with_suffix(".log.1"))
+    os.close(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600))
+    pp = plist_path()
+    pp.parent.mkdir(parents=True, exist_ok=True)
+    pp.write_bytes(data)
+    os.chmod(pp, 0o644)
+    print(f"plist: {pp}")
+    if not start:
+        print(f"installed, not started: it starts at your next login, or `{service_cmd('start')}` now, "
+              f"or re-run with --start")
+        return 0
+    code, out = _launchctl("print", _target())
+    if code in (126, 127):
+        return _refuse(f"the plist was written to {pp}, but {out}")
+    if code == 0:                                 # loaded: an upgrade; launchd refuses a second bootstrap
+        _launchctl("bootout", _target())
+        for _ in range(50):
+            if _launchctl("print", _target())[0] != 0:
+                break
+            time.sleep(0.1)
+    _launchctl("enable", _target())               # before bootstrap: a job once disabled is never loaded
+    code, out = _launchctl("bootstrap", _domain(), str(pp))
+    print("started" if code == 0 else f"could not start: {out}")
+    return 0 if code == 0 else 1
+
+
 def service_install(sf: Path, start: bool) -> int:
-    if sys.platform == "darwin":
-        return _refuse("macOS has no systemd; the launchd installer arrives next (D2). Use `server.py daemon start`")
     fd = _locked()
     try:
         m, pid = mode()
@@ -328,6 +444,8 @@ def service_install(sf: Path, start: bool) -> int:
         return _refuse(f"a daemon is running (pid {pid}); `server.py daemon stop` first. One server at a time")
     if not projects(sf):
         return _refuse(f"{sf} holds no projects; add one with `agent.py server add` (docs/JOIN.md)")
+    if _is_mac():
+        return _launchd_install(sf, start)
     try:
         text = render_unit(sf)
     except ValueError as e:
@@ -349,6 +467,14 @@ def service_install(sf: Path, start: bool) -> int:
 
 
 def service_uninstall() -> int:
+    if _is_mac():
+        pp = plist_path()
+        if not pp.exists():
+            return _refuse(f"{LABEL} is not installed")
+        _launchctl("bootout", _target())          # "not loaded" is fine: the plist goes either way
+        pp.unlink()
+        print(f"removed {pp}")
+        return 0
     up = unit_path()
     if not up.exists():
         return _refuse(f"{UNIT} is not installed")
@@ -372,7 +498,9 @@ def status(sf: Path) -> dict:
                             if isinstance(p.get("port"), int) else False} for n, p in projs.items()}}
     if m == "daemon" and rec:
         out["started_at"] = rec.get("started_at")
-    if m == "service":
+    if m == "service" and _is_mac():
+        out["started_at"] = None                  # launchd keeps no start time
+    elif m == "service":
         code, ts = _systemctl("show", UNIT, "-p", "ActiveEnterTimestamp", "--value")
         out["started_at"] = ts.strip() if code == 0 else None
     return out
@@ -402,7 +530,8 @@ def health(sf: Path) -> dict:
     h = (socket_answers(sock) or {}) if st["answering"] else {}
     want = (KIT / "VERSION").read_text().strip() if (KIT / "VERSION").exists() else None
     if h.get("version") and want and h["version"] != want:
-        problems.append(f"version skew: the running server is {h['version']}, the installed kit is {want}; restart it")
+        problems.append(f"version skew: the running server is {h['version']}, the installed kit is {want}; restart it"
+                        + (f": `{service_cmd('restart')}`" if st["mode"] == "service" else ""))
     linger = None
     if sys.platform.startswith("linux"):
         try:
@@ -455,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("daemon", help="run detached, with a pid file and a log")
     d.add_argument("action", choices=("start", "stop"))
-    s = sub.add_parser("service", help="a systemd user unit (Linux, WSL)")
+    s = sub.add_parser("service", help="a systemd user unit (Linux, WSL) or a launchd LaunchAgent (macOS)")
     s.add_argument("action", choices=("install", "uninstall"))
     s.add_argument("--start", action="store_true", help="install: also start it now")
     for name in ("status", "health"):
