@@ -9030,7 +9030,14 @@ class WorktreeTests(unittest.TestCase):
                 t.join(30)
                 self.assertFalse(t.is_alive(), "worktree new hung on the registry lock")
                 mark = now[0]
-                listing = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None)
+                listed = {}
+                def lister():
+                    listed["v"] = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None)
+                t = threading.Thread(target=lister, daemon=True)     # a list that waits fails, never hangs the suite
+                t.start()
+                t.join(30)
+                self.assertFalse(t.is_alive(), "worktree list waited on the registry lock")
+                listing = listed["v"]
                 self.assertEqual(now[0], mark)                       # list never waited
         finally:
             os.close(fd)

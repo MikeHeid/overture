@@ -6773,7 +6773,8 @@ class WorktreeBrowserTests(unittest.TestCase):
                 D.write_watch(self.cfg.state, True, stale=[{"branch": self.T, "age_days": 16, "agent": "agent-5"}])
                 page = self.page(kind, 1280, url)
                 page.evaluate("ConsoleKit.openTab('prs')")
-                count = page.wait_for_selector(".ck-prs-pushed .ck-prs-stale-count")
+                count = page.locator(".ck-prs-pushed .ck-prs-stale-count")   # re-resolved: the poll may redraw it
+                count.wait_for()
                 self.assertEqual(count.text_content(), "1 stale worktree")
                 count.click()
                 self.assertEqual(page.evaluate("document.querySelector('details.ck-stale-worktrees').open"), True)
