@@ -16,23 +16,38 @@ and shows them; it never sees a path.
   empty, and says so). It is never trusted over `git worktree list`: every
   `new`, `list` and `prune` reconciles the two first, dropping entries git no
   longer knows.
-- **Pruning (W3).** Only a worktree whose PR is merged or closed, with no
-  uncommitted changes, and every commit on some remote ref. Anything else is
-  kept and the reason said. No `--force`, ever, and no remote branch is
-  deleted. One with no PR for 14 days is listed as stale and kept.
+- **Pruning (W3).** Never with uncommitted changes, and never while a commit
+  is on no remote. A worktree has LANDED when the one `gh pr list` of the
+  cycle reports its PR merged AND that PR's head commit is the worktree's
+  `HEAD` (a squash merge deletes the remote branch, but the PR's head is kept
+  by the remote, so nothing is lost): it is removed and its local branch
+  deleted only if it still points at that commit. A merged PR whose head is
+  another commit (work after the merge, or a fork's branch of the same name)
+  keeps the worktree. A closed, unmerged PR's worktree goes only when every
+  commit is on some remote ref. Anything else is kept and the reason said.
+  No `--force`, ever, no `branch -D`, and no remote branch is deleted. Only
+  paths under `~/.overture/worktrees/<project>/` are ever acted on. One with
+  no PR for 14 days is listed as stale and kept.
 - **Overlap (W4).** Two agents on one item are warned about, never blocked.
+- **Setup is never run.** A project's `worktree_setup` is read from the new
+  worktree, checked (an argv list, no shell) and PRINTED as a suggested
+  command; the agent runs it itself, through its own permission prompt. The
+  branch it is read from is origin's, which a merged PR controls, so running
+  it here would hand that PR the owner's account (lead ruling, 1.50 review S1).
 
-Every process starts through `gitseam` (`git_full`, `proc`, `gh`), so in the
-server, where the seam is closed, nothing here can run.
+Every process starts through `gitseam` (`git_full`, `gh`), so in the server,
+where the seam is closed, nothing here can run.
 """
 
 from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
+import shlex
 import stat
 import tempfile
 import time
@@ -56,11 +71,14 @@ LOCK = ".registry.lock"
 MAX_REGISTRY = 1 << 20
 MAX_ENTRIES = 500
 GIT_SECONDS = 120.0
-SETUP_SECONDS = 600.0
 MAX_STALE_REPORT = 12    # what fits the heartbeat file (doorbell.MAX_WATCH)
 TS = "%Y-%m-%dT%H:%M:%SZ"
+GH_LIMIT = 200           # the one `gh pr list` of a cycle: the newest PRs of the repository, every state
+GH_FIELDS = "number,state,headRefName,headRefOid"
+OID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
-PrLookup = Callable[[str], "dict | None | str"]   # branch -> {"number", "state"} | None (no PR) | why unknown
+# branch -> a PR {"number", "state", "oid"?} or a list of them | None (no PR) | a string (why it is unknown)
+PrLookup = Callable[[str], "dict | list | None | str"]
 
 
 class WorktreeError(ValueError):
@@ -77,8 +95,15 @@ def _git(args: list[str], cwd: Path | str, timeout: float = GIT_SECONDS) -> tupl
     return r
 
 
-def _out(args: list[str], cwd: Path | str) -> str | None:
-    rc, out, _err = _git(args, cwd)
+def _left(deadline: float | None) -> float:
+    """A git call's timeout: GIT_SECONDS, or what is left of a cycle's budget (at least a second)."""
+    if deadline is None:
+        return GIT_SECONDS
+    return max(1.0, min(GIT_SECONDS, deadline - time.monotonic()))
+
+
+def _out(args: list[str], cwd: Path | str, deadline: float | None = None) -> str | None:
+    rc, out, _err = _git(args, cwd, _left(deadline))
     return out if rc == 0 else None
 
 
@@ -136,28 +161,44 @@ def parse_branch(branch: str) -> tuple[str, str] | None:
     return kind, rest
 
 
-def project_slug(name: str) -> str:
-    """The console's project name as one safe path part: `[A-Za-z0-9._-]`, at most 64, never empty or dotted."""
-    s = PROJECT.sub("-", name or "").strip(".-")[:64].strip(".-")
-    return s or "project"
+def project_slug(name: str, main: Path | str) -> str:
+    """The console's project name as one safe path part, plus the first 8 hex of the sha256 of the main
+    checkout's real path: two repositories in folders of the same name never share a registry (1.50 review C5)."""
+    s = PROJECT.sub("-", name or "").strip(".-")[:64].strip(".-") or "project"
+    return s + "-" + hashlib.sha256(os.fsencode(os.path.realpath(main))).hexdigest()[:8]
+
+
+def _under(real: str, top: str) -> bool:
+    return real == top or real.startswith(top.rstrip(os.sep) + os.sep)
+
+
+def _refuse_elsewhere(d: Path, home_real: str) -> None:
+    """Refused when `d`, links followed, lands under /mnt/ or outside the user's home (1.50 review S4)."""
+    real = os.path.realpath(d)   # checked before anything is made, so a link elsewhere is never followed
+    if _under(real, "/mnt"):
+        raise WorktreeError(f"refused: {d} resolves to {real}, under /mnt/ (a symlink to a Windows drive?); agent "
+                            f"worktrees live in the Linux home")
+    if not _under(real, home_real):
+        raise WorktreeError(f"refused: {d} resolves to {real}, outside your home {home_real} (a symlink?); agent "
+                            f"worktrees live in ~/.overture/worktrees itself")
 
 
 def base_dir(home: Path | None = None) -> Path:
-    """`~/.overture/worktrees`, refused when the home resolves under /mnt/ (W1)."""
+    """`~/.overture/worktrees`, refused when the home resolves under /mnt/ (W1) or the folder leads out of it."""
     h = Path(home) if home is not None else Path.home()
     real = os.path.realpath(h)
-    if real == "/mnt" or real.startswith("/mnt/"):
+    if _under(real, "/mnt"):
         raise WorktreeError(f"refused: your home resolves to {real}, under /mnt/ (a Windows drive under WSL, where "
                             f"git is slow); agent worktrees live in the Linux home. Run from a Linux HOME")
-    return Path(real) / ".overture" / "worktrees"
+    d = Path(real) / ".overture" / "worktrees"
+    _refuse_elsewhere(d, real)
+    return d
 
 
-def _project_dir(home: Path | None, project: str, create: bool) -> Path:
-    d = base_dir(home) / project_slug(project)
-    real = os.path.realpath(d)   # checked before anything is made, so a link onto /mnt/ is never followed
-    if real == "/mnt" or real.startswith("/mnt/"):
-        raise WorktreeError(f"refused: {d} resolves to {real}, under /mnt/ (a symlink to a Windows drive?); agent "
-                            f"worktrees live in the Linux home")
+def _project_dir(home: Path | None, project: str, main: Path, create: bool) -> Path:
+    base = base_dir(home)
+    d = base / project_slug(project, main)
+    _refuse_elsewhere(d, os.path.realpath(base.parent.parent))
     if create:
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
@@ -275,13 +316,20 @@ def _reconcile(project_dir: Path, main: Path) -> tuple[list[dict], list[dict], l
     entries, problem = read_registry(project_dir)
     notes = [problem] if problem else []
     known = git_worktrees(main)
-    live, gone = [], []
+    top = os.path.realpath(project_dir)
+    live, gone, outside = [], [], []
     for e in entries:
         real = os.path.realpath(e["path"])
-        (live if real in known and os.path.realpath(main) != real else gone).append(e)
+        if not real.startswith(top + os.sep):   # S5: only what lies under this project's folder is ours
+            outside.append(e)
+        else:
+            (live if real in known and os.path.realpath(main) != real else gone).append(e)
     for e in gone:
         notes.append(f"gone: {e['branch']} is no longer a worktree of this repository; dropped from the registry")
-    top = os.path.realpath(project_dir)
+    for e in outside:
+        notes.append(f"outside: {e['branch']} was registered at a path outside {top}; dropped from the registry, "
+                     f"and nothing there is touched")
+    gone += outside
     have = {os.path.realpath(e["path"]) for e in live}
     loose = []
     for path, branch in sorted(known.items()):
@@ -313,36 +361,25 @@ def _base_ref(main: Path) -> tuple[str, str | None]:
                         "one with `git remote set-head origin --auto`")
 
 
-def _registered_project(main: Path) -> bool:
-    """Whether the user switched the console on for this checkout (their own registry, never the repo's)."""
-    from . import registry as R
-    try:
-        return R.enclosing(main) is not None
-    except R.RegistryError:
-        return False
+def _setup_suggestion(path: Path) -> dict | None:
+    """The project's `worktree_setup`, read from the NEW worktree's .overture.json and checked: NEVER run here.
 
-
-def _run_setup(path: Path, main: Path, timeout: float) -> dict | None:
-    """The project's `worktree_setup`, from the NEW worktree's own .overture.json; never fatal."""
+    Lead ruling (1.50 review S1): the file comes from origin's branch, which any
+    merged PR controls, so running it would give that PR the owner's account
+    without a single prompt. It is printed instead, for the agent to run itself
+    through its own Bash tool, where the user is asked first.
+    """
     from . import projectcfg as PC
     try:
         argv = PC.load(path).worktree_setup
     except PC.ConfigError as e:
-        return {"ran": False, "ok": False, "note": f"worktree_setup not run: {e}"}
+        return {"ran": False, "argv": None, "command": None, "note": f"worktree_setup ignored: {e}"}
     if not argv:
         return None
-    if not _registered_project(main):
-        return {"ran": False, "ok": False, "argv": list(argv),
-                "note": "worktree_setup not run: this project is not in your registry (agent.py register)"}
-    r = G.proc(list(argv), path, timeout=timeout)
-    if isinstance(r, G.Unavailable):
-        return {"ran": False, "ok": False, "argv": list(argv), "note": f"worktree_setup not run: {G.UNAVAILABLE}"}
-    rc, _out_, err = r
-    if rc == 0:
-        return {"ran": True, "ok": True, "argv": list(argv), "exit": 0, "note": "worktree_setup ran"}
-    return {"ran": True, "ok": False, "argv": list(argv), "exit": rc,
-            "note": f"worktree_setup failed (exit {rc}): {_first_line(err) or 'no output'}; the worktree is kept, "
-                    f"set it up by hand"}
+    command = "cd " + shlex.quote(str(path)) + " && " + shlex.join(argv)
+    return {"ran": False, "argv": list(argv), "command": command,
+            "note": "This project suggests a setup step; run it yourself in the worktree (Overture never runs it): "
+                    + command}
 
 
 def _overlap(live: list[dict], item: str, bucket: str, mine: str) -> list[dict]:
@@ -350,32 +387,60 @@ def _overlap(live: list[dict], item: str, bucket: str, mine: str) -> list[dict]:
             for e in live if e["item"] == item and e["branch"] != mine and e["agent"] != bucket]
 
 
+NAME_NEEDED = ("refused: `worktree new` needs this session's agent name, so the worktree, its marks and any overlap "
+               "warning are this session's own (unnamed sessions would share one worktree). Name it as for `agent.py "
+               "working`: `agent.py --as agent-N ...` before the subcommand, OVERTURE_AGENT=agent-N, or "
+               "/overture:as agent-N in the session")
+
+
+def _head(path: str, deadline: float | None = None) -> str | None:
+    out = _out(["rev-parse", "--verify", "--quiet", "HEAD"], path, deadline)
+    sha = (out or "").strip()
+    return sha if OID.match(sha) else None
+
+
 def new(repo: Path | str, project: str, kind: str, item: str, agent: str | None, *, home: Path | None = None,
-        now: float | None = None, setup_timeout: float = SETUP_SECONDS) -> dict:
-    """Make (or, for the same agent, kind and item, return) this agent's worktree for ITEM. Raises WorktreeError."""
+        now: float | None = None, prs: PrLookup | None | bool = True) -> dict:
+    """Make (or, for the same agent, kind and item, return) this agent's worktree for ITEM. Raises WorktreeError.
+
+    `prs` is asked only when this agent already has a worktree for the item: one whose PR merged or closed is
+    never handed back (1.50 review C3); a fresh `-N` one is made and the old one left for `prune`.
+    """
     why = kind_problem(kind) or item_problem(item)
     if why:
         raise WorktreeError(f"refused: {why}")
-    bucket = agent or N.UNNAMED
-    if bucket != N.UNNAMED and N.problem(bucket):
-        raise WorktreeError(f"refused: {N.problem(bucket)}")
+    if not agent or agent == N.UNNAMED:
+        raise WorktreeError(NAME_NEEDED)
+    if N.problem(agent):
+        raise WorktreeError(f"refused: {N.problem(agent)}")
+    bucket = agent
     main = main_checkout(repo)
     if main is None:
         raise WorktreeError(f"refused: {repo} is not inside a git repository with a .git folder")
     if _out(["remote", "get-url", "origin"], main) is None:
         raise WorktreeError(f"refused: {main} has no remote named origin to branch from")
-    pdir = _project_dir(home, project, create=True)
+    pdir = _project_dir(home, project, main, create=True)
     t = time.time() if now is None else now
     notes: list[str] = []
     with _locked(pdir):
         live, _loose, rnotes, known = _reconcile(pdir, main)
         notes += rnotes
-        for e in live:
-            if e["item"] == item and e["kind"] == kind and e["agent"] == bucket:
-                return {"path": e["path"], "branch": e["branch"], "worktree": Path(e["path"]).name, "kind": kind,
-                        "item": item, "agent": bucket, "created": e["created"], "base": e.get("base"),
-                        "reused": True, "overlap": _overlap(live, item, bucket, e["branch"]), "notes": notes,
-                        "setup": None}
+        mine = [e for e in live if e["item"] == item and e["kind"] == kind and e["agent"] == bucket]
+        if mine and prs is True:
+            prs, gh_why = gh_prs(main)
+            if gh_why:
+                notes.append(f"{gh_why}; your worktree is handed back without knowing whether its PR landed")
+        for e in mine:
+            pr = _pick_pr(prs(e["branch"]) if callable(prs) else None, _head(e["path"]))
+            if pr and pr["state"] in ("merged", "closed"):
+                notes.append(f"your earlier worktree for {kind} {item}, on {e['branch']}, has PR #{pr['number']} "
+                             f"{pr['state']}: it is never reused, and waits for `agent.py worktree prune`; this is "
+                             f"a fresh one")
+                continue
+            return {"path": e["path"], "branch": e["branch"], "worktree": Path(e["path"]).name, "kind": kind,
+                    "item": item, "agent": bucket, "created": e["created"], "base": e.get("base"),
+                    "reused": True, "overlap": _overlap(live, item, bucket, e["branch"]), "notes": notes,
+                    "setup": None}
         rc, _o, err = _git(["fetch", "--quiet", "origin"], main)
         if rc != 0:
             notes.append(f"git fetch origin failed ({_first_line(err) or f'exit {rc}'}); branched from what was "
@@ -407,7 +472,7 @@ def new(repo: Path | str, project: str, kind: str, item: str, agent: str | None,
                  "created": _ts(t), "base": base}
         write_registry(pdir, [*live, entry])
         overlap = _overlap(live, item, bucket, branch)
-    setup = _run_setup(path, main, setup_timeout)
+    setup = _setup_suggestion(path)
     if setup is not None:
         notes.append(setup["note"])
     return {**{k: entry[k] for k in ("path", "branch", "kind", "item", "agent", "created", "base")},
@@ -417,32 +482,49 @@ def new(repo: Path | str, project: str, kind: str, item: str, agent: str | None,
 # -- list ------------------------------------------------------------------------------------------------
 
 def gh_prs(main: Path) -> tuple[PrLookup | None, str | None]:
-    """A lookup of each branch's PR through `gh`, or (None, why) when gh cannot be used at all."""
-    r = G.gh(["--version"], main, timeout=30)
+    """ONE `gh pr list` for the whole repository, keyed by head branch, or (None, why) when gh cannot say.
+
+    1.50 review C2: one call per cycle, never one per worktree. Every state, the newest GH_LIMIT PRs, with
+    each PR's head commit (`headRefOid`), which is what tells a landed worktree from a fork's PR that only
+    shares its branch name (C1).
+    """
+    r = G.gh(["pr", "list", "--state", "all", "--limit", str(GH_LIMIT), "--json", GH_FIELDS], main)
     if isinstance(r, G.Unavailable):
         return None, G.UNAVAILABLE
-    if r[0] != 0:
+    rc, out, err = r
+    if rc == 127:
         return None, "gh (the GitHub CLI) is not available, so no PR state is known"
+    if rc != 0:
+        return None, f"gh pr list failed ({_first_line(err) or f'exit {rc}'}), so no PR state is known"
+    try:
+        rows = json.loads(out or "[]")
+    except ValueError:
+        return None, "gh pr list printed something that is not JSON, so no PR state is known"
+    if not isinstance(rows, list):
+        return None, "gh pr list printed no list, so no PR state is known"
+    by: dict[str, list[dict]] = {}
+    for row in rows:
+        if not (isinstance(row, dict) and isinstance(row.get("number"), int) and isinstance(row.get("state"), str)
+                and isinstance(row.get("headRefName"), str)):
+            continue
+        oid = row.get("headRefOid")
+        by.setdefault(row["headRefName"], []).append(
+            {"number": row["number"], "state": row["state"].lower(),
+             "oid": oid if isinstance(oid, str) and OID.match(oid) else None})
+    return (lambda branch: by.get(branch)), None
 
-    def lookup(branch: str):
-        res = G.gh(["pr", "list", "--head", branch, "--state", "all", "--json", "number,state", "--limit", "20"],
-                   main)
-        if isinstance(res, G.Unavailable):
-            return G.UNAVAILABLE
-        rc, out, err = res
-        if rc != 0:
-            return f"gh pr list failed: {_first_line(err) or f'exit {rc}'}"
-        try:
-            rows = json.loads(out or "[]")
-        except ValueError:
-            return "gh pr list printed something that is not JSON"
-        prs = [r for r in rows if isinstance(r, dict) and isinstance(r.get("number"), int)
-               and isinstance(r.get("state"), str)] if isinstance(rows, list) else []
-        if not prs:
-            return None
-        prs.sort(key=lambda r: (r["state"].upper() == "OPEN", r["number"]), reverse=True)
-        return {"number": prs[0]["number"], "state": prs[0]["state"].lower()}
-    return lookup, None
+
+def _pick_pr(got: object, head: str | None) -> dict | None:
+    """The PR that speaks for this worktree: the one whose head commit is its HEAD, else an open one, else the
+    newest. A lookup may give one PR (a dict) or several (a list); None or nothing usable: no PR."""
+    rows = got if isinstance(got, list) else [got] if isinstance(got, dict) else []
+    norm = [{"number": r["number"], "state": r["state"].lower(),
+             "oid": r.get("oid") if isinstance(r.get("oid"), str) else None}
+            for r in rows if isinstance(r, dict) and isinstance(r.get("number"), int)
+            and isinstance(r.get("state"), str)]
+    if not norm:
+        return None
+    return max(norm, key=lambda r: (head is not None and r["oid"] == head, r["state"] == "open", r["number"]))
 
 
 def _int(out: str | None) -> int | None:
@@ -452,26 +534,27 @@ def _int(out: str | None) -> int | None:
         return None
 
 
-def status(e: dict, now: float, prs: PrLookup | None) -> dict:
+def status(e: dict, now: float, prs: PrLookup | None, deadline: float | None = None) -> dict:
     """One worktree's state: last commit, ahead/behind, dirty, unpushed, PR and stale. Reads only."""
     path = e["path"]
     row = {k: e.get(k) for k in ("path", "branch", "item", "kind", "agent", "created", "base")}
     row["registered"] = e.get("registered", True)
-    last = _out(["log", "-1", "--format=%H%x1f%ct%x1f%s"], path)
+    last = _out(["log", "-1", "--format=%H%x1f%ct%x1f%s"], path, deadline)
     if last and last.count("\x1f") >= 2:
         sha, ct, subj = last.rstrip("\n").split("\x1f", 2)
         row["last_commit"] = {"sha": sha[:12], "at": _ts(float(ct)) if ct.isdigit() else None, "subject": subj[:200]}
+        row["head"] = sha if OID.match(sha) else None
     else:
-        row["last_commit"] = None
+        row["last_commit"] = row["head"] = None
     row["ahead"] = row["behind"] = None
     if e.get("base"):
-        lr = _out(["rev-list", "--left-right", "--count", f"{e['base']}...HEAD"], path)
+        lr = _out(["rev-list", "--left-right", "--count", f"{e['base']}...HEAD"], path, deadline)
         parts = (lr or "").split()
         if len(parts) == 2 and all(p.isdigit() for p in parts):
             row["behind"], row["ahead"] = int(parts[0]), int(parts[1])
-    st = _out(["status", "--porcelain", "--untracked-files=normal"], path)
+    st = _out(["status", "--porcelain", "--untracked-files=normal"], path, deadline)
     row["dirty"] = None if st is None else bool(st.strip())
-    row["unpushed"] = _int(_out(["rev-list", "--count", "HEAD", "--not", "--remotes"], path))
+    row["unpushed"] = _int(_out(["rev-list", "--count", "HEAD", "--not", "--remotes"], path, deadline))
     if prs is None:
         row["pr"], row["pr_unknown"] = None, "gh is not available"
     elif not BRANCH.match(e["branch"] or ""):
@@ -481,7 +564,9 @@ def status(e: dict, now: float, prs: PrLookup | None) -> dict:
         if isinstance(got, str):
             row["pr"], row["pr_unknown"] = None, got
         else:
-            row["pr"], row["pr_unknown"] = got, None
+            row["pr"], row["pr_unknown"] = _pick_pr(got, row["head"]), None
+    row["landed"] = bool(row["pr"] and row["pr"]["state"] == "merged" and row["head"]
+                         and row["pr"]["oid"] == row["head"])
     created = _parse_ts(e.get("created"))
     if created is None:
         with contextlib.suppress(OSError):
@@ -493,29 +578,42 @@ def status(e: dict, now: float, prs: PrLookup | None) -> dict:
 
 
 def list_worktrees(repo: Path | str, project: str, *, home: Path | None = None, now: float | None = None,
-                   prs: PrLookup | None | bool = True) -> dict:
+                   prs: PrLookup | None | bool = True, deadline: float | None = None,
+                   start_after: str | None = None) -> dict:
     """Every worktree under `~/.overture/worktrees/<project>/`, reconciled with git, with its state.
 
-    `prs`: True looks PRs up through gh (degrading to "unknown" without it); a
-    callable is used as the lookup (tests); None means no PR state is known.
+    `prs`: True looks PRs up through gh, in one call (degrading to "unknown" without it); a callable is used
+    as the lookup (tests, and the steward's watch, which made its one call already); None means no PR state is
+    known. `deadline` (time.monotonic) stops it early, at least one worktree in, and `unfinished` then names
+    the last branch looked at; `start_after` takes up from there (worktrees are looked at in branch order).
     """
     main = main_checkout(repo)
     if main is None:
         raise WorktreeError(f"refused: {repo} is not inside a git repository with a .git folder")
-    pdir = _project_dir(home, project, create=False)
+    pdir = _project_dir(home, project, main, create=False)
     t = time.time() if now is None else now
     notes: list[str] = []
+    slug = project_slug(project, main)
     if prs is True:
         prs, why = gh_prs(main)
         if why:
             notes.append(why)
     if not pdir.is_dir():
-        return {"project": project_slug(project), "worktrees": [], "notes": notes, "gh": prs is not None}
+        return {"project": slug, "worktrees": [], "notes": notes, "gh": prs is not None, "unfinished": None}
     with _locked(pdir):
         live, loose, rnotes, _known = _reconcile(pdir, main)
     notes += rnotes
-    rows = [status(e, t, prs) for e in [*live, *loose]]
-    return {"project": project_slug(project), "worktrees": rows, "notes": notes, "gh": prs is not None}
+    todo = sorted([*live, *loose], key=lambda e: e["branch"] or "")
+    if start_after:
+        todo = [e for e in todo if (e["branch"] or "") > start_after]
+    rows: list[dict] = []
+    unfinished = None
+    for e in todo:
+        if deadline is not None and rows and time.monotonic() >= deadline:
+            unfinished = rows[-1]["branch"]
+            break
+        rows.append(status(e, t, prs, deadline))
+    return {"project": slug, "worktrees": rows, "notes": notes, "gh": prs is not None, "unfinished": unfinished}
 
 
 def stale_summary(listing: dict) -> list[dict]:
@@ -533,7 +631,7 @@ def stale_summary(listing: dict) -> list[dict]:
 # -- prune -----------------------------------------------------------------------------------------------
 
 def _keep_reason(r: dict) -> str | None:
-    """Why this worktree stays, or None when every rule for removing it holds (W3)."""
+    """Why this worktree stays, or None when every rule for removing it holds (W3; 1.50 review C1)."""
     if r.get("pr_unknown"):
         return f"PR state unknown ({r['pr_unknown']})"
     pr = r.get("pr")
@@ -546,6 +644,20 @@ def _keep_reason(r: dict) -> str | None:
         return "its status cannot be read"
     if r["dirty"]:
         return "it has uncommitted changes"
+    if pr["state"] == "merged":
+        # Landed: the PR merged AND its head commit is this worktree's HEAD, so every commit here is on the
+        # remote (the PR keeps its head even after a squash merge deletes the branch). Anything else is kept.
+        if r.get("landed"):
+            return None
+        if not r.get("head"):
+            return f"PR #{pr['number']} merged, but this worktree's HEAD cannot be read"
+        if not pr.get("oid"):
+            return (f"PR #{pr['number']} merged, but gh did not say at which commit, so whether this worktree "
+                    f"landed is unknown")
+        return (f"PR #{pr['number']} merged at {pr['oid'][:12]}, but this worktree is at {r['head'][:12]}: "
+                f"commits after the merge, or another repository's branch of the same name (remove it by hand "
+                f"when you are sure)")
+    # Closed, never merged: only when every commit is on some remote ref (W3: unpushed commits always block).
     if r.get("unpushed") is None:
         return "cannot tell whether every commit is on a remote"
     if r["unpushed"]:
@@ -555,40 +667,74 @@ def _keep_reason(r: dict) -> str | None:
 
 
 def prune(repo: Path | str, project: str, *, dry_run: bool = False, home: Path | None = None,
-          now: float | None = None, prs: PrLookup | None | bool = True) -> dict:
-    """Remove the worktrees W3 allows; keep and explain the rest. Never `--force`, never a remote branch."""
-    listing = list_worktrees(repo, project, home=home, now=now, prs=prs)
+          now: float | None = None, prs: PrLookup | None | bool = True, budget: float | None = None,
+          start_after: str | None = None) -> dict:
+    """Remove the worktrees W3 allows; keep and explain the rest. Never `--force`, never a remote branch.
+
+    `budget` (seconds) caps the looking; what is left is named in `unfinished`, for `start_after` next time.
+    """
+    deadline = None if budget is None else time.monotonic() + budget
+    listing = list_worktrees(repo, project, home=home, now=now, prs=prs, deadline=deadline,
+                             start_after=start_after)
     main = main_checkout(repo)
     removed, kept, notes = [], [], list(listing["notes"])
     if not listing["gh"]:
         notes.append("without gh no PR state is known, so every worktree is kept")
-    pdir = _project_dir(home, project, create=False)
+    pdir = _project_dir(home, project, main, create=False)
+    top = os.path.realpath(pdir)
     for r in listing["worktrees"]:
         why = _keep_reason(r)
         if why is None and not r.get("registered", True):
             why = "not in the registry (made by hand?); remove it with git worktree remove"
+        if why is None and not os.path.realpath(r["path"]).startswith(top + os.sep):
+            why = f"its path is outside {top}; prune acts only there"   # S5: never reached through the registry
         if why:
             kept.append({"branch": r["branch"], "item": r.get("item"), "why": why, "stale": bool(r.get("stale"))})
             continue
         if dry_run:
             removed.append({"branch": r["branch"], "item": r.get("item"), "dry_run": True})
             continue
-        rc, _o, err = _git(["worktree", "remove", r["path"]], main)
-        if rc != 0:
-            kept.append({"branch": r["branch"], "item": r.get("item"),
-                         "why": f"git worktree remove refused: {_first_line(err) or f'exit {rc}'}", "stale": False})
+        why = _remove(pdir, main, r)
+        if why:
+            kept.append({"branch": r["branch"], "item": r.get("item"), "why": why, "stale": False})
             continue
-        with _locked(pdir):
-            entries, _p = read_registry(pdir)
-            write_registry(pdir, [e for e in entries if os.path.realpath(e["path"]) != os.path.realpath(r["path"])])
-        gone = {"branch": r["branch"], "item": r.get("item")}
-        rc, _o, err = _git(["branch", "-d", r["branch"]], main)   # -d, never -D: git refuses an unmerged branch
+        gone = {"branch": r["branch"], "item": r.get("item"), "landed": bool(r.get("landed"))}
+        if r.get("landed"):
+            # Only if the branch still points at the commit that landed: never `branch -D`, never a guess.
+            rc, _o, err = _git(["update-ref", "-d", f"refs/heads/{r['branch']}", r["head"]], main)
+        else:
+            rc, _o, err = _git(["branch", "-d", r["branch"]], main)   # -d: git refuses an unmerged branch
         if rc != 0:
             gone["branch_kept"] = _first_line(err) or f"exit {rc}"
         removed.append(gone)
         _tidy(pdir, Path(r["path"]))
+    if listing["unfinished"]:
+        notes.append(f"stopped after {budget:g} s, at {listing['unfinished']}; the rest is looked at next time")
     return {"project": listing["project"], "removed": removed, "kept": kept,
-            "stale": stale_summary(listing), "notes": notes, "gh": listing["gh"], "dry_run": dry_run}
+            "stale": stale_summary(listing), "notes": notes, "gh": listing["gh"], "dry_run": dry_run,
+            "unfinished": listing["unfinished"]}
+
+
+def _remove(pdir: Path, main: Path, r: dict) -> str | None:
+    """`git worktree remove` (never --force), under the registry lock, after looking again: None when removed.
+
+    1.50 review L2: an agent may have written into it since it was judged, so it is judged clean and at the
+    same commit once more, right before the remove, and the reason is said when that no longer holds.
+    """
+    with _locked(pdir):
+        st = _out(["status", "--porcelain", "--untracked-files=normal"], r["path"])
+        if st is None:
+            return "its status cannot be read now; kept"
+        if st.strip():
+            return "it has uncommitted changes now (written while prune ran); kept"
+        if _head(r["path"]) != r.get("head"):
+            return "its HEAD moved while prune ran (a new commit?); kept, and looked at again next time"
+        rc, _o, err = _git(["worktree", "remove", r["path"]], main)
+        if rc != 0:
+            return f"git worktree remove refused: {_first_line(err) or f'exit {rc}'}"
+        entries, _p = read_registry(pdir)
+        write_registry(pdir, [e for e in entries if os.path.realpath(e["path"]) != os.path.realpath(r["path"])])
+    return None
 
 
 def _tidy(pdir: Path, path: Path) -> None:

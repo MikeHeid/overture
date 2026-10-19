@@ -78,16 +78,21 @@ round whose outcome changes code: start it with
     WT=$(A worktree new --kind KIND --item ITEM)
 
 KIND is `ticket`, `visual`, `ux`, `playbook`, `round` or `fix` (a bug fix the
-owner asked for). It makes your own worktree under
-`~/.overture/worktrees/<project>/` on `overture/<kind>/<item>`, cut from
-`origin/main` after a fetch, marks the item worked on with that branch, and
-prints the path. Work, commit, push (`git -C "$WT" push -u origin HEAD`) and
-open the PR from there, never from the main checkout and never on main. Run
-it again for the same item and kind and it gives your worktree back. If
-another agent is on the item it says so (an overlap: warned, never blocked):
-go on, and tell the owner on the item. Never make a worktree by hand. Chat
-replies, deliberation (console-fork, roar, refine, drill, deliberate) and
-grilling change no files and need none.
+owner asked for). It makes your own worktree under `~/.overture/worktrees/`
+on `overture/<kind>/<item>`, cut from `origin/main` after a fetch, marks the
+item worked on with that branch, and prints the path. It needs your agent
+name (`--as`, `/overture:as` or `OVERTURE_AGENT`) and refuses without one.
+Work, commit, push (`git -C "$WT" push -u origin HEAD`) and open the PR from
+there, never from the main checkout and never on main. Run it again for the
+same item and kind and it gives your worktree back, unless that one's PR
+merged or closed: then you get a fresh `-N` one. If another agent is on the
+item it says so (an overlap: warned, never blocked): go on, and tell the
+owner on the item. If it prints "This project suggests a setup step; run it
+yourself in the worktree: ...", that is the project's `worktree_setup`:
+Overture never runs it. Run that command yourself, as its own Bash call (so
+the user's permission prompt sees it), only if the work needs it. Never make
+a worktree by hand. Chat replies, deliberation (console-fork, roar, refine,
+drill, deliberate) and grilling change no files and need none.
 
 **Then push what git says**, from the project root:
 
@@ -320,9 +325,13 @@ It exits 0 printing the waiting lines when a `process`, `fork`, `chat`, `visual`
 arrives, and returns at once if one is already waiting. When it exits, run
 this skill again.
 
-Each `watch` first prunes this project's agent worktrees (1.50.0, W3): it
-removes one only when its PR merged or closed, it has no uncommitted changes
-and every commit is on a remote. It keeps the rest, and the ones with no PR
-for 14 days show in the owner's PR tab as stale. Without `gh` it skips this
-and says so once. `A worktree list` and `A worktree prune --dry-run` show
-the same by hand.
+Each `watch`, once its heartbeat is written and when nothing is waiting,
+prunes this project's agent worktrees (1.50.0, W3), at most once per 10
+minutes and for at most 60 seconds (it takes up where it stopped next time),
+with one `gh` call. It never removes one with uncommitted changes or a commit
+on no remote; it removes one that LANDED (its PR merged at exactly the
+worktree's HEAD, as a squash merge leaves it) or whose PR closed with every
+commit on a remote. It keeps the rest, and the ones with no PR for 14 days
+show in the owner's PR tab as stale. Without `gh` it skips this and says so
+once. `A worktree list` and `A worktree prune --dry-run` show the same by
+hand.

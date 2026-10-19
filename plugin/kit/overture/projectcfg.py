@@ -22,12 +22,13 @@ The file is the repository's DATA, never a path anything executes from
                  `agent.py next-step`).
 
     worktree_setup  (1.50.0) ["make", "deps"]: one command, as an argv list (never a
-                 shell string), that `agent.py worktree new` runs inside a NEW agent
-                 worktree to set up what git does not carry (a virtualenv, node_modules).
-                 The server never runs it; it is checked here so a bad value is named at
-                 start-up. It is read from the new worktree's own copy (the branch it was
-                 made from), run only for a project in the user's registry, with a
-                 timeout; a failure is reported, never fatal. Unset: nothing runs.
+                 shell string), that sets up what git does not carry in a NEW agent
+                 worktree (a virtualenv, node_modules). NOTHING runs it: `agent.py
+                 worktree new` reads it from the new worktree's own copy, checks it here,
+                 and prints it as a suggested command, which the agent runs itself
+                 through its own Bash tool and the user's permission prompt. (The copy
+                 comes from origin's branch, which any merged PR can change.) Unset:
+                 nothing is suggested.
 
 Each directory is jailed like an evidence path: relative, plain characters, at
 least one real folder (never "." or the root itself), no `..`, never a
@@ -88,7 +89,7 @@ class ProjectConfig:
     items_require_parent: bool = False
     # D10: {lane: {"color"?: palette name, "label"?: str, "ux"?: bool}}
     lanes: dict = field(default_factory=dict)
-    # 1.50.0: the argv `agent.py worktree new` runs in a new agent worktree; () when unset. Never run by the server.
+    # 1.50.0: the argv `agent.py worktree new` SUGGESTS for a new agent worktree; () when unset. Never run by the kit.
     worktree_setup: tuple = ()
 
 
@@ -159,7 +160,7 @@ def _setup(v: object) -> tuple:
     if not (isinstance(v, list) and 0 < len(v) <= MAX_SETUP_ARGS
             and all(isinstance(a, str) and a and len(a) <= MAX_SETUP_ARG and "\0" not in a for a in v)):
         raise ConfigError(f"{FILE}: worktree_setup must be a command as a list of 1 to {MAX_SETUP_ARGS} non-empty "
-                          f'strings, e.g. ["make", "deps"]; a shell string is refused (nothing is run through a shell)')
+                          f'strings, e.g. ["make", "deps"]; a shell string is refused (it is suggested to the agent as one argv)')
     return tuple(v)
 
 

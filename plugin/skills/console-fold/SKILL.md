@@ -40,7 +40,9 @@ steward's. If you are not the steward, stop: the steward folds.
    ITEM is the item whose locked answers you fold (the first, if several:
    the PR lists them all). Run every step below from `$WT`, push its branch
    (`git push -u origin HEAD`) and open the PR from it. The steward removes
-   the worktree once the PR merges or closes.
+   the worktree once the PR lands (merged at its head commit), or closes with
+   every commit pushed. A setup step `worktree new` prints is never run for
+   you; folding needs none.
 2. **Export.**
 
        python3 KIT/fold.py export --store STATE/store.jsonl --out <fold.locked>

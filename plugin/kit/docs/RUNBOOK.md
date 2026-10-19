@@ -210,6 +210,21 @@ names the file to move.
   design. Export into your own worktree on a branch
   (`agent.py worktree new --kind visual --item ITEM` makes one and prints its
   path, 1.50.0), then open a PR.
+- **`worktree new` says "needs this session's agent name"** (1.50.0): by
+  design; unnamed sessions share one set of marks, so they would share one
+  worktree. Name the session as for `working`: `agent.py --as agent-6 ...`,
+  `OVERTURE_AGENT=agent-6`, or `/overture:as agent-6` typed in it.
+- **`worktree new` prints "This project suggests a setup step; run it
+  yourself in the worktree: ..."**: the project's `worktree_setup`. Overture
+  never runs it (it comes from `origin/main`, which any merged PR can change);
+  run the printed command yourself, through your own Bash tool and its
+  permission prompt, if you trust it.
+- **`worktree prune` keeps one: "PR #N merged at A, but this worktree is at
+  B"**: the worktree has commits the merged PR did not carry, or the PR was a
+  fork's branch of the same name. Look at it (`git -C <path> log`), then
+  remove it by hand with `git worktree remove <path>` when you are sure.
+  "it has uncommitted changes now" or "its HEAD moved while prune ran": an
+  agent wrote into it while prune looked; it is looked at again next time.
 - **`visual-export` says "... is already there with other content"**: a file
   in your worktree at that path differs from the stored visual. Nothing was
   written. Look at it; move it aside if it is stale, then export again.

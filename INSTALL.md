@@ -10,7 +10,7 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
 
 - **Python 3.11 or newer.**
 - **`systemd --user`** (Linux or WSL2) to keep the server running.
-- **`git`**, which agents use for their own worktrees (1.50), and optionally
+- **`git`**, which agents use for their own worktrees, and optionally
   **`gh`**, the GitHub CLI, for the PR tab, merging from it, and removing an
   agent's worktree once its PR merges or closes. Without `gh` everything else
   works and agent worktrees are kept until you remove them.
@@ -20,13 +20,16 @@ of the routes needs the others:
 
 - **Cloudflare Access**, with `cloudflared` and a Cloudflare account (the free
   tier is enough);
-- **sign-in links** (1.46), with no Cloudflare at all: on your Tailscale
-  tailnet through `tailscale serve`, or with `--listen` on a ZeroTier or
-  Tailscale address (1.47);
+- **sign-in links**, with no Cloudflare at all: on your Tailscale tailnet
+  through `tailscale serve`, or with `--listen` on a ZeroTier or Tailscale
+  address;
 - **this machine only**: the console on 127.0.0.1, nothing to set up.
 
 Onboarding asks which one and walks you through it (the repository's
 `docs/features/sign-in-and-networks.md` has the detail).
+
+*Since: sign-in links 1.46, `--listen` on ZeroTier or Tailscale 1.47, agent
+worktrees (and so `git` here) 1.50.*
 
 **Docker is not required**, and no container image is offered yet: the
 console is one Python process under `systemd --user`.

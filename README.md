@@ -14,7 +14,7 @@
   <img alt="version" src="https://img.shields.io/badge/version-1.50.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1291-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1309-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -105,7 +105,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Visibility** | Feed with screenshot filter · Favorites · PRs tab with inline Merge · cross-project priority ribbon · Chat per item · Portfolio · Operator Shift report · themes and skins | [Finding your way around](docs/features/navigation.md) |
 | **Sections and phones** (1.48) | Work, Automation, Projects and Team, each with its own tabs, on a rail · a badge per section · full screen on a phone with a bottom bar · motion that respects reduced motion | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Pop-outs and a calmer Inbox** (1.49) | Flowcharts, graphs, visuals, rounds, long rulings and screenshots pop out beside the console, three at a time, with Pin · the Inbox grouped by lane, with an outline · `j`/`k` through the unanswered questions · a sticky Mine | [Finding your way around](docs/features/navigation.md#pop-outs-149) |
-| **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR merges or closes · stale ones listed for the owner · `worktree_setup` | [Automation](docs/features/automation.md#agent-worktrees-150) |
+| **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR lands (merged at its head) or closes · stale ones listed for the owner · a `worktree_setup` suggested, never run | [Automation](docs/features/automation.md#agent-worktrees-150) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |

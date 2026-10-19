@@ -95,8 +95,11 @@ naming why.
 `~/.overture/worktrees/<project>/` on the branch `overture/visual/<item>`
 (cut from `origin/main`), marks the item worked on with that branch, and
 prints its path. Run it again for the same item and it gives the same
-worktree back. If it names another agent on the item (an overlap), go on,
-and say so in your reply. Never make a worktree by hand.
+worktree back (a fresh one once its PR merged or closed). It needs your agent
+name, as `working` does. If it names another agent on the item (an overlap),
+go on, and say so in your reply. If it prints a suggested setup step, Overture
+has not run it: run it yourself, as its own Bash call, only if you need it.
+Never make a worktree by hand.
 
 `--project` must be the TOP of that worktree, never a folder inside it.
 `--visual` may repeat; without it every stored visual is exported, and one

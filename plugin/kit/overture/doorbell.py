@@ -193,6 +193,7 @@ def listening(state: Path, *, now: float | None = None) -> dict:
 
 STALE_BRANCH = re.compile(r"^overture/[a-z]+/[A-Za-z0-9._-]{1,120}\Z")   # worktrees.BRANCH, the server's check
 MAX_STALE = 12
+STALE_FOR = 86400.0   # 1.50 review C8: the stale list is shown only while its heartbeat is at most a day old
 
 
 def _stale_rows(rows: object) -> list[dict]:
@@ -230,7 +231,7 @@ def stale_worktrees(state: Path, *, now: float | None = None) -> dict | None:
     if not isinstance(rec, dict) or "stale_worktrees" not in rec:
         return None
     at = _parse_ts(rec.get("at"))
-    if at is None or at > t + 60:
+    if at is None or at > t + 60 or t - at > STALE_FOR:   # C8: a list the steward left a day ago says nothing
         return None
     return {"at": rec["at"], "worktrees": _stale_rows(rec.get("stale_worktrees"))}
 
@@ -266,6 +267,12 @@ class Heartbeat:
         if self._last is None or now - self._last >= self.every:
             self._last = now
             self._write(True)
+
+    def update(self, stale: list | None) -> None:
+        """1.50.0: the steward's prune finished after the first beat: carry its stale list, written now."""
+        self.stale = stale
+        self._last = self.clock()
+        self._write(True)
 
     def stop(self) -> None:
         """The watch is over (woken, timed out or interrupted): say so now, not after the promise lapses."""

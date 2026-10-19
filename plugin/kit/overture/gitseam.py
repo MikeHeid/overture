@@ -23,10 +23,11 @@ prs-push`: gh runs git to find the repository's remote, so it obeys the same
 config, and the server never talks to GitHub anyway. Closed, it starts nothing
 and returns `NO_GIT`, exactly as `run` does.
 
-`proc` (1.50.0) is the same door for any other program the agent side starts:
-`worktrees.py` runs `git worktree` through `git_full` and a project's
-`worktree_setup` argv through `proc`, never through a shell. Closed, both start
-nothing and return `NO_GIT`.
+`git_full` (1.50.0) is the same door with the exit code and both streams, for
+`worktrees.py`'s `git worktree` calls. It runs git and nothing else: the kit
+starts no other program, and a project's `worktree_setup` is printed for the
+agent to run through its own permission prompt, never run here. Closed, it
+starts nothing and returns `NO_GIT`.
 """
 
 from __future__ import annotations
@@ -110,45 +111,47 @@ def gh(args: Sequence[str], cwd: Path | str, *, timeout: float = GH_SECONDS) -> 
     return r.returncode, r.stdout, r.stderr
 
 
-def proc(argv: Sequence[str], cwd: Path | str, *, timeout: float,
-         env_over: dict[str, str] | None = None) -> tuple[int, str, str] | Unavailable:
-    """Run ARGV (a list, never a shell) in `cwd`: (exit code, stdout, stderr), as text.
+MAX_OUTPUT = 4 << 20   # 1.50.0: what `git_full` keeps of each stream; more than any listing it reads
 
-    1.50.0: the door for the agent side's other processes, so the server's rule
-    stays one module wide: with the seam closed (in the server) it starts nothing
-    and returns `NO_GIT`. It runs in a session of its own, and on `timeout` the
-    whole group is killed, so a setup command's children cannot outlive it.
-    127 when the program cannot be found, 126 when it cannot start, 124 on a timeout.
-    """
-    if not _OPEN:
-        return NO_GIT
-    if isinstance(argv, (str, bytes)) or not argv or not all(isinstance(a, str) and a and "\0" not in a
-                                                            for a in argv):
-        raise ValueError("argv is a non-empty list of non-empty strings (never one shell string)")
-    import signal
-    try:
-        p = subprocess.Popen(list(argv), cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, env={**env(), **(env_over or {})},
-                             start_new_session=True)
-    except FileNotFoundError:
-        return 127, "", f"{argv[0]}: not found"
-    except (OSError, ValueError, subprocess.SubprocessError) as e:
-        return 126, "", f"{argv[0]} could not start: {e}"
-    try:
-        out, err = p.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        try:
-            p.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        return 124, "", f"{argv[0]} did not finish within {timeout:g} s and was stopped"
-    return p.returncode, out or "", err or ""
+
+def _kept(fh) -> str:
+    fh.seek(0)
+    return fh.read(MAX_OUTPUT).decode("utf-8", "replace")
 
 
 def git_full(args: Sequence[str], cwd: Path | str, *, timeout: float) -> tuple[int, str, str] | Unavailable:
-    """`git --no-optional-locks ARGS` in `cwd` as (exit code, stdout, stderr); `NO_GIT` once the seam is closed."""
-    return proc([*GIT, *args], cwd, timeout=timeout)
+    """`git --no-optional-locks ARGS` in `cwd` as (exit code, stdout, stderr); `NO_GIT` once the seam is closed.
+
+    1.50.0, for `worktrees.py`. Git only: there is no door here for any other program (a project's
+    `worktree_setup` is printed for the agent to run, never run by the kit). Each stream is spooled to a
+    temporary file and at most MAX_OUTPUT bytes of it kept, so a huge listing cannot fill memory. It runs in a
+    session of its own, and on `timeout` the whole group is killed. 127 when git cannot be found, 126 when it
+    cannot start, 124 on a timeout.
+    """
+    if not _OPEN:
+        return NO_GIT
+    if isinstance(args, (str, bytes)) or not all(isinstance(a, str) and "\0" not in a for a in args):
+        raise ValueError("git's arguments are a list of strings (never one shell string)")
+    import signal
+    import tempfile
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            p = subprocess.Popen([*GIT, *args], cwd=cwd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                 env=env(), start_new_session=True)
+        except FileNotFoundError:
+            return 127, "", "git: not found"
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            return 126, "", f"git could not start: {e}"
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            return 124, "", f"git did not finish within {timeout:g} s and was stopped"
+        return rc, _kept(out), _kept(err)

@@ -2939,7 +2939,8 @@ class VisualLandingTests(_Live, unittest.TestCase):
                            text=True, timeout=120, env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
         wt = Path(r.stdout.strip())
-        self.assertEqual(wt, home / ".overture/worktrees/svc/overture/visual/LANE.1")
+        from overture import worktrees as WT
+        self.assertEqual(wt, home / ".overture/worktrees" / WT.project_slug("svc", self.svc) / "overture/visual/LANE.1")
         before = snapshot(self.svc)
         r = subprocess.run([sys.executable, AGENT_PY, "--state", str(self.cfg.state), "visual-export", "--project",
                             str(wt), "--visual", rec["id"]], cwd=self.svc, capture_output=True, text=True,
@@ -11844,7 +11845,8 @@ class WorktreeMarkTests(_Live, unittest.TestCase):
                                           "ticket", "--project", str(repo))
         self.assertEqual(rc, 0, err)
         path = Path(out.strip())
-        self.assertEqual(path, home5 / ".overture/worktrees/proj/overture/ticket/LANE.1")
+        from overture import worktrees as WT
+        self.assertEqual(path, home5 / ".overture/worktrees" / WT.project_slug("proj", repo) / "overture/ticket/LANE.1")
         self.assertEqual(self.cursor()["branches"],
                          {"agent-5": {"LANE.1": {"branch": "overture/ticket/LANE.1", "worktree": "LANE.1"}}})
         with self.cli_env(home6):
@@ -11873,7 +11875,12 @@ class WorktreeMarkTests(_Live, unittest.TestCase):
         _o, repo = wt_repo(Path(self.tmp.name) / "g")
         home = Path(self.tmp.name) / "h"
         home.mkdir()
-        with self.cli_env(home), mock.patch.object(SV, "WORKING_FIELDS", {"items"}):
+        real = SV.Console.set_working
+        def as_149(console, body, agent=None):   # 1.49's set_working: any key but "items" refused, in its words
+            if isinstance(body, dict) and set(body) != {"items"}:
+                raise SV.RequestError(400, f'working takes {{"items": [1 to {SV.MAX_WORKING} item ids]}}')
+            return real(console, body, agent)
+        with self.cli_env(home), mock.patch.object(SV.Console, "set_working", as_149):
             rc, out, err = self.agent_cli("--as", "agent-5", "worktree", "new", "--item", "LANE.1", "--kind",
                                           "ticket", "--project", str(repo))
         self.assertEqual(rc, 0, err)

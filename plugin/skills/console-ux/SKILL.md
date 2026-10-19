@@ -321,9 +321,11 @@ under `ux`.
 
   `A worktree new` (1.50.0) makes it under `~/.overture/worktrees/`, on
   `overture/ux/<item>` from `origin/main`, marks the item with that branch,
-  and prints the path (the same one again if you run it twice). An overlap
-  with another agent is named; go on, and say so in the reply. Never make a
-  worktree by hand.
+  and prints the path (the same one again if you run it twice, until its PR
+  merges or closes). It needs your agent name, as `working` does. An overlap
+  with another agent is named; go on, and say so in the reply. A suggested
+  setup step it prints is never run for you: run it yourself, as its own Bash
+  call, only if you need it. Never make a worktree by hand.
 
   It writes `components/<item>.md` (front matter, the doc, and the HTML) and
   `components/<item>.css`. A previous version goes to

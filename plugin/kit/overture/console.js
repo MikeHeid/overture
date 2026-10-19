@@ -1062,6 +1062,13 @@
     const names = activeNames(itemId);
     return names.length ? names.join(', ') + ' active' : 'agent active';
   }
+  // X1 (1.50 review): an item's count of what waits on an agent beside the agents' names. The number counts
+  // questions and threads, the words name agents, so "1 agent-5, agent-6 active" read as one agent: the names
+  // lead, and the count follows only when more than one thing waits.
+  function agentCountWords(itemId, n) {
+    if (!agentActive(itemId)) return n + ' awaiting agent';
+    return agentWords(itemId) + (n > 1 ? ' (' + n + ' waiting)' : '');
+  }
   // 1.50 (W4): where the agents on an item work, from cursor.branches (no new server call): the branch each
   // fresh mark carries, and the agent holding it. Two marks on one item with different branches are an overlap:
   // the console warns, never blocks.
@@ -1075,9 +1082,12 @@
     return out.sort((x, y) => x.branch.localeCompare(y.branch));
   }
   function branchWho(name) { return name === 'agent' ? 'unnamed session' : name; }
+  // X6/X2 (1.50 review): one name for the chip, starting with its visible text (2.5.3), so a phone's ellipsis
+  // never hides the branch from a screen reader or a pointer (the title is the same words).
   function branchChip(b) {
-    return el('span', { className: 'ck-branch-chip', dataBranch: b.branch,
-      title: branchWho(b.agent) + ' works on the branch ' + b.branch }, [
+    const words = b.branch + ' · ' + branchWho(b.agent) + ', branch';
+    return el('span', { className: 'ck-branch-chip', dataBranch: b.branch, role: 'img', 'aria-label': words,
+      title: words }, [
       icon('git-branch') || '',
       el('span', { className: 'ck-branch-name' }, [b.branch]),
       el('span', { className: 'ck-branch-agent' }, [' · ' + branchWho(b.agent)])
@@ -1088,9 +1098,18 @@
     const names = Array.from(new Set(bs.map(b => b.branch)));
     return names.length < 2 ? null : bs.length + ' agents on ' + itemId + ': ' + names.join(', ');
   }
+  // X3 (1.50 review): the warning is static (liveLoop redraws it; a live region would re-announce it on every
+  // redraw), so it is said once through announce() when an overlap first appears: keyed by the item and its
+  // sorted branches, so a third branch is news and a redraw is not.
+  const overlapsSaid = new Set();
   function renderBranchOverlap(itemId) {
     const words = branchOverlapWords(itemId);
     if (!words) return null;
+    const key = itemId + '\n' + Array.from(new Set(itemBranches(itemId).map(b => b.branch))).sort().join('\n');
+    if (!overlapsSaid.has(key)) {
+      overlapsSaid.add(key);
+      announce(words + '. Warned, not blocked.', { silent: true });
+    }
     return el('p', { className: 'ck-branch-overlap', role: 'note' }, [
       icon('triangle-alert') || '', el('span', {}, [words + '. Both may go on; agree on the item before you touch the same files.'])]);
   }
@@ -1133,6 +1152,23 @@
       'Kept, never removed silently: open its PR, or remove it with git worktree remove. Listed '
       + relTime(st.at) + ' by the steward.']));
     return d;
+  }
+  // X5 (1.50 review): the same count where the PR tab says what it shows (owner-only, as the list: the server
+  // sends cursor.stale_worktrees to an owner alone); pressing it opens the list and moves focus to it.
+  function renderStaleCount() {
+    const st = cursor && cursor.stale_worktrees;
+    const n = st && Array.isArray(st.worktrees) ? st.worktrees.length : 0;
+    if (!n) return null;
+    const b = el('button', { type: 'button', className: 'ck-prs-stale-count' },
+      [n + ' stale worktree' + (n === 1 ? '' : 's')]);
+    b.addEventListener('click', () => {
+      const d = panelEl && panelEl.querySelector('details.ck-stale-worktrees');
+      if (!d) return;
+      d.open = true;
+      const s = d.querySelector('summary');
+      if (s) s.focus();
+    });
+    return b;
   }
   // 0.8.2: who wrote an agent record: its name when it gave one, else the word it always had.
   function agentLabel(rec, fallback) { return (rec && rec.by === 'agent' && rec.agent) ? rec.agent : fallback; }
@@ -1584,7 +1620,9 @@
       if (lane) { det.setAttribute('data-ck-lane', lane); det.setAttribute('data-ck-lane-color', laneColor(lane)); }
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', t.awaiting_you + ' you']);
-      if (t.awaiting_agent > 0) parts.push(['awaiting_agent', t.awaiting_agent + (agentActive(id) ? ' agent active' : ' agent')]);
+      if (t.awaiting_agent > 0) parts.push(['awaiting_agent', agentActive(id)
+        ? 'agent active' + (t.awaiting_agent > 1 ? ' (' + t.awaiting_agent + ' waiting)' : '')   // X1: the count is threads
+        : t.awaiting_agent + ' agent']);
       if (t.unlocked > 0) parts.push(['unlocked', t.unlocked + ' unlocked']);
       if (t.stale > 0) parts.push(['stale', t.stale + ' stale']);
       const hasItems = parts.length > 0;
@@ -3676,7 +3714,7 @@
       const t = view.items[itemId].own;
       const counts = el('div', { className: 'ck-counts' });
       if (t.awaiting_you) counts.appendChild(el('span', {}, [stateMark('awaiting_you'), ' ' + t.awaiting_you + ' awaiting you']));
-      if (t.awaiting_agent) counts.appendChild(el('span', {}, [stateMark('awaiting_agent'), ' ' + t.awaiting_agent + ' ' + agentWords(itemId)]));
+      if (t.awaiting_agent) counts.appendChild(el('span', { className: 'ck-agent-words' }, [stateMark('awaiting_agent'), ' ' + agentCountWords(itemId, t.awaiting_agent)]));
       if (t.unlocked) counts.appendChild(el('span', {}, [stateMark('unlocked'), ' ' + t.unlocked + ' unlocked']));
       if (t.stale) counts.appendChild(el('span', {}, [stateMark('stale'), ' ' + t.stale + ' stale']));
       bar.appendChild(counts);
@@ -10916,11 +10954,14 @@
     if (!d || !d.pushed) {   // never a blank list, never invented PRs (F63)
       box.appendChild(el('p', { className: 'ck-prs-note', role: 'status' },
         [(d && d.note) || 'The steward has not pushed pull requests yet (agent.py prs-push).']));
+      const count = renderStaleCount();
+      if (count) box.appendChild(el('p', { className: 'ck-muted ck-prs-pushed' }, [count]));
       return;
     }
     const by = d.by ? 'the steward (' + d.by + ')' : 'the steward';
+    const count = renderStaleCount();
     box.appendChild(el('p', { className: 'ck-muted ck-prs-pushed', title: new Date(d.pushed_at).toLocaleString() },
-      [String(d.repo) + ' · pushed ' + relTime(d.pushed_at) + ' by ' + by]));
+      [String(d.repo) + ' · pushed ' + relTime(d.pushed_at) + ' by ' + by].concat(count ? [' · ', count] : [])));
     const prs = Array.isArray(d.prs) ? d.prs : [];
     const open = prs.filter(p => p.state === 'open');
     const done = prs.filter(p => p.state !== 'open');

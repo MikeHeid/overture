@@ -69,16 +69,22 @@
                                                 overture/<kind>/<item>[-n], branched from origin/main
                                                 after a fetch, and mark the item worked on with its
                                                 branch; prints the path. KIND: ticket, visual, ux,
-                                                playbook, round or fix. Another agent on the item is
-                                                named (an overlap warning, W4) and it still exits 0
+                                                playbook, round or fix. Needs this session's agent
+                                                name (--as, OVERTURE_AGENT or /overture:as). Another
+                                                agent on the item is named (an overlap warning, W4)
+                                                and it still exits 0. A worktree whose PR merged or
+                                                closed is never handed back. A project's
+                                                worktree_setup is PRINTED, never run: run it yourself
     agent.py --state DIR worktree list [--project REPO] [--json]
                                                 every agent worktree of this project: branch, item,
                                                 kind, agent, age, last commit, ahead/behind, dirty,
                                                 unpushed, PR (via gh, when it is there) and stale
     agent.py --state DIR worktree prune [--project REPO] [--dry-run] [--json]
-                                                remove the worktrees whose PR merged or closed, that are
-                                                clean and fully pushed; keep and explain the rest (W3).
-                                                Never --force, never a remote branch. `watch` runs it
+                                                remove the clean worktrees that LANDED (PR merged at
+                                                exactly their HEAD, by one `gh pr list`) or whose PR
+                                                closed with every commit on a remote; keep and explain
+                                                the rest (W3). Never --force, never branch -D, never a
+                                                remote branch. `watch` runs it at most every 10 minutes
     agent.py --state DIR synced [--through SEQ] [--rx-through RX] [--error MSG]
                                                 record that the agent has processed the doorbell up to SEQ
     agent.py --state DIR costs collect | show --fork RECORD_ID
@@ -651,12 +657,13 @@ def _post_working(state: Path, items: list[str], where: dict | None, agent: str 
     """POST /working with the branch when there is one: (exit code, the server's answer, a note).
 
     An older server (before 1.50) refuses the extra keys; the mark is then sent again without them, and the
-    note says the branch was not shown.
+    note says the branch was not shown. Only that refusal, by its words: a 1.50 server's refusal of the branch
+    itself is reported as it is (1.50 review L1).
     """
     body = {"items": items, **(where or {})}
     try:
         code, out = _req(state, "POST", "/working", body, agent=agent)
-        if code == 400 and where:
+        if code == 400 and where and _older_than_branches(out):
             code, out = _req(state, "POST", "/working", {"items": items}, agent=agent)
             if code == 200:
                 return 0, out, ("the console server did not take the branch (older than 1.50?): the item is "
@@ -668,6 +675,15 @@ def _post_working(state: Path, items: list[str], where: dict | None, agent: str 
     if not isinstance(out, dict):
         out = {"error": str(out)}
     return (0 if code == 200 else 1), out, ("" if code == 200 else f"refused: {out.get('error', out)}")
+
+
+OLD_WORKING = 'working takes {"items": ['   # a 1.49 server's whole refusal of any key but "items"
+
+
+def _older_than_branches(out: object) -> bool:
+    """Whether a 400 from /working is a server older than 1.50 refusing the unknown "branch" key."""
+    err = out.get("error") if isinstance(out, dict) else None
+    return isinstance(err, str) and err.startswith(OLD_WORKING) and '"branch"' not in err
 
 
 def _here_branch() -> dict | None:
@@ -759,15 +775,56 @@ def _worktree_new(a, WT, repo: Path, name: str) -> int:
 
 
 GH_NOTE = ".worktrees-no-gh"   # in STATE: the steward was told once that prune needs gh
+PRUNE_FILE = ".worktrees-prune.json"   # in STATE: when the watch last pruned, what was stale, where it stopped
+PRUNE_EVERY = 600.0    # 1.50 review C2: the watch prunes at most once per 10 minutes...
+PRUNE_BUDGET = 60.0    # ...and spends at most this long looking, then stops and takes up there next time
+MAX_PRUNE_FILE = 16384
 
 
-def _watch_prune(state: Path) -> list | None:
-    """The steward's prune, once per watch cycle (W3): the stale ones for the heartbeat, or None (nothing said).
+def _prune_record(state: Path) -> dict:
+    """The watch's last prune: {"at": epoch, "stale": list | None, "resume_after": branch | None}; {} if none."""
+    try:
+        data = R.read_regular(Path(state) / PRUNE_FILE, MAX_PRUNE_FILE, nofollow=True)
+        rec = json.loads(data.decode("utf-8")) if data is not None else {}
+    except (OSError, ValueError, R.RegistryError):
+        return {}
+    if not (isinstance(rec, dict) and isinstance(rec.get("at"), (int, float)) and not isinstance(rec["at"], bool)):
+        return {}
+    stale = rec.get("stale")
+    after = rec.get("resume_after")
+    return {"at": float(rec["at"]), "stale": stale if isinstance(stale, list) else None,
+            "resume_after": after if isinstance(after, str) else None}
+
+
+def _write_prune_record(state: Path, rec: dict) -> None:
+    import tempfile
+    p = Path(state) / PRUNE_FILE
+    with contextlib.suppress(OSError):
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".worktrees-prune.", suffix=".tmp")   # 0600
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, sort_keys=True) + "\n")
+            os.replace(tmp, p)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
+
+def _watch_prune(state: Path, now: float | None = None) -> list | None:
+    """The steward's prune (W3): the stale ones for the heartbeat, or None (nothing said).
 
     Only for the project the working directory is in AND whose console this is (--state), so a watch run
-    anywhere else touches nothing. Without gh nothing can be judged: it is skipped, said once.
+    anywhere else touches nothing. 1.50 review C2: called after the watch's first heartbeat, it prunes at most
+    once per PRUNE_EVERY (the time kept in STATE; in between it hands back the last stale list), makes ONE gh
+    call, and stops looking after PRUNE_BUDGET seconds, to take up where it stopped on the next cycle. Without
+    gh nothing can be judged: it is skipped, said once.
     """
+    import time as _time
     from overture import worktrees as WT
+    t = _time.time() if now is None else now
+    rec = _prune_record(state)
+    if rec and not rec["resume_after"] and 0 <= t - rec["at"] < PRUNE_EVERY:
+        return rec["stale"]
     try:
         cwd = Path.cwd()
         here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
@@ -777,7 +834,8 @@ def _watch_prune(state: Path) -> list | None:
         if main is None:
             return None
         name = _project_name(state, main)
-        if not (WT.base_dir() / WT.project_slug(name)).is_dir():
+        if not (WT.base_dir() / WT.project_slug(name, main)).is_dir():
+            _write_prune_record(state, {"at": t, "stale": [], "resume_after": None})
             return []
         prs, why = WT.gh_prs(main)
         note = Path(state) / GH_NOTE
@@ -787,16 +845,26 @@ def _watch_prune(state: Path) -> list | None:
                       file=sys.stderr)
                 with contextlib.suppress(OSError):
                     note.write_text("1\n")
+            _write_prune_record(state, {"at": t, "stale": None, "resume_after": None})
             return None
         with contextlib.suppress(OSError):
             note.unlink()
-        res = WT.prune(main, name, prs=prs)
+        res = WT.prune(main, name, prs=prs, budget=PRUNE_BUDGET, start_after=rec.get("resume_after"))
     except (WT.WorktreeError, R.RegistryError, OSError) as e:
         print(f"worktree prune skipped: {e}", file=sys.stderr)
         return None
     for r in res["removed"]:
         print(f"worktree prune: removed {r['branch']}", file=sys.stderr)
-    return res["stale"]
+    stale = res["stale"]
+    if rec.get("resume_after"):   # a pass taken up again: what the first part found stale still counts
+        seen = {s["branch"] for s in stale}
+        stale = [*stale, *[s for s in rec.get("stale") or [] if isinstance(s, dict) and s.get("branch") not in seen
+                          and isinstance(s.get("branch"), str) and s["branch"] <= rec["resume_after"]]]
+    if res["unfinished"]:
+        print(f"worktree prune: stopped after {PRUNE_BUDGET:g} s at {res['unfinished']}; the rest next cycle",
+              file=sys.stderr)
+    _write_prune_record(state, {"at": t, "stale": stale[:WT.MAX_STALE_REPORT], "resume_after": res["unfinished"]})
+    return stale[:WT.MAX_STALE_REPORT]
 
 
 def _costs(a) -> int:
@@ -2458,8 +2526,10 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "watch":
         since = a.since if a.since is not None else D.read_cursor(a.state)
-        stale = _watch_prune(a.state)   # 1.50.0 (W3): prune once per cycle; the stale ones ride the heartbeat
-        beat = D.Heartbeat(a.state, a.poll, stale=stale)  # the owner sees "agent listening" while this waits (0.6.0)
+        beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"))  # "agent listening" (0.6.0)
+        beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
+        if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
+            beat.update(_watch_prune(a.state))   # W3: throttled and time-capped; the stale ones ride the heartbeat
         # A session that ends kills its watch with SIGTERM or SIGHUP; turn those into an
         # ordinary exit so `finally` says "stopped" now, rather than the owner seeing
         # "listening" until the promise lapses. SIGKILL cannot be caught: that is the lapse's job.
