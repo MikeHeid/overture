@@ -3003,15 +3003,20 @@ defaults A1 to A9 are in OPEN-DECISIONS.md, "D2 as decided".
   `KeepAlive` on a failed exit, a 10 s `ThrottleInterval`, and the
   daemon's log for its output. `--start` boots out a loaded job first,
   then runs `launchctl enable` and `launchctl bootstrap gui/<uid>`.
-  Without `--start` nothing is loaded until your next login.
-- **`service uninstall`** boots the job out and removes the plist.
+  Without `--start` nothing is loaded until your next login. The plist is
+  written whole at 0644 (a temp file and a rename). Over SSH, or with
+  nobody logged in at the Mac, a failed bootstrap says launchd needs your
+  login session; there is no fallback to another domain.
+- **`service uninstall`** boots the job out and removes the plist; a job
+  still loaded after its plist was deleted by hand is booted out too.
 - **`status`, `health` and the one-server gate** read `launchctl print` by
   line name: `running` with its pid, `spawn scheduled`, a failed last exit,
   or not loaded. A daemon is refused while the job runs. `health` checks no
   linger on a Mac: a LaunchAgent runs while you are logged in.
 - **Every hint names the platform's command**: `launchctl bootout`,
   `kickstart -k` and `print` on a Mac, `systemctl --user` elsewhere. A
-  version-skew problem from a service now names its restart command.
+  version-skew problem from a service now names its restart command, and
+  so does the plugin's upgrade notice (`launchctl kickstart -k` on a Mac).
 - **`deploy/install.sh` refuses on macOS** by name (its per-project units
   are systemd) and points to `server.py service install`.
 - Docs: INSTALL.md (macOS prerequisites and the logged-in note,

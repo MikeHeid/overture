@@ -76,7 +76,10 @@ architect defaults for it.
   `ProcessType` (Background is throttled), no environment.
 - **A4** One `_launchctl` helper. `--start`: boot out a loaded job first (an
   upgrade), then `enable`, then `bootstrap`. Without `--start`, only the
-  plist is written. Uninstall boots out and removes.
+  plist is written. Uninstall boots out and removes. The order is bootout
+  (if loaded) → enable → bootstrap, never bootstrap first: a job that was
+  once disabled (`launchctl disable`) cannot be bootstrapped until it is
+  enabled again.
 - **A5** `launchctl print`, matched by line name: not found → `inactive`;
   `running` → `active` with its pid; `spawn scheduled` → `activating`; not
   running → `failed` on a non-zero last exit code, else `inactive`; anything

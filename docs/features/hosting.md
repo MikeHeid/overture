@@ -52,11 +52,13 @@ unchanged.
 
 On a Mac, the same `server.py service install [--start]` writes a launchd
 LaunchAgent, `~/Library/LaunchAgents/overture.console.plist` (label
-`overture.console`), and with `--start` loads it in your login session
-(`launchctl enable`, then `launchctl bootstrap gui/<uid>`); installing again
-boots the old job out first. Without `--start` it only writes the plist,
-which loads at your next login. `service uninstall` boots the job out and
-removes the plist.
+`overture.console`), and with `--start` loads and starts it in your login
+session (`launchctl enable`, then `launchctl bootstrap gui/<uid>` to load
+it); installing again boots the old job out first. Without `--start` it
+only writes the plist, which loads at your next login. Over SSH, or with
+nobody logged in at the Mac, `--start` cannot load it and says to log in
+at the Mac. `service uninstall` boots the job out and removes the plist
+(and still boots out a job whose plist was deleted by hand).
 
 - The plist runs `server.py --all --server-file <server.json>` as an argv
   list, so a space in a path is fine; a path that is not absolute or holds
@@ -69,7 +71,7 @@ removes the plist.
   sleep and closing every terminal; there is no linger to turn on.
 - `status`, `health` and the one-server gate read `launchctl print`; every
   hint names the Mac's command (`launchctl kickstart -k
-  gui/<uid>/overture.console` to restart, `launchctl bootout ...` to stop).
+  gui/<uid>/overture.console` to restart, `launchctl bootout ...` to stop and unload).
 - The per-project units of `deploy/install.sh` stay systemd: on a Mac it
   refuses by name and points here. For a Cloudflare tunnel on a Mac, use
   `cloudflared service install`, Cloudflare's own launchd installer.

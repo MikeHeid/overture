@@ -1697,6 +1697,7 @@ class LaunchdTests(unittest.TestCase):
         self.bin = self.t / "bin"
         self.bin.mkdir()
         self.log, self.state_file, self.code_file = self.t / "launchctl.log", self.t / "PRINT", self.t / "CODE"
+        self.boot_code = self.t / "BOOTCODE"      # present: bootstrap fails with it, as with no login session
         (self.t / "RUNNING").write_text(self.RUNNING)
         lc = self.bin / "launchctl"
         lc.write_text("#!/bin/sh\n"
@@ -1706,7 +1707,9 @@ class LaunchdTests(unittest.TestCase):
                       f"[ -f '{self.code_file}' ] && exit $(cat '{self.code_file}'); exit 0; fi\n"
                       "         echo 'Could not find service \"overture.console\" in domain for port' >&2; exit 113;;\n"
                       f"  bootout) rm -f '{self.state_file}';;\n"
-                      f"  bootstrap) cp '{self.t / 'RUNNING'}' '{self.state_file}';;\n"
+                      f"  bootstrap) if [ -f '{self.boot_code}' ]; then c=$(cat '{self.boot_code}'); "
+                      "echo \"Bootstrap failed: $c: Input/output error\" >&2; exit $c; fi\n"
+                      f"             cp '{self.t / 'RUNNING'}' '{self.state_file}';;\n"
                       "esac\nexit 0\n")
         lc.chmod(0o755)
         env = mock.patch.dict(os.environ, {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.cfg),
@@ -1853,6 +1856,67 @@ class LaunchdTests(unittest.TestCase):
         self.assertEqual((doc["service"], doc["linger"]), ("failed", None))
         self.assertTrue(any("not running" in p for p in doc["problems"]))
         self.assertFalse(any("linger" in p or "systemctl" in p for p in doc["problems"]))
+
+    def test_a_bootstrap_with_no_login_session_says_to_log_in_at_the_mac(self):
+        # Catches: `--start` over SSH, or with nobody logged in at the Mac, failing with launchctl's bare
+        # "Bootstrap failed: 5" and no word on why (there is no gui/<uid> domain to load into), and a fallback
+        # to the user/<uid> domain, which would run the console outside the login session D2 chose.
+        for exit_code in ("5", "125"):
+            with self.subTest(exit_code=exit_code):
+                self.boot_code.write_text(exit_code)
+                code, out, err = self.run_h(self.H.service_install, self.sfile, True)
+                self.assertEqual(code, 1)
+                self.assertIn("Bootstrap failed", out)
+                self.assertIn(f"launchd needs your login session ({self.domain})", out)
+                self.assertIn("log in at the Mac, or the service loads at your next login", out)
+                self.assertFalse(any(" user/" in f" {c}" for c in self.calls()), self.calls())
+                self.assertTrue(self.plist.exists())
+
+    def test_the_plist_lands_whole_at_0644_through_a_rename_and_a_failed_write_keeps_the_old_one(self):
+        # Catches: a plist written in place and chmodded after (launchd, or a crash, can see it half-written or
+        # at the umask's mode), and a failed write that destroys the previous plist or leaves a temp file behind.
+        real = os.replace
+        seen = []
+
+        def spy(src, dst):
+            seen.append((Path(dst), stat.S_IMODE(os.stat(src).st_mode), Path(src).parent))
+            return real(src, dst)
+
+        old = os.umask(0o077)
+        self.addCleanup(os.umask, old)
+        with mock.patch.object(self.H.os, "replace", side_effect=spy):
+            code, out, err = self.run_h(self.H.service_install, self.sfile, False)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(seen, [(self.plist, 0o644, self.plist.parent)])
+        before = self.plist.read_bytes()
+        with mock.patch.object(self.H.os, "replace", side_effect=OSError(28, "No space left on device")):
+            code, out, err = self.run_h(self.H.service_install, self.sfile, False)
+        self.assertEqual(code, 1)
+        self.assertIn("No space left on device", err)
+        self.assertEqual(self.plist.read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in self.plist.parent.iterdir()), [self.plist.name])
+
+    def test_uninstall_boots_out_a_loaded_job_whose_plist_is_already_gone(self):
+        # Catches: an uninstall that refuses "not installed" while the job still runs (someone deleted the plist
+        # by hand), which leaves a server nobody can stop through Overture until the next logout.
+        self.run_h(self.H.service_install, self.sfile, True)
+        self.plist.unlink()
+        self.log.unlink()
+        code, out, err = self.run_h(self.H.service_uninstall)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"bootout {self.target}", self.calls())
+        self.assertFalse(self.state_file.exists())
+        code, out, err = self.run_h(self.H.service_uninstall)                     # neither file nor job now
+        self.assertEqual(code, 1)
+        self.assertIn("not installed", err)
+
+    def test_the_start_hint_quotes_a_plist_path_with_a_space(self):
+        # Catches: a copy-paste hint `launchctl bootstrap gui/<uid> /Users/a b/...` that the shell splits in two.
+        spaced = self.t / "my home"
+        spaced.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(spaced)}):
+            want = spaced / "Library" / "LaunchAgents" / "overture.console.plist"
+            self.assertEqual(self.H.service_cmd("start"), f"launchctl bootstrap {self.domain} '{want}'")
 
     def test_the_rendered_plist_is_valid_and_plutil_agrees_when_present(self):
         # Catches: bytes plistlib wrote that launchd's own parser rejects (checked with plutil on a Mac only).

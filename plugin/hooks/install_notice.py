@@ -104,6 +104,14 @@ def _is_windows_native() -> bool:
     return platform.system() == "Windows"
 
 
+def _restart_cmd() -> str:
+    """The main server's restart command on this platform: hosting.service_cmd("restart"), spelled out here
+    because importing hosting would pull in fcntl, which native Windows Python does not have."""
+    if sys.platform == "darwin":                  # 1.51: a launchd LaunchAgent in the login session
+        return f"launchctl kickstart -k gui/{os.getuid()}/overture.console"
+    return "systemctl --user restart overture-console"
+
+
 KIT = Path(__file__).resolve().parent.parent / "kit"   # the kit this plugin carries, wherever it was installed
 JOIN = "https://github.com/MikeHeid/overture/blob/main/docs/JOIN.md"
 
@@ -159,7 +167,7 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
         "",
         "  Running the main server for several projects (docs/JOIN.md)? After install.sh:",
         "",
-        "    systemctl --user restart overture-console",
+        "    " + _restart_cmd(),
     ]
     if _is_windows_native():
         lines += ["", "  On Windows, run these inside WSL."]

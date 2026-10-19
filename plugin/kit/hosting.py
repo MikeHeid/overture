@@ -21,10 +21,12 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -76,7 +78,7 @@ def service_cmd(verb: str) -> str:
     """The command that starts, stops, restarts or shows the service on this platform, for a hint."""
     if not _is_mac():
         return f"systemctl --user {verb} {UNIT}"
-    return {"start": f"launchctl bootstrap {_domain()} {plist_path()}", "stop": f"launchctl bootout {_target()}",
+    return {"start": f"launchctl bootstrap {_domain()} {shlex.quote(str(plist_path()))}", "stop": f"launchctl bootout {_target()}",
             "restart": f"launchctl kickstart -k {_target()}", "status": f"launchctl print {_target()}"}[verb]
 
 
@@ -411,9 +413,10 @@ def _launchd_install(sf: Path, start: bool) -> int:
         log.replace(log.with_suffix(".log.1"))
     os.close(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600))
     pp = plist_path()
-    pp.parent.mkdir(parents=True, exist_ok=True)
-    pp.write_bytes(data)
-    os.chmod(pp, 0o644)
+    try:
+        _write_whole(pp, data, 0o644)
+    except OSError as e:
+        return _refuse(f"could not write {pp}: {e}")
     print(f"plist: {pp}")
     if not start:
         print(f"installed, not started: it starts at your next login, or `{service_cmd('start')}` now, "
@@ -430,8 +433,34 @@ def _launchd_install(sf: Path, start: bool) -> int:
             time.sleep(0.1)
     _launchctl("enable", _target())               # before bootstrap: a job once disabled is never loaded
     code, out = _launchctl("bootstrap", _domain(), str(pp))
-    print("started" if code == 0 else f"could not start: {out}")
-    return 0 if code == 0 else 1
+    if code == 0:
+        print("started")
+        return 0
+    # Over SSH, or with nobody logged in at the Mac, there is no gui/<uid> domain and bootstrap fails with a bare
+    # number (5, 125). No fallback to user/<uid>: that would run the console outside the login session (D2).
+    print(f"could not start: {out}\nlaunchd needs your login session ({_domain()}); "
+          f"log in at the Mac, or the service loads at your next login")
+    return 1
+
+
+def _write_whole(path: Path, data: bytes, perm: int) -> None:
+    """Write `path` at `perm` through a temp file in its directory and a rename, so launchd (or a crash) never
+    sees it half-written or at the umask's mode, and a failed write keeps the old file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), perm)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def service_install(sf: Path, start: bool) -> int:
@@ -469,11 +498,15 @@ def service_install(sf: Path, start: bool) -> int:
 def service_uninstall() -> int:
     if _is_mac():
         pp = plist_path()
-        if not pp.exists():
+        loaded = _launchctl("print", _target())[0] == 0
+        if not pp.exists() and not loaded:
             return _refuse(f"{LABEL} is not installed")
         _launchctl("bootout", _target())          # "not loaded" is fine: the plist goes either way
-        pp.unlink()
-        print(f"removed {pp}")
+        if pp.exists():
+            pp.unlink()
+            print(f"removed {pp}")
+        else:                                     # the plist was deleted by hand while the job ran
+            print(f"unloaded {LABEL} (its plist was already gone)")
         return 0
     up = unit_path()
     if not up.exists():

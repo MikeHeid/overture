@@ -700,6 +700,28 @@ class InstallNoticeTests(unittest.TestCase):
         self.assertTrue(script.is_file(), script)
         self.assertNotIn("overture.service", out)
 
+    def test_the_upgrade_restart_line_names_this_platforms_service_command(self):
+        # Catches: a Mac told to run `systemctl --user restart overture-console` after an upgrade (there is no
+        # systemctl, so the console keeps the old kit), and a restart line that drifts from the one hosting.py
+        # prints in every other hint.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("install_notice_t", self.HOOK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.path.insert(0, str(self.HOOK.parent.parent / "kit"))
+        self.addCleanup(sys.path.remove, str(self.HOOK.parent.parent / "kit"))
+        import hosting
+        for plat in ("darwin", "linux"):
+            with self.subTest(plat=plat), mock.patch.object(sys, "platform", plat):
+                body = "\n".join(mod._upgrade_lines(["0.0.1"])) + "\n"
+                if plat == "darwin":
+                    self.assertIn(f"    {hosting.service_cmd('restart')}\n", body)
+                    self.assertIn(f"launchctl kickstart -k gui/{os.getuid()}/overture.console", body)
+                    self.assertNotIn("systemctl", body)
+                else:                                                   # unchanged from 1.50
+                    self.assertIn("    systemctl --user restart overture-console\n", body)
+                    self.assertNotIn("launchctl", body)
+
     def test_it_shows_once_per_version(self):
         with tempfile.TemporaryDirectory() as td:
             env = {**os.environ, "XDG_STATE_HOME": td}

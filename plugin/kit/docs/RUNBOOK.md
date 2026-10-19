@@ -66,6 +66,8 @@ On a Mac the one server (`server.py --all`) runs as the LaunchAgent
     python3 <kit>/server.py health
     launchctl print gui/$(id -u)/overture.console | grep -E 'state =|pid =|last exit code ='
 
+(`$(id -u)` is your user id, e.g. 501.)
+
 - **Where things are:** the plist is `~/Library/LaunchAgents/overture.console.plist`;
   the server's output goes to `~/.local/state/overture/server.log` (the daemon's
   log, rotated at install past 5 MiB).
@@ -76,6 +78,10 @@ On a Mac the one server (`server.py --all`) runs as the LaunchAgent
 - **`Could not find service "overture.console"`** (exit 113): the plist is
   there but the job is not loaded, so `health` says `inactive`. Load it with
   `server.py service install --start`.
+- **`--start` says `Bootstrap failed: 5` (or 125) and "launchd needs your
+  login session":** you are on SSH, or nobody is logged in at the Mac, so
+  there is no `gui/$(id -u)` domain to load into. The plist is written: log in
+  at the Mac and run `--start` again, or it loads at your next login.
 - **`failed`, and the log repeats the same error every 10 s:** launchd has no
   start limit; with `KeepAlive` it starts a server that exits non-zero again
   after `ThrottleInterval` (10 s), forever. Read the log, fix the cause (a bad
