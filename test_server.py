@@ -2925,6 +2925,35 @@ class VisualLandingTests(_Live, unittest.TestCase):
         self.assertEqual(snapshot(self.svc), before)
         self.assertEqual(git(self.svc, "status", "--porcelain", "--untracked-files=all").stdout, "")
 
+    def test_an_export_lands_in_an_agent_worktree_and_never_in_the_service_checkout(self):
+        # Catches (1.50.0, W2): `visual-export` refusing the worktree `agent.py worktree new` made under
+        # ~/.overture/worktrees (outside every registered root), and the old refusal of the server's own checkout
+        # lost on the way; and its refusal still telling agents to `git worktree add` by hand.
+        import subprocess
+        home = self.base / "home"
+        home.mkdir()
+        env = {**GIT_ENV, "HOME": str(home)}
+        rec = self.draw()
+        r = subprocess.run([sys.executable, AGENT_PY, "--state", str(self.cfg.state), "--as", "agent-5", "worktree",
+                            "new", "--kind", "visual", "--item", "LANE.1"], cwd=self.svc, capture_output=True,
+                           text=True, timeout=120, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        wt = Path(r.stdout.strip())
+        from overture import worktrees as WT
+        self.assertEqual(wt, home / ".overture/worktrees" / WT.project_slug("svc", self.svc) / "overture/visual/LANE.1")
+        before = snapshot(self.svc)
+        r = subprocess.run([sys.executable, AGENT_PY, "--state", str(self.cfg.state), "visual-export", "--project",
+                            str(wt), "--visual", rec["id"]], cwd=self.svc, capture_output=True, text=True,
+                           timeout=60, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(list((wt / "architect/visuals/LANE.1").glob("*.mmd")))
+        r = subprocess.run([sys.executable, AGENT_PY, "--state", str(self.cfg.state), "visual-export", "--project",
+                            str(self.svc)], cwd=self.svc, capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("agent.py worktree new --kind visual", r.stderr)
+        self.assertNotIn("git worktree add", r.stderr)
+        self.assertEqual(snapshot(self.svc), before)
+
     def raw_visual(self, rid):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         conn.request("GET", f"/api/visual?id={rid}", headers={"Cf-Access-Jwt-Assertion": token()})
@@ -11694,6 +11723,171 @@ class PlaybookOwnerOnlyTests(_Live, unittest.TestCase):
         code, out = self.req("POST", "/api/playbook", {"name": "triage", "nonce": "pbowner0002"}, tok=token())
         self.assertEqual(code, 200, out)
         self.assertEqual([s["why"] for s in out["skipped"]], [s["reason"] for s in plan["steps"]])
+
+
+# -- 1.50.0: where agents work (OPEN-DECISIONS.md W3, W4) ------------------------------------------------
+
+class WorktreeMarkTests(_Live, unittest.TestCase):
+    """A working mark may carry the agent's branch and its worktree's folder name; the steward's stale list
+    rides its heartbeat. The server runs no git for any of it, and never stores or serves a path."""
+
+    BR = {"branch": "overture/ticket/LANE.1", "worktree": "LANE.1"}
+
+    def work(self, body, agent="agent-5"):
+        return SV.agent_request(self.cfg.socket, "POST", "/working", body, agent=agent)
+
+    def cursor(self, email=None):
+        code, out = self.req("GET", "/api/view", tok=token(email=email) if email else token())
+        self.assertEqual(code, 200, out)
+        return out["cursor"]
+
+    def test_a_branch_rides_its_mark_and_goes_with_it(self):
+        # Catches: a branch the page never sees, one shown for another agent's mark, one left behind after the
+        # agent syncs (a branch on an item nobody works on), and the reply not naming the branches (the second
+        # agent's `worktree new` is told of the overlap from it).
+        code, out = self.work({"items": ["LANE.1"], **self.BR})
+        self.assertEqual(code, 200, out)
+        self.assertEqual(out["branches"], {"agent-5": {"LANE.1": self.BR}})
+        code, out = self.work({"items": ["LANE.1", "LANE"], "branch": "overture/fix/LANE.1-2"}, agent="agent-6")
+        self.assertEqual(code, 200, out)
+        cur = self.cursor()
+        self.assertEqual(cur["branches"], {"agent-5": {"LANE.1": self.BR},
+                                           "agent-6": {"LANE": {"branch": "overture/fix/LANE.1-2"},
+                                                       "LANE.1": {"branch": "overture/fix/LANE.1-2"}}})
+        SV.agent_request(self.cfg.socket, "POST", "/cursor", {"last_synced_at": "2026-10-16T10:00:00Z"},
+                         agent="agent-6")
+        self.assertEqual(self.cursor()["branches"], {"agent-5": {"LANE.1": self.BR}})
+        self.assertEqual(json.loads(self.cfg.working.read_text())["@branches"], {"agent-5": {"LANE.1": self.BR}})
+        self.assertEqual(SV.agent_request(self.cfg.socket, "GET", "/view", None)[1]["cursor"]["branches"],
+                         {"agent-5": {"LANE.1": self.BR}})
+
+    def test_a_branch_of_another_shape_or_a_path_is_refused_by_name(self):
+        # Catches: a path (a home directory on the owner's page), a branch of any shape, a worktree given as a
+        # path, a worktree with no branch, and an unknown key taken; and a refusal that still writes.
+        home = str(Path.home())
+        bad = [({"branch": home + "/.overture/worktrees/p/overture/ticket/X"}, "branch must"),
+               ({"branch": "feature/x"}, "branch must"), ({"branch": "overture/Ticket/X"}, "branch must"),
+               ({"branch": "overture/ticket/a/b"}, "branch must"), ({"branch": "overture/ticket/" + "a" * 121}, "branch must"),
+               ({"branch": "overture/ticket/X\n"}, "branch must"), ({"branch": 7}, "branch must"),
+               ({"branch": "overture/ticket/X", "worktree": home + "/w"}, "worktree must"),
+               ({"branch": "overture/ticket/X", "worktree": ".."}, "worktree must"),
+               ({"worktree": "X"}, "needs its branch"), ({"branch": "overture/ticket/X", "path": "/tmp/x"}, "working takes")]
+        for extra, why in bad:
+            with self.subTest(extra=extra):
+                code, out = self.work({"items": ["LANE.1"], **extra})
+                self.assertEqual(code, 400, out)
+                self.assertIn(why, out["error"])
+        self.assertFalse(self.cfg.working.exists())
+
+    def test_no_path_is_stored_or_served_and_an_old_payload_still_works(self):
+        # Catches: anything beyond the branch and the folder name kept in working.json or sent to the page; an
+        # old client (items only) refused; an items-only mark leaving the branch of an earlier call standing; and
+        # a 1.49 file (no branches) misread.
+        self.assertEqual(self.work({"items": ["LANE.1"], **self.BR})[0], 200)
+        raw = self.cfg.working.read_text()
+        self.assertEqual(json.loads(raw)["@branches"], {"agent-5": {"LANE.1": self.BR}})
+        for text in (raw, json.dumps(self.cursor())):
+            self.assertNotIn(str(Path.home()), text)
+            self.assertNotIn(".overture/worktrees", text)
+        self.assertEqual(self.work({"items": ["LANE.1"]})[0], 200)   # a 1.49 agent.py
+        cur = self.cursor()
+        self.assertIn("LANE.1", cur["working"])
+        self.assertEqual(cur["branches"], {})
+        self.assertNotIn("@branches", cur["working_by"])
+        now = time.strftime(SV.TS_FORMAT, time.gmtime())
+        self.cfg.working.write_text(json.dumps({"agent-5": {"LANE": now}}))   # a 1.49 server's file
+        self.assertEqual((self.cursor()["working_by"], self.cursor()["branches"]), ({"agent-5": {"LANE": now}}, {}))
+        self.cfg.working.write_text(json.dumps({"agent-5": {"LANE": now},
+                                                "@branches": {"agent-5": {"LANE": {"branch": "/etc/passwd"}},
+                                                              "agent-9": {"LANE": self.BR}}}))
+        self.assertEqual(self.cursor()["branches"], {})   # a planted shape, or a branch with no mark: nothing
+
+    def test_stale_worktrees_reach_an_owners_login_only_and_branches_reach_whoever_sees_the_marks(self):
+        # Catches (W3, roles): the steward's stale list shown to a member or viewer (it is the owner's
+        # housekeeping), on the page's first view or its long poll; and the branches hidden from those who see
+        # the marks today (roles.py: a viewer reads the console, agents' marks included).
+        from overture import doorbell as D
+        from overture import roles as RO
+        self.assertEqual(self.work({"items": ["LANE.1"], **self.BR})[0], 200)
+        D.write_watch(self.cfg.state, True, stale=[{"branch": "overture/ticket/LANE", "age_days": 16,
+                                                    "agent": "agent-5"}])
+        want = {"branch": "overture/ticket/LANE", "age_days": 16, "agent": "agent-5"}
+        self.assertEqual(self.cursor()["stale_worktrees"]["worktrees"], [want])   # roles off: everyone is owner
+        (Path(self.cfg.state) / RO.FILE).write_text(json.dumps({"roles": {
+            "olivia@example.com": {"role": "owner"}, "mo@example.com": {"role": "member", "areas": ["LANE"]}}}))
+        self.assertEqual(self.cursor("olivia@example.com")["stale_worktrees"]["worktrees"], [want])
+        for who in ("mo@example.com", "viewer@example.com"):
+            with self.subTest(login=who):
+                cur = self.cursor(who)
+                self.assertNotIn("stale_worktrees", cur)
+                self.assertEqual(cur["branches"], {"agent-5": {"LANE.1": self.BR}})
+                code, out = self.req("GET", "/api/wait?since=0&timeout=0", tok=token(email=who))
+                self.assertEqual(code, 200, out)
+                self.assertNotIn("stale_worktrees", out["cursor"])
+        code, out = self.req("GET", "/api/wait?since=0&timeout=0", tok=token(email="olivia@example.com"))
+        self.assertEqual(out["cursor"]["stale_worktrees"]["worktrees"], [want])
+
+    def cli_env(self, home):
+        return mock.patch.dict(os.environ, {"HOME": str(home), "GIT_CONFIG_GLOBAL": os.devnull,
+                                            "GIT_CONFIG_NOSYSTEM": "1"})
+
+    def test_worktree_new_marks_its_item_and_working_from_inside_sends_the_branch(self):
+        # Catches: `worktree new` leaving the item "awaiting agent" (the owner cannot see where the work is), a
+        # second agent on another machine not told of the first (its own registry is empty: the console knows),
+        # and `working` run from inside the worktree dropping the branch.
+        from test_kit import wt_repo
+        _o, repo = wt_repo(Path(self.tmp.name) / "g")
+        home5, home6 = Path(self.tmp.name) / "h5", Path(self.tmp.name) / "h6"
+        home5.mkdir()
+        home6.mkdir()
+        with self.cli_env(home5):
+            rc, out, err = self.agent_cli("--as", "agent-5", "worktree", "new", "--item", "LANE.1", "--kind",
+                                          "ticket", "--project", str(repo))
+        self.assertEqual(rc, 0, err)
+        path = Path(out.strip())
+        from overture import worktrees as WT
+        self.assertEqual(path, home5 / ".overture/worktrees" / WT.project_slug("proj", repo) / "overture/ticket/LANE.1")
+        self.assertEqual(self.cursor()["branches"],
+                         {"agent-5": {"LANE.1": {"branch": "overture/ticket/LANE.1", "worktree": "LANE.1"}}})
+        with self.cli_env(home6):
+            rc, out, err = self.agent_cli("--as", "agent-6", "worktree", "new", "--item", "LANE.1", "--kind",
+                                          "fix", "--project", str(repo), "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["overlap"], [{"branch": "overture/ticket/LANE.1", "agent": "agent-5",
+                                                        "kind": None}])
+        self.assertIn("overlap: agent-5 is also on LANE.1, in overture/ticket/LANE.1", err)
+        SV.agent_request(self.cfg.socket, "POST", "/cursor", {"last_synced_at": None}, agent="agent-5")
+        here = os.getcwd()
+        try:
+            os.chdir(path)
+            with self.cli_env(home5):
+                rc, out, err = self.agent_cli("--as", "agent-5", "working", "LANE")
+        finally:
+            os.chdir(here)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.cursor()["branches"]["agent-5"],
+                         {"LANE": {"branch": "overture/ticket/LANE.1", "worktree": "LANE.1"}})
+
+    def test_working_against_a_server_older_than_1_50_still_marks_the_item(self):
+        # Catches: an agent.py that sends a branch to a 1.49 server (which refuses any key but items) and gives
+        # up, so after an upgrade of the plugin alone no item ever shows "agent active".
+        from test_kit import wt_repo
+        _o, repo = wt_repo(Path(self.tmp.name) / "g")
+        home = Path(self.tmp.name) / "h"
+        home.mkdir()
+        real = SV.Console.set_working
+        def as_149(console, body, agent=None):   # 1.49's set_working: any key but "items" refused, in its words
+            if isinstance(body, dict) and set(body) != {"items"}:
+                raise SV.RequestError(400, f'working takes {{"items": [1 to {SV.MAX_WORKING} item ids]}}')
+            return real(console, body, agent)
+        with self.cli_env(home), mock.patch.object(SV.Console, "set_working", as_149):
+            rc, out, err = self.agent_cli("--as", "agent-5", "worktree", "new", "--item", "LANE.1", "--kind",
+                                          "ticket", "--project", str(repo))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("did not take the branch", err)
+        cur = self.cursor()
+        self.assertIn("LANE.1", cur["working"])
+        self.assertEqual(cur["branches"], {})
 
 
 if __name__ == "__main__":

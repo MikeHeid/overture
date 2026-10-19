@@ -22,14 +22,22 @@ open and use git as before.
 prs-push`: gh runs git to find the repository's remote, so it obeys the same
 config, and the server never talks to GitHub anyway. Closed, it starts nothing
 and returns `NO_GIT`, exactly as `run` does.
+
+`git_full` (1.50.0) is the same door with the exit code and both streams, for
+`worktrees.py`'s `git worktree` calls. It runs git and nothing else: the kit
+starts no other program, and a project's `worktree_setup` is printed for the
+agent to run through its own permission prompt, never run here. Closed, it
+starts nothing and returns `NO_GIT`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
+import time
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 UNAVAILABLE = "unavailable (no git in the server)"
 # 0.8.1: every git call is READ-ONLY. Plain `git status` refreshes the index's stat cache
@@ -103,3 +111,70 @@ def gh(args: Sequence[str], cwd: Path | str, *, timeout: float = GH_SECONDS) -> 
     except (OSError, subprocess.SubprocessError) as e:
         return 126, "", f"gh could not start: {e}"
     return r.returncode, r.stdout, r.stderr
+
+
+MAX_OUTPUT = 4 << 20   # 1.50.0: what `git_full` keeps of each stream; more than any listing it reads
+
+
+def _kept(fh) -> str:
+    fh.seek(0)
+    return fh.read(MAX_OUTPUT).decode("utf-8", "replace")
+
+
+TICK_EVERY = 1.0   # 1.50: how often `git_full` runs its `tick` while it waits
+
+
+def _wait(p: subprocess.Popen, timeout: float, tick: Callable[[], None] | None) -> int:
+    """p's exit code, waiting at most `timeout` (TimeoutExpired after); `tick` runs about every TICK_EVERY s."""
+    if tick is None:
+        return p.wait(timeout=timeout)
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            return p.wait(timeout=max(0.0, min(TICK_EVERY, end - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= end:
+                raise
+        # The heartbeat's own failure must not stop a git that is half-way through deleting a folder.
+        with contextlib.suppress(Exception):
+            tick()
+
+
+def git_full(args: Sequence[str], cwd: Path | str, *, timeout: float,
+             tick: Callable[[], None] | None = None) -> tuple[int, str, str] | Unavailable:
+    """`git --no-optional-locks ARGS` in `cwd` as (exit code, stdout, stderr); `NO_GIT` once the seam is closed.
+
+    1.50.0, for `worktrees.py`. Git only: there is no door here for any other program (a project's
+    `worktree_setup` is printed for the agent to run, never run by the kit). Each stream is spooled to a
+    temporary file and at most MAX_OUTPUT bytes of it kept, so a huge listing cannot fill memory. It runs in a
+    session of its own, and on `timeout` the whole group is killed. 127 when git cannot be found, 126 when it
+    cannot start, 124 on a timeout. `tick` (the steward's heartbeat) is run about once a second while it waits,
+    for a call that must not be cut short to keep the heartbeat fresh (`git worktree remove`).
+    """
+    if not _OPEN:
+        return NO_GIT
+    if isinstance(args, (str, bytes)) or not all(isinstance(a, str) and "\0" not in a for a in args):
+        raise ValueError("git's arguments are a list of strings (never one shell string)")
+    import signal
+    import tempfile
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            p = subprocess.Popen([*GIT, *args], cwd=cwd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                 env=env(), start_new_session=True)
+        except FileNotFoundError:
+            return 127, "", "git: not found"
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            return 126, "", f"git could not start: {e}"
+        try:
+            rc = _wait(p, timeout, tick)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            return 124, "", f"git did not finish within {timeout:g} s and was stopped"
+        return rc, _kept(out), _kept(err)
