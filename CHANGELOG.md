@@ -2990,6 +2990,44 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## The console as a macOS service (1.51.0)
+
+The owner's D2 (B, "Go" on 2026-10-19): the command Linux and WSL got in
+1.33 now works on a Mac, through a launchd LaunchAgent. The architect
+defaults A1 to A9 are in OPEN-DECISIONS.md, "D2 as decided".
+
+- **`server.py service install [--start]`** on macOS writes
+  `~/Library/LaunchAgents/overture.console.plist` with `plistlib`: the
+  server as an argv array (a space in a path is fine; a path that is not
+  absolute or holds a control character is refused by name), `RunAtLoad`,
+  `KeepAlive` on a failed exit, a 10 s `ThrottleInterval`, and the
+  daemon's log for its output. `--start` boots out a loaded job first,
+  then runs `launchctl enable` and `launchctl bootstrap gui/<uid>`.
+  Without `--start` nothing is loaded until your next login. The plist is
+  written whole at 0644 (a temp file and a rename). Over SSH, or with
+  nobody logged in at the Mac, a failed bootstrap says launchd needs your
+  login session; there is no fallback to another domain.
+- **`service uninstall`** boots the job out and removes the plist; a job
+  still loaded after its plist was deleted by hand is booted out too.
+- **`status`, `health` and the one-server gate** read `launchctl print` by
+  line name: `running` with its pid, `spawn scheduled`, a failed last exit,
+  or not loaded. A daemon is refused while the job runs. `health` checks no
+  linger on a Mac: a LaunchAgent runs while you are logged in.
+- **Every hint names the platform's command**: `launchctl bootout`,
+  `kickstart -k` and `print` on a Mac, `systemctl --user` elsewhere. A
+  version-skew problem from a service now names its restart command, and
+  so does the plugin's upgrade notice. On a Mac that notice names one
+  command, `server.py service install --start` from the new kit, which
+  points the LaunchAgent at it and restarts it.
+- **`deploy/install.sh` refuses on macOS** by name (its per-project units
+  are systemd) and points to `server.py service install`.
+- **The PRs tab no longer stays on "Loading…"** when the page redraws while
+  it loads (a fault since 1.0); the projects list had the same fault, also
+  fixed.
+- Docs: INSTALL.md (macOS prerequisites and the logged-in note,
+  `cloudflared service install` for a tunnel), docs/features/hosting.md,
+  RUNBOOK ("macOS: the launchd service").
+
 ## Agent worktrees (1.50.0)
 
 The owner's choices of 2026-10-16 (OPEN-DECISIONS.md, "Agent worktrees", W1
