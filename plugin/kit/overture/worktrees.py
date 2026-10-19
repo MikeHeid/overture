@@ -25,8 +25,9 @@ and shows them; it never sees a path.
   another commit (work after the merge, or a fork's branch of the same name)
   keeps the worktree. A worktree with no commits of its own (nothing past the
   commit it was cut from, recorded at `new`) has no PR at all: it is never
-  landed, however a PR of its branch name ended, and is stale after 14 days. A closed, unmerged PR's worktree goes only when every
-  commit is on some remote ref. Anything else is kept and the reason said.
+  landed, however a PR of its branch name ended, and is stale after 14 days.
+  A closed, unmerged PR's worktree goes only when every commit is on some
+  remote ref. Anything else is kept and the reason said.
   No `--force`, ever, no `branch -D`, and no remote branch is deleted. Only
   paths under `~/.overture/worktrees/<project>/` are ever acted on. One with
   no PR for 14 days is listed as stale and kept. The steward's prune runs on

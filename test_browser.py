@@ -6750,8 +6750,8 @@ class WorktreeBrowserTests(unittest.TestCase):
                 _wait_for(page, "() => /agent active \\(2 waiting on agents\\)/.test((document.querySelector("
                                 "'details#item-LANE .ck-item-btn') || {}).textContent || '')", timeout=10000)
                 # The header counts the item's own (one thread at most today): two, served, read the same way.
-                def two(route):
-                    resp = route.fetch()
+                def two(route):   # routes run newest first: this one carries the access token itself
+                    resp = route.fetch(headers={**route.request.headers, "cf-access-jwt-assertion": self.tok})
                     data = json.loads(resp.text())
                     if isinstance(data.get("view"), dict) and "LANE.1" in data["view"].get("items", {}):
                         data["view"]["items"]["LANE.1"]["own"]["awaiting_agent"] = 2

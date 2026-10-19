@@ -2045,6 +2045,20 @@ class ListeningTests(Tmp):
         p.write_text(json.dumps({"watching": "yes", "at": D._ts(self.T0), "until": D._ts(self.T0 + 30)}))
         self.assertEqual(D.listening(self.dir, now=self.T0 + 1)["state"], "idle")
 
+    def test_a_deeply_nested_watch_or_cursor_file_reads_as_nothing(self):
+        # Catches (1.50 clearing round, after Z3): watch.json or agent-cursor.json nested deeper than the JSON
+        # parser goes ([[[[... fits under the 4 KiB cap), raising RecursionError (not a ValueError) out of
+        # listening(), stale_worktrees() or the cursor, so one bad file breaks /api/status or stops the watch
+        # instead of reading as no data.
+        for text in ("[" * 4000, '{"at": ' + "[" * 4000, b"\xff\xfe"):
+            with self.subTest(text=text[:10]):
+                for name in (D.WATCH_FILE, D.CURSOR_FILE):
+                    p = self.dir / name
+                    p.write_bytes(text if isinstance(text, bytes) else text.encode())
+                self.assertEqual(D.listening(self.dir, now=self.T0), {"state": "never", "last_seen": None})
+                self.assertIsNone(D.stale_worktrees(self.dir, now=self.T0))
+                self.assertEqual((D.read_cursor(self.dir), D.read_rx_cursor(self.dir)), (0, 0))
+
     def test_a_fifo_at_the_watch_file_reads_never_without_blocking(self):
         os.mkfifo(self.dir / D.WATCH_FILE)
         self.assertEqual(D.listening(self.dir, now=self.T0)["state"], "never")

@@ -3012,11 +3012,13 @@ server only stores and shows the branch it is told.
   a worktrees or project folder that a symlink leads out of the home or onto
   `/mnt/`, a folder in the way that is not a registered worktree of this
   repository, and a session with **no agent name** (unnamed sessions share
-  one set of marks, so they would share one worktree): the refusal says how
-  to name it, as for `agent.py working` (`--as`, `OVERTURE_AGENT` or
-  `/overture:as`). The same agent asking again for the same item and kind
-  gets its worktree back, unless that worktree's PR merged or closed: then it
-  gets a fresh `-N` one, and is told the old one waits for prune. It marks
+  one set of marks, so they would share one worktree): the refusal leads
+  with the fix, `agent.py --as agent-5 --state STATE worktree new ...` (or
+  `OVERTURE_AGENT`, or `/overture:as`). The same agent asking again for the
+  same item and kind gets its worktree back, unless that worktree's PR merged
+  or closed: then it gets a fresh `-N` one, and is told the old one waits for
+  prune. A PR counts as the worktree's only when its head is the worktree's
+  `HEAD`, so an old PR of a freed branch name is not mistaken for it. It marks
   the item worked on, with its branch.
 - **Another agent on the item** (W4) gets the next branch
   (`overture/ticket/API-3-2`, then `-3`), and `worktree new` names the other
@@ -3034,7 +3036,10 @@ server only stores and shows the branch it is told.
   its local branch deleted only if it still points at that commit (`git
   update-ref -d`, never `branch -D`). A merged PR at another commit (work
   after the merge, or a fork's branch of the same name) keeps the worktree,
-  and says why. A closed, unmerged PR's worktree goes only when every commit
+  and says why. A worktree with **no commits of its own** (nothing past the
+  commit `new` cut it from) is never landed, whatever a PR of its branch name
+  did: it is kept, and is stale after 14 days. A closed, unmerged PR's
+  worktree goes only when every commit
   is on a remote ref (its branch then with `git branch -d`). It looks again
   right before each removal, under the registry's lock, and keeps one written
   into meanwhile. It acts only on paths under the project's own folder. Never
@@ -3044,8 +3049,13 @@ server only stores and shows the branch it is told.
   directory is in and only for its own console, after its first heartbeat
   (the owner sees "listening" first) and only when no signal is waiting: at
   most once per 10 minutes (the time kept in the state folder), with one `gh`
-  call, and for at most 60 seconds, after which it stops and takes up where it
-  stopped on the next cycle. Without `gh` it skips, and says so once.
+  call, and for at most 60 seconds in all, that `gh` call included: each git
+  and `gh` call is held to the time left (and not started under 2 s), and the
+  heartbeat is kept fresh between calls, so "listening" never lapses. Out of
+  time, it stops and takes up where it stopped on the next cycle. Without
+  `gh` it skips, and says so once. A record of its own, or a `watch.json`,
+  that will not parse (nested past the JSON parser's depth included) reads as
+  nothing.
 - **The registry**, `<project>/.registry.json` beside the worktrees (path,
   branch, item, kind, agent, created, base), is written to a temporary file and
   renamed over, under a lock, read tolerantly (a corrupt one is rebuilt from
@@ -3053,7 +3063,10 @@ server only stores and shows the branch it is told.
   `list` and `prune`: git wins, and an entry whose path lies outside the
   project's folder is dropped.
 - **`worktree_setup`** in `.overture.json`: one command as an argv list (a
-  shell string is refused by name) that sets up what git does not carry.
+  shell string is refused by name) that sets up what git does not carry. A
+  word holding a control character (ESC, BEL, a newline, CR, DEL, a C1 such
+  as CSI) is refused, by the character's name and the word's index, so it is
+  never printed to a terminal.
   **Overture never runs it.** `worktree new` reads it from the new worktree's
   copy, checks it, and prints it as a suggested command ("This project
   suggests a setup step; run it yourself in the worktree: ..."), also in
@@ -3079,16 +3092,18 @@ server only stores and shows the branch it is told.
 - **The console shows them** (W4): the item, its Tickets fold, its open cards
   in the Tickets tab (never a closed one) and the PR row whose head is the
   branch each show a chip (the branch icon and name, D9) with the agent's
-  name; its accessible name and title are the whole text, "overture/fix/API-2-2
-  · agent-6, branch", and on a phone a long one stays on one line with an
-  ellipsis. With two branches on one item all of them warn: "2 agents on
+  name, the whole text in the page ("overture/fix/API-2-2 · agent-6") inside a
+  group named "Where agents work on API-2", with the same words and ", branch"
+  as its title; on a phone a long one wraps inside its column (touch has no
+  hover for a title), never wider than a 320px screen. With two branches on one item all of them warn: "2 agents on
   API-3: overture/fix/API-3-2, overture/ticket/API-3", a note, never a block,
   said once to a screen reader when it first appears (not on each redraw).
   The Active agents fold says which branch each agent is on. Members and
   viewers see branches as they see the marks.
 - **The item's header names the agents first**: "agent-5, agent-6 active",
   no longer "1 agent-5, agent-6 active" (the number counts what waits, not
-  agents); the dashboard says "agent active (2 waiting)".
+  agents); with more than one thing waiting, the header and the dashboard
+  add "(2 waiting on agents)".
 - **Stale worktrees** (W3) ride the steward's heartbeat (`watch.json`, branch,
   age and agent only, at most 12), so no new route was needed, and are shown
   only while that heartbeat is at most a day old. The owner sees a quiet "1

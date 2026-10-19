@@ -29,7 +29,7 @@ Onboarding asks which one and walks you through it (the repository's
 `docs/features/sign-in-and-networks.md` has the detail).
 
 *Since: sign-in links 1.46, `--listen` on ZeroTier or Tailscale 1.47, agent
-worktrees (and so `git` here) 1.50.*
+worktrees 1.50 (they use git).*
 
 **Docker is not required**, and no container image is offered yet: the
 console is one Python process under `systemd --user`.

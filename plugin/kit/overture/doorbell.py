@@ -178,7 +178,7 @@ def listening(state: Path, *, now: float | None = None) -> dict:
     try:
         data = _read_watch(Path(state) / WATCH_FILE)
         rec = json.loads(data.decode("utf-8")) if data is not None else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: never
         rec = None
     if not isinstance(rec, dict):
         return {"state": "never", "last_seen": None}
@@ -226,7 +226,7 @@ def stale_worktrees(state: Path, *, now: float | None = None) -> dict | None:
     try:
         data = _read_watch(Path(state) / WATCH_FILE)
         rec = json.loads(data.decode("utf-8")) if data is not None else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: nothing
         return None
     if not isinstance(rec, dict) or "stale_worktrees" not in rec:
         return None
@@ -283,7 +283,7 @@ def _cursor_value(state: Path, key: str) -> int:
     try:
         data = read_regular(Path(state) / CURSOR_FILE, MAX_CURSOR)
         v = json.loads(data.decode("utf-8")).get(key, 0) if data is not None else 0
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, RecursionError):   # 1.50 clearing round: too deep reads as 0
         return 0
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
 

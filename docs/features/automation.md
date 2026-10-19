@@ -182,8 +182,9 @@ it says so), prints the path, and marks the item worked on with that branch.
 `KIND` is one of `ticket`, `visual`, `ux`, `playbook`, `round` and `fix`. It
 needs the session's agent name, the same one `agent.py working` uses
 (`agent.py --as agent-5 ...`, `OVERTURE_AGENT`, or `/overture:as` in the
-session), and refuses without one, saying so: unnamed sessions share one set
-of marks, so they would share one worktree. Run again by the same agent for
+session), and refuses without one, leading with the fix (`agent.py --as
+agent-5 --state STATE worktree new ...`): unnamed sessions share one set of
+marks, so they would share one worktree. Run again by the same agent for
 the same item and kind, it gives the same worktree back, unless that
 worktree's PR has merged or closed: then it makes a fresh `-N` one and says
 the old one waits for prune. The agent works, commits, pushes and opens its
@@ -197,8 +198,9 @@ Tickets fold and the open cards in the Tickets tab, never a closed one) and
 the PR row of either branch show a chip per branch with the agent's name, and
 a warning: "2 agents on API-3: overture/fix/API-3-2, overture/ticket/API-3".
 It warns, never blocks; a screen reader hears it once, when it first appears.
-On a phone a long branch stays on one line with an ellipsis; the chip's
-title and accessible name are the whole text. The console learns a branch
+The chip's whole text is in the page, inside a group named for the item; on
+a phone a long branch wraps inside its column rather than being cut (touch
+has no hover for the title). The console learns a branch
 from the agent's `working` mark: the branch and the worktree folder's name
 only, never a path, and the server refuses anything else by name. Members and
 viewers see the branches as they see the marks.
@@ -220,6 +222,10 @@ state, the newest 200, with each PR's head commit).
 - **Closed without merging:** removed only when every commit is on a remote
   ref, its branch then with `git branch -d` (which keeps one git thinks
   unmerged).
+- **No commits of its own** (nothing past the commit `new` cut it from):
+  never landed, whatever a PR of its branch name did, and kept. A PR is the
+  worktree's only when its head is the worktree's `HEAD`; `new` reuses or
+  replaces a worktree by the same rule.
 - **Open, no PR, unknown:** kept, with the reason. One with no PR for 14 days
   is **stale**: listed, never removed.
 
@@ -231,8 +237,10 @@ Without `gh` it keeps everything and says so.
 The steward's `watch` runs the same prune after its first heartbeat (you see
 "listening" first) and only when no signal is waiting: at most once per 10
 minutes (the time kept in its state folder), with that one `gh` call, and for
-at most 60 seconds, after which it stops and takes up there on its next
-cycle. The owner sees a quiet "1 stale worktree" note at the top of the PR
+at most 60 seconds in all, that `gh` call included: every git and `gh` call
+is held to the time left, and the heartbeat is kept fresh between them, so
+"listening" never lapses. Out of time, it stops and takes up there on its
+next cycle. The owner sees a quiet "1 stale worktree" note at the top of the PR
 tab, and the same count on the tab's "pushed" line, with each branch and its
 age (owners only, and only while the steward's heartbeat is under a day old).
 `agent.py worktree list [--json]` shows each worktree's branch, item, kind,
@@ -241,7 +249,9 @@ commits, PR and stale.
 
 **Setting one up: `worktree_setup`.** git does not carry untracked
 dependencies (a virtualenv, `node_modules`). A project can name one command
-in `.overture.json`, as an argv list, never a shell string:
+in `.overture.json`, as an argv list, never a shell string (a word with a
+control character, such as ESC or a newline, is refused by name, so it is
+never printed to a terminal):
 
     {"worktree_setup": ["make", "deps"]}
 
