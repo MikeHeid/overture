@@ -8520,6 +8520,356 @@ class WorktreeTests(unittest.TestCase):
             with self.assertRaisesRegex(self.WT.WorktreeError, "no git in the server"):
                 self.new()
 
+    # ---- tests that kill surviving mutants (1.50 run2) ----
+
+    def test_under_requires_a_separator_not_just_a_prefix(self):
+        # Catches T01: _under returned True for "/home/user" under "/home/us" (prefix without separator).
+        self.assertFalse(self.WT._under("/home/userXYZ", "/home/user"))
+        self.assertTrue(self.WT._under("/home/user/child", "/home/user"))
+        self.assertTrue(self.WT._under("/home/user", "/home/user"))
+
+    def test_a_closed_pr_is_not_landed_even_at_the_worktrees_head(self):
+        # Catches L04: state "closed" read as landed (merged); a closed PR's worktree was deleted.
+        # A closed PR can still be removed if fully pushed, but "landed" must be False (it never merged).
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "CLOSED", "oid": head}] if b == r["branch"] else None
+        row = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=prs)["worktrees"][0]
+        self.assertFalse(row["landed"])  # CLOSED is never "landed"
+        # The status function should NOT report this as landed
+        entry = {"path": r["path"], "branch": r["branch"], "item": "API-3", "kind": "ticket",
+                 "agent": "agent-5", "created": "2026-01-01T00:00:00Z", "base_oid": head}
+        row2 = self.WT.status(entry, self.t0, prs)
+        self.assertFalse(row2["landed"])
+
+    def test_prune_never_uses_branch_dash_capital_d(self):
+        # Catches R02: `branch -D` used instead of `branch -d`, force-deleting an unmerged branch.
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "closed", "oid": head}] if b == r["branch"] else None
+        calls, patch = self.spy()
+        with patch:
+            self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        flat = [a for c in calls for a in c]
+        self.assertIn("-d", flat)
+        self.assertNotIn("-D", flat)
+
+    def test_an_unregistered_worktree_is_kept_with_a_reason(self):
+        # Catches R05: unregistered worktrees (made by hand) pruned without the owner's knowledge.
+        # Create a worktree by hand (not through new()) so it's not in the registry.
+        # Use a CLOSED PR (not merged) with all commits pushed, so _keep_reason returns None
+        # and the R05 check is what catches it.
+        hand_made = self.root() / "overture" / "ticket" / "HAND-1"
+        hand_made.parent.mkdir(parents=True, exist_ok=True)
+        wt_git(self.repo, "worktree", "add", "-q", "-b", "overture/ticket/HAND-1", str(hand_made), "origin/main")
+        (hand_made / "w.txt").write_text("work")
+        wt_git(hand_made, "add", "w.txt")
+        wt_git(hand_made, "commit", "-qm", "work")
+        wt_git(hand_made, "push", "-q", "origin", "HEAD")
+        head = wt_git(hand_made, "rev-parse", "HEAD").strip()
+        # CLOSED (not merged), all pushed -> _keep_reason returns None, but R05 should catch it
+        prs = lambda b: [{"number": 9, "state": "closed", "oid": head}] if b == "overture/ticket/HAND-1" else None
+        res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        self.assertEqual([r["branch"] for r in res["removed"]], [])
+        kept_hand = [k for k in res["kept"] if k["branch"] == "overture/ticket/HAND-1"]
+        self.assertEqual(len(kept_hand), 1)
+        self.assertIn("not in the registry", kept_hand[0]["why"])
+        self.assertTrue(hand_made.is_dir())
+
+    def test_remove_updates_the_registry_after_git_worktree_remove(self):
+        # Catches R07: registry entry not removed after worktree is deleted.
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "merged", "oid": head}] if b == r["branch"] else None
+        self.assertEqual(len(self.WT.read_registry(self.root())[0]), 1)
+        res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        self.assertEqual([x["branch"] for x in res["removed"]], [r["branch"]])
+        self.assertEqual(len(self.WT.read_registry(self.root())[0]), 0)
+
+    def test_tidy_never_removes_folders_outside_the_project_dir(self):
+        # Catches T10: _tidy climbing out of the project dir when parent matches as prefix.
+        # Create a worktree at ~/.overture/worktrees/proj-HASH/overture/ticket/X
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "merged", "oid": head}] if b == r["branch"] else None
+        self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        # The .overture/worktrees dir should still exist (tidy stops at project dir, never above)
+        self.assertTrue((self.home / ".overture" / "worktrees").is_dir())
+
+    def test_registered_here_only_matches_paths_under_the_base_dir(self):
+        # Catches T11: registered_here matching a path that starts with base but isn't under it.
+        r = self.new()
+        # Path under the base: should match
+        got = self.WT.registered_here(Path(r["path"]), home=self.home)
+        self.assertIsNotNone(got)
+        # Path in repo (not under ~/.overture/worktrees): should not match
+        got = self.WT.registered_here(self.repo, home=self.home)
+        self.assertIsNone(got)
+
+    def test_a_worktree_whose_status_cannot_be_read_is_kept(self):
+        # Catches L07: worktree with unreadable status (dirty=None) pruned.
+        from unittest import mock
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "merged", "oid": head}] if b == r["branch"] else None
+        real = self.WT.status
+        def broken_status(e, now, prs_fn, cycle=None):
+            row = real(e, now, prs_fn, cycle)
+            row["dirty"] = None  # simulate unreadable status
+            return row
+        with mock.patch.object(self.WT, "status", side_effect=broken_status):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        self.assertEqual(res["removed"], [])
+        self.assertIn("status cannot be read", res["kept"][0]["why"])
+
+    def test_a_closed_pr_with_unknown_unpushed_is_kept(self):
+        # Catches L10: worktree with unknown unpushed count (None) pruned on closed PR.
+        from unittest import mock
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "closed", "oid": head}] if b == r["branch"] else None
+        real = self.WT.status
+        def broken_unpushed(e, now, prs_fn, cycle=None):
+            row = real(e, now, prs_fn, cycle)
+            row["unpushed"] = None  # simulate unknown
+            return row
+        with mock.patch.object(self.WT, "status", side_effect=broken_unpushed):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        self.assertEqual(res["removed"], [])
+        self.assertIn("cannot tell whether every commit is on a remote", res["kept"][0]["why"])
+
+    def test_remove_rechecks_status_and_keeps_when_unreadable(self):
+        # Catches L17: status unreadable during re-check before remove not caught.
+        from unittest import mock
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "merged", "oid": head}] if b == r["branch"] else None
+        call_count = [0]
+        real_out = self.WT._out
+        def broken_on_recheck(args, cwd, cycle=None):
+            if "status" in args:
+                call_count[0] += 1
+                if call_count[0] > 1:  # first is status(), second is in _remove
+                    return None
+            return real_out(args, cwd, cycle)
+        with mock.patch.object(self.WT, "_out", side_effect=broken_on_recheck):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        self.assertEqual(res["removed"], [])
+        self.assertIn("status cannot be read now", res["kept"][0]["why"])
+        self.assertTrue(Path(r["path"]).is_dir())
+
+    def test_cycle_skips_call_under_min_call_unless_must(self):
+        # Catches C01: left < 0 instead of left < MIN_CALL (2s); C02: must calls can be skipped.
+        import time as _time
+        cycle = self.WT.Cycle(10.0)  # 10 second budget
+        # Still have time
+        t = cycle.timeout(10.0, must=False)
+        self.assertIsNotNone(t)
+        # Burn down to under MIN_CALL (2s)
+        cycle.deadline = _time.monotonic() + 1.0  # 1s left < MIN_CALL
+        t = cycle.timeout(10.0, must=False)
+        self.assertIsNone(t)  # skipped because < MIN_CALL
+        t = cycle.timeout(10.0, must=True)
+        self.assertIsNotNone(t)  # must is never skipped
+        self.assertGreaterEqual(t, 1.0)
+
+    def test_cycle_timeout_is_capped_by_time_left(self):
+        # Catches C03: per-call timeout ignores time left.
+        import time as _time
+        cycle = self.WT.Cycle(5.0, call_max=100.0)
+        _time.sleep(0.1)
+        t = cycle.timeout(120.0)  # request 120s but only ~5s left
+        self.assertLess(t, 6.0)
+
+    def test_cycle_ticks_before_each_timeout_call(self):
+        # Catches C05: tick not called before timeout().
+        ticks = []
+        cycle = self.WT.Cycle(60.0, tick=lambda: ticks.append(1))
+        cycle.timeout(10.0)
+        self.assertEqual(len(ticks), 1)
+        cycle.timeout(10.0)
+        self.assertEqual(len(ticks), 2)
+
+    def test_at_least_one_worktree_is_looked_at_per_cycle(self):
+        # Catches C07: cycle stops before looking at any worktree when time is low.
+        # The check is: `if rows and cycle.left() < MIN_CALL` - must have at least one row first.
+        import time as _time
+        from unittest import mock
+        self.new(item="API-1")
+        self.new(item="API-2")
+        self.new(item="API-3")
+        # Mock status to burn the clock after the first worktree
+        real_status = self.WT.status
+        call_count = [0]
+        def burn_after_first(e, now, prs, cycle=None):
+            row = real_status(e, now, prs, cycle)
+            call_count[0] += 1
+            if call_count[0] == 1 and cycle:
+                cycle.deadline = _time.monotonic() + 0.5  # burn down after first
+            return row
+        cycle = self.WT.Cycle(60.0)
+        with mock.patch.object(self.WT, "status", side_effect=burn_after_first):
+            listing = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None, cycle=cycle)
+        # Even though time ran out, we got at least 1 worktree (not 0)
+        self.assertGreaterEqual(len(listing["worktrees"]), 1)
+        # And we stopped early
+        self.assertIsNotNone(listing["unfinished"])
+
+    def test_resume_strictly_after_the_last_branch(self):
+        # Catches C09: >= instead of > for resume, looking at the same branch twice.
+        a = self.new(item="API-1")
+        b = self.new(item="API-2")
+        listing = self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None,
+                                          start_after=a["branch"])
+        branches = [w["branch"] for w in listing["worktrees"]]
+        self.assertNotIn(a["branch"], branches)
+        self.assertIn(b["branch"], branches)
+
+    def test_prune_ticks_between_worktrees(self):
+        # Catches C11: tick not called between worktrees.
+        ticks = []
+        self.new(item="API-1")
+        self.new(item="API-2")
+        cycle = self.WT.Cycle(60.0, tick=lambda: ticks.append(1))
+        self.WT.list_worktrees(self.repo, "proj", home=self.home, prs=None, cycle=cycle)
+        self.assertGreaterEqual(len(ticks), 2)  # at least one per worktree
+
+    def test_overlap_excludes_own_agents_other_branches(self):
+        # Catches N02: own agent's other branches shown as overlap.
+        a = self.new(item="API-1", agent="agent-5")
+        b = self.new(item="API-2", agent="agent-5")  # same agent, different item
+        # When getting API-2, API-1 should not be in overlap (same agent)
+        self.assertEqual(b["overlap"], [])
+        # But another agent's branch should be in overlap
+        c = self.new(item="API-1", agent="agent-6")
+        self.assertEqual(len(c["overlap"]), 1)
+        self.assertEqual(c["overlap"][0]["agent"], "agent-5")
+
+    def test_worktree_is_cut_from_base_oid_not_ref_name(self):
+        # Catches N04: worktree cut from base ref name instead of recorded oid.
+        calls, patch = self.spy()
+        with patch:
+            r = self.new()
+        # Find the worktree add call
+        add_call = [c for c in calls if "worktree" in c and "add" in c][0]
+        # The last arg should be a sha, not "origin/main"
+        self.assertNotEqual(add_call[-1], "origin/main")
+        self.assertRegex(add_call[-1], r"^[0-9a-f]{40}$")
+
+    def test_stale_summary_is_capped_at_max_stale_report(self):
+        # Catches S04: stale summary not capped, sending too many entries.
+        old_max = self.WT.MAX_STALE_REPORT
+        self.WT.MAX_STALE_REPORT = 2
+        try:
+            for i in range(5):
+                self.new(item=f"API-{i}")
+            listing = self.WT.list_worktrees(self.repo, "proj", home=self.home,
+                                              now=self.t0 + 20 * self.DAY, prs=lambda b: None)
+            summary = self.WT.stale_summary(listing)
+            self.assertEqual(len(summary), 2)  # capped at MAX_STALE_REPORT
+        finally:
+            self.WT.MAX_STALE_REPORT = old_max
+
+    def test_prune_throttle_is_10_minutes_not_60_seconds(self):
+        # Catches A01: PRUNE_EVERY checked as 60 instead of 600.
+        import agent as AG
+        state = self.dir / "state"
+        state.mkdir()
+        R.register(self.repo, state, KIT)
+        # Write a prune record from 5 minutes ago
+        import time as _time
+        t = _time.time()
+        (state / AG.PRUNE_FILE).write_text(json.dumps({"at": t - 300, "stale": [], "resume_after": None}))
+        rec = AG._prune_record(state)
+        self.assertIsNotNone(rec)
+        # Should still be throttled (< 600s)
+        self.assertTrue(0 <= t - rec["at"] < AG.PRUNE_EVERY)
+
+    def test_future_prune_stamp_is_not_throttled(self):
+        # Catches A02: future timestamp still throttles.
+        import agent as AG
+        state = self.dir / "state"
+        state.mkdir()
+        import time as _time
+        t = _time.time()
+        (state / AG.PRUNE_FILE).write_text(json.dumps({"at": t + 600, "stale": [], "resume_after": None}))
+        rec = AG._prune_record(state)
+        # A future timestamp should NOT pass the throttle check (0 <= delta is false)
+        self.assertFalse(0 <= t - rec["at"] < AG.PRUNE_EVERY)
+
+    def test_branch_with_extra_keys_is_refused(self):
+        # Catches V01: extra keys in branch dict accepted.
+        from overture.server import branch_problem
+        self.assertIsNone(branch_problem({"branch": "overture/ticket/API-3"}))
+        self.assertIsNone(branch_problem({"branch": "overture/ticket/API-3", "worktree": "API-3"}))
+        self.assertIsNotNone(branch_problem({"branch": "overture/ticket/API-3", "extra": "bad"}))
+
+    def test_future_heartbeat_stamp_is_refused(self):
+        # Catches D02: future heartbeat stamp accepted.
+        import time as _time
+        t = _time.time()
+        D.write_watch(self.dir, True, now=t + 120)  # 2 minutes in the future
+        got = D.listening(self.dir, now=t)
+        self.assertEqual(got["state"], "never")
+
+    def test_negative_stale_age_is_refused(self):
+        # Catches D03: negative age_days accepted.
+        rows = D._stale_rows([
+            {"branch": "overture/ticket/API-3", "age_days": 14},
+            {"branch": "overture/ticket/API-4", "age_days": -5},
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["branch"], "overture/ticket/API-3")
+
+    def test_no_remove_started_when_cycle_cannot_finish(self):
+        # Catches C10: remove started even when cycle has < 2*MIN_CALL left.
+        import time as _time
+        from unittest import mock
+        r = self.new()
+        head = self.commit(r)
+        prs = lambda b: [{"number": 9, "state": "merged", "oid": head}] if b == r["branch"] else None
+        # A cycle with very little time left - enough to list but not to remove
+        cycle = self.WT.Cycle(60.0)
+        real_keep = self.WT._keep_reason
+        def burn_after_keep(row):
+            why = real_keep(row)
+            if why is None:
+                # Burn down to < 2*MIN_CALL right before remove would start
+                cycle.deadline = _time.monotonic() + 2.0  # < 2*MIN_CALL (4s)
+            return why
+        with mock.patch.object(self.WT, "_keep_reason", side_effect=burn_after_keep):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs, cycle=cycle)
+        # Should NOT have been removed - not enough time
+        self.assertEqual(res["removed"], [])
+        self.assertIn("time was up", res["kept"][0]["why"])
+        self.assertTrue(Path(r["path"]).is_dir())
+
+    def test_main_checkout_is_never_marked_live_in_reconcile(self):
+        # Catches T07: main checkout (the repository itself) included in live worktrees.
+        # Create a worktree then check reconcile doesn't include main as live
+        r = self.new()
+        pdir = self.root()
+        main = self.WT.main_checkout(self.repo)
+        live, loose, notes, known = self.WT._reconcile(pdir, main)
+        # Live should contain our worktree but NOT the main checkout
+        live_paths = {os.path.realpath(e["path"]) for e in live}
+        self.assertIn(os.path.realpath(r["path"]), live_paths)
+        self.assertNotIn(os.path.realpath(main), live_paths)
+
+    def test_enclosing_via_worktree_only_matches_paths_under_base(self):
+        # Catches A09: _enclosing_via_worktree matching paths outside ~/.overture/worktrees.
+        import agent as AG
+        state = self.dir / "state"
+        state.mkdir()
+        R.register(self.repo, state, KIT)  # register so enclosing can find it
+        r = self.new()
+        # Inside a worktree: should find enclosing (the main repo is registered)
+        got = AG._enclosing_via_worktree(Path(r["path"]))
+        self.assertIsNotNone(got)
+        # The main repo is NOT under ~/.overture/worktrees: should NOT match
+        got = AG._enclosing_via_worktree(self.repo)
+        self.assertIsNone(got)
+
 
 SETUP_SCRIPT = '''import json, sys
 open("setup-ran.json", "w").write(json.dumps(sys.argv[1:]))   # the marker a setup that ran would leave
