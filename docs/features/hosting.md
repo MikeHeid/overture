@@ -40,13 +40,41 @@ One server, `server.py --all`, hosts every project on the machine. Run it
 however suits the host (1.32):
 
     <py> <kit>/server.py daemon start|stop         # detached, with a pid file and a log
-    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
+    <py> <kit>/server.py service install --start   # systemd (Linux, WSL) or launchd (macOS, 1.51)
     <py> <kit>/server.py status                    # which mode, pid, each project's port
     <py> <kit>/server.py health                    # agent door, version skew, linger; clears stale files
 
 `status` and `health` only read; a daemon and a service refuse to run
 together, each naming the other. `server.py --all` in the foreground is
-unchanged. macOS launchd support is on the roadmap.
+unchanged.
+
+### macOS: launchd (1.51)
+
+On a Mac, the same `server.py service install [--start]` writes a launchd
+LaunchAgent, `~/Library/LaunchAgents/overture.console.plist` (label
+`overture.console`), and with `--start` loads and starts it in your login
+session (`launchctl enable`, then `launchctl bootstrap gui/<uid>` to load
+it); installing again boots the old job out first. Without `--start` it
+only writes the plist, which loads at your next login. Over SSH, or with
+nobody logged in at the Mac, `--start` cannot load it and says to log in
+at the Mac. `service uninstall` boots the job out and removes the plist
+(and still boots out a job whose plist was deleted by hand).
+
+- The plist runs `server.py --all --server-file <server.json>` as an argv
+  list, so a space in a path is fine; a path that is not absolute or holds
+  a control character is refused by name.
+- It starts at login and again after a crash (`KeepAlive` on a failed
+  exit). launchd has no start limit: a server that keeps failing is tried
+  again every 10 seconds, and `health` shows the service as `failed`.
+- Output goes to the daemon's log, `~/.local/state/overture/server.log`.
+- A LaunchAgent runs while you are logged in to the Mac. It survives
+  sleep and closing every terminal; there is no linger to turn on.
+- `status`, `health` and the one-server gate read `launchctl print`; every
+  hint names the Mac's command (`launchctl kickstart -k
+  gui/<uid>/overture.console` to restart, `launchctl bootout ...` to stop and unload).
+- The per-project units of `deploy/install.sh` stay systemd: on a Mac it
+  refuses by name and points here. For a Cloudflare tunnel on a Mac, use
+  `cloudflared service install`, Cloudflare's own launchd installer.
 
 `/health` is always answered on the agent's door. A plain HTTP health
 port exists only when the server is started with `--health-port PORT`,

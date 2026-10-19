@@ -104,6 +104,13 @@ def _is_windows_native() -> bool:
     return platform.system() == "Windows"
 
 
+def _restart_cmd() -> str:
+    """The main server's systemd restart command: hosting.service_cmd("restart") on Linux, spelled out here
+    because importing hosting would pull in fcntl, which native Windows Python does not have. Only the
+    non-Mac upgrade banner prints it; a Mac's banner names `service install --start` instead (1.51)."""
+    return "systemctl --user restart overture-console"
+
+
 KIT = Path(__file__).resolve().parent.parent / "kit"   # the kit this plugin carries, wherever it was installed
 JOIN = "https://github.com/MikeHeid/overture/blob/main/docs/JOIN.md"
 
@@ -148,6 +155,18 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
     `deploy/install.sh` copied, until install.sh copies the new one and restarts the unit.
     """
     from_ver = prior[-1] if prior else "an earlier version"
+    if sys.platform == "darwin":       # 1.51: no install.sh on a Mac; re-installing the LaunchAgent re-points and restarts it
+        return [
+            f"Upgraded to Overture {VERSION} (from {from_ver}).",
+            "",
+            "Your console server still runs the old kit until you re-install and restart it.",
+            "This points the service at the new kit and restarts it:",
+            "",
+            f'    python3 "{KIT / "server.py"}" service install --start',
+            "",
+            "  Changelog: https://github.com/MikeHeid/overture/blob/main/CHANGELOG.md",
+            "  This reminder shows once per version.",
+        ]
     install = KIT / "deploy" / "install.sh"
     lines: list[str] = [
         f"Upgraded to Overture {VERSION} (from {from_ver}).",
@@ -159,7 +178,7 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
         "",
         "  Running the main server for several projects (docs/JOIN.md)? After install.sh:",
         "",
-        "    systemctl --user restart overture-console",
+        "    " + _restart_cmd(),
     ]
     if _is_windows_native():
         lines += ["", "  On Windows, run these inside WSL."]

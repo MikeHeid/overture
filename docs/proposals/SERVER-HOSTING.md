@@ -13,7 +13,8 @@ Status: decided on 2026-10-11, with amendments. See [OPEN-DECISIONS.md](OPEN-DEC
 **Built for Linux and WSL in 1.33:** `server.py daemon start|stop`,
 `service install|uninstall`, `status`, `health` (`plugin/kit/hosting.py`),
 the `overture-console.service` template, and the SessionStart one-line hint.
-macOS launchd (D2) is the next, separate change.
+**Built for macOS in 1.51:** the same `service install|uninstall` writes a launchd
+LaunchAgent (`overture.console`), and `status`/`health` read `launchctl` (D2).
 
 ---
 

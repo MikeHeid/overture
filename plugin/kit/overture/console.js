@@ -10033,7 +10033,10 @@
     }
     prsState.ver = ver;
     prsState.loading = false;
-    if (document.contains(listEl)) fillPRs(listEl);
+    // A redraw while this loaded (openPanel's second render, a live poll) replaced listEl, and its own
+    // loadPRs returned on the guard above: fill the box on screen now, never the detached one.
+    const box = document.contains(listEl) ? listEl : panelEl && panelEl.querySelector('.ck-prs');
+    if (box) fillPRs(box);
   }
 
   function renderPRs(body) {
@@ -10094,7 +10097,11 @@
     }
     portfolioState.ver = ver;
     portfolioState.loading = false;
-    if (container && document.contains(container)) fillPortfolio(container);
+    // Same race as loadPRs: a redraw while this loaded replaced the container, so fill the one on screen.
+    // (null: the ribbon's own kick-off, which fills on its next redraw.)
+    const box = !container ? null
+      : document.contains(container) ? container : panelEl && panelEl.querySelector('.ck-portfolio');
+    if (box) fillPortfolio(box);
   }
 
   // The browser-side notifier. Compares each peer's current `awaiting_you` and `stale` against the

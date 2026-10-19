@@ -294,6 +294,22 @@ class InstallGuardTests(Base):
                 for d in ("share", "cfg", "st"):
                     self.assertFalse((self.home / d).exists(), f"{d} was written before the refusal")
 
+    def test_macos_is_refused_by_name_and_pointed_to_the_launchd_service(self):
+        # Catches (1.51, D2): install.sh on a Mac copying the kit and writing systemd units that nothing runs,
+        # instead of naming `server.py service install` (launchd), before anything is written.
+        O.write(self.project, GOOD, check_port=False)
+        fake = self.root / "fakebin"
+        fake.mkdir()
+        (fake / "uname").write_text("#!/bin/sh\necho Darwin\n")
+        (fake / "uname").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}"}):
+            r = self.run_install(self.project)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("macOS", r.stderr)
+        self.assertIn("server.py service install", r.stderr)
+        for d in ("share", "cfg", "st"):
+            self.assertFalse((self.home / d).exists(), f"{d} was written before the refusal")
+
 
 class ReadEnvTests(Base):
     def test_show_returns_only_validated_keys(self):
@@ -683,6 +699,33 @@ class InstallNoticeTests(unittest.TestCase):
         script = Path(line.split('"')[1])
         self.assertTrue(script.is_file(), script)
         self.assertNotIn("overture.service", out)
+
+    def test_the_upgrade_names_systemctl_restart_on_linux_and_service_install_on_a_mac(self):
+        # Catches: on Linux, a restart line that drifts from `systemctl --user restart overture-console` (the
+        # main server would keep the old kit); on a Mac, any systemctl or install.sh line (neither works there)
+        # in place of `service install --start` from the new kit.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("install_notice_t", self.HOOK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.path.insert(0, str(self.HOOK.parent.parent / "kit"))
+        self.addCleanup(sys.path.remove, str(self.HOOK.parent.parent / "kit"))
+        import hosting
+        for plat in ("darwin", "linux"):
+            with self.subTest(plat=plat), mock.patch.object(sys, "platform", plat):
+                body = "\n".join(mod._upgrade_lines(["0.0.1"])) + "\n"
+                if plat == "darwin":
+                    # Catches (1.51): a Mac told to run deploy/install.sh, which refuses on macOS, so the upgrade
+                    # never reaches the service; `service install --start` from the new kit re-points the
+                    # LaunchAgent and restarts it, and the server.py it names exists.
+                    line = next(l for l in body.splitlines() if "service install --start" in l)
+                    self.assertTrue(Path(line.split('"')[1]).is_file(), line)
+                    self.assertIn(str(Path(hosting.__file__).resolve().parent / "server.py"), line)
+                    self.assertNotIn("install.sh", body)
+                    self.assertNotIn("systemctl", body)
+                else:                                                   # unchanged from 1.50
+                    self.assertIn("    systemctl --user restart overture-console\n", body)
+                    self.assertNotIn("launchctl", body)
 
     def test_it_shows_once_per_version(self):
         with tempfile.TemporaryDirectory() as td:

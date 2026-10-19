@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.50.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.51.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1353-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1375-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -106,9 +106,10 @@ Each area links to its own page, with the full reference and screenshots.
 | **Sections and phones** (1.48) | Work, Automation, Projects and Team, each with its own tabs, on a rail · a badge per section · full screen on a phone with a bottom bar · motion that respects reduced motion | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Pop-outs and a calmer Inbox** (1.49) | Flowcharts, graphs, visuals, rounds, long rulings and screenshots pop out beside the console, three at a time, with Pin · the Inbox grouped by lane, with an outline · `j`/`k` through the unanswered questions · a sticky Mine | [Finding your way around](docs/features/navigation.md#pop-outs-149) |
 | **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR lands (merged at its head) or closes · stale ones listed for the owner · a `worktree_setup` suggested, never run | [Automation](docs/features/automation.md#agent-worktrees-150) |
+| **macOS service** (1.51) | `server.py service install --start` on a Mac writes a launchd LaunchAgent (`~/Library/LaunchAgents/overture.console.plist`) and loads it · back after a crash and at every login · `status`, `health` and the one-server gate read `launchctl` · every hint names the Mac's own command | [Hosting](docs/features/hosting.md#macos-launchd-151) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
-| **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
+| **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units (Linux, WSL) or a launchd LaunchAgent (macOS) · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
 | **Security** | Cloudflare Access or sign-in links · per-request CSP nonce · CSRF double-submit · atomic state writes · sandboxed iframes · parser-based HTML allowlist | [Trust](#trust) |
 
 ## Features
@@ -205,7 +206,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.50.0
+      - uses: MikeHeid/overture@v1.51.0
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
@@ -274,11 +275,12 @@ shortcuts, and **Operator Shift** reports the week as Markdown.
 
 ### Hosting
 
-One server hosts every project on the machine, as a daemon or a systemd user
-unit, with `status` and `health` to check it. Each project's agents use their
+One server hosts every project on the machine, as a daemon, a systemd user
+unit (Linux, WSL) or a launchd LaunchAgent (macOS, 1.51), with `status` and
+`health` to check it. Each project's agents use their
 own token. Windows hosts run it in WSL2.
 
-    <py> <kit>/server.py service install --start   # a systemd user unit (Linux, WSL)
+    <py> <kit>/server.py service install --start   # systemd (Linux, WSL) or launchd (macOS)
     <py> <kit>/server.py status                    # which mode, pid, each project's port
 
 → [docs/features/hosting.md](docs/features/hosting.md)

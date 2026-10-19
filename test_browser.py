@@ -6648,6 +6648,68 @@ class WorktreeBrowserTests(unittest.TestCase):
                                 " && document.querySelectorAll('.ck-branches[data-where=\"item\"] .ck-branch-chip').length === 1",
                           timeout=10000)
 
+    def test_a_redraw_while_the_prs_load_still_fills_the_list_on_screen(self):
+        # Catches: the PR list filled into the box a redraw threw away (openPanel's second render, or a live mark
+        # redrawing the tab while /api/prs is in flight), so the tab on screen stays on "Loading…" until the next
+        # live event. The first /api/prs is held until the box it was asked for has been replaced.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-5", self.T)
+                page = self.page(kind, 1280, url)
+                held = []
+                page.route("**/api/prs*", lambda r: held.append(r) if not held else r.fallback())
+                page.evaluate("ConsoleKit.openTab('prs')")
+                deadline = time.monotonic() + 10
+                while not held and time.monotonic() < deadline:
+                    page.wait_for_timeout(50)
+                self.assertEqual(len(held), 1, "the PR tab never asked for /api/prs")
+                page.evaluate("document.querySelector('.ck-prs').dataset.asked = '1'")
+                self.mark("agent-6", self.F)                       # a live change: the poll redraws the PR tab
+                _wait_for(page, "() => { const b = document.querySelector('.ck-prs'); return b && !b.dataset.asked; }",
+                          timeout=10000)
+                held[0].fallback()                                   # on to the access route, then the server
+                page.wait_for_selector(".ck-pr-row[data-number='12']", timeout=10000)
+                self.assertNotIn("Loading…", page.locator(".ck-prs").first.text_content())
+
+    def test_a_redraw_while_the_portfolio_loads_still_fills_the_cards_on_screen(self):
+        # Catches: the portfolio filled into the box a redraw threw away (a live mark redrawing the tab while
+        # /api/portfolio is in flight), so the tab on screen keeps the old cards until the next live event. The
+        # second /api/portfolio (a live wake's) is held until its box has been replaced, then answers a new peer.
+        def roll_up(peers):
+            return json.dumps({"self": {"project": "live-test", "ok": True}, "peers": peers})
+
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                page = self.page(kind, 1280, url)
+                armed, held = [], []
+
+                def route(r):
+                    if armed and not held:
+                        held.append(r)
+                    else:
+                        r.fulfill(status=200, content_type="application/json", body=roll_up([]))
+
+                page.route("**/api/portfolio*", route)
+                page.evaluate("ConsoleKit.openTab('portfolio')")
+                page.wait_for_selector(".ck-portfolio-grid .ck-portfolio-self", timeout=10000)
+                armed.append(1)
+                self.mark("agent-5", self.T)                       # a live wake: the tab asks again
+                deadline = time.monotonic() + 10
+                while not held and time.monotonic() < deadline:
+                    page.wait_for_timeout(50)
+                self.assertEqual(len(held), 1, "the live wake never asked for /api/portfolio")
+                page.evaluate("document.querySelector('.ck-portfolio').dataset.asked = '1'")
+                self.mark("agent-6", self.F)                       # another: the poll redraws the tab
+                _wait_for(page, "() => { const b = document.querySelector('.ck-portfolio'); return b && !b.dataset.asked; }",
+                          timeout=10000)
+                held[0].fulfill(status=200, content_type="application/json",
+                                body=roll_up([{"name": "alpha", "project": "Alpha", "ok": True}]))
+                page.wait_for_selector(".ck-portfolio-card[aria-label='Project Alpha']", timeout=10000)
+
     def test_branches_fit_a_phone_and_nothing_shows_without_a_branch(self):
         # Catches: a long branch name widening the phone's console past the screen, and an empty strip (or a
         # warning) drawn for a mark that carries no branch, as every 1.49 agent's does.
