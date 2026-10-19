@@ -700,10 +700,10 @@ class InstallNoticeTests(unittest.TestCase):
         self.assertTrue(script.is_file(), script)
         self.assertNotIn("overture.service", out)
 
-    def test_the_upgrade_restart_line_names_this_platforms_service_command(self):
-        # Catches: a Mac told to run `systemctl --user restart overture-console` after an upgrade (there is no
-        # systemctl, so the console keeps the old kit), and a restart line that drifts from the one hosting.py
-        # prints in every other hint.
+    def test_the_upgrade_names_systemctl_restart_on_linux_and_service_install_on_a_mac(self):
+        # Catches: on Linux, a restart line that drifts from `systemctl --user restart overture-console` (the
+        # main server would keep the old kit); on a Mac, any systemctl or install.sh line (neither works there)
+        # in place of `service install --start` from the new kit.
         import importlib.util
         spec = importlib.util.spec_from_file_location("install_notice_t", self.HOOK)
         mod = importlib.util.module_from_spec(spec)

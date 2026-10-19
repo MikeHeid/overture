@@ -105,10 +105,9 @@ def _is_windows_native() -> bool:
 
 
 def _restart_cmd() -> str:
-    """The main server's restart command on this platform: hosting.service_cmd("restart"), spelled out here
-    because importing hosting would pull in fcntl, which native Windows Python does not have."""
-    if sys.platform == "darwin":                  # 1.51: a launchd LaunchAgent in the login session
-        return f"launchctl kickstart -k gui/{os.getuid()}/overture.console"
+    """The main server's systemd restart command: hosting.service_cmd("restart") on Linux, spelled out here
+    because importing hosting would pull in fcntl, which native Windows Python does not have. Only the
+    non-Mac upgrade banner prints it; a Mac's banner names `service install --start` instead (1.51)."""
     return "systemctl --user restart overture-console"
 
 

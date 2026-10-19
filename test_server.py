@@ -1698,15 +1698,20 @@ class LaunchdTests(unittest.TestCase):
         self.bin.mkdir()
         self.log, self.state_file, self.code_file = self.t / "launchctl.log", self.t / "PRINT", self.t / "CODE"
         self.boot_code = self.t / "BOOTCODE"      # present: bootstrap fails with it, as with no login session
+        self.linger = self.t / "LINGER"           # present (N): after a bootout the job stays loaded for N prints
+        count = self.t / "COUNT"
         (self.t / "RUNNING").write_text(self.RUNNING)
         lc = self.bin / "launchctl"
         lc.write_text("#!/bin/sh\n"
                       f"echo \"$@\" >> '{self.log}'\n"
                       "case \"$1\" in\n"
-                      f"  print) if [ -f '{self.state_file}' ]; then cat '{self.state_file}'; "
+                      f"  print) if [ -f '{count}' ]; then n=$(cat '{count}'); if [ \"$n\" -le 0 ]; then "
+                      f"rm -f '{count}' '{self.state_file}'; else echo $((n - 1)) > '{count}'; fi; fi\n"
+                      f"         if [ -f '{self.state_file}' ]; then cat '{self.state_file}'; "
                       f"[ -f '{self.code_file}' ] && exit $(cat '{self.code_file}'); exit 0; fi\n"
                       "         echo 'Could not find service \"overture.console\" in domain for port' >&2; exit 113;;\n"
-                      f"  bootout) rm -f '{self.state_file}';;\n"
+                      f"  bootout) if [ -f '{self.linger}' ]; then cp '{self.linger}' '{count}'; "
+                      f"else rm -f '{self.state_file}'; fi;;\n"
                       f"  bootstrap) if [ -f '{self.boot_code}' ]; then c=$(cat '{self.boot_code}'); "
                       "echo \"Bootstrap failed: $c: Input/output error\" >&2; exit $c; fi\n"
                       f"             cp '{self.t / 'RUNNING'}' '{self.state_file}';;\n"
@@ -1765,7 +1770,9 @@ class LaunchdTests(unittest.TestCase):
         self.assertIn("server file path", err)
         self.assertFalse(self.plist.exists())
         self.assertEqual(self.calls(), [])
-        for kw, want in (({"python": "/usr/bin/py\x7fthon"}, "python path"), ({}, "server file path")):
+        # Catches: a C1 control (U+0085, NEXT LINE, a line break to some readers) let through when DEL is not.
+        for kw, want in (({"python": "/usr/bin/py\x7fthon"}, "python path"), ({"python": "/usr/bin/py\x85thon"}, "python path"),
+                         ({}, "server file path")):
             with self.subTest(want=want), self.assertRaises(ValueError) as cm:
                 self.H.render_plist(self.sfile if kw else Path("server.json"), **kw)
             self.assertIn(want, str(cm.exception))
@@ -1917,6 +1924,115 @@ class LaunchdTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HOME": str(spaced)}):
             want = spaced / "Library" / "LaunchAgents" / "overture.console.plist"
             self.assertEqual(self.H.service_cmd("start"), f"launchctl bootstrap {self.domain} '{want}'")
+
+    def fake_systemctl(self):
+        """A systemctl on PATH (as on a Mac with one installed) that calls every unit active and answers `show`
+        with a timestamp."""
+        sc = self.bin / "systemctl"
+        sc.write_text("#!/bin/sh\ncase \"$2\" in is-active) echo active;; show) echo 'Mon 2026-10-19 10:00:00 UTC';; esac\n"
+                      "exit 0\n")
+        sc.chmod(0o755)
+        unit = self.H.unit_path()                     # what the Linux branch needs to call the unit installed
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text("")
+
+    def answer_health(self, doc: dict):
+        """A stand-in server on the agent socket that answers GET /health with `doc`."""
+        import http.server
+        import socketserver
+        import threading
+        body = json.dumps(doc).encode()
+
+        class Health(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        path = self.H.agent_socket(self.sfile)
+        srv = socketserver.ThreadingUnixStreamServer(str(path), Health)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(path.unlink, missing_ok=True)
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+
+    def test_a_job_gone_by_code_or_by_message_is_inactive_and_a_signalled_exit_is_a_failure(self):
+        # Catches: "not loaded" read from the exit code alone or from the message alone (each is enough without
+        # the other), so a job that is plainly gone reads "unavailable" and blocks a daemon for nothing; and a
+        # job killed by a signal (last exit code -9) shown as merely inactive instead of failed.
+        self.plist.parent.mkdir(parents=True)
+        self.plist.write_bytes(b"")
+        for text, code, want in (('Could not find service "overture.console" in domain for port\n', "3", "inactive"),
+                                 ("", "113", "inactive"), (self.EXITED.format(code=-9), "0", "failed")):
+            with self.subTest(code=code, want=want):
+                self.state_file.write_text(text)
+                self.code_file.write_text(code)
+                self.assertEqual(self.H.service_state(), want)
+
+    def test_a_pending_respawn_is_the_service_running(self):
+        # Catches: mode() taking only "running" as the service, so a job between KeepAlive respawns reads
+        # stopped and a daemon can start beside the server launchd is about to bring back.
+        self.plist.parent.mkdir(parents=True)
+        self.plist.write_bytes(b"")
+        self.state_file.write_text("gui/501/overture.console = {\n\tstate = spawn scheduled\n}\n")
+        self.assertEqual(self.H.mode(), ("service", None))
+
+    def test_uninstall_removes_a_plist_whose_job_was_never_loaded(self):
+        # Catches: an uninstall that refuses "not installed" after an install without --start (plist there,
+        # nothing loaded), leaving a plist that starts the console at the next login.
+        code, _, err = self.run_h(self.H.service_install, self.sfile, False)
+        self.assertEqual(code, 0, err)
+        code, out, err = self.run_h(self.H.service_uninstall)
+        self.assertEqual(code, 0, err)
+        self.assertFalse(self.plist.exists())
+        self.assertIn(f"removed {self.plist}", out)
+
+    def test_an_upgrade_bootstraps_only_after_the_old_job_has_unloaded(self):
+        # Catches: a bootstrap sent while bootout is still unloading the old job (launchd refuses a second
+        # load, so the upgrade fails or keeps the old server), whether the wait is skipped or ends while the
+        # job still answers `print`.
+        self.run_h(self.H.service_install, self.sfile, True)
+        self.log.unlink()
+        self.linger.write_text("3")                   # the old job answers three more prints after bootout
+        code, out, err = self.run_h(self.H.service_install, self.sfile, True)
+        self.assertEqual(code, 0, err)
+        calls = self.calls()
+        after = calls[calls.index(f"bootout {self.target}") + 1:]
+        self.assertEqual(after, [f"print {self.target}"] * 4                 # the 4th is the one that says 113
+                         + [f"enable {self.target}", f"bootstrap {self.domain} {self.plist}"])
+
+    def test_status_on_macos_has_no_start_time_even_with_a_systemctl_on_path(self):
+        # Catches: status on a Mac asking `systemctl show` for the start time, where a systemctl on PATH answers
+        # for a unit that is not this job (launchd keeps no start time at all).
+        self.fake_systemctl()
+        self.run_h(self.H.service_install, self.sfile, True)
+        st = self.H.status(self.sfile)
+        self.assertEqual((st["mode"], st["started_at"]), ("service", None))
+        with mock.patch.object(sys, "platform", "linux"):                   # the same fake, read on Linux
+            self.assertEqual(self.H.status(self.sfile)["started_at"], "Mon 2026-10-19 10:00:00 UTC")
+
+    def test_version_skew_in_service_mode_names_this_platforms_restart_command(self):
+        # Catches: a version-skew problem that says "restart it" without the command, or with the other
+        # platform's (systemctl on a Mac, launchctl on Linux).
+        kit = self.t / "kit"
+        kit.mkdir()
+        (kit / "VERSION").write_text("1.51.0\n")
+        self.answer_health({"version": "0.0.0"})
+        self.fake_systemctl()
+        self.run_h(self.H.service_install, self.sfile, True)
+        for plat, cmd in (("darwin", f"launchctl kickstart -k {self.target}"),
+                          ("linux", "systemctl --user restart overture-console.service")):
+            with self.subTest(plat=plat), mock.patch.object(sys, "platform", plat), \
+                    mock.patch.object(self.H, "KIT", kit):
+                doc = self.H.health(self.sfile)
+                self.assertEqual((doc["mode"], doc["version"]), ("service", "0.0.0"))
+                self.assertEqual([p for p in doc["problems"] if p.startswith("version skew")],
+                                 [f"version skew: the running server is 0.0.0, the installed kit is 1.51.0; "
+                                  f"restart it: `{cmd}`"])
 
     def test_the_rendered_plist_is_valid_and_plutil_agrees_when_present(self):
         # Catches: bytes plistlib wrote that launchd's own parser rejects (checked with plutil on a Mac only).
