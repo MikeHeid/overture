@@ -156,6 +156,18 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
     `deploy/install.sh` copied, until install.sh copies the new one and restarts the unit.
     """
     from_ver = prior[-1] if prior else "an earlier version"
+    if sys.platform == "darwin":       # 1.51: no install.sh on a Mac; re-installing the LaunchAgent re-points and restarts it
+        return [
+            f"Upgraded to Overture {VERSION} (from {from_ver}).",
+            "",
+            "Your console server still runs the old kit until you re-install and restart it.",
+            "This points the service at the new kit and restarts it:",
+            "",
+            f'    python3 "{KIT / "server.py"}" service install --start',
+            "",
+            "  Changelog: https://github.com/MikeHeid/overture/blob/main/CHANGELOG.md",
+            "  This reminder shows once per version.",
+        ]
     install = KIT / "deploy" / "install.sh"
     lines: list[str] = [
         f"Upgraded to Overture {VERSION} (from {from_ver}).",

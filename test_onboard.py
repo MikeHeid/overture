@@ -715,8 +715,13 @@ class InstallNoticeTests(unittest.TestCase):
             with self.subTest(plat=plat), mock.patch.object(sys, "platform", plat):
                 body = "\n".join(mod._upgrade_lines(["0.0.1"])) + "\n"
                 if plat == "darwin":
-                    self.assertIn(f"    {hosting.service_cmd('restart')}\n", body)
-                    self.assertIn(f"launchctl kickstart -k gui/{os.getuid()}/overture.console", body)
+                    # Catches (1.51): a Mac told to run deploy/install.sh, which refuses on macOS, so the upgrade
+                    # never reaches the service; `service install --start` from the new kit re-points the
+                    # LaunchAgent and restarts it, and the server.py it names exists.
+                    line = next(l for l in body.splitlines() if "service install --start" in l)
+                    self.assertTrue(Path(line.split('"')[1]).is_file(), line)
+                    self.assertIn(str(Path(hosting.__file__).resolve().parent / "server.py"), line)
+                    self.assertNotIn("install.sh", body)
                     self.assertNotIn("systemctl", body)
                 else:                                                   # unchanged from 1.50
                     self.assertIn("    systemctl --user restart overture-console\n", body)

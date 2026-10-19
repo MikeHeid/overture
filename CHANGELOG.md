@@ -3016,9 +3016,14 @@ defaults A1 to A9 are in OPEN-DECISIONS.md, "D2 as decided".
 - **Every hint names the platform's command**: `launchctl bootout`,
   `kickstart -k` and `print` on a Mac, `systemctl --user` elsewhere. A
   version-skew problem from a service now names its restart command, and
-  so does the plugin's upgrade notice (`launchctl kickstart -k` on a Mac).
+  so does the plugin's upgrade notice. On a Mac that notice names one
+  command, `server.py service install --start` from the new kit, which
+  points the LaunchAgent at it and restarts it.
 - **`deploy/install.sh` refuses on macOS** by name (its per-project units
   are systemd) and points to `server.py service install`.
+- **The PRs tab no longer stays on "Loading…"** when the page redraws while
+  it loads (a fault since 1.0); the projects list had the same fault, also
+  fixed.
 - Docs: INSTALL.md (macOS prerequisites and the logged-in note,
   `cloudflared service install` for a tunnel), docs/features/hosting.md,
   RUNBOOK ("macOS: the launchd service").
