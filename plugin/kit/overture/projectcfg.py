@@ -66,6 +66,11 @@ MAX_LANES = 64
 MAX_LANE_LABEL = 40
 MAX_SETUP_ARGS = 32       # worktree_setup (1.50.0): an argv of at most this many words
 MAX_SETUP_ARG = 4096
+# 1.50 clearing round Z1: a worktree_setup word holding one of these is refused, so it is never printed (an ESC
+# or a CSI could restyle or rewrite the agent's terminal; a newline or CR could forge a line of its own).
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+CONTROL_NAMES = {0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x09: "TAB", 0x0A: "LF (a newline)", 0x0B: "VT", 0x0C: "FF",
+                 0x0D: "CR", 0x1B: "ESC", 0x7F: "DEL", 0x85: "NEL", 0x9B: "CSI"}
 
 
 class ConfigError(ValueError):
@@ -158,9 +163,16 @@ def _setup(v: object) -> tuple:
     if v is None:
         return ()
     if not (isinstance(v, list) and 0 < len(v) <= MAX_SETUP_ARGS
-            and all(isinstance(a, str) and a and len(a) <= MAX_SETUP_ARG and "\0" not in a for a in v)):
+            and all(isinstance(a, str) and a and len(a) <= MAX_SETUP_ARG for a in v)):
         raise ConfigError(f"{FILE}: worktree_setup must be a command as a list of 1 to {MAX_SETUP_ARGS} non-empty "
                           f'strings, e.g. ["make", "deps"]; a shell string is refused (it is suggested to the agent as one argv)')
+    for i, a in enumerate(v):
+        m = CONTROL.search(a)
+        if m:   # named, never echoed: the message is printed too
+            c = ord(m.group())
+            name = f"{CONTROL_NAMES[c]}, U+{c:04X}" if c in CONTROL_NAMES else f"U+{c:04X}"
+            raise ConfigError(f"{FILE}: worktree_setup[{i}] holds a control character ({name}); refused, so it is "
+                              f"never printed to a terminal")
     return tuple(v)
 
 

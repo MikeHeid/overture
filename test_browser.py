@@ -6728,7 +6728,9 @@ class WorktreeBrowserTests(unittest.TestCase):
 
     def test_the_items_header_names_the_agents_without_a_count_that_reads_as_theirs(self):
         # Catches (1.50 review X1): the status bar's "1 agent-5, agent-6 active", the number (what waits on an
-        # agent) read as a count of the agents named after it.
+        # agent) read as a count of the agents named after it. Catches (clearing round Y2): with two things
+        # waiting, "(2 waiting)" after the names read as two agents waiting; it says what waits on whom, in the
+        # header and on the dashboard's item button alike.
         for kind in BROWSERS:
             with self.subTest(browser=kind):
                 url = self.serve()
@@ -6741,11 +6743,32 @@ class WorktreeBrowserTests(unittest.TestCase):
                 words = page.wait_for_selector(".ck-status-bar .ck-agent-words")
                 self.assertEqual(words.text_content(), " agent-5, agent-6 active")
                 self.assertNotRegex(page.locator(".ck-status-bar").first.text_content(), r"\d agent")
+                # The dashboard's item button counts the subtree: LANE's own thread and LANE.1's, on agents marked there.
+                self.owner_message(url, "LANE", "And the parent lane")
+                self.mark("agent-5", self.T, item="LANE")
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "() => /agent active \\(2 waiting on agents\\)/.test((document.querySelector("
+                                "'details#item-LANE .ck-item-btn') || {}).textContent || '')", timeout=10000)
+                # The header counts the item's own (one thread at most today): two, served, read the same way.
+                def two(route):
+                    resp = route.fetch()
+                    data = json.loads(resp.text())
+                    if isinstance(data.get("view"), dict) and "LANE.1" in data["view"].get("items", {}):
+                        data["view"]["items"]["LANE.1"]["own"]["awaiting_agent"] = 2
+                    route.fulfill(response=resp, body=json.dumps(data))
+                page.route("**/api/view*", two)
+                page.evaluate("ConsoleKit.refresh()")
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                _wait_for(page, "() => /\\(2 waiting/.test((document.querySelector('.ck-status-bar .ck-agent-words')"
+                                " || {}).textContent || '')", timeout=10000)
+                self.assertEqual(page.locator(".ck-status-bar .ck-agent-words").first.text_content(),
+                                 " agent-5, agent-6 active (2 waiting on agents)")
 
-    def test_a_phone_at_320px_keeps_each_branch_on_one_line_and_names_it_whole(self):
-        # Catches (1.50 review X2, X6): a long "overture/fix/..." chip widening the 320px phone past the screen
-        # (sideways scroll), wrapping onto several lines, or cut with no full name left for a pointer or a
-        # screen reader (the chip had a title and no accessible name).
+    def test_a_phone_at_320px_wraps_each_branch_whole_inside_its_column(self):
+        # Catches (1.50 clearing round Y1, after X2/X6): a long "overture/fix/..." chip widening the 320px phone
+        # past the screen (sideways scroll), or cut with an ellipsis (a phone has no hover to show the title); and
+        # the chip given role="img" with an aria-label (a generic span may not carry one): its whole text is in
+        # the DOM instead, inside the strip's named group.
         long = "overture/fix/LANE.1-" + "y" * 80
         for kind in BROWSERS:
             with self.subTest(browser=kind):
@@ -6760,13 +6783,18 @@ class WorktreeBrowserTests(unittest.TestCase):
                 box = chip.bounding_box()
                 body = page.locator(".ck-body").first.bounding_box()
                 self.assertLessEqual(box["x"] + box["width"], min(320, body["x"] + body["width"]) + 0.5)
-                self.assertLess(box["height"], 34)                       # one line, not a wrapped name
+                self.assertGreater(box["height"], 34)                    # wrapped onto more lines, not cut
                 name = page.locator(".ck-branches[data-where='item'] .ck-branch-name").first
-                self.assertTrue(name.evaluate("n => n.scrollWidth > n.clientWidth"))   # cut, with an ellipsis
-                self.assertEqual(name.evaluate("n => getComputedStyle(n).textOverflow"), "ellipsis")
-                self.assertEqual(chip.get_attribute("aria-label"), long + " · agent-6, branch")
+                self.assertFalse(name.evaluate("n => n.scrollWidth > n.clientWidth"))  # nothing hidden
+                self.assertNotEqual(name.evaluate("n => getComputedStyle(n).textOverflow"), "ellipsis")
+                self.assertEqual(name.text_content(), long)
+                self.assertEqual(chip.text_content(), long + " · agent-6")
                 self.assertEqual(chip.get_attribute("title"), long + " · agent-6, branch")
-                self.assertEqual(chip.get_attribute("role"), "img")
+                self.assertIsNone(chip.get_attribute("role"))
+                self.assertIsNone(chip.get_attribute("aria-label"))
+                group = page.locator(".ck-branches[data-where='item']").first
+                self.assertEqual((group.get_attribute("role"), group.get_attribute("aria-label")),
+                                 ("group", "Where agents work on LANE.1"))
 
     def test_an_overlap_is_announced_once_and_not_on_every_redraw(self):
         # Catches (1.50 review X3): the overlap never said to a screen reader (the warning is static), or said

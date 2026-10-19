@@ -1067,7 +1067,7 @@
   // lead, and the count follows only when more than one thing waits.
   function agentCountWords(itemId, n) {
     if (!agentActive(itemId)) return n + ' awaiting agent';
-    return agentWords(itemId) + (n > 1 ? ' (' + n + ' waiting)' : '');
+    return agentWords(itemId) + (n > 1 ? ' (' + n + ' waiting on agents)' : '');   // Y2: what waits, not who
   }
   // 1.50 (W4): where the agents on an item work, from cursor.branches (no new server call): the branch each
   // fresh mark carries, and the agent holding it. Two marks on one item with different branches are an overlap:
@@ -1082,12 +1082,12 @@
     return out.sort((x, y) => x.branch.localeCompare(y.branch));
   }
   function branchWho(name) { return name === 'agent' ? 'unnamed session' : name; }
-  // X6/X2 (1.50 review): one name for the chip, starting with its visible text (2.5.3), so a phone's ellipsis
-  // never hides the branch from a screen reader or a pointer (the title is the same words).
+  // Y1 (1.50 clearing round): a plain span, its whole text in the DOM (a screen reader reads it as it is, and
+  // the strip's role="group" name says what the chips are); no role and no aria-label, which a generic span may
+  // not carry. On a phone it wraps rather than cutting the name (touch has no hover for the title).
   function branchChip(b) {
     const words = b.branch + ' · ' + branchWho(b.agent) + ', branch';
-    return el('span', { className: 'ck-branch-chip', dataBranch: b.branch, role: 'img', 'aria-label': words,
-      title: words }, [
+    return el('span', { className: 'ck-branch-chip', dataBranch: b.branch, title: words }, [
       icon('git-branch') || '',
       el('span', { className: 'ck-branch-name' }, [b.branch]),
       el('span', { className: 'ck-branch-agent' }, [' · ' + branchWho(b.agent)])
@@ -1621,7 +1621,7 @@
       const parts = [];
       if (t.awaiting_you > 0) parts.push(['awaiting_you', t.awaiting_you + ' you']);
       if (t.awaiting_agent > 0) parts.push(['awaiting_agent', agentActive(id)
-        ? 'agent active' + (t.awaiting_agent > 1 ? ' (' + t.awaiting_agent + ' waiting)' : '')   // X1: the count is threads
+        ? 'agent active' + (t.awaiting_agent > 1 ? ' (' + t.awaiting_agent + ' waiting on agents)' : '')   // X1, Y2: the count is threads
         : t.awaiting_agent + ' agent']);
       if (t.unlocked > 0) parts.push(['unlocked', t.unlocked + ' unlocked']);
       if (t.stale > 0) parts.push(['stale', t.stale + ' stale']);

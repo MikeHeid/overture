@@ -777,7 +777,7 @@ def _worktree_new(a, WT, repo: Path, name: str) -> int:
 GH_NOTE = ".worktrees-no-gh"   # in STATE: the steward was told once that prune needs gh
 PRUNE_FILE = ".worktrees-prune.json"   # in STATE: when the watch last pruned, what was stale, where it stopped
 PRUNE_EVERY = 600.0    # 1.50 review C2: the watch prunes at most once per 10 minutes...
-PRUNE_BUDGET = 60.0    # ...and spends at most this long looking, then stops and takes up there next time
+PRUNE_BUDGET = 60.0    # ...and spends at most this long in all (its gh call too), then takes up there next time
 MAX_PRUNE_FILE = 16384
 
 
@@ -786,7 +786,7 @@ def _prune_record(state: Path) -> dict:
     try:
         data = R.read_regular(Path(state) / PRUNE_FILE, MAX_PRUNE_FILE, nofollow=True)
         rec = json.loads(data.decode("utf-8")) if data is not None else {}
-    except (OSError, ValueError, R.RegistryError):
+    except (OSError, ValueError, RecursionError, R.RegistryError):   # Z3: nested past the parser's depth: no record
         return {}
     if not (isinstance(rec, dict) and isinstance(rec.get("at"), (int, float)) and not isinstance(rec["at"], bool)):
         return {}
@@ -810,14 +810,16 @@ def _write_prune_record(state: Path, rec: dict) -> None:
             raise
 
 
-def _watch_prune(state: Path, now: float | None = None) -> list | None:
+def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | None:
     """The steward's prune (W3): the stale ones for the heartbeat, or None (nothing said).
 
     Only for the project the working directory is in AND whose console this is (--state), so a watch run
     anywhere else touches nothing. 1.50 review C2: called after the watch's first heartbeat, it prunes at most
     once per PRUNE_EVERY (the time kept in STATE; in between it hands back the last stale list), makes ONE gh
     call, and stops looking after PRUNE_BUDGET seconds, to take up where it stopped on the next cycle. Without
-    gh nothing can be judged: it is skipped, said once.
+    gh nothing can be judged: it is skipped, said once. Clearing round Z2: PRUNE_BUDGET is one deadline for
+    all of it, gh included (`WT.Cycle`); each call is held to what is left and to under the heartbeat's grace,
+    and `beat` (the watch's Heartbeat) is run before every call, so "listening" never lapses meanwhile.
     """
     import time as _time
     from overture import worktrees as WT
@@ -825,19 +827,20 @@ def _watch_prune(state: Path, now: float | None = None) -> list | None:
     rec = _prune_record(state)
     if rec and not rec["resume_after"] and 0 <= t - rec["at"] < PRUNE_EVERY:
         return rec["stale"]
+    cycle = WT.Cycle(PRUNE_BUDGET, tick=beat, call_max=D.BEAT_GRACE * 0.75)   # Z2: from here, all of it
     try:
         cwd = Path.cwd()
         here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
         if not here or os.path.realpath(here[1].get("state", "")) != os.path.realpath(state):
             return None
-        main = WT.main_checkout(cwd)
+        main = WT.main_checkout(cwd, cycle)
         if main is None:
             return None
         name = _project_name(state, main)
         if not (WT.base_dir() / WT.project_slug(name, main)).is_dir():
             _write_prune_record(state, {"at": t, "stale": [], "resume_after": None})
             return []
-        prs, why = WT.gh_prs(main)
+        prs, why = WT.gh_prs(main, cycle)
         note = Path(state) / GH_NOTE
         if prs is None:
             if not note.exists():
@@ -849,7 +852,7 @@ def _watch_prune(state: Path, now: float | None = None) -> list | None:
             return None
         with contextlib.suppress(OSError):
             note.unlink()
-        res = WT.prune(main, name, prs=prs, budget=PRUNE_BUDGET, start_after=rec.get("resume_after"))
+        res = WT.prune(main, name, prs=prs, cycle=cycle, start_after=rec.get("resume_after"))
     except (WT.WorktreeError, R.RegistryError, OSError) as e:
         print(f"worktree prune skipped: {e}", file=sys.stderr)
         return None
@@ -2529,7 +2532,7 @@ def _run(a, bell: Path) -> int:
         beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"))  # "agent listening" (0.6.0)
         beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
         if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
-            beat.update(_watch_prune(a.state))   # W3: throttled and time-capped; the stale ones ride the heartbeat
+            beat.update(_watch_prune(a.state, beat=beat))   # W3: throttled and time-capped; the stale ones ride the heartbeat
         # A session that ends kills its watch with SIGTERM or SIGHUP; turn those into an
         # ordinary exit so `finally` says "stopped" now, rather than the owner seeing
         # "listening" until the promise lapses. SIGKILL cannot be caught: that is the lapse's job.

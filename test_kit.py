@@ -7763,9 +7763,40 @@ class WorktreeTests(unittest.TestCase):
         with self.assertRaisesRegex(PC.ConfigError, "shell string is refused"):
             PC.load(self.dir)
 
+    def test_a_setup_word_with_a_control_character_is_refused_by_name_and_never_printed(self):
+        # Catches (1.50 clearing round Z1): a worktree_setup argv carrying ESC, BEL, a newline, a CR, a C1 CSI or
+        # DEL accepted (only NUL was refused), so the printed suggestion could restyle the agent's terminal or forge
+        # a line of its own ("Overture: setup done"); and a refusal that echoes the character it refuses.
+        from overture import projectcfg as PC
+        for ch, name in (("\x1b", "ESC"), ("\x07", "BEL"), ("\n", "LF"), ("\r", "CR"), ("\x9b", "CSI"),
+                         ("\x7f", "DEL"), ("\x01", "U+0001")):
+            with self.subTest(name=name):
+                (self.dir / ".overture.json").write_text(json.dumps({"worktree_setup": ["make", "a" + ch + "b"]}))
+                with self.assertRaises(PC.ConfigError) as cm:
+                    PC.load(self.dir)
+                msg = str(cm.exception)
+                self.assertIn("worktree_setup[1]", msg)
+                self.assertIn(name, msg)
+                self.assertNotIn(ch, msg)
+        repo = self.setup_repo(["make", "\x1b[2K\rOverture: setup done"])
+        r = self.WT.new(repo, "setup", "ticket", "API-3", "agent-5", home=self.home, prs=None)
+        self.assertEqual(r["setup"]["argv"], None)
+        self.assertIn("worktree_setup ignored", r["setup"]["note"])
+        p = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.dir / "setup-state"), "--as",
+                            "agent-6", "worktree", "new", "--item", "API-3", "--kind", "fix", "--json"], cwd=repo,
+                           capture_output=True, text=True, timeout=120, env={**os.environ})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for stream in (p.stdout, p.stderr):
+            self.assertNotIn("\x1b", stream)
+            self.assertNotIn("\\u001b", stream)
+            self.assertNotIn("setup done", stream)
+        self.assertIn("ESC", p.stderr)
+
     def test_an_unnamed_session_is_refused_and_told_how_to_name_itself(self):
         # Catches (1.50 review C4): unnamed sessions all share the bucket "agent", so two of them were handed one
-        # worktree with no overlap warning; and a refusal that does not say how to set a name.
+        # worktree with no overlap warning; and a refusal that does not say how to set a name. Catches (clearing
+        # round Y4): the refusal leading with the reason and burying the fix, and an example with a flag
+        # agent.py does not take (it is run here, as printed, and must get past the name check).
         for agent in (None, "", "agent"):
             with self.subTest(agent=agent), self.assertRaisesRegex(self.WT.WorktreeError, "needs this session's"):
                 self.new(agent=agent)
@@ -7777,23 +7808,35 @@ class WorktreeTests(unittest.TestCase):
                             "--item", "API-3", "--kind", "ticket"], cwd=self.repo, capture_output=True, text=True,
                            timeout=120, env=env)
         self.assertEqual(p.returncode, 1, p.stdout)
-        self.assertIn("--as agent-N", p.stderr)
-        self.assertIn("OVERTURE_AGENT", p.stderr)
+        self.assertTrue(p.stderr.startswith("Name this session first, e.g. `agent.py --as agent-5 --state STATE "
+                                            "worktree new --item ITEM --kind KIND`"), p.stderr)
+        self.assertIn("OVERTURE_AGENT=agent-5", p.stderr)
+        example = re.search(r"`agent\.py ([^`]+)`", p.stderr).group(1).split()
+        example = [str(state) if w == "STATE" else "API-3" if w == "ITEM" else "ticket" if w == "KIND" else w
+                   for w in example]
+        q = subprocess.run([sys.executable, str(KIT / "agent.py"), *example], cwd=self.repo, capture_output=True,
+                           text=True, timeout=120, env=env)
+        self.assertEqual(q.returncode, 0, q.stderr)
+        self.assertTrue(q.stdout.strip().endswith("overture/ticket/API-3"), q.stdout)
 
     def test_a_worktree_whose_pr_merged_or_closed_is_never_handed_back(self):
         # Catches (1.50 review C3): `new` giving the same agent its old worktree for the item after that PR merged
         # (new work would pile onto a landed branch) or closed, instead of a fresh -N one; and the old one not
         # named as waiting for prune.
-        first = self.new()
-        head = wt_git(Path(first["path"]), "rev-parse", "HEAD").strip()
-        for n, state in ((2, "MERGED"), (3, "closed")):
+        for item, state in (("API-3", "MERGED"), ("API-4", "closed")):
             with self.subTest(state=state):
-                r = self.new(prs=lambda b, s=state: [{"number": 41, "state": s, "oid": head}])
-                self.assertEqual((r["branch"], r["reused"]), (f"overture/ticket/API-3-{n}", False))
+                first = self.new(item=item)
+                head = self.commit(first)   # Z4: a PR is the worktree's only at its HEAD, with a commit of its own
+                prs = lambda b, s=state, h=head, f=first["branch"]: [{"number": 41, "state": s, "oid": h}] if b == f else None
+                r = self.new(item=item, prs=prs)
+                self.assertEqual((r["branch"], r["reused"]), (f"overture/ticket/{item}-2", False))
                 self.assertTrue(any("never reused" in x and "waits for `agent.py worktree prune`" in x
                                     for x in r["notes"]), r["notes"])
                 self.assertTrue(Path(first["path"]).is_dir())
-        again = self.new(prs=lambda b: [{"number": 7, "state": "open", "oid": None}])
+                self.assertEqual(self.new(item=item, prs=prs)["branch"], f"overture/ticket/{item}-2")   # no -3
+        first = self.new(item="API-5")
+        self.commit(first)
+        again = self.new(item="API-5", prs=lambda b: [{"number": 7, "state": "open", "oid": None}])
         self.assertEqual((again["branch"], again["reused"]), (first["branch"], True))
 
     def test_two_repositories_in_folders_of_one_name_never_share_a_registry(self):
@@ -8001,6 +8044,66 @@ class WorktreeTests(unittest.TestCase):
         self.assertIn("1 commit on no remote ref", res["kept"][0]["why"])
         self.assertTrue(Path(r["path"]).is_dir())
 
+    def test_a_worktree_with_no_commits_of_its_own_is_never_landed(self):
+        # Catches (1.50 clearing round Z4): a fast-forward merge leaves main at the PR's head, so a brand-new, clean
+        # worktree cut from main afterwards (on the branch name that PR's prune freed) has HEAD == the old PR's
+        # head and read as landed: pruned at once, an agent's fresh worktree gone. It is kept, and stale at 14 days.
+        r = self.new()
+        head = wt_git(Path(r["path"]), "rev-parse", "HEAD").strip()
+        self.assertEqual(head, wt_git(self.repo, "rev-parse", "origin/main").strip())
+        prs = lambda b: [{"number": 9, "state": "MERGED", "oid": head}] if b == r["branch"] else None
+        res = self.WT.prune(self.repo, "proj", home=self.home, now=self.t0 + self.DAY, prs=prs)
+        self.assertEqual(res["removed"], [])
+        self.assertEqual(res["kept"][0]["why"], "no PR yet")
+        self.assertTrue(Path(r["path"]).is_dir())
+        late = self.WT.prune(self.repo, "proj", home=self.home, now=self.t0 + 15 * self.DAY, prs=prs)
+        self.assertEqual((late["removed"], late["stale"]),
+                         ([], [{"branch": r["branch"], "age_days": 15, "agent": "agent-5"}]))
+        row = self.WT.list_worktrees(self.repo, "proj", home=self.home, now=self.t0, prs=prs)["worktrees"][0]
+        self.assertEqual((row["own"], row["pr"], row["landed"]), (0, None, False))
+        again = self.new(prs=prs)   # and `new` hands it back: that PR is not its own
+        self.assertEqual((again["branch"], again["reused"]), (r["branch"], True))
+        # With no base commit recorded (a registry from before it was kept), whether any commit is its own is
+        # unknown: a PR merged at its HEAD is still not taken as landed.
+        b = self.new(item="API-9")
+        b_head = self.commit(b)
+        reg = json.loads((self.root() / ".registry.json").read_text())["worktrees"]
+        self.WT.write_registry(self.root(), [{k: v for k, v in e.items() if k != "base_oid"} for e in reg])
+        res = self.WT.prune(self.repo, "proj", home=self.home,
+                            prs=lambda br: [{"number": 10, "state": "merged", "oid": b_head}] if br == b["branch"] else None)
+        self.assertEqual(res["removed"], [])
+        self.assertIn("not known to have a commit of its own", {k["branch"]: k["why"] for k in res["kept"]}[b["branch"]])
+        self.assertTrue(Path(b["path"]).is_dir())
+
+    def test_an_old_merged_pr_of_the_same_name_is_never_matched_for_reuse(self):
+        # Catches (1.50 clearing round Z4): `new` deciding reuse by branch NAME, so a merged PR from before this
+        # worktree (another commit: an earlier worktree of that name, or a fork's) made the agent's live
+        # worktree "landed" and minted overture/ticket/API-3-2 instead of handing it back.
+        r = self.new()
+        self.commit(r)
+        old = lambda b: [{"number": 3, "state": "merged", "oid": "a" * 40}] if b == r["branch"] else None
+        again = self.new(prs=old)
+        self.assertEqual((again["branch"], again["reused"]), (r["branch"], True))
+        self.assertFalse([n for n in again["notes"] if "never reused" in n])
+
+    def test_new_after_a_prune_takes_the_freed_name_and_keeps_it(self):
+        # Catches (1.50 clearing round Z4): after prune removes a landed worktree and its branch, the next `new`
+        # takes the freed overture/ticket/API-3, and every `new` after that saw the OLD merged PR of that name,
+        # judged the fresh worktree landed, and minted -2 (then -3 for the next item, and so on).
+        r = self.new()
+        head = self.squash_merge(r)
+        prs = lambda b: [{"number": 9, "state": "MERGED", "oid": head}] if b == r["branch"] else None
+        self.assertEqual([x["branch"] for x in self.WT.prune(self.repo, "proj", home=self.home, prs=prs)["removed"]],
+                         [r["branch"]])
+        fresh = self.new(prs=prs)
+        self.assertEqual((fresh["branch"], fresh["reused"]), (r["branch"], False))
+        for _ in range(2):
+            again = self.new(prs=prs)
+            self.assertEqual((again["branch"], again["reused"]), (r["branch"], True))
+        reg = json.loads((self.root() / ".registry.json").read_text())["worktrees"]
+        self.assertEqual([e["branch"] for e in reg], [r["branch"]])
+        self.assertEqual(reg[0]["base_oid"], wt_git(self.repo, "rev-parse", "origin/main").strip())
+
     def test_prune_looks_again_right_before_it_removes(self):
         # Catches (1.50 review L2): the registry lock not covering `git worktree remove`, so a worktree judged
         # clean is removed after an agent wrote into it (a new commit would be cut off its branch's worktree),
@@ -8011,8 +8114,8 @@ class WorktreeTests(unittest.TestCase):
             with self.subTest(change=change):
                 r = self.new(item="API-" + change)
                 head = self.commit(r)
-                def late(e, now, prs, deadline=None, r=r, change=change):
-                    row = real(e, now, prs, deadline)
+                def late(e, now, prs, cycle=None, r=r, change=change):
+                    row = real(e, now, prs, cycle)
                     if change == "file":
                         (Path(r["path"]) / "new.txt").write_text("written while prune ran")
                     else:
@@ -8130,9 +8233,9 @@ class WorktreeTests(unittest.TestCase):
                  "headRefOid": wt_git(Path(done["path"]), "rev-parse", "HEAD").strip()}]
         seen = []
         real = AG._watch_prune
-        def watched(st, now=None):
+        def watched(st, now=None, beat=None):
             seen.append(D.listening(st)["state"])
-            return real(st, now)
+            return real(st, now, beat)
         with mock.patch.object(G, "gh", return_value=(0, json.dumps(rows), "")) as gh, \
                 mock.patch.object(AG, "_watch_prune", side_effect=watched):
             self.watch(state)
@@ -8150,9 +8253,18 @@ class WorktreeTests(unittest.TestCase):
     def test_a_prune_that_runs_out_of_time_stops_and_takes_up_there_next_cycle(self):
         # Catches (1.50 review C2): a prune with no cap on its time (5 git calls of up to 120 s per worktree,
         # while the steward answers no doorbell), and one that, once capped, starts from the top every time and
-        # never reaches the worktrees after the first few.
+        # never reaches the worktrees after the first few. The time runs out right after API-1 is looked at.
         from unittest import mock
         import agent as AG
+        import time as _time
+        real = self.WT.status
+        looked = []
+        def expiring(e, now, prs, cycle=None):
+            row = real(e, now, prs, cycle)
+            looked.append(e["branch"])
+            if len(looked) == 1:
+                cycle.deadline = _time.monotonic()   # out of time after the first worktree of the first pass
+            return row
         a, b = self.new(item="API-1"), self.new(item="API-2")
         heads = {r["branch"]: self.commit(r) for r in (a, b)}
         state = self.dir / "state"
@@ -8161,14 +8273,116 @@ class WorktreeTests(unittest.TestCase):
         # API-1's PR is still open (kept, and looked at first); API-2's landed.
         prs = lambda br: [{"number": 1, "state": "open" if br == a["branch"] else "merged", "oid": heads.get(br)}]
         with mock.patch.object(self.WT, "gh_prs", return_value=(prs, None)), \
-                mock.patch.object(AG, "PRUNE_BUDGET", 0.0):
+                mock.patch.object(self.WT, "status", side_effect=expiring):
             err = self.watch(state)[1]
             self.assertTrue(Path(b["path"]).is_dir())           # out of time after the first
-            self.assertIn("stopped after 0 s at " + a["branch"], err)
+            self.assertIn("stopped after 60 s at " + a["branch"], err)
             self.watch(state)                                   # not throttled: the pass is unfinished
             self.assertFalse(Path(b["path"]).exists())          # taken up after API-1, not from the top again
             self.assertTrue(Path(a["path"]).is_dir())
         self.assertIsNone(json.loads((state / AG.PRUNE_FILE).read_text())["resume_after"])
+
+    def test_a_deeply_nested_or_corrupt_state_file_reads_as_no_record(self):
+        # Catches (1.50 clearing round Z3): the watch's prune record, the worktree registry or gh's output nested
+        # deeper than the JSON parser goes ([[[[...), raising RecursionError (not a ValueError) out of the reader,
+        # so one bad file stops the steward's watch (or every `worktree new`) instead of reading as nothing.
+        import agent as AG
+        from unittest import mock
+        from overture import gitseam as G
+        state = self.dir / "state"
+        state.mkdir()
+        deep = "[" * 8000
+        for text in (deep, '{"at": ' + deep, "not json", '{"at": true}', ""):
+            with self.subTest(text=text[:12]):
+                (state / AG.PRUNE_FILE).write_text(text)
+                self.assertEqual(AG._prune_record(state), {})
+        self.new()
+        (self.root() / ".registry.json").write_text('{"worktrees": ' + "[" * 100000)
+        entries, why = self.WT.read_registry(self.root())
+        self.assertEqual(entries, [])
+        self.assertIn("not JSON", why)
+        self.assertEqual([r["branch"] for r in self.WT.list_worktrees(self.repo, "proj", home=self.home,
+                                                                      prs=None)["worktrees"]],
+                         ["overture/ticket/API-3"])   # rebuilt from git, reported as not in the registry
+        with mock.patch.object(G, "gh", return_value=(0, "[" * 100000, "")):
+            prs, why = self.WT.gh_prs(self.repo)
+        self.assertIsNone(prs)
+        self.assertIn("not JSON", why)
+        (state / AG.PRUNE_FILE).write_text(deep)
+        R.register(self.repo, state, KIT)
+        with mock.patch.object(self.WT, "gh_prs", return_value=(lambda b: None, None)):
+            rc, err = self.watch(state)
+        self.assertEqual(rc, 3, err)
+        self.assertNotIn("Traceback", err)
+        self.assertIsInstance(json.loads((state / AG.PRUNE_FILE).read_text())["at"], float)
+
+    def test_a_slow_git_and_gh_keep_one_prune_within_its_cap_and_the_heartbeat_fresh(self):
+        # Catches (1.50 clearing round Z2): the prune's cap not bounding its wall time: gh's own 120 s timeout
+        # spent before the budget started, git calls that ignore what is left (120 s each), no deadline check
+        # between worktrees; and the heartbeat written only before and after the prune, so "listening" lapses
+        # (its grace is ~30 s) while a slow git or gh holds the steward. Here git sleeps before every call, gh
+        # hangs (or answers), and the beat's promise is shrunk with the cap, so the same arithmetic runs in seconds.
+        import shlex
+        import shutil
+        import stat as _stat
+        import threading
+        import time as _time
+        from unittest import mock
+        import agent as AG
+        real_git = shutil.which("git")
+        for i in range(1, 9):
+            self.commit(self.new(item=f"API-{i}"))
+        state = self.dir / "state"
+        state.mkdir()
+        R.register(self.repo, state, KIT)
+        slow = self.dir / "slowbin"
+        slow.mkdir()
+        def stub(name, body):
+            (slow / name).write_text("#!/bin/sh\n" + body + "\n")
+            (slow / name).chmod(_stat.S_IRWXU)
+        stub("git", f'sleep 0.5\nexec {shlex.quote(real_git)} "$@"')   # a worktree takes longer than the beat's promise
+        cap, every, grace = 8.0, 1.0, 2.0
+        call_max = grace * 0.75
+        for case, gh, bound in (("gh hangs", "exec sleep 30", call_max + 1.5), ("git is slow", "printf '[]'", cap + 1.0)):
+            with self.subTest(case=case):
+                stub("gh", gh)
+                (state / AG.PRUNE_FILE).unlink(missing_ok=True)
+                samples, span = [], {}
+                stop = threading.Event()
+                def sample():
+                    while not stop.is_set():
+                        samples.append((_time.monotonic(), D.listening(state)["state"]))
+                        _time.sleep(0.05)
+                real = AG._watch_prune
+                def timed(st, now=None, beat=None):
+                    span["start"] = _time.monotonic()
+                    try:
+                        return real(st, now, beat)
+                    finally:
+                        span["end"] = _time.monotonic()
+                t = threading.Thread(target=sample, daemon=True)
+                with mock.patch.dict(os.environ, {"PATH": f"{slow}{os.pathsep}{os.environ['PATH']}"}), \
+                        mock.patch.object(AG, "PRUNE_BUDGET", cap), mock.patch.object(D, "BEAT_EVERY", every), \
+                        mock.patch.object(D, "BEAT_GRACE", grace), mock.patch.object(AG, "_watch_prune", side_effect=timed):
+                    t.start()
+                    try:
+                        rc, err = self.watch(state)
+                    finally:
+                        stop.set()
+                        t.join()
+                self.assertEqual(rc, 3, err)
+                took = span["end"] - span["start"]
+                self.assertLessEqual(took, bound, err)
+                during = [s for at, s in samples if span["start"] <= at <= span["end"]]
+                self.assertTrue(during)
+                self.assertEqual(set(during), {"listening"}, err)
+                if case == "gh hangs":
+                    self.assertIn("worktree prune skipped", err)
+                else:
+                    self.assertGreater(took, cap - self.WT.MIN_CALL - 1.0)   # it ran into the cap, and stopped there
+                    self.assertIn("stopped after 8 s at overture/ticket/API-", err)
+                for i in range(1, 9):
+                    self.assertTrue((self.root() / "overture" / "ticket" / f"API-{i}").is_dir())
 
     def test_the_heartbeat_carries_the_stale_list_and_only_its_shape(self):
         # Catches: stale worktrees sent with a full path (a home directory on the owner's page), anything of
