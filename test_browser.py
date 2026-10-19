@@ -6666,6 +6666,68 @@ class WorktreeBrowserTests(unittest.TestCase):
                 page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-overlap", timeout=10000)
                 self.assertFalse(page.evaluate(OVERFLOW))
 
+    # A cursor carrying two marks the server itself never sends (it checks every branch): one with no branch,
+    # one whose branch is a number. Wrapped into every /api/view and /api/wait answer before the page loads.
+    BAD_MARKS = """(() => {
+      const real = window.fetch;
+      window.fetch = async (...args) => {
+        const r = await real(...args);
+        const u = String((args[0] && args[0].url) || args[0]);
+        if (!/\\/api\\/(view|wait)/.test(u)) return r;
+        let data;
+        try { data = await r.clone().json(); } catch (e) { return r; }
+        if (data && data.cursor) {
+          data.cursor.branches = Object.assign({}, data.cursor.branches || {},
+            { 'agent-8': { 'LANE.1': { worktree: 'LANE.1' } }, 'agent-9': { 'LANE.1': { branch: 7 } } });
+        }
+        return new Response(JSON.stringify(data), { status: r.status, headers: r.headers });
+      };
+    })();"""
+
+    def test_a_mark_without_a_string_branch_draws_no_chip(self):
+        # Catches (J05): a mark whose branch is missing or not a string (a server of another version, or a
+        # working.json it did not write) taken as a branch: a chip reading "undefined" or "7", a false overlap
+        # warning, or the chips' sort (localeCompare on a non-string) throwing so the item draws no strip.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-5", self.T)
+                page = self.page(kind, 1280, url, init=self.BAD_MARKS)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-chip")
+                self.assertTrue(page.evaluate(   # the control: the page really is served the two bad marks
+                    "async () => { const d = await (await fetch('/api/view', {credentials: 'same-origin'})).json();"
+                    " return !!(d.cursor && d.cursor.branches && d.cursor.branches['agent-9']); }"))
+                sel = ".ck-branches[data-where='item']"
+                self.assertEqual((page.evaluate(CHIPS, sel), page.evaluate(WARNS, sel)),
+                                 ([self.T + " · agent-5"], []))
+
+    def test_a_merged_or_closed_pr_of_a_marked_branch_shows_no_chip(self):
+        # Catches (J03): the agent's branch chip (and the overlap warning) drawn on a PR that merged or closed,
+        # as if work on it were still going on, because its head is the branch an agent still has marked; only
+        # the open PR of that branch carries it.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                push = {"repo": "octo/repo", "window_days": 30, "prs": [
+                    _pr_row(12, head=self.T, title="Retry policy"),
+                    _pr_row(14, head=self.T, state="merged", merged_at="2026-10-16T12:00:00Z", title="Earlier"),
+                    _pr_row(15, head=self.F, state="closed", closed_at="2026-10-16T12:00:00Z", title="Dropped")]}
+                code, out = self.SV.agent_request(self.cfg.socket, "POST", "/prs", push, agent="agent-5")
+                self.assertEqual(code, 200, out)
+                self.mark("agent-5", self.T)
+                self.mark("agent-6", self.F)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('prs')")
+                page.wait_for_selector(".ck-pr-row[data-number='12'] .ck-branch-chip")
+                for n in (14, 15):
+                    page.wait_for_selector(f".ck-pr-row[data-number='{n}']", state="attached")
+                    sel = f".ck-pr-row[data-number='{n}']"
+                    self.assertEqual((page.evaluate(CHIPS, sel), page.evaluate(WARNS, sel)), ([], []), n)
+                self.assertEqual(page.evaluate(CHIPS, ".ck-pr-row[data-number='12']"), [self.T + " · agent-5"])
+
     def test_the_stale_worktree_note_is_the_owners_alone(self):
         # Catches (W3): stale worktrees never reaching the console, shown loudly (they are housekeeping: a quiet
         # fold), shown without the branch and its age, or shown to a viewer (the server sends it to an owner only,
@@ -6676,6 +6738,13 @@ class WorktreeBrowserTests(unittest.TestCase):
             with self.subTest(browser=kind):
                 url = self.serve()
                 self.seed()
+                # Catches (J07): a steward that found nothing stale (an empty list, which the server passes on)
+                # drawn as "0 stale worktrees": the note is there only when a worktree is.
+                D.write_watch(self.cfg.state, True, stale=[])
+                empty = self.page(kind, 1280, url)
+                empty.evaluate("ConsoleKit.openTab('prs')")
+                empty.wait_for_selector(".ck-pr-row[data-number='12']")
+                self.assertEqual(empty.locator(".ck-stale-worktrees, .ck-prs-stale-count").count(), 0)
                 D.write_watch(self.cfg.state, True, stale=[{"branch": self.T, "age_days": 16, "agent": "agent-5"}])
                 page = self.page(kind, 1280, url)
                 page.evaluate("ConsoleKit.openTab('prs')")
@@ -6818,6 +6887,20 @@ class WorktreeBrowserTests(unittest.TestCase):
                 page.wait_for_timeout(300)
                 said = [s for s in page.evaluate("window.__said") if "agents on LANE.1" in s]
                 self.assertEqual(said, ["2 agents on LANE.1: " + self.F + ", " + self.T + ". Warned, not blocked."])
+                # Catches (J06): the "said once" key being the item alone, so a THIRD agent's branch joining
+                # the overlap is news the screen reader never hears; it is said once more, and only once.
+                U = "overture/ux/LANE.1-3"
+                self.mark("agent-7", U)
+                _wait_for(page, "() => /3 agents on LANE\\.1/.test((document.querySelector("
+                                "\".ck-pr-row[data-number='12'] .ck-branch-overlap\") || {}).textContent || '')",
+                          timeout=10000)
+                for _ in range(2):
+                    self.look(page)
+                page.wait_for_timeout(300)
+                said = [s for s in page.evaluate("window.__said") if "agents on LANE.1" in s]
+                self.assertEqual(said, ["2 agents on LANE.1: " + self.F + ", " + self.T + ". Warned, not blocked.",
+                                        "3 agents on LANE.1: " + ", ".join([self.F, self.T, U])
+                                        + ". Warned, not blocked."])
 
     def test_a_closed_ticket_shows_no_branch(self):
         # Catches (1.50 review X4): a branch chip (or an overlap warning) on a closed ticket's card, as if work on

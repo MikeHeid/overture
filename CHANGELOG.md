@@ -3055,7 +3055,11 @@ server only stores and shows the branch it is told.
   time, it stops and takes up where it stopped on the next cycle. A
   `git worktree remove` once started is the one call not held to that: it
   is never cut short half-way through its delete, only stopped after 120 s
-  (the heartbeat kept fresh meanwhile), and then kept with what to do. Without
+  (the heartbeat kept fresh meanwhile), and then kept with what to do; one
+  started late in the 60 s can so take the prune to about 3 minutes. While it
+  runs it holds the registry's lock: an agent's `worktree new` waits at most
+  10 s for it and is then refused by name ("a prune is removing a worktree
+  right now; try again in a minute"), and `worktree list` never waits. Without
   `gh` it skips, and says so once. A record of its own, or a `watch.json`,
   that will not parse (nested past the JSON parser's depth included) reads as
   nothing.

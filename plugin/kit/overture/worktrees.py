@@ -78,7 +78,11 @@ LOCK = ".registry.lock"
 MAX_REGISTRY = 1 << 20
 MAX_ENTRIES = 500
 GIT_SECONDS = 120.0
-MIN_CALL = 2.0           # Z2: under this many seconds left of a prune's budget, a call is not started
+LOCK_WAIT = 10.0         # M2: how long an agent's `worktree new` waits for the registry lock before it is refused
+LOCK_POLL = 0.1
+LOCK_BUSY = ("refused: the worktree registry is busy: a prune is removing a worktree right now (or another agent "
+             "is making one); try again in a minute")
+MIN_CALL = 2.0          # Z2: under this many seconds left of a prune's budget, a call is not started
 MAX_STALE_REPORT = 12    # what fits the heartbeat file (doorbell.MAX_WATCH)
 TS = "%Y-%m-%dT%H:%M:%SZ"
 GH_LIMIT = 200           # the one `gh pr list` of a cycle: the newest PRs of the repository, every state
@@ -91,6 +95,10 @@ PrLookup = Callable[[str], "dict | list | None | str"]
 
 class WorktreeError(ValueError):
     """Refused, by name; nothing was made or removed."""
+
+
+class RegistryBusy(WorktreeError):
+    """The registry lock was not free within the wait asked for (M2)."""
 
 
 # -- small helpers -----------------------------------------------------------------------------------
@@ -346,23 +354,42 @@ def write_registry(project_dir: Path, entries: list[dict]) -> None:
 
 
 @contextlib.contextmanager
-def _locked(project_dir: Path):
-    """One writer at a time across agents: an exclusive lock on `.registry.lock` beside the registry."""
+def _locked(project_dir: Path, wait: float | None = None):
+    """One writer at a time across agents: an exclusive lock on `.registry.lock` beside the registry.
+
+    `wait` None blocks until the lock is free (the prune, whose `git worktree remove` may hold it for up to
+    GIT_SECONDS). A number waits at most that long and then raises RegistryBusy (M2: an agent's `worktree new`
+    is refused by name rather than hung behind a slow remove); 0 tries once.
+    """
     fd = os.open(Path(project_dir) / LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if wait is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            end = time.monotonic() + wait
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    left = end - time.monotonic()
+                    if left <= 0:
+                        raise RegistryBusy(LOCK_BUSY) from None
+                    time.sleep(min(LOCK_POLL, left))
         yield
     finally:
         os.close(fd)
 
 
-def _reconcile(project_dir: Path, main: Path,
-               cycle: Cycle | None = None) -> tuple[list[dict], list[dict], list[str], dict[str, str | None]]:
+def _reconcile(project_dir: Path, main: Path, cycle: Cycle | None = None,
+               write: bool = True) -> tuple[list[dict], list[dict], list[str], dict[str, str | None]]:
     """(live registered entries, unregistered worktrees under the project dir, notes, git's list).
 
     Git wins: a registry entry whose path git no longer lists as a worktree of
     this repository is dropped (and said); a worktree git lists under the
     project dir that the registry lacks is reported with what its branch says.
+    `write` False (the lock is not held) leaves the registry as it is: a rewrite then could lose an entry
+    another agent is adding.
     """
     entries, problem = read_registry(project_dir)
     notes = [problem] if problem else []
@@ -389,7 +416,7 @@ def _reconcile(project_dir: Path, main: Path,
             loose.append({"path": path, "branch": branch or "(detached)", "item": parsed[1] if parsed else None,
                           "kind": parsed[0] if parsed else None, "agent": None, "created": None, "base": None,
                           "base_oid": None, "registered": False})
-    if gone or problem:
+    if (gone or problem) and write:
         write_registry(project_dir, live)
     return live, loose, notes, known
 
@@ -489,7 +516,7 @@ def new(repo: Path | str, project: str, kind: str, item: str, agent: str | None,
     pdir = _project_dir(home, project, main, create=True)
     t = time.time() if now is None else now
     notes: list[str] = []
-    with _locked(pdir):
+    with _locked(pdir, wait=LOCK_WAIT):   # M2: refused by name after LOCK_WAIT, never hung behind a prune
         live, _loose, rnotes, known = _reconcile(pdir, main)
         notes += rnotes
         mine = [e for e in live if e["item"] == item and e["kind"] == kind and e["agent"] == bucket]
@@ -668,11 +695,11 @@ def list_worktrees(repo: Path | str, project: str, *, home: Path | None = None, 
     main = main_checkout(repo, cycle)
     if main is None:
         raise WorktreeError(f"refused: {repo} is not inside a git repository with a .git folder")
-    return _list(main, project, home=home, now=now, prs=prs, cycle=cycle, start_after=start_after)
+    return _list(main, project, home=home, now=now, prs=prs, cycle=cycle, start_after=start_after, wait=0.0)
 
 
 def _list(main: Path, project: str, *, home: Path | None, now: float | None, prs: PrLookup | None | bool,
-          cycle: Cycle | None, start_after: str | None) -> dict:
+          cycle: Cycle | None, start_after: str | None, wait: float | None = None) -> dict:
     pdir = _project_dir(home, project, main, create=False)
     t = time.time() if now is None else now
     notes: list[str] = []
@@ -683,8 +710,14 @@ def _list(main: Path, project: str, *, home: Path | None, now: float | None, prs
             notes.append(why)
     if not pdir.is_dir():
         return {"project": slug, "worktrees": [], "notes": notes, "gh": prs is not None, "unfinished": None}
-    with _locked(pdir):
-        live, loose, rnotes, _known = _reconcile(pdir, main, cycle)
+    try:
+        # M2: the prune waits for the lock (wait None); `worktree list` (wait 0) never does: when another agent
+        # holds it, the registry (written by rename, so always whole) is read as it is and left untouched.
+        with _locked(pdir, wait=wait):
+            live, loose, rnotes, _known = _reconcile(pdir, main, cycle)
+    except RegistryBusy:
+        live, loose, rnotes, _known = _reconcile(pdir, main, cycle, write=False)
+        notes.append("the registry is busy (a prune or a `worktree new` is at work): listed as it is, untidied")
     notes += rnotes
     todo = sorted([*live, *loose], key=lambda e: e["branch"] or "")
     if start_after:
@@ -828,7 +861,8 @@ def _remove(pdir: Path, main: Path, r: dict, cycle: Cycle | None = None) -> str 
         # a folder git still lists); bounded only by GIT_SECONDS, the heartbeat run about once a second meanwhile.
         tick = cycle.tick if cycle is not None else None
         if tick is not None:
-            tick()
+            with contextlib.suppress(Exception):   # the heartbeat's failure must not stop the remove (as in G._wait)
+                tick()
         rc, _o, err = _git(["worktree", "remove", r["path"]], main, GIT_SECONDS, tick=tick)
         if rc == 124 and err.endswith("and was stopped"):
             return f"removing it took over {GIT_SECONDS:g} s and was stopped; {_repair(r['path'])}"

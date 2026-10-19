@@ -243,7 +243,15 @@ names the file to move.
   next cycle"**: the steward's prune has 60 seconds in all, its `gh` call
   included, and a slow git or `gh` used them up. Nothing is wrong; the next
   cycle (10 minutes on) takes up after BRANCH, and "listening" stayed fresh
-  meanwhile.
+  meanwhile. A `git worktree remove` started late in those 60 seconds is
+  never cut short: it may take up to 120 seconds more, so one prune can last
+  about 3 minutes.
+- **`worktree new` says "the worktree registry is busy: a prune is removing a
+  worktree right now ...; try again in a minute"**: the steward's prune holds
+  the registry's lock while a `git worktree remove` runs (up to 120 s on a
+  slow disk), and `new` waits only 10 seconds for it. Nothing was made; run
+  it again shortly. `worktree list` does not wait; while the lock is held it
+  says "the registry is busy" and lists what is there.
 - **`visual-export` says "... is already there with other content"**: a file
   in your worktree at that path differs from the stored visual. Nothing was
   written. Look at it; move it aside if it is stale, then export again.
