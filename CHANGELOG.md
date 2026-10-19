@@ -3052,7 +3052,10 @@ server only stores and shows the branch it is told.
   call, and for at most 60 seconds in all, that `gh` call included: each git
   and `gh` call is held to the time left (and not started under 2 s), and the
   heartbeat is kept fresh between calls, so "listening" never lapses. Out of
-  time, it stops and takes up where it stopped on the next cycle. Without
+  time, it stops and takes up where it stopped on the next cycle. A
+  `git worktree remove` once started is the one call not held to that: it
+  is never cut short half-way through its delete, only stopped after 120 s
+  (the heartbeat kept fresh meanwhile), and then kept with what to do. Without
   `gh` it skips, and says so once. A record of its own, or a `watch.json`,
   that will not parse (nested past the JSON parser's depth included) reads as
   nothing.

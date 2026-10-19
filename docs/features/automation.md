@@ -240,7 +240,9 @@ minutes (the time kept in its state folder), with that one `gh` call, and for
 at most 60 seconds in all, that `gh` call included: every git and `gh` call
 is held to the time left, and the heartbeat is kept fresh between them, so
 "listening" never lapses. Out of time, it stops and takes up there on its
-next cycle. The owner sees a quiet "1 stale worktree" note at the top of the PR
+next cycle. A `git worktree remove` once started is never cut short half-way
+through its delete: it may run on past the 60 seconds, up to 120, the
+heartbeat kept fresh meanwhile. The owner sees a quiet "1 stale worktree" note at the top of the PR
 tab, and the same count on the tab's "pushed" line, with each branch and its
 age (owners only, and only while the steward's heartbeat is under a day old).
 `agent.py worktree list [--json]` shows each worktree's branch, item, kind,

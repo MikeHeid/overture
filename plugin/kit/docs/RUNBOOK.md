@@ -234,6 +234,11 @@ names the file to move.
   a merged PR of its branch name exists (an old one, before the name was
   freed): it is kept, and listed stale after 14 days; remove it by hand if
   it is not wanted.
+- **`worktree prune` keeps one: "removing it took over 120 s and was
+  stopped; it may be half-removed"** (or "its folder is gone, but git still
+  lists it as a worktree"): a very slow disk. Look at the folder, then run
+  `git worktree remove <path>` from the main checkout, or `git worktree
+  prune` there if the folder is already gone.
 - **The watch says "worktree prune: stopped after 60 s at BRANCH; the rest
   next cycle"**: the steward's prune has 60 seconds in all, its `gh` call
   included, and a slow git or `gh` used them up. Nothing is wrong; the next

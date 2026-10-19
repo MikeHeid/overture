@@ -32,7 +32,9 @@ and shows them; it never sees a path.
   paths under `~/.overture/worktrees/<project>/` are ever acted on. One with
   no PR for 14 days is listed as stale and kept. The steward's prune runs on
   one clock (`Cycle`): one deadline for the gh call and every git call, each
-  call held to what is left, and the heartbeat refreshed before each one.
+  call held to what is left, and the heartbeat refreshed before each one;
+  a `git worktree remove` once started is held only to GIT_SECONDS, the
+  heartbeat refreshed while it runs, so no delete is killed half-way (M1).
 - **Overlap (W4).** Two agents on one item are warned about, never blocked.
 - **Setup is never run.** A project's `worktree_setup` is read from the new
   worktree, checked (an argv list, no shell) and PRINTED as a suggested
@@ -93,9 +95,10 @@ class WorktreeError(ValueError):
 
 # -- small helpers -----------------------------------------------------------------------------------
 
-def _git(args: list[str], cwd: Path | str, timeout: float = GIT_SECONDS) -> tuple[int, str, str]:
+def _git(args: list[str], cwd: Path | str, timeout: float = GIT_SECONDS,
+         tick: Callable[[], None] | None = None) -> tuple[int, str, str]:
     """git ARGS through the seam. The one place this module starts git (tests watch it for `--force`)."""
-    r = G.git_full(args, cwd, timeout=timeout)
+    r = G.git_full(args, cwd, timeout=timeout, tick=tick)
     if isinstance(r, G.Unavailable):
         raise WorktreeError(G.UNAVAILABLE)
     return r
@@ -145,6 +148,12 @@ def _run(args: list[str], cwd: Path | str, cycle: Cycle | None = None, timeout: 
 def _out(args: list[str], cwd: Path | str, cycle: Cycle | None = None) -> str | None:
     rc, out, _err = _run(args, cwd, cycle)
     return out if rc == 0 else None
+
+
+def _repair(path: str) -> str:
+    """What the owner does about a worktree a remove may have left half-done (1.50, M1)."""
+    return (f"it may be half-removed: check it, then run `git worktree remove {path}` (or `git worktree prune` "
+            f"if the folder is gone) from the main checkout")
 
 
 def _first_line(text: str) -> str:
@@ -604,6 +613,7 @@ def status(e: dict, now: float, prs: PrLookup | None, cycle: Cycle | None = None
     path = e["path"]
     row = {k: e.get(k) for k in ("path", "branch", "item", "kind", "agent", "created", "base", "base_oid")}
     row["registered"] = e.get("registered", True)
+    row["folder_gone"] = not os.path.isdir(path)   # git still lists it, but its folder is gone (M1)
     last = _out(["log", "-1", "--format=%H%x1f%ct%x1f%s"], path, cycle)
     if last and last.count("\x1f") >= 2:
         sha, ct, subj = last.rstrip("\n").split("\x1f", 2)
@@ -707,6 +717,8 @@ def stale_summary(listing: dict) -> list[dict]:
 
 def _keep_reason(r: dict) -> str | None:
     """Why this worktree stays, or None when every rule for removing it holds (W3; 1.50 review C1)."""
+    if r.get("folder_gone"):
+        return f"its folder is gone, but git still lists it as a worktree; {_repair(r['path'])}"
     if r.get("pr_unknown"):
         return f"PR state unknown ({r['pr_unknown']})"
     pr = r.get("pr")
@@ -812,7 +824,14 @@ def _remove(pdir: Path, main: Path, r: dict, cycle: Cycle | None = None) -> str 
             return "it has uncommitted changes now (written while prune ran); kept"
         if _head(r["path"], cycle) != r.get("head"):
             return "its HEAD moved while prune ran (a new commit?); kept, and looked at again next time"
-        rc, _o, err = _run(["worktree", "remove", r["path"]], main, cycle)
+        # M1: never cut short by the cycle's per-call cap or what is left of it (a delete killed half-way leaves
+        # a folder git still lists); bounded only by GIT_SECONDS, the heartbeat run about once a second meanwhile.
+        tick = cycle.tick if cycle is not None else None
+        if tick is not None:
+            tick()
+        rc, _o, err = _git(["worktree", "remove", r["path"]], main, GIT_SECONDS, tick=tick)
+        if rc == 124 and err.endswith("and was stopped"):
+            return f"removing it took over {GIT_SECONDS:g} s and was stopped; {_repair(r['path'])}"
         if rc != 0:
             return f"git worktree remove refused: {_first_line(err) or f'exit {rc}'}"
         entries, _p = read_registry(pdir)

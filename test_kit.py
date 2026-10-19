@@ -7948,9 +7948,9 @@ class WorktreeTests(unittest.TestCase):
         from unittest import mock
         calls = []
         real = self.WT._git
-        def spy(args, cwd, timeout=self.WT.GIT_SECONDS):
+        def spy(args, cwd, timeout=self.WT.GIT_SECONDS, tick=None):
             calls.append(list(args))
-            return real(args, cwd, timeout)
+            return real(args, cwd, timeout, tick)
         return calls, mock.patch.object(self.WT, "_git", side_effect=spy)
 
     def test_prune_removes_only_merged_or_closed_clean_and_fully_pushed_never_forcing(self):
@@ -8397,6 +8397,69 @@ class WorktreeTests(unittest.TestCase):
                     self.assertIn("stopped after 8 s at overture/ticket/API-", err)
                 for i in range(1, 9):
                     self.assertTrue((self.root() / "overture" / "ticket" / f"API-{i}").is_dir())
+
+    def slow_remove(self, seconds):
+        """A git on PATH that sleeps before `git worktree remove` (a large worktree on a slow disk), else the real one."""
+        import shlex
+        import shutil
+        import stat as _stat
+        from unittest import mock
+        real_git = shutil.which("git")
+        slow = self.dir / "slowbin"
+        slow.mkdir(exist_ok=True)
+        (slow / "git").write_text(f'#!/bin/sh\ncase " $* " in *" worktree remove "*) sleep {seconds};; esac\n'
+                                  f'exec {shlex.quote(real_git)} "$@"\n')
+        (slow / "git").chmod(_stat.S_IRWXU)
+        return mock.patch.dict(os.environ, {"PATH": f"{slow}{os.pathsep}{os.environ['PATH']}"})
+
+    def landed(self):
+        r = self.new()
+        head = self.commit(r)
+        return r, (lambda b: [{"number": 7, "state": "merged", "oid": head}] if b == r["branch"] else None)
+
+    def test_a_slow_worktree_remove_is_not_cut_short_and_the_heartbeat_keeps_beating(self):
+        # Catches (1.50 clearing M1): `git worktree remove` held to the cycle's per-call cap (the heartbeat's
+        # grace, 15 s in the steward), so a large worktree on a slow disk is killed half-way through its delete,
+        # leaving a folder git still lists; and a remove that waits without running the heartbeat meanwhile.
+        import time as _time
+        from unittest import mock
+        r, prs = self.landed()
+        ticks = []
+        cycle = self.WT.Cycle(60.0, tick=lambda: ticks.append(_time.monotonic()), call_max=1.0)
+        with self.slow_remove(3), mock.patch.object(self.WT, "GIT_SECONDS", 10.0):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs, cycle=cycle)
+        self.assertEqual([x["branch"] for x in res["removed"]], [r["branch"]], res["kept"])
+        self.assertFalse(Path(r["path"]).exists())
+        gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+        self.assertGreater(len(ticks), 3)
+        self.assertLess(max(gaps), 1.8, gaps)   # beaten about once a second through the 3 s remove
+
+    def test_a_worktree_remove_past_its_bound_is_stopped_kept_and_the_owner_told_what_to_do(self):
+        # Catches (1.50 clearing M1): a remove that runs on past GIT_SECONDS; and one stopped with only "git did
+        # not finish", the entry dropped or nothing said about the half-removed folder and how to repair it.
+        from unittest import mock
+        r, prs = self.landed()
+        with self.slow_remove(30), mock.patch.object(self.WT, "GIT_SECONDS", 2.0):
+            res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs, cycle=self.WT.Cycle(60.0))
+        self.assertEqual(res["removed"], [])
+        why = {k["branch"]: k["why"] for k in res["kept"]}[r["branch"]]
+        self.assertIn("removing it took over 2 s and was stopped", why)
+        self.assertIn(f"git worktree remove {r['path']}", why)
+        self.assertIn("git worktree prune", why)
+        self.assertIn("from the main checkout", why)
+        self.assertTrue(Path(r["path"]).is_dir())
+        self.assertEqual([e["branch"] for e in self.WT.read_registry(self.root())[0]], [r["branch"]])
+
+    def test_a_listed_worktree_whose_folder_is_gone_is_kept_with_the_repair_hint(self):
+        # Catches (1.50 clearing M1): a worktree half-removed earlier (its folder gone, git still listing it)
+        # reported on every later cycle only as "its status cannot be read", with nothing saying what to do.
+        import shutil
+        r, prs = self.landed()
+        shutil.rmtree(r["path"])
+        res = self.WT.prune(self.repo, "proj", home=self.home, prs=prs)
+        why = {k["branch"]: k["why"] for k in res["kept"]}[r["branch"]]
+        self.assertIn("its folder is gone", why)
+        self.assertIn("git worktree prune", why)
 
     def test_the_heartbeat_carries_the_stale_list_and_only_its_shape(self):
         # Catches: stale worktrees sent with a full path (a home directory on the owner's page), anything of
