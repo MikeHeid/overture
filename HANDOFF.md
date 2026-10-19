@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.50.0 released — Agent worktrees** (PR #177, `b1f9dd6`, zip sha f812c919…66de): owner menu W1–W4 (all ★); "continue when ready. merge when ready".
+  `agent.py worktree new|list|prune`; worktrees in ~/.overture/worktrees/<project>-<hash>/<branch>; pruned only once landed (MERGED at the worktree HEAD, clean, own commits), never forced; stale listed; branch chips + overlap warning; worktree_setup printed, never run.
+  1353 tests; 88 mutants, every survivor tested and re-checked by an independent runner. Disk filled twice mid-run (other projects); work saved as WIP each time. Next: launchd for macOS (Docker optional).
+
 - **v1.49.0 released — Pop-outs and a calmer Inbox** (PR #176, `0ab37f8`, zip sha 8b035622…1ca0): owner menu U3, U5, U6; "continue when ready. merge when ready".
   Pop-outs over the dashboard (stack of 3, Pin, Esc incl. ck-escape from chart frames, #pop= links, 480px room else a stowable sheet); Inbox by lane, outline, j/k, sticky Mine.
   1261 tests; mutation 75 (all testable gaps tested). Power failure mid-build: work saved as WIP, scratchpad rebuilt. Next: 1.50 agent worktrees (owner W1–W4, all ★), then launchd/Docker (Docker optional).
@@ -148,7 +152,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.49.0 (PR #176), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.50.0 (PR #177), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
