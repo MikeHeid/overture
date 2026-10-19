@@ -17,7 +17,7 @@ The live page, the sections and their tabs, pop-outs, moving through a long Inbo
 
 - The status bar says whether an agent session is listening right now.
 - **The footer (0.8.14).** A thin bar at the bottom of the page always
-  names the running kit, "overture 1.49.0", the same version `/health`
+  names the running kit, "overture 1.50.0", the same version `/health`
   reports, and carries a **Shortcuts** button. When the server is started
   with `--usage-file`, it also shows your Claude usage for the 5-hour and
   7-day windows.

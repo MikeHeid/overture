@@ -1,4 +1,4 @@
-# Automation: Delegate, playbooks and triggers
+# Automation: Delegate, playbooks, triggers and agent worktrees
 
 [← Back to README](../../README.md)
 
@@ -152,3 +152,136 @@ graph by kind (item, question, round, section, file) and by state. It is
 drawn in the same sandboxed frame as the charts, from at most 120 nodes.
 
 <img src="../screenshots/feature-impact-graph.png" alt="The impact graph for API-2: Wave 2, the item, its two questions and a cited file, with kind and state chips" width="400">
+
+## Agent worktrees (1.50)
+
+Work that changes files happens in the agent's **own worktree**, never in
+your checkout and never on `main`, and the console shows where each agent
+works. The owner's decisions are in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#agent-worktrees-decided-2026-10-16)
+(W1 to W4).
+
+**Where they live (W1).** `~/.overture/worktrees/<project>-<hash>/<branch>`,
+in the Linux home: outside the repository, one place to list and prune.
+`<project>` is the console's project name (the one server's name for it, else
+the registered project folder's name) and `<hash>` the first 8 hex of the
+sha256 of the main checkout's real path, so two repositories in folders of
+the same name never share one. A home that resolves under `/mnt/` (a Windows
+drive from WSL, where git is slow) is refused, and so is a worktrees or
+project folder that a symlink leads onto `/mnt/` or out of your home.
+
+**What gets one (W2).** Anything that changes files: agent work on a ticket,
+a visual, a UX save, a playbook step that writes, a fold, a round whose
+outcome changes code, a fix. The writing skills start with
+
+    agent.py --state STATE worktree new --kind KIND --item ITEM
+
+which fetches `origin`, makes the branch `overture/<kind>/<item>` from
+`origin/main` (from the remote's default branch when there is no `main`, and
+it says so), prints the path, and marks the item worked on with that branch.
+`KIND` is one of `ticket`, `visual`, `ux`, `playbook`, `round` and `fix`. It
+needs the session's agent name, the same one `agent.py working` uses
+(`agent.py --as agent-5 ...`, `OVERTURE_AGENT`, or `/overture:as` in the
+session), and refuses without one, leading with the fix (`agent.py --as
+agent-5 --state STATE worktree new ...`): unnamed sessions share one set of
+marks, so they would share one worktree. Run again by the same agent for
+the same item and kind, it gives the same worktree back, unless that
+worktree's PR has merged or closed: then it makes a fresh `-N` one and says
+the old one waits for prune. The agent works, commits, pushes and opens its
+PR from there. Chat, deliberation and grilling change no files and stay
+where they are.
+
+**Two agents on one item (W4).** A second agent gets the next branch,
+`overture/ticket/API-3-2`, and is told when it starts: `worktree new` names
+the other agent and branch and still succeeds. The item, its tickets (the
+Tickets fold and the open cards in the Tickets tab, never a closed one) and
+the PR row of either branch show a chip per branch with the agent's name, and
+a warning: "2 agents on API-3: overture/fix/API-3-2, overture/ticket/API-3".
+It warns, never blocks; a screen reader hears it once, when it first appears.
+The chip's whole text is in the page, inside a group named for the item; on
+a phone a long branch wraps inside its column rather than being cut (touch
+has no hover for the title). The console learns a branch
+from the agent's `working` mark: the branch and the worktree folder's name
+only, never a path, and the server refuses anything else by name. Members and
+viewers see the branches as they see the marks.
+
+<img src="../screenshots/feature-worktrees.png" alt="An item with two agents' branch chips, overture/fix/API-2-2 by agent-6 and overture/ticket/API-2 by agent-5, and the overlap warning under them" width="400">
+
+**Pruning (W3).** `agent.py worktree prune [--dry-run]` never removes a
+worktree with uncommitted changes, and never one with a commit that is on no
+remote. Its PR state comes from one `gh pr list` for the repository (every
+state, the newest 200, with each PR's head commit).
+
+- **Landed:** the PR merged and its head commit is the worktree's `HEAD`.
+  A squash merge deletes the head branch, but the PR keeps its head on the
+  remote, so the work is safe: the worktree is removed, and its local branch
+  deleted only if it still points at that commit (`git update-ref -d`,
+  never `branch -D`).
+- **Merged at another commit** (work after the merge, or a fork's branch that
+  shares the name): kept, and `prune` says which two commits differ.
+- **Closed without merging:** removed only when every commit is on a remote
+  ref, its branch then with `git branch -d` (which keeps one git thinks
+  unmerged).
+- **No commits of its own** (nothing past the commit `new` cut it from):
+  never landed, whatever a PR of its branch name did, and kept. A PR is the
+  worktree's only when its head is the worktree's `HEAD`; `new` reuses or
+  replaces a worktree by the same rule.
+- **Open, no PR, unknown:** kept, with the reason. One with no PR for 14 days
+  is **stale**: listed, never removed.
+
+Right before each removal it looks again, under the registry's lock, and
+keeps a worktree written into meanwhile. It acts only on paths under the
+project's own folder. It never forces and never deletes a remote branch.
+Without `gh` it keeps everything and says so.
+
+The steward's `watch` runs the same prune after its first heartbeat (you see
+"listening" first) and only when no signal is waiting: at most once per 10
+minutes (the time kept in its state folder), with that one `gh` call, and for
+at most 60 seconds in all, that `gh` call included: every git and `gh` call
+is held to the time left, and the heartbeat is kept fresh between them, so
+"listening" never lapses. Out of time, it stops and takes up there on its
+next cycle. A `git worktree remove` once started is never cut short half-way
+through its delete. One is started only while at least 4 of the 60 seconds
+are left, so it can start late in the budget and then take up to 120 seconds
+of its own: one prune can run for about 3 minutes in all, the heartbeat kept
+fresh meanwhile. While a remove runs it holds the worktree registry's lock;
+an agent's `worktree new` waits at most 10 seconds for it, then is refused
+("a prune is removing a worktree right now; try again in a minute"), and
+`worktree list` never waits (it lists the registry as it is). The owner sees a quiet "1 stale worktree" note at the top of the PR
+tab, and the same count on the tab's "pushed" line, with each branch and its
+age (owners only, and only while the steward's heartbeat is under a day old).
+`agent.py worktree list [--json]` shows each worktree's branch, item, kind,
+agent, age, last commit, ahead and behind, uncommitted changes, unpushed
+commits, PR and stale.
+
+**Setting one up: `worktree_setup`.** git does not carry untracked
+dependencies (a virtualenv, `node_modules`). A project can name one command
+in `.overture.json`, as an argv list, never a shell string (a word with a
+control character, such as ESC or a newline, is refused by name, so it is
+never printed to a terminal):
+
+    {"worktree_setup": ["make", "deps"]}
+
+**Overture never runs it.** `worktree new` reads the key from the new
+worktree's own copy, checks its shape, and prints it as a suggested next
+command: "This project suggests a setup step; run it yourself in the
+worktree: cd ... && make deps" (in `--json`, `setup.argv` and
+`setup.command`). The agent runs it through its own Bash tool, so your
+permission prompt sees it like any other command. The copy comes from
+`origin/main`, which any merged PR can change, so running it unasked would
+hand that PR your account. Unset, nothing is suggested, and `.venv` is never
+copied or linked for you.
+
+**The boundary.** The server starts no git (CONSOLE-kit/Q24): `worktree`
+runs in the agent's own process, through the same seam as every other git
+call (git and `gh` only; the kit starts no other program for it), and the
+server only stores and shows the branch it is told. The registry beside the
+worktrees (`.registry.json`) is written atomically and never trusted over
+`git worktree list`.
+
+**Going back to 1.49.** A 1.49 server ignores the branches stored beside the
+marks (the marks still show, without them) and the stale list in the
+heartbeat. A 1.50 `agent.py` talking to a 1.49 server, which refuses a mark
+with a branch, sends the mark again without it and says so, so the item still
+shows "agent active". The worktrees stay on disk; remove one with
+`git worktree remove <path>` from the project's checkout.

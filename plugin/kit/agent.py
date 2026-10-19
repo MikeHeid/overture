@@ -60,7 +60,31 @@
     agent.py --state DIR working ITEM [ITEM ...]
                                                 show the owner "agent active" on these items; this
                                                 session's next `synced` clears it (0.8.2: only its own
-                                                marks, by --as name), and it lapses after an hour
+                                                marks, by --as name), and it lapses after an hour. Run
+                                                from inside an agent worktree it also says which branch
+                                                (1.50.0; the branch and folder name only, never a path)
+    agent.py --state DIR worktree new --item ITEM --kind KIND [--project REPO] [--json]
+                                                make (or, for the same agent, kind and item, give back)
+                                                this agent's worktree, ~/.overture/worktrees/<project>/
+                                                overture/<kind>/<item>[-n], branched from origin/main
+                                                after a fetch, and mark the item worked on with its
+                                                branch; prints the path. KIND: ticket, visual, ux,
+                                                playbook, round or fix. Needs this session's agent
+                                                name (--as, OVERTURE_AGENT or /overture:as). Another
+                                                agent on the item is named (an overlap warning, W4)
+                                                and it still exits 0. A worktree whose PR merged or
+                                                closed is never handed back. A project's
+                                                worktree_setup is PRINTED, never run: run it yourself
+    agent.py --state DIR worktree list [--project REPO] [--json]
+                                                every agent worktree of this project: branch, item,
+                                                kind, agent, age, last commit, ahead/behind, dirty,
+                                                unpushed, PR (via gh, when it is there) and stale
+    agent.py --state DIR worktree prune [--project REPO] [--dry-run] [--json]
+                                                remove the clean worktrees that LANDED (PR merged at
+                                                exactly their HEAD, by one `gh pr list`) or whose PR
+                                                closed with every commit on a remote; keep and explain
+                                                the rest (W3). Never --force, never branch -D, never a
+                                                remote branch. `watch` runs it at most every 10 minutes
     agent.py --state DIR synced [--through SEQ] [--rx-through RX] [--error MSG]
                                                 record that the agent has processed the doorbell up to SEQ
     agent.py --state DIR costs collect | show --fork RECORD_ID
@@ -162,6 +186,7 @@ environment as OVERTURE_SESSION. This session's name is then, in order:
 
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import json
 import os
@@ -250,7 +275,7 @@ def resolve_door(state: Path) -> _Door:
     except SF.ServerFileError as e:
         raise DoorRefused(f"refused, nothing sent: {e}") from None
     cwd = Path.cwd()
-    here = R.enclosing(cwd)
+    here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
     here_state = os.path.realpath(here[1]["state"]) if here and isinstance(here[1].get("state"), str) else None
     if s not in hosted and here_state not in hosted:
         return _Door(Path(state) / "agent.sock")
@@ -263,6 +288,20 @@ def resolve_door(state: Path) -> _Door:
                           f"the directory it runs in, so pass that console's --state or run it from the other "
                           f"project's checkout")
     return _Door(socket_path(SF.location()), hosted[s])
+
+
+def _enclosing_via_worktree(cwd: Path):
+    """1.50.0: an agent worktree (~/.overture/worktrees/...) sits outside every registered root, so the project
+    it runs in is the one its main checkout is in: asked of git, here, only for a folder under that base."""
+    from overture import worktrees as WT
+    try:
+        base = os.path.realpath(WT.base_dir())
+        if not os.path.realpath(cwd).startswith(base + os.sep):
+            return None
+        main = WT.main_checkout(cwd)
+    except WT.WorktreeError:
+        return None
+    return R.enclosing(main) if main is not None else None
 
 
 def _get_view(state: Path):
@@ -508,7 +547,8 @@ def _ux_export(state: Path, project: Path, save: str) -> int:
     dest = Path(project).resolve()
     top = _git_top(dest)
     if top is None or top != dest:
-        print(f"refused: {project} must be the top of your own git worktree, on a branch", file=sys.stderr)
+        print(f"refused: {project} must be the top of your own git worktree, on a branch (make one with "
+              f"`agent.py worktree new --kind ux --item ITEM`)", file=sys.stderr)
         return 1
     try:
         code, out = _req(state, "POST", "/ux-export", {"save": save})
@@ -570,7 +610,8 @@ def _visual_export(state: Path, project: Path, ids: list[str]) -> int:
     if dest in (server_root, server_top):
         print(f"refused: {project} is the directory the console server runs from ({server_root}). Its checkout "
               f"follows main, and a file written there blocks the next fast-forward. Export into your own "
-              f"worktree on a branch (git worktree add ../visuals-branch -b visuals) and land it by PR",
+              f"worktree on a branch (`agent.py worktree new --kind visual --item ITEM` prints one) and land it "
+              f"by PR",
               file=sys.stderr)
         return 1
     for r in out["refused"]:
@@ -593,6 +634,240 @@ def _visual_export(state: Path, project: Path, ids: list[str]) -> int:
         return 0
     # 3: a partial export, told apart from 1 ("nothing was written") so a caller knows files landed.
     return 3 if done["written"] else 1
+
+
+# -- 1.50.0: agent worktrees (OPEN-DECISIONS.md W1-W4) --------------------------------------------------
+
+def _project_name(state: Path, main: Path) -> str:
+    """The console's project name for `~/.overture/worktrees/<project>`: the one server's name for this console,
+    else the registered project root's folder name, else the checkout's."""
+    from overture import serverfile as SF
+    s = os.path.realpath(state)
+    try:
+        for n, e in SF.load()["projects"].items():
+            if isinstance(e, dict) and isinstance(e.get("state"), str) and os.path.realpath(e["state"]) == s:
+                return n
+    except SF.ServerFileError:
+        pass
+    here = R.enclosing(main)
+    return Path(here[0]).name if here else Path(main).name
+
+
+def _post_working(state: Path, items: list[str], where: dict | None, agent: str | None) -> tuple[int, dict, str]:
+    """POST /working with the branch when there is one: (exit code, the server's answer, a note).
+
+    An older server (before 1.50) refuses the extra keys; the mark is then sent again without them, and the
+    note says the branch was not shown. Only that refusal, by its words: a 1.50 server's refusal of the branch
+    itself is reported as it is (1.50 review L1).
+    """
+    body = {"items": items, **(where or {})}
+    try:
+        code, out = _req(state, "POST", "/working", body, agent=agent)
+        if code == 400 and where and _older_than_branches(out):
+            code, out = _req(state, "POST", "/working", {"items": items}, agent=agent)
+            if code == 200:
+                return 0, out, ("the console server did not take the branch (older than 1.50?): the item is "
+                                "marked worked on, without it")
+    except OSError as e:
+        return 2, {}, f"cannot reach the console server at {_where(state)}: {e}"
+    except DoorRefused as e:   # the worktree (if any) is made already: say so, never lose it to a traceback
+        return 1, {}, str(e)
+    if not isinstance(out, dict):
+        out = {"error": str(out)}
+    return (0 if code == 200 else 1), out, ("" if code == 200 else f"refused: {out.get('error', out)}")
+
+
+OLD_WORKING = 'working takes {"items": ['   # a 1.49 server's whole refusal of any key but "items"
+
+
+def _older_than_branches(out: object) -> bool:
+    """Whether a 400 from /working is a server older than 1.50 refusing the unknown "branch" key."""
+    err = out.get("error") if isinstance(out, dict) else None
+    return isinstance(err, str) and err.startswith(OLD_WORKING) and '"branch"' not in err
+
+
+def _here_branch() -> dict | None:
+    from overture import worktrees as WT
+    try:
+        e = WT.registered_here(Path.cwd())
+    except WT.WorktreeError:
+        return None
+    if not e:
+        return None
+    return {"branch": e["branch"], **({"worktree": e["worktree"]} if e.get("worktree") else {})}
+
+
+def _worktree(a) -> int:
+    from overture import worktrees as WT
+    repo = Path(a.project) if a.project else Path.cwd()
+    try:
+        main = WT.main_checkout(repo)
+        if main is None:
+            raise WT.WorktreeError(f"refused: {repo} is not inside a git repository with a .git folder")
+        name = _project_name(a.state, main)
+        if a.wt_cmd == "new":
+            return _worktree_new(a, WT, repo, name)
+        if a.wt_cmd == "list":
+            res = WT.list_worktrees(repo, name)
+            if a.json:
+                sys.stdout.write(_json(res))
+                return 0
+            for n in res["notes"]:
+                print(n, file=sys.stderr)
+            if not res["worktrees"]:
+                print(f"no agent worktrees for {res['project']}")
+            for r in res["worktrees"]:
+                pr = (f"PR #{r['pr']['number']} {r['pr']['state']}" if r["pr"] else
+                      ("PR unknown" if r["pr_unknown"] else "no PR"))
+                flags = [f"{r['ahead']} ahead, {r['behind']} behind" if r["ahead"] is not None else "",
+                         "dirty" if r["dirty"] else "", f"{r['unpushed']} unpushed" if r["unpushed"] else "",
+                         "STALE" if r["stale"] else ""]
+                print(f"{r['branch']}  {r['item'] or '?'}  {r['kind'] or '?'}  {r['agent'] or '?'}  "
+                      f"{r['age_days'] if r['age_days'] is not None else '?'}d  {pr}  "
+                      + "  ".join(f for f in flags if f) + f"\n    {r['path']}")
+            return 0
+        res = WT.prune(repo, name, dry_run=a.dry_run)
+        if a.json:
+            sys.stdout.write(_json(res))
+            return 0
+        for n in res["notes"]:
+            print(n, file=sys.stderr)
+        for r in res["removed"]:
+            print(("would remove " if a.dry_run else "removed ") + r["branch"]
+                  + (f" (local branch kept: {r['branch_kept']})" if r.get("branch_kept") else ""))
+        for r in res["kept"]:
+            print(f"kept {r['branch']}: {r['why']}")
+        return 0
+    except WT.WorktreeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+
+def _worktree_new(a, WT, repo: Path, name: str) -> int:
+    res = WT.new(repo, name, a.kind, a.item, a.agent)
+    where = {"branch": res["branch"], **({"worktree": res["worktree"]} if WT.BASENAME.match(res["worktree"]) else {})}
+    rc, out, note = _post_working(a.state, [a.item], where, a.agent)
+    res["marked"] = rc == 0
+    if note:
+        res["notes"].append(note if rc == 0 else note + "; the worktree is made: run `agent.py working` from it "
+                                                         "when the console is back")
+    # W4: another agent on this item, whether this machine made its worktree or the console knows its mark.
+    seen = {o["branch"] for o in res["overlap"]}
+    me = a.agent or N.UNNAMED
+    for bucket, marks in (out.get("branches") or {}).items() if isinstance(out, dict) else ():
+        b = (marks or {}).get(a.item) if isinstance(marks, dict) else None
+        if bucket != me and isinstance(b, dict) and b.get("branch") not in seen | {res["branch"]}:
+            res["overlap"].append({"branch": b.get("branch"), "agent": bucket, "kind": None})
+            seen.add(b.get("branch"))
+    if a.json:
+        sys.stdout.write(_json(res))
+    else:
+        print(res["path"])
+    for n in res["notes"]:
+        print(n, file=sys.stderr)
+    if res["reused"]:
+        print(f"your worktree for {a.kind} {a.item} already exists, on {res['branch']}: carry on there",
+              file=sys.stderr)
+    for o in res["overlap"]:
+        print(f"overlap: {o['agent']} is also on {a.item}, in {o['branch']}. You are on {res['branch']}: warned, "
+              f"not blocked (W4); talk on the item before you touch the same files", file=sys.stderr)
+    return 0
+
+
+GH_NOTE = ".worktrees-no-gh"   # in STATE: the steward was told once that prune needs gh
+PRUNE_FILE = ".worktrees-prune.json"   # in STATE: when the watch last pruned, what was stale, where it stopped
+PRUNE_EVERY = 600.0    # 1.50 review C2: the watch prunes at most once per 10 minutes...
+PRUNE_BUDGET = 60.0    # ...and spends at most this long in all (its gh call too), then takes up there next time
+MAX_PRUNE_FILE = 16384
+
+
+def _prune_record(state: Path) -> dict:
+    """The watch's last prune: {"at": epoch, "stale": list | None, "resume_after": branch | None}; {} if none."""
+    try:
+        data = R.read_regular(Path(state) / PRUNE_FILE, MAX_PRUNE_FILE, nofollow=True)
+        rec = json.loads(data.decode("utf-8")) if data is not None else {}
+    except (OSError, ValueError, RecursionError, R.RegistryError):   # Z3: nested past the parser's depth: no record
+        return {}
+    if not (isinstance(rec, dict) and isinstance(rec.get("at"), (int, float)) and not isinstance(rec["at"], bool)):
+        return {}
+    stale = rec.get("stale")
+    after = rec.get("resume_after")
+    return {"at": float(rec["at"]), "stale": stale if isinstance(stale, list) else None,
+            "resume_after": after if isinstance(after, str) else None}
+
+
+def _write_prune_record(state: Path, rec: dict) -> None:
+    import tempfile
+    p = Path(state) / PRUNE_FILE
+    with contextlib.suppress(OSError):
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".worktrees-prune.", suffix=".tmp")   # 0600
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, sort_keys=True) + "\n")
+            os.replace(tmp, p)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
+
+def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | None:
+    """The steward's prune (W3): the stale ones for the heartbeat, or None (nothing said).
+
+    Only for the project the working directory is in AND whose console this is (--state), so a watch run
+    anywhere else touches nothing. 1.50 review C2: called after the watch's first heartbeat, it prunes at most
+    once per PRUNE_EVERY (the time kept in STATE; in between it hands back the last stale list), makes ONE gh
+    call, and stops looking after PRUNE_BUDGET seconds, to take up where it stopped on the next cycle. Without
+    gh nothing can be judged: it is skipped, said once. Clearing round Z2: PRUNE_BUDGET is one deadline for
+    all of it, gh included (`WT.Cycle`); each call is held to what is left and to under the heartbeat's grace,
+    and `beat` (the watch's Heartbeat) is run before every call, so "listening" never lapses meanwhile.
+    """
+    import time as _time
+    from overture import worktrees as WT
+    t = _time.time() if now is None else now
+    rec = _prune_record(state)
+    if rec and not rec["resume_after"] and 0 <= t - rec["at"] < PRUNE_EVERY:
+        return rec["stale"]
+    cycle = WT.Cycle(PRUNE_BUDGET, tick=beat, call_max=D.BEAT_GRACE * 0.75)   # Z2: from here, all of it
+    try:
+        cwd = Path.cwd()
+        here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
+        if not here or os.path.realpath(here[1].get("state", "")) != os.path.realpath(state):
+            return None
+        main = WT.main_checkout(cwd, cycle)
+        if main is None:
+            return None
+        name = _project_name(state, main)
+        if not (WT.base_dir() / WT.project_slug(name, main)).is_dir():
+            _write_prune_record(state, {"at": t, "stale": [], "resume_after": None})
+            return []
+        prs, why = WT.gh_prs(main, cycle)
+        note = Path(state) / GH_NOTE
+        if prs is None:
+            if not note.exists():
+                print(f"worktree prune skipped: {why}; agent worktrees are kept until gh is there (said once)",
+                      file=sys.stderr)
+                with contextlib.suppress(OSError):
+                    note.write_text("1\n")
+            _write_prune_record(state, {"at": t, "stale": None, "resume_after": None})
+            return None
+        with contextlib.suppress(OSError):
+            note.unlink()
+        res = WT.prune(main, name, prs=prs, cycle=cycle, start_after=rec.get("resume_after"))
+    except (WT.WorktreeError, R.RegistryError, OSError) as e:
+        print(f"worktree prune skipped: {e}", file=sys.stderr)
+        return None
+    for r in res["removed"]:
+        print(f"worktree prune: removed {r['branch']}", file=sys.stderr)
+    stale = res["stale"]
+    if rec.get("resume_after"):   # a pass taken up again: what the first part found stale still counts
+        seen = {s["branch"] for s in stale}
+        stale = [*stale, *[s for s in rec.get("stale") or [] if isinstance(s, dict) and s.get("branch") not in seen
+                          and isinstance(s.get("branch"), str) and s["branch"] <= rec["resume_after"]]]
+    if res["unfinished"]:
+        print(f"worktree prune: stopped after {PRUNE_BUDGET:g} s at {res['unfinished']}; the rest next cycle",
+              file=sys.stderr)
+    _write_prune_record(state, {"at": t, "stale": stale[:WT.MAX_STALE_REPORT], "resume_after": res["unfinished"]})
+    return stale[:WT.MAX_STALE_REPORT]
 
 
 def _costs(a) -> int:
@@ -1517,6 +1792,23 @@ def main(argv=None) -> int:
     s.add_argument("--project", type=Path, required=True)
     s = sub.add_parser("working")
     s.add_argument("items", nargs="+", help="the item ids this session is now working on")
+    s = sub.add_parser("worktree", description=(
+        "1.50.0 (W1-W4): this agent's own worktree for a request that changes files, under "
+        "~/.overture/worktrees/<project>/, made, listed and pruned HERE, in your process (the console server "
+        "starts no git). `new` prints the path to work, commit, push and open the PR from."))
+    ws = s.add_subparsers(dest="wt_cmd", required=True)
+    w = ws.add_parser("new")
+    w.add_argument("--item", required=True, help="the item id the work is for")
+    w.add_argument("--kind", required=True, help="ticket, visual, ux, playbook, round or fix")
+    w.add_argument("--project", type=Path, help="a checkout of the repository (default: the working directory)")
+    w.add_argument("--json", action="store_true")
+    w = ws.add_parser("list")
+    w.add_argument("--project", type=Path)
+    w.add_argument("--json", action="store_true")
+    w = ws.add_parser("prune")
+    w.add_argument("--project", type=Path)
+    w.add_argument("--dry-run", action="store_true", help="say what would be removed; remove nothing")
+    w.add_argument("--json", action="store_true")
     s = sub.add_parser("synced")
     s.add_argument("--through", type=int)
     s.add_argument("--rx-through", type=int, help="the highest `rx` among the scan lines processed (Q40)")
@@ -1741,7 +2033,8 @@ def main(argv=None) -> int:
     try:
         # The user's own commands write the user's files; every other command reaches (or, for watch, inbox and
         # synced, reads) ONE project's console, and that project is the one the working directory is in (K4).
-        if a.cmd not in USER_COMMANDS:
+        # 1.50.0: `worktree list` and `prune` never reach the console, so they need no door.
+        if a.cmd not in USER_COMMANDS and not (a.cmd == "worktree" and a.wt_cmd != "new"):
             _DOOR = resolve_door(a.state)
         return _run(a, bell)
     except R.RegistryError as e:  # an unsafe or unreadable console file, named
@@ -2236,7 +2529,10 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "watch":
         since = a.since if a.since is not None else D.read_cursor(a.state)
-        beat = D.Heartbeat(a.state, a.poll)  # the owner sees "agent listening" while this waits (0.6.0)
+        beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"))  # "agent listening" (0.6.0)
+        beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
+        if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
+            beat.update(_watch_prune(a.state, beat=beat))   # W3: throttled and time-capped; the stale ones ride the heartbeat
         # A session that ends kills its watch with SIGTERM or SIGHUP; turn those into an
         # ordinary exit so `finally` says "stopped" now, rather than the owner seeing
         # "listening" until the promise lapses. SIGKILL cannot be caught: that is the lapse's job.
@@ -2275,7 +2571,14 @@ def _run(a, bell: Path) -> int:
             body["reply_to"] = a.reply_to
         return _call(a.state, "POST", "/message", body, agent=a.agent)
     if a.cmd == "working":
-        return _call(a.state, "POST", "/working", {"items": a.items}, agent=a.agent)
+        rc, out, note = _post_working(a.state, a.items, _here_branch(), a.agent)
+        if rc != 2:
+            sys.stdout.write(_json(out))
+        if note:
+            print(note, file=sys.stderr)
+        return rc
+    if a.cmd == "worktree":
+        return _worktree(a)
     if a.cmd == "next-step":
         from overture import projectcfg as PC
         try:

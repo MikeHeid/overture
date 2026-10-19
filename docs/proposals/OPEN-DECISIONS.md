@@ -135,6 +135,30 @@ Weighed and not chosen: SMTP email (N1 B), the URL set from Settings (N2 A),
 question text in messages (N3 B), a message per question (N4 A), and the
 steward session sending (N5 B).
 
+## Agent worktrees (decided 2026-10-16)
+
+The owner asked whether "auto branching to subagents in their own worktree,
+and having that support" would help Overture itself. The review found that
+visuals and saved UX components already must be written from the agent's own
+worktree and land by PR, but each skill tells the agent to make one by hand,
+other writing work has no such rule, and the console records which agents
+are active on an item but not where they work. The server runs no project
+code and starts no git (CONSOLE-kit/Q24), so worktrees are made and pruned on
+the agent side; the server only records and shows the branch. Merging stays
+with the owner, through the PR tab.
+
+| # | Question | Decision |
+|---|---|---|
+| W1 | Where an agent's worktree lives | **A** (owner): `~/.overture/worktrees/<project>/<branch>` in the Linux home. Outside the repository, never on `/mnt/c`, one place to list and prune. |
+| W2 | Which console requests get one automatically | **A** (owner): anything that changes files: agent work on tickets, visuals, UX saves, playbook steps that write, rounds that change code. Chat, deliberation and grilling stay where they are. |
+| W3 | When a worktree is removed | **A** (owner): when its PR merges or closes, by the steward on its next watch cycle. One with no PR for 14 days is listed in the console as stale, never deleted silently. Unpushed commits always block removal. |
+| W4 | Two agents' branches on the same item or files | **A** (owner): warn, never block. The item, its tickets and the PR tab show both branches with an overlap warning, and the second agent is told when it starts. |
+
+Weighed and not chosen: next to the repository, or Claude Code's own
+subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
+pruning when the PR opens, or only by hand (W3 B, C); blocking the second
+agent, or showing branches with no warning (W4 B, C).
+
 ## Sections, pop-outs and a calmer Inbox (decided 2026-10-16)
 
 The owner asked: "do multiple menus (with animation)… configuration and people

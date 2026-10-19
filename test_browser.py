@@ -6554,5 +6554,488 @@ class InboxGroupTests(unittest.TestCase):
                 self.assertEqual(first.locator(".ck-priority-qid").text_content(), "UI/Q1")
                 self.assertFalse(first.get_attribute("aria-label").startswith("live-test"))
 
+# -- 1.50.0: where agents work (W3, W4), and the 1.49 pop-out leftovers (L1-L4) ---------------------------
+
+def _pr_row(n, **o):
+    return {**{"number": n, "title": f"PR {n}", "state": "open", "draft": False, "head": f"lane-{n}", "base": "main",
+               "author": "octo", "created_at": "2026-10-16T10:00:00Z", "updated_at": "2026-10-16T11:00:00Z",
+               "merged_at": None, "closed_at": None, "url": f"https://github.com/octo/repo/pull/{n}",
+               "merge_commit": None, "checks": "success"}, **o}
+
+
+CHIPS = "s => [...document.querySelectorAll(s + ' .ck-branch-chip')].map(c => c.textContent)"
+WARNS = "s => [...document.querySelectorAll(s + ' .ck-branch-overlap')].map(c => c.textContent)"
+
+
+class WorktreeBrowserTests(unittest.TestCase):
+    """1.50.0 (W4): the item, its tickets and the PR tab show each agent's branch, and warn when two meet; the
+    steward's stale worktrees are a quiet note for the owner (W3). In a real browser on the real server."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+    serve = LiveConsoleTests.serve
+    agent_post = LiveConsoleTests.agent_post
+    ask = LiveConsoleTests.ask
+    page = LiveConsoleTests.page
+
+    T, F = "overture/ticket/LANE.1", "overture/fix/LANE.1-2"
+
+    def mark(self, agent, branch, item="LANE.1"):
+        code, out = self.SV.agent_request(self.cfg.socket, "POST", "/working",
+                                          {"items": [item], "branch": branch, "worktree": branch.rsplit("/", 1)[1]},
+                                          agent=agent)
+        self.assertEqual(code, 200, out)
+
+    def seed(self):
+        from overture import tickets as TK
+        self.ask(1)
+        TK.create(self.cfg.state, {"parent_item": "LANE.1", "kind": "task", "title": "Retry the job"}, "owner",
+                  "2026-10-16T10:00:00Z")
+        push = {"repo": "octo/repo", "window_days": 30,
+                "prs": [_pr_row(12, head=self.T, title="Retry policy"), _pr_row(13, head="lane-13")]}
+        code, out = self.SV.agent_request(self.cfg.socket, "POST", "/prs", push, agent="agent-5")
+        self.assertEqual(code, 200, out)
+
+    def look(self, page):
+        """{where: (chips, warnings)} on the item, its Tickets fold, the Tickets tab and PR #12 (and #13)."""
+        page.evaluate("ConsoleKit.open('LANE.1')")
+        page.wait_for_selector(".ck-questions-heading")
+        fold = page.locator("details.ck-tickets-fold")
+        if fold.get_attribute("open") is None:
+            fold.locator("summary").first.click()
+        got = {"item": (page.evaluate(CHIPS, ".ck-branches[data-where='item']"),
+                        page.evaluate(WARNS, ".ck-branches[data-where='item']")),
+               "fold": (page.evaluate(CHIPS, ".ck-tickets-body"), page.evaluate(WARNS, ".ck-tickets-body"))}
+        page.evaluate("ConsoleKit.openTab('tickets')")
+        page.wait_for_selector(".ck-ticket-board")
+        got["ticket"] = (page.evaluate(CHIPS, ".ck-ticket-board .ck-ticket"),
+                         page.evaluate(WARNS, ".ck-ticket-board .ck-ticket"))
+        page.evaluate("ConsoleKit.openTab('prs')")
+        page.wait_for_selector(".ck-pr-row[data-number='12']")
+        got["pr"] = (page.evaluate(CHIPS, ".ck-pr-row[data-number='12']"),
+                     page.evaluate(WARNS, ".ck-pr-row[data-number='12']"))
+        got["other-pr"] = (page.evaluate(CHIPS, ".ck-pr-row[data-number='13']"),
+                           page.evaluate(WARNS, ".ck-pr-row[data-number='13']"))
+        return got
+
+    def test_the_item_its_tickets_and_its_pr_show_the_branch_and_warn_when_two_meet(self):
+        # Catches (W4): a branch shown in one place only (the owner opens the PR tab or a ticket and cannot see who
+        # works where); a chip without the agent's name; the overlap warning shown for one branch, missing from any
+        # of the three when two agents carry different branches, or naming only one of them; a chip on a PR whose
+        # head is nobody's branch; and the warning not tracking the live marks (a sync clears it).
+        T, F = self.T, self.F
+        one = ([T + " · agent-5"], [])
+        both = "2 agents on LANE.1: " + F + ", " + T + ". Both may go on; agree on the item before you touch the same files."
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-5", T)
+                page = self.page(kind, 1280, url)
+                self.assertEqual(self.look(page), {"item": one, "fold": one, "ticket": one, "pr": one,
+                                                   "other-pr": ([], [])})
+                self.mark("agent-6", F)
+                page.wait_for_selector(".ck-pr-row[data-number='12'] .ck-branch-overlap", timeout=10000)
+                two = ([F + " · agent-6", T + " · agent-5"], [both])
+                self.assertEqual(self.look(page), {"item": two, "fold": two, "ticket": two,
+                                                   "pr": ([T + " · agent-5"], [both]), "other-pr": ([], [])})
+                chip = page.locator(".ck-pr-row[data-number='12'] .ck-branch-chip").first
+                self.assertEqual(chip.locator("svg.ck-icon").count(), 1)          # icon and label (D9)
+                self.assertEqual(page.locator(".ck-pr-row .ck-branch-overlap").first.get_attribute("role"), "note")
+                self.SV.agent_request(self.cfg.socket, "POST", "/cursor", {"last_synced_at": None}, agent="agent-6")
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                _wait_for(page, "() => !document.querySelector('.ck-branch-overlap')"
+                                " && document.querySelectorAll('.ck-branches[data-where=\"item\"] .ck-branch-chip').length === 1",
+                          timeout=10000)
+
+    def test_branches_fit_a_phone_and_nothing_shows_without_a_branch(self):
+        # Catches: a long branch name widening the phone's console past the screen, and an empty strip (or a
+        # warning) drawn for a mark that carries no branch, as every 1.49 agent's does.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                code, _ = self.SV.agent_request(self.cfg.socket, "POST", "/working", {"items": ["LANE.1"]}, agent="agent-7")
+                self.assertEqual(code, 200)
+                page = self.page(kind, 375, url, mobile=True, height=812)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-questions-heading")
+                self.assertEqual(page.locator(".ck-branches, .ck-branch-overlap").count(), 0)
+                self.mark("agent-5", "overture/ticket/" + "LANE.1-" + "x" * 100)
+                self.mark("agent-6", self.F)
+                page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-overlap", timeout=10000)
+                self.assertFalse(page.evaluate(OVERFLOW))
+
+    # A cursor carrying two marks the server itself never sends (it checks every branch): one with no branch,
+    # one whose branch is a number. Wrapped into every /api/view and /api/wait answer before the page loads.
+    BAD_MARKS = """(() => {
+      const real = window.fetch;
+      window.fetch = async (...args) => {
+        const r = await real(...args);
+        const u = String((args[0] && args[0].url) || args[0]);
+        if (!/\\/api\\/(view|wait)/.test(u)) return r;
+        let data;
+        try { data = await r.clone().json(); } catch (e) { return r; }
+        if (data && data.cursor) {
+          data.cursor.branches = Object.assign({}, data.cursor.branches || {},
+            { 'agent-8': { 'LANE.1': { worktree: 'LANE.1' } }, 'agent-9': { 'LANE.1': { branch: 7 } } });
+        }
+        return new Response(JSON.stringify(data), { status: r.status, headers: r.headers });
+      };
+    })();"""
+
+    def test_a_mark_without_a_string_branch_draws_no_chip(self):
+        # Catches (J05): a mark whose branch is missing or not a string (a server of another version, or a
+        # working.json it did not write) taken as a branch: a chip reading "undefined" or "7", a false overlap
+        # warning, or the chips' sort (localeCompare on a non-string) throwing so the item draws no strip.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-5", self.T)
+                page = self.page(kind, 1280, url, init=self.BAD_MARKS)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-chip")
+                self.assertTrue(page.evaluate(   # the control: the page really is served the two bad marks
+                    "async () => { const d = await (await fetch('/api/view', {credentials: 'same-origin'})).json();"
+                    " return !!(d.cursor && d.cursor.branches && d.cursor.branches['agent-9']); }"))
+                sel = ".ck-branches[data-where='item']"
+                self.assertEqual((page.evaluate(CHIPS, sel), page.evaluate(WARNS, sel)),
+                                 ([self.T + " · agent-5"], []))
+
+    def test_a_merged_or_closed_pr_of_a_marked_branch_shows_no_chip(self):
+        # Catches (J03): the agent's branch chip (and the overlap warning) drawn on a PR that merged or closed,
+        # as if work on it were still going on, because its head is the branch an agent still has marked; only
+        # the open PR of that branch carries it.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                push = {"repo": "octo/repo", "window_days": 30, "prs": [
+                    _pr_row(12, head=self.T, title="Retry policy"),
+                    _pr_row(14, head=self.T, state="merged", merged_at="2026-10-16T12:00:00Z", title="Earlier"),
+                    _pr_row(15, head=self.F, state="closed", closed_at="2026-10-16T12:00:00Z", title="Dropped")]}
+                code, out = self.SV.agent_request(self.cfg.socket, "POST", "/prs", push, agent="agent-5")
+                self.assertEqual(code, 200, out)
+                self.mark("agent-5", self.T)
+                self.mark("agent-6", self.F)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('prs')")
+                page.wait_for_selector(".ck-pr-row[data-number='12'] .ck-branch-chip")
+                for n in (14, 15):
+                    page.wait_for_selector(f".ck-pr-row[data-number='{n}']", state="attached")
+                    sel = f".ck-pr-row[data-number='{n}']"
+                    self.assertEqual((page.evaluate(CHIPS, sel), page.evaluate(WARNS, sel)), ([], []), n)
+                self.assertEqual(page.evaluate(CHIPS, ".ck-pr-row[data-number='12']"), [self.T + " · agent-5"])
+
+    def test_the_stale_worktree_note_is_the_owners_alone(self):
+        # Catches (W3): stale worktrees never reaching the console, shown loudly (they are housekeeping: a quiet
+        # fold), shown without the branch and its age, or shown to a viewer (the server sends it to an owner only,
+        # and the page must not invent it from anything else).
+        from overture import doorbell as D
+        from overture import roles as RO
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                # Catches (J07): a steward that found nothing stale (an empty list, which the server passes on)
+                # drawn as "0 stale worktrees": the note is there only when a worktree is.
+                D.write_watch(self.cfg.state, True, stale=[])
+                empty = self.page(kind, 1280, url)
+                empty.evaluate("ConsoleKit.openTab('prs')")
+                empty.wait_for_selector(".ck-pr-row[data-number='12']")
+                self.assertEqual(empty.locator(".ck-stale-worktrees, .ck-prs-stale-count").count(), 0)
+                D.write_watch(self.cfg.state, True, stale=[{"branch": self.T, "age_days": 16, "agent": "agent-5"}])
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('prs')")
+                note = page.wait_for_selector("details.ck-stale-worktrees")
+                self.assertIsNone(note.get_attribute("open"))
+                self.assertEqual(page.locator("details.ck-stale-worktrees summary").text_content().strip(),
+                                 "1 stale worktree")
+                page.locator("details.ck-stale-worktrees summary").click()
+                self.assertIn(self.T + " · 16 days, no PR · agent-5",
+                              page.locator(".ck-stale-worktrees-list").text_content())
+                (Path(self.cfg.state) / RO.FILE).write_text(json.dumps({"roles": {"boss@example.com": {"role": "owner"}}}))
+                self.mark("agent-5", self.T)
+                viewer = self.page(kind, 1280, url)          # owner@example.com is now an unlisted login: a viewer
+                viewer.evaluate("ConsoleKit.openTab('prs')")
+                viewer.wait_for_selector(".ck-pr-row[data-number='12'] .ck-branch-chip")   # branches: as marks
+                self.assertEqual(viewer.locator(".ck-stale-worktrees, .ck-prs-stale-count").count(), 0)
+
+    def test_the_pr_tabs_own_line_counts_the_stale_worktrees_and_opens_them(self):
+        # Catches (1.50 review X5): the stale note only inside a shut fold, where the owner never looks; a count
+        # that does not lead to the list (or leaves focus behind); and its summary with no visible focus.
+        from overture import doorbell as D
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                D.write_watch(self.cfg.state, True, stale=[{"branch": self.T, "age_days": 16, "agent": "agent-5"}])
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('prs')")
+                count = page.locator(".ck-prs-pushed .ck-prs-stale-count")   # re-resolved: the poll may redraw it
+                count.wait_for()
+                self.assertEqual(count.text_content(), "1 stale worktree")
+                count.click()
+                self.assertEqual(page.evaluate("document.querySelector('details.ck-stale-worktrees').open"), True)
+                self.assertTrue(page.evaluate("document.activeElement.matches('details.ck-stale-worktrees > summary')"))
+                page.keyboard.press("Shift+Tab")
+                page.keyboard.press("Tab")
+                style = page.evaluate("getComputedStyle(document.activeElement).outlineStyle")
+                self.assertEqual(style, "solid")
+
+    def owner_message(self, url, item, text):
+        import http.client
+        from urllib.parse import urlparse
+        from test_server import HOSTNAME, token
+        conn = http.client.HTTPConnection("127.0.0.1", urlparse(url).port, timeout=10)
+        conn.request("POST", "/api/message", body=json.dumps({"item": item, "text": text, "nonce": "ownermsg-" + item.replace(".", "_")}).encode(),
+                     headers={"Content-Type": "application/json", "Origin": f"https://{HOSTNAME}",
+                              "X-Overture-CSRF": self.console._csrf, "Cf-Access-Jwt-Assertion": token()})
+        r = conn.getresponse()
+        self.assertEqual(r.status, 200, r.read())
+        conn.close()
+
+    def test_the_items_header_names_the_agents_without_a_count_that_reads_as_theirs(self):
+        # Catches (1.50 review X1): the status bar's "1 agent-5, agent-6 active", the number (what waits on an
+        # agent) read as a count of the agents named after it. Catches (clearing round Y2): with two things
+        # waiting, "(2 waiting)" after the names read as two agents waiting; it says what waits on whom, in the
+        # header and on the dashboard's item button alike.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.owner_message(url, "LANE.1", "Please retry the job")
+                self.mark("agent-5", self.T)
+                self.mark("agent-6", self.F)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                words = page.wait_for_selector(".ck-status-bar .ck-agent-words")
+                self.assertEqual(words.text_content(), " agent-5, agent-6 active")
+                self.assertNotRegex(page.locator(".ck-status-bar").first.text_content(), r"\d agent")
+                # The dashboard's item button counts the subtree: LANE's own thread and LANE.1's, on agents marked there.
+                self.owner_message(url, "LANE", "And the parent lane")
+                self.mark("agent-5", self.T, item="LANE")
+                page.evaluate("ConsoleKit.refresh()")
+                _wait_for(page, "() => /agent active \\(2 waiting on agents\\)/.test((document.querySelector("
+                                "'details#item-LANE .ck-item-btn') || {}).textContent || '')", timeout=10000)
+                # The header counts the item's own (one thread at most today): two, served, read the same way.
+                def two(route):   # routes run newest first: this one carries the access token itself
+                    resp = route.fetch(headers={**route.request.headers, "cf-access-jwt-assertion": self.tok})
+                    data = json.loads(resp.text())
+                    if isinstance(data.get("view"), dict) and "LANE.1" in data["view"].get("items", {}):
+                        data["view"]["items"]["LANE.1"]["own"]["awaiting_agent"] = 2
+                    route.fulfill(response=resp, body=json.dumps(data))
+                page.route("**/api/view*", two)
+                page.evaluate("ConsoleKit.refresh()")
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                _wait_for(page, "() => /\\(2 waiting/.test((document.querySelector('.ck-status-bar .ck-agent-words')"
+                                " || {}).textContent || '')", timeout=10000)
+                self.assertEqual(page.locator(".ck-status-bar .ck-agent-words").first.text_content(),
+                                 " agent-5, agent-6 active (2 waiting on agents)")
+
+    def test_a_phone_at_320px_wraps_each_branch_whole_inside_its_column(self):
+        # Catches (1.50 clearing round Y1, after X2/X6): a long "overture/fix/..." chip widening the 320px phone
+        # past the screen (sideways scroll), or cut with an ellipsis (a phone has no hover to show the title); and
+        # the chip given role="img" with an aria-label (a generic span may not carry one): its whole text is in
+        # the DOM instead, inside the strip's named group.
+        long = "overture/fix/LANE.1-" + "y" * 80
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-6", long)
+                page = self.page(kind, 320, url, height=740)     # a 320px window: the layout viewport is 320
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                chip = page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-chip")
+                page.wait_for_timeout(400)                       # the panel's slide-in is over
+                self.assertFalse(page.evaluate(OVERFLOW))
+                box = chip.bounding_box()
+                body = page.locator(".ck-body").first.bounding_box()
+                self.assertLessEqual(box["x"] + box["width"], min(320, body["x"] + body["width"]) + 0.5)
+                self.assertGreater(box["height"], 34)                    # wrapped onto more lines, not cut
+                name = page.locator(".ck-branches[data-where='item'] .ck-branch-name").first
+                self.assertFalse(name.evaluate("n => n.scrollWidth > n.clientWidth"))  # nothing hidden
+                self.assertNotEqual(name.evaluate("n => getComputedStyle(n).textOverflow"), "ellipsis")
+                self.assertEqual(name.text_content(), long)
+                self.assertEqual(chip.text_content(), long + " · agent-6")
+                self.assertEqual(chip.get_attribute("title"), long + " · agent-6, branch")
+                self.assertIsNone(chip.get_attribute("role"))
+                self.assertIsNone(chip.get_attribute("aria-label"))
+                group = page.locator(".ck-branches[data-where='item']").first
+                self.assertEqual((group.get_attribute("role"), group.get_attribute("aria-label")),
+                                 ("group", "Where agents work on LANE.1"))
+
+    def test_an_overlap_is_announced_once_and_not_on_every_redraw(self):
+        # Catches (1.50 review X3): the overlap never said to a screen reader (the warning is static), or said
+        # again on every redraw of the item, its tickets or the PR tab (liveLoop redraws them all the time).
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                self.mark("agent-5", self.T)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-chip")
+                page.evaluate("""() => { window.__said = [];
+                    const live = document.querySelector('.ck-live');
+                    new MutationObserver(() => { if (live.textContent) window.__said.push(live.textContent); })
+                      .observe(live, { childList: true, characterData: true, subtree: true }); }""")
+                self.mark("agent-6", self.F)
+                page.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-overlap", timeout=10000)
+                for _ in range(2):
+                    self.look(page)                     # the item, its tickets, the Tickets tab, the PR tab
+                page.wait_for_timeout(300)
+                said = [s for s in page.evaluate("window.__said") if "agents on LANE.1" in s]
+                self.assertEqual(said, ["2 agents on LANE.1: " + self.F + ", " + self.T + ". Warned, not blocked."])
+                # Catches (J06): the "said once" key being the item alone, so a THIRD agent's branch joining
+                # the overlap is news the screen reader never hears; it is said once more, and only once.
+                U = "overture/ux/LANE.1-3"
+                self.mark("agent-7", U)
+                _wait_for(page, "() => /3 agents on LANE\\.1/.test((document.querySelector("
+                                "\".ck-pr-row[data-number='12'] .ck-branch-overlap\") || {}).textContent || '')",
+                          timeout=10000)
+                for _ in range(2):
+                    self.look(page)
+                page.wait_for_timeout(300)
+                said = [s for s in page.evaluate("window.__said") if "agents on LANE.1" in s]
+                self.assertEqual(said, ["2 agents on LANE.1: " + self.F + ", " + self.T + ". Warned, not blocked.",
+                                        "3 agents on LANE.1: " + ", ".join([self.F, self.T, U])
+                                        + ". Warned, not blocked."])
+
+    def test_a_closed_ticket_shows_no_branch(self):
+        # Catches (1.50 review X4): a branch chip (or an overlap warning) on a closed ticket's card, as if work on
+        # it were still going on, while the item's open ticket shows it.
+        from overture import tickets as TK
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                self.seed()
+                done = TK.create(self.cfg.state, {"parent_item": "LANE.1", "kind": "task", "title": "Old job"},
+                                 "owner", "2026-10-15T10:00:00Z")
+                TK.close(self.cfg.state, done["id"], "2026-10-15T11:00:00Z")
+                self.mark("agent-5", self.T)
+                self.mark("agent-6", self.F)
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.openTab('tickets')")
+                page.wait_for_selector(".ck-ticket-col[data-status='open'] .ck-branch-chip")
+                self.assertEqual(page.locator(".ck-ticket-col[data-status='closed'] .ck-ticket").count(), 1)
+                self.assertEqual(page.locator(".ck-ticket-col[data-status='closed'] .ck-branches").count(), 0)
+                self.assertEqual(page.locator(".ck-ticket-col[data-status='open'] .ck-branch-overlap").count(), 1)
+
+
+class PopoutLeftoverTests(unittest.TestCase):
+    """1.50.0: the 1.49 review's leftovers L1-L4, on the real server."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+    serve = LiveConsoleTests.serve
+    agent_post = LiveConsoleTests.agent_post
+    ask = LiveConsoleTests.ask
+    page = LiveConsoleTests.page
+    seed = PopoutTests.seed
+    item_page = PopoutTests.item_page
+    pop_button = PopoutTests.pop_button
+    pop = PopoutTests.pop
+
+    def sheet_with_chart(self, kind):
+        page = self.item_page(kind, width=1040)   # docked: 464px of room, the sheet
+        self.pop(page, "flow:LANE.1")
+        page.wait_for_selector(".ck-pop.ck-pop-sheet:not(.ck-pop-leaving)")
+        frame = page.locator(f"{POP} .ck-pop-panel:not([hidden]) .ck-pop-chart iframe").element_handle().content_frame()
+        frame.wait_for_load_state()
+        return page, frame
+
+    def test_a_chart_click_of_an_unknown_kind_leaves_the_sheet_alone(self):
+        # Catches (L1): the sheet stowed for a click the console then ignores, leaving nothing on show and focus
+        # on <body>.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page, frame = self.sheet_with_chart(kind)
+                frame.evaluate("parent.postMessage({type: 'ck-chart-click', kind: 'bogus', target: 'LANE'}, '*')")
+                frame.evaluate("parent.postMessage({type: 'ck-chart-click', kind: 'toString', target: 'LANE'}, '*')")
+                page.wait_for_timeout(400)
+                self.assertTrue(page.evaluate("() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                              " return !r.hidden && document.documentElement.classList.contains('ck-pop-sheet-open'); }"))
+                self.assertNotEqual(page.evaluate("document.activeElement.tagName"), "BODY")
+                self.assertEqual(page.locator(".ck-pop-chip").count(), 0)
+                frame.evaluate("parent.postMessage({type: 'ck-chart-click', kind: 'item', target: 'LANE'}, '*')")
+                _wait_for(page, POP_STOWED)   # a kind it acts on still stows it
+
+    def test_a_stowed_sheet_stays_stowed_across_wide_and_back_and_is_out_of_reach(self):
+        # Catches (L2): going wide and back to the sheet bringing the modal sheet back over the console, focus
+        # pulled into it, after the owner had stowed it; focus left in a stack that went away. (L3): a stowed sheet
+        # still focusable, in the Tab order or in the accessibility tree.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page, frame = self.sheet_with_chart(kind)
+                title = page.locator(f"{POP} .ck-pop-tab").first.text_content()
+                frame.evaluate("parent.postMessage({type: 'ck-chart-click', kind: 'item', target: 'LANE'}, '*')")
+                _wait_for(page, POP_STOWED)
+                # L3: hidden and inert: nothing in it takes focus, Tab never lands in it, the tree leaves it out.
+                self.assertEqual(page.evaluate("() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                               " const b = r.querySelector('.ck-pop-close'); b.focus();"
+                                               " return [r.hidden, r.inert, r.checkVisibility(), document.activeElement === b]; }"),
+                                 [True, True, False, False])
+                for _ in range(40):
+                    page.keyboard.press("Tab")
+                    self.assertFalse(page.evaluate("document.querySelector('.ck-pop:not(.ck-pop-leaving)').contains(document.activeElement)"))
+                snap = page.locator("body").aria_snapshot()   # the live region may still say "Opened <title>"
+                self.assertIsNone(re.search(r"^\s*- (dialog|tablist|tab|region)\b", snap, re.M), snap)
+                self.assertNotIn('"' + title, snap)
+                # L2: wide shows the stack; back to the sheet keeps it stowed, with its chip, focus in the console.
+                page.set_viewport_size({"width": 1280, "height": 900})
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return !r.hidden && r.getAttribute('role') === 'region'; }")
+                page.locator(f"{POP} .ck-pop-tab").first.focus()          # focus inside the wide stack
+                page.set_viewport_size({"width": 1040, "height": 900})
+                _wait_for(page, POP_STOWED)
+                self.assertTrue(page.is_visible(".ck-panel .ck-pop-chip"))
+                self.assertTrue(page.evaluate("document.activeElement.classList.contains('ck-pop-chip')"))
+                self.assertEqual(page.evaluate(POP_TABS), ["flow:LANE.1"])
+                page.locator(".ck-panel .ck-pop-chip").click()           # the chip still brings it back
+                _wait_for(page, "() => !document.querySelector('.ck-pop:not(.ck-pop-leaving)').hidden")
+                # Going wide and back WITHOUT a stow shows the sheet as before.
+                page.set_viewport_size({"width": 1280, "height": 900})
+                _wait_for(page, "() => document.querySelector('.ck-pop:not(.ck-pop-leaving)').getAttribute('role') === 'region'")
+                page.set_viewport_size({"width": 1040, "height": 900})
+                _wait_for(page, "() => { const r = document.querySelector('.ck-pop:not(.ck-pop-leaving)');"
+                                " return !r.hidden && r.getAttribute('role') === 'dialog'; }")
+
+
+class BackToInboxLaneTests(unittest.TestCase):
+    """1.50.0 (L4): Back from an item that lands on another tab queues nothing for the Inbox."""
+
+    setUpClass = classmethod(LiveConsoleTests.setUpClass.__func__)
+    tearDownClass = classmethod(LiveConsoleTests.tearDownClass.__func__)
+    serve = LiveConsoleTests.serve
+    agent_post = LiveConsoleTests.agent_post
+    ask = LiveConsoleTests.ask
+    page = LiveConsoleTests.page
+    seed = InboxGroupTests.seed
+    inbox = InboxGroupTests.inbox
+
+    def test_back_to_another_tab_does_not_open_a_shut_group_on_the_next_inbox_visit(self):
+        # Catches (L4): Back from an item opened from the PR tab queueing its lane to open on the next Inbox
+        # visit, so a group the owner shut opens on some later, unrelated visit.
+        web = ".ck-lane-group[data-lane='lane-web'] .ck-group-toggle"
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                page = self.inbox(kind)
+                page.click(web)   # shut, and saved so
+                page.wait_for_selector(web + "[aria-expanded='false']")
+                code, out = self.SV.agent_request(self.cfg.socket, "POST", "/prs", {"repo": "octo/repo", "window_days": 30,
+                    "prs": [_pr_row(21, title="fixes WEB/Q1")]}, agent="agent-5")
+                self.assertEqual(code, 200, out)
+                page.evaluate("ConsoleKit.openTab('prs')")
+                page.locator(".ck-pr-row[data-number='21'] button", has_text="Open WEB/Q1").click()
+                page.wait_for_selector(".ck-back-btn")
+                page.click(".ck-back-btn")
+                _wait_for(page, "document.getElementById('ck-tab-prs').getAttribute('aria-selected') === 'true'")
+                page.evaluate("ConsoleKit.openTab('inbox')")
+                page.wait_for_selector(web)
+                self.assertEqual(page.get_attribute(web, "aria-expanded"), "false")
+
+
 if __name__ == "__main__":
     unittest.main()

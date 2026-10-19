@@ -316,15 +316,26 @@ under `ux`.
 - **A `ux-save`** names the chosen visual (`visual_id`). Land it from
   **your own worktree on a branch**, never the server's checkout:
 
-      git worktree add <scratch>/ux-<item> -b overture/ux/<item> origin/main
-      A ux-export --project <scratch>/ux-<item> --save SAVE_ID
+      WT=$(A worktree new --kind ux --item ITEM)
+      A ux-export --project "$WT" --save SAVE_ID
+
+  `A worktree new` (1.50.0) makes it under `~/.overture/worktrees/`, on
+  `overture/ux/<item>` from `origin/main`, marks the item with that branch,
+  and prints the path (the same one again if you run it twice, until its PR
+  merges or closes). It needs your agent name, as `working` does. An overlap
+  with another agent is named; go on, and say so in the reply. A suggested
+  setup step it prints is never run for you: run it yourself, as its own Bash
+  call, only if you need it. Never make a worktree by hand.
 
   It writes `components/<item>.md` (front matter, the doc, and the HTML) and
   `components/<item>.css`. A previous version goes to
   `components/.history/<item>-<hash>.md`, and the newest 10 are kept.
   Running it twice changes nothing.
 
-  Commit those paths only, open the pull request, then reply with its URL.
+  In `$WT`, commit those paths only, push the branch
+  (`git -C "$WT" push -u origin HEAD`), open the pull request from it, then
+  reply with its URL. The steward removes the worktree once the PR merges or
+  closes.
   The reply's `--reply-to` takes the save off `todo.ux`:
 
       A reply ITEM "Saved as components/<item>.md. PR <url>." --reply-to SAVE_ID

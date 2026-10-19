@@ -21,6 +21,15 @@ The file is the repository's DATA, never a path anything executes from
                  installed user skill is refused by name (`resolve_skill`, run by
                  `agent.py next-step`).
 
+    worktree_setup  (1.50.0) ["make", "deps"]: one command, as an argv list (never a
+                 shell string), that sets up what git does not carry in a NEW agent
+                 worktree (a virtualenv, node_modules). NOTHING runs it: `agent.py
+                 worktree new` reads it from the new worktree's own copy, checks it here,
+                 and prints it as a suggested command, which the agent runs itself
+                 through its own Bash tool and the user's permission prompt. (The copy
+                 comes from origin's branch, which any merged PR can change.) Unset:
+                 nothing is suggested.
+
 Each directory is jailed like an evidence path: relative, plain characters, at
 least one real folder (never "." or the root itself), no `..`, never a
 secrets directory, and it must resolve inside the project root (no symlink
@@ -55,6 +64,13 @@ LANE_COLORS = ("blue", "teal", "green", "amber", "orange", "red", "purple", "pin
 LANE = re.compile(r"^lane-[a-z0-9][a-z0-9._-]{0,58}\Z")
 MAX_LANES = 64
 MAX_LANE_LABEL = 40
+MAX_SETUP_ARGS = 32       # worktree_setup (1.50.0): an argv of at most this many words
+MAX_SETUP_ARG = 4096
+# 1.50 clearing round Z1: a worktree_setup word holding one of these is refused, so it is never printed (an ESC
+# or a CSI could restyle or rewrite the agent's terminal; a newline or CR could forge a line of its own).
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+CONTROL_NAMES = {0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x09: "TAB", 0x0A: "LF (a newline)", 0x0B: "VT", 0x0C: "FF",
+                 0x0D: "CR", 0x1B: "ESC", 0x7F: "DEL", 0x85: "NEL", 0x9B: "CSI"}
 
 
 class ConfigError(ValueError):
@@ -78,6 +94,8 @@ class ProjectConfig:
     items_require_parent: bool = False
     # D10: {lane: {"color"?: palette name, "label"?: str, "ux"?: bool}}
     lanes: dict = field(default_factory=dict)
+    # 1.50.0: the argv `agent.py worktree new` SUGGESTS for a new agent worktree; () when unset. Never run by the kit.
+    worktree_setup: tuple = ()
 
 
 def _dir(root: Path, v: object, key: str) -> str:
@@ -137,7 +155,25 @@ def load(root: Path) -> ProjectConfig:
     return ProjectConfig(specs_dir=specs, visuals_dir=visuals, next_step=dict(steps), sections=sections,
                          items_auto_ref=items_opts.get("auto_ref", True),
                          items_require_parent=items_opts.get("require_parent", False),
-                         lanes=_lanes(doc.get("lanes")))
+                         lanes=_lanes(doc.get("lanes")), worktree_setup=_setup(doc.get("worktree_setup")))
+
+
+def _setup(v: object) -> tuple:
+    """Parse an optional `worktree_setup` argv (1.50.0); refused by name unless a list of plain strings."""
+    if v is None:
+        return ()
+    if not (isinstance(v, list) and 0 < len(v) <= MAX_SETUP_ARGS
+            and all(isinstance(a, str) and a and len(a) <= MAX_SETUP_ARG for a in v)):
+        raise ConfigError(f"{FILE}: worktree_setup must be a command as a list of 1 to {MAX_SETUP_ARGS} non-empty "
+                          f'strings, e.g. ["make", "deps"]; a shell string is refused (it is suggested to the agent as one argv)')
+    for i, a in enumerate(v):
+        m = CONTROL.search(a)
+        if m:   # named, never echoed: the message is printed too
+            c = ord(m.group())
+            name = f"{CONTROL_NAMES[c]}, U+{c:04X}" if c in CONTROL_NAMES else f"U+{c:04X}"
+            raise ConfigError(f"{FILE}: worktree_setup[{i}] holds a control character ({name}); refused, so it is "
+                              f"never printed to a terminal")
+    return tuple(v)
 
 
 def _lanes(v: object) -> dict:

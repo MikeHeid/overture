@@ -958,6 +958,22 @@ def later_scenes(demo: Demo, shot, tab, panel, item) -> None:
         card.screenshot(path=str(OUT / "feature-two-key-confirmed.png"))
     shot("feature-two-key-confirmed", confirmed)
 
+    # 1.50 (W4): two agents on API-2, each in its own worktree: the branch chips and the overlap warning. Marked
+    # only now, so no earlier shot shows them. Branch names only: the demo has no paths to show, and the server
+    # would refuse one.
+    demo.agent("/working", {"items": ["API-2"], "branch": "overture/ticket/API-2", "worktree": "API-2"}, name="agent-5")
+    demo.agent("/working", {"items": ["API-2"], "branch": "overture/fix/API-2-2", "worktree": "API-2-2"}, name="agent-6")
+
+    def worktrees(pg):
+        item(pg, "API-2")
+        pg.wait_for_selector(".ck-branches[data-where='item'] .ck-branch-overlap")
+        pg.locator(".ck-branches[data-where='item']").evaluate(
+            "w => { const b = w.closest('.ck-body'); b.scrollTop += w.getBoundingClientRect().top"
+            " - b.getBoundingClientRect().top - 120; }")
+        pg.wait_for_timeout(400)
+        panel(pg, "feature-worktrees")
+    shot("feature-worktrees", worktrees)
+
 
 # -- sign-in links (1.46): a second console, --auth link, no Cloudflare --------------------------
 def link_scenes(browser, problems: list[str]) -> None:

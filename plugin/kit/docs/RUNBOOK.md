@@ -208,7 +208,50 @@ names the file to move.
   to `.overture.json` (by pull request) and restart the server.
 - **`visual-export` says "the directory the console server runs from"**: by
   design. Export into your own worktree on a branch
-  (`git worktree add ../visuals -b visuals origin/main`), then open a PR.
+  (`agent.py worktree new --kind visual --item ITEM` makes one and prints its
+  path, 1.50.0), then open a PR.
+- **`worktree new` says "Name this session first, e.g. `agent.py --as
+  agent-5 --state STATE worktree new ...`"** (1.50.0): by design; unnamed
+  sessions share one set of marks, so they would share one worktree. Name the
+  session as for `working`: `agent.py --as agent-6 ...`,
+  `OVERTURE_AGENT=agent-6`, or `/overture:as agent-6` typed in it.
+- **`.overture.json` is refused: "worktree_setup[N] holds a control
+  character (ESC, U+001B)"**: a word of the setup command carries a
+  terminal escape, a newline or the like, which could rewrite what the agent
+  sees when it is printed. Take the character out (by pull request).
+- **`worktree new` prints "This project suggests a setup step; run it
+  yourself in the worktree: ..."**: the project's `worktree_setup`. Overture
+  never runs it (it comes from `origin/main`, which any merged PR can change);
+  run the printed command yourself, through your own Bash tool and its
+  permission prompt, if you trust it.
+- **`worktree prune` keeps one: "PR #N merged at A, but this worktree is at
+  B"**: the worktree has commits the merged PR did not carry, or the PR was a
+  fork's branch of the same name. Look at it (`git -C <path> log`), then
+  remove it by hand with `git worktree remove <path>` when you are sure.
+  "it has uncommitted changes now" or "its HEAD moved while prune ran": an
+  agent wrote into it while prune looked; it is looked at again next time.
+  A worktree with no commits of its own is never pruned as landed, even when
+  a merged PR of its branch name exists (an old one, before the name was
+  freed): it is kept, and listed stale after 14 days; remove it by hand if
+  it is not wanted.
+- **`worktree prune` keeps one: "removing it took over 120 s and was
+  stopped; it may be half-removed"** (or "its folder is gone, but git still
+  lists it as a worktree"): a very slow disk. Look at the folder, then run
+  `git worktree remove <path>` from the main checkout, or `git worktree
+  prune` there if the folder is already gone.
+- **The watch says "worktree prune: stopped after 60 s at BRANCH; the rest
+  next cycle"**: the steward's prune has 60 seconds in all, its `gh` call
+  included, and a slow git or `gh` used them up. Nothing is wrong; the next
+  cycle (10 minutes on) takes up after BRANCH, and "listening" stayed fresh
+  meanwhile. A `git worktree remove` started late in those 60 seconds is
+  never cut short: it may take up to 120 seconds more, so one prune can last
+  about 3 minutes.
+- **`worktree new` says "the worktree registry is busy: a prune is removing a
+  worktree right now ...; try again in a minute"**: the steward's prune holds
+  the registry's lock while a `git worktree remove` runs (up to 120 s on a
+  slow disk), and `new` waits only 10 seconds for it. Nothing was made; run
+  it again shortly. `worktree list` does not wait; while the lock is held it
+  says "the registry is busy" and lists what is there.
 - **`visual-export` says "... is already there with other content"**: a file
   in your worktree at that path differs from the stored visual. Nothing was
   written. Look at it; move it aside if it is stale, then export again.
