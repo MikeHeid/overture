@@ -159,6 +159,41 @@ hash where an excerpt fits, which is what made most rulings go stale.
 
 <img src="../screenshots/feature-stale.png" alt="A stale ruling with What changed? open: the cited line and the file as it is now" width="400">
 
+## Rulings before an agent edits (1.52)
+
+The CI check (1.36) catches a broken ruling on the pull request. This
+catches it before the agent writes the line. Before Claude edits a file in a
+registered project, a PreToolUse hook adds the rulings on that file to its
+context:
+
+- **holds on this file (this edit can break it)**: a condition that decides the ruling (its excerpt,
+  or its file hash) is on this file, so an edit can break it;
+- **cites this file (its condition is elsewhere; context)**: the question's source or evidence points at it, but
+  nothing on it decides the ruling, so it is context.
+
+If the edit would break one (its excerpt would be gone, or a file hash would
+change), the agent reads a warning naming that ruling, why, and what to do:
+keep what the ruling rests on, or ask you to re-lock it. Only a condition that
+holds now and fails after the edit counts. The edit is **never blocked**: it goes through your normal permission prompt, and the CI check
+still guards the merge. A stale ruling is listed and marked stale; a ruling
+you withdrew, stopped checking or replaced is not listed.
+
+The rulings come from the running console, so a lock you made a minute ago
+counts. When the console does not answer within 1.5 s (or answers 401, 403
+or a server error), the committed rulings (`.overture.json` `fold.locked`)
+answer instead, and the note says "from the committed rulings"; a damaged
+ruling file is skipped and named. Only the registered checkout's rulings are
+shown, and its verified agent worktrees'. A file's rulings are shown once
+per session, and again when they change. A would-break warning is shown every time.
+
+Other ways to ask:
+
+    agent.py rulings --path src/pay.py --path docs/    # a folder ends in /
+    agent.py rulings --path src/pay.py --json
+
+and the MCP server's `rulings` tool, `{"paths": ["src/pay.py"]}`, for Cursor,
+Codex and other MCP clients ([MCP and CI](mcp-and-ci.md)).
+
 ## Lessons: what you settled stays settled (1.33–1.34)
 
 When you **Withdraw…** a ruling or **Keep, stop checking…** it, the reason

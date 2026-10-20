@@ -43,6 +43,7 @@ args = ["<kit>/mcp_server.py", "--state", "<STATE>", "--project", "<your checkou
 | `ask` | Post a question for the owner |
 | `reply` | Post a message on an item's thread |
 | `working` | Show the owner "agent active" on items |
+| `rulings` | The rulings on files or folders before an edit, labelled `holds` or `cites` (1.52) |
 
 The server tells the client how to use these when it connects: read
 `answers` before asking, run `lesson_match` first, prefer an excerpt

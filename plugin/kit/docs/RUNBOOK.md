@@ -464,6 +464,38 @@ disappeared, or a status changed.
 - **Goes stale after every unrelated edit**: the question hashes a busy file.
   Ask it again citing an `excerpt`.
 
+## The ruling lookup says nothing, or says "committed rulings" (1.52.0)
+
+Before an edit, `plugin/hooks/ruling_lookup.py` adds the owner's rulings on
+the file to the agent's context. Ask by hand what it would have said:
+
+    python3 <vendored>/agent.py --state <state> rulings --path src/pay.py
+
+- **It says nothing** when the file has no rulings (that is the usual case),
+  when this session was already shown them and they have not changed (a
+  would-break warning is still always shown), when the checkout is not in
+  your registry (`agent.py register`), when the file is in another
+  repository than the registered checkout (a nested repo, a sibling clone),
+  when a worktree's `.git` file is not matched by git's back link
+  (`<main>/.git/worktrees/NAME/gitdir`; `git worktree repair` fixes a moved
+  one), when the server refused the request (a 400 naming why), or when
+  anything else failed: it fails open and silent. The command above names a
+  path it refuses (absolute, `..`, a secrets file) and the server's refusal.
+- **It says "from the committed rulings; the console server is not
+  answering"** when the agent socket was absent, took over 1.5 s in all,
+  answered 401 or 403 (a stale token: `server.py status`), answered 5xx (a
+  crash: its log), or runs a kit older than 1.52 (restart it on the new
+  kit). The rulings then come from `.overture.json` `fold.locked` in the
+  checkout, so a lock made since the last fold is missing. `server.py
+  status` says why the server is down.
+- **It says "skipped .overture/locked/X.json: …"**: that committed file is
+  not a valid ruling (or is a symlink, or too big) and was left out; the
+  rest were read. Export again (`fold.py export`). **"(first 500 ruling
+  files)"**: the folder holds more than the lookup reads before an edit;
+  `rulecheck.py` still checks them all.
+- It never blocks an edit; the CI check (`rulecheck.py`) still guards the
+  merge.
+
 ## The fold refuses
 
 The fold is all or nothing: one refused file refuses the lot, and each reason

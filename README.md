@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.51.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.52.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1375-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1443-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -107,6 +107,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Pop-outs and a calmer Inbox** (1.49) | Flowcharts, graphs, visuals, rounds, long rulings and screenshots pop out beside the console, three at a time, with Pin · the Inbox grouped by lane, with an outline · `j`/`k` through the unanswered questions · a sticky Mine | [Finding your way around](docs/features/navigation.md#pop-outs-149) |
 | **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR lands (merged at its head) or closes · stale ones listed for the owner · a `worktree_setup` suggested, never run | [Automation](docs/features/automation.md#agent-worktrees-150) |
 | **macOS service** (1.51) | `server.py service install --start` on a Mac writes a launchd LaunchAgent (`~/Library/LaunchAgents/overture.console.plist`) and loads it · back after a crash and at every login · `status`, `health` and the one-server gate read `launchctl` · every hint names the Mac's own command | [Hosting](docs/features/hosting.md#macos-launchd-151) |
+| **Rulings before an edit** (1.52) | Before an agent edits a file, a hook shows it the owner's rulings on that file, labelled **holds on this file** or **cites this file** · a warning by name when the edit would break one, never a block · from the running console, or the committed rulings when it is down · three ways to ask: a hook before each edit · `agent.py rulings --path P` · an MCP `rulings` tool | [Inbox and rulings](docs/features/inbox-and-rulings.md#rulings-before-an-agent-edits-152) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units (Linux, WSL) or a launchd LaunchAgent (macOS) · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
@@ -206,7 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.51.0
+      - uses: MikeHeid/overture@v1.52.0
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
@@ -309,7 +310,7 @@ own token. Windows hosts run it in WSL2.
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~60%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47) |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~60%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52) |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
@@ -401,8 +402,8 @@ project's server with `install.sh --project <path> --start`, then check
 
 ## Hooks the plugin ships
 
-The plugin registers four hook scripts (`plugin/hooks/hooks.json`), and
-Claude Code runs them in every session on your machine. Three of them act
+The plugin registers five hook scripts (`plugin/hooks/hooks.json`), and
+Claude Code runs them in every session on your machine. Four of them act
 only in projects that `agent.py register` has entered in your user-level
 registry (`~/.config/overture/projects.json`); in any other project they
 print nothing and exit 0. The fourth, `install_notice.py`, is the
@@ -415,9 +416,10 @@ project you open first.
 | `SessionStart` (same matcher) | `plugin/hooks/session_start.py` | Registered projects only | Reads the doorbell for this project's console and prints what the owner sent while no session was watching: questions, and the owner's requests (process, fork, chat replies, scan, visual, UX save and link, PR merge), each with its seq and the command to handle it. Names how many lessons (1.33) the owner has recorded, when there are any, and says when the shared server is down. The first time this project's state sees a new kit version it adds a short list of useful `agent.py` commands and records the version in `STATE/last_seen_kit_version`. It also appends `export OVERTURE_SESSION=<session id>` to Claude Code's `CLAUDE_ENV_FILE`. |
 | `UserPromptSubmit` | `plugin/hooks/name_session.py` | Registered projects only | Picks up `/overture:as NAME` and records the mapping `session_id → agent name` in `STATE/sessions.jsonl` (atomic rewrite). The next `agent.py` call reads the name from this file. Every other prompt is ignored. |
 | `PreToolUse` (matcher: `AskUserQuestion`) | `plugin/hooks/ask_guard.py` | Registered projects that name a steward | On a non-steward session, and on the steward's own session when this machine's role is `worker`, refuses `AskUserQuestion` so the question goes to the owner through the console instead of a transient prompt. It fails open: any error lets the call through. |
+| `PreToolUse` (matcher: `Edit\|Write\|MultiEdit\|NotebookEdit`) | `plugin/hooks/ruling_lookup.py` | Registered projects only | Adds the owner's rulings on the file being edited to the agent's context (1.52), from the console server's agent socket, or the committed rulings when the server does not answer in 1.5 s, and warns by name when the edit would break one. It never allows or denies: the edit goes through your normal permission prompt. Says a file's rulings once per session (`${XDG_STATE_HOME:-~/.local/state}/overture/rulings-shown.json`, the only file it writes). Fails open and silent. |
 
-All four are stdlib-only, write only the files named above, and never
-run anything from the repository. See the module docstrings for the trust
+All five are stdlib-only, write only the files named above, and never
+run anything from the repository (the ruling lookup imports the kit inside the plugin itself, never a project's). See the module docstrings for the trust
 model. How the server, `agent.py`, the fold and the skills fit together is in
 [Hosting](docs/features/hosting.md#how-it-fits-together).
 
@@ -533,12 +535,13 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 The latest three:
 
-- **1.47 — ZeroTier and Tailscale**: `--listen` puts a link-mode console on
-  its ZeroTier or Tailscale address too, and onboarding asks how you reach it.
-- **1.46 — Sign-in links**: run a console with no Cloudflare: `agent.py
-  invite EMAIL` makes a one-time link, People lists and revokes browsers.
-- **1.45 — Notifications**: a digest of waiting questions to your team's
-  Slack-style channel, with quiet hours; never a question's text.
+- **1.52 — Rulings before an edit**: before an agent edits a file it reads
+  your rulings on it, and is warned by name when the edit would break one;
+  never blocked. `agent.py rulings` and an MCP `rulings` tool too.
+- **1.51 — macOS service**: `server.py service install --start` runs the
+  console as a launchd LaunchAgent on a Mac.
+- **1.50 — Agent worktrees**: each agent's file-changing work in its own
+  worktree, shown on the item, pruned once its PR lands.
 
 ## License
 

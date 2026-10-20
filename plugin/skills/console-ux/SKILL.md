@@ -311,7 +311,9 @@ and saves one:
     A reply ITEM "Drew <title>: <one line on the idea>. Save the one you want." --reply-to REQUEST_ID
 
 **When the owner saves.** `A todo` lists each waiting ux-save and ux-link
-under `ux`.
+under `ux`. Before you write into the project, `A rulings --path DIR/` lists
+the owner's rulings on that folder (1.52.0); the plugin's hook also shows them
+before each edit, and warns when the edit would break one.
 
 - **A `ux-save`** names the chosen visual (`visual_id`). Land it from
   **your own worktree on a branch**, never the server's checkout:

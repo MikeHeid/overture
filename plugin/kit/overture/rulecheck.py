@@ -37,6 +37,7 @@ from pathlib import Path
 from . import anchors as A
 from . import fold as F
 from . import gitseam as G
+from . import lookup as L
 
 DEFAULT_LOCKED = ".overture/locked"   # what onboard writes into `.overture.json` (`fold.locked`)
 MARKER = "<!-- overture-rulecheck -->"   # the Action finds its own comment by this first line
@@ -131,10 +132,7 @@ def parse(raw: dict[str, bytes], items: dict | None, where: str) -> dict[str, di
 
 # -- judging ---------------------------------------------------------------------------
 
-def conditions(e: dict) -> tuple[list[dict], str]:
-    """What decides an exported lock: its anchors when it carries them (export wrote the deciding ones), else valid_if."""
-    lk = e["locked"]
-    return (lk["anchors"], lk["anchored_by"]) if "anchors" in lk else (e["valid_if"], "question")
+conditions = L.conditions   # 1.52.0: one reading of what decides an exported lock, shared with the ruling lookup
 
 
 def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None) -> dict:
