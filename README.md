@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.53.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.53.1-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1488-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1493-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -208,7 +208,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.53.0
+      - uses: MikeHeid/overture@v1.53.1
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)

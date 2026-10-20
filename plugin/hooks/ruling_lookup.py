@@ -56,8 +56,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "kit"))   # this plugin's own kit, never the registry's or the project's
 import session_start as SS  # noqa: E402  (this plugin's own hook module)
-from overture import anchors as A  # noqa: E402
-from overture import lookup as L  # noqa: E402
+try:
+    from overture import anchors as A  # noqa: E402
+    from overture import lookup as L  # noqa: E402
+except (ImportError, AttributeError):
+    if SS.fcntl is not None:
+        raise      # on POSIX a broken kit still shows as a hook error, as before 1.53.1
+    A = L = None   # native Windows Python: the kit's reads need POSIX open flags, and no project registers there
+                   # (its paths are POSIX); `note` then fails open in main, silent
 
 TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 MAX_INPUT = 4 << 20                # a Write's content rides in the input
