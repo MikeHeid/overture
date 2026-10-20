@@ -2990,6 +2990,31 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Hooks on Windows (1.53.1)
+
+A report from a Windows 11 machine (Store Python, Overture 1.49.0): every
+hook failed at import, because `session_start.py` imported `fcntl`, which
+native Windows Python does not have. Claude Code then showed a hook error on
+every session and prompt.
+
+- **The hooks load on native Windows Python.** `fcntl` and the open flags
+  Windows lacks (`O_NONBLOCK`, `O_NOFOLLOW`, `O_CLOEXEC`) are optional in
+  `session_start.py`. Where a read refuses a symlink, a missing `O_NOFOLLOW`
+  is made up for by checking the path first. In a project that is not
+  registered, which is every project on native Windows (the registry holds
+  POSIX paths), each hook says nothing and exits 0, as it does elsewhere.
+- **`/overture:as NAME` there says why it records nothing:** naming a
+  session needs POSIX file locks, so run Claude Code inside WSL, where the
+  console runs. Before, it said only "failed (AttributeError)".
+- **The ruling lookup (1.52) stands down there too.** It loads the kit's
+  file reader, which needs the same flags; it now fails open at import, so
+  an edit never shows a hook error.
+- The server side is unchanged: it runs in WSL on Windows (Hosting).
+- Tests: `test_kit.WindowsHookTests` runs each hook with `fcntl` and the
+  three flags taken away, as on Windows. It also holds POSIX to what it
+  did before: each open keeps its exact flags, and a broken kit still shows
+  as a hook error there instead of a silent stand-down.
+
 ## Area notes (1.53.0)
 
 The owner's M1 to M4 (2026-10-20, "do recommended"): what an agent should
