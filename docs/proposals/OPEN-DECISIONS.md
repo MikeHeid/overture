@@ -193,6 +193,31 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## Memory in its own place: area notes (decided 2026-10-20)
+
+The owner asked whether each lane, wave or phase, and each function, should
+keep its context in its own place, to keep agents on track and spend fewer
+tokens. A three-seat panel (roar) and the advisory board (analyst, advisor,
+devops) answered: **per area of code, yes; per phase, only as a release file
+that is deleted when the release ships; per lane or wave, no.** Lanes and
+waves close when their work ends, so memory kept by them dies with them; they
+are tags. The owner said "do recommended" (every ★).
+
+| # | Question | Decision |
+|---|---|---|
+| M1 | The four memory tiers | **Yes** (owner ★). (1) Area facts: a short `CLAUDE.md` of 5–10 lines in a declared area folder, written as facts with their "why", never orders; loaded when an agent reads there. (2) Release context: one memory file per open release, deleted on ship. (3) Where an agent stopped: on the console item (working mark, claim, HANDOFF). (4) Decisions: rulings and this file only. A note cites a ruling (`ITEM/Qn`) or a lesson and never copies it. |
+| M2 | Build phases 0–2 now | **Yes** (owner ★), as 1.53. Phase 0 (measured): a subagent starts at about 19k–22k input tokens, about 40% of it the always-loaded rules and CLAUDE.md files; a long agent's run reaches about 10M, so cutting exploration matters more than the fixed start. |
+| M3 | Show area notes in the console | **Wait** (owner ★) until notes have been used for a while; then its own release, read by other agent tools too. |
+| M4 | Slim the owner's global always-loaded rules | **Measure first** (owner ★). Measured: under 2% of a long run, so not worth changing the owner's global setup now. |
+
+Board amendments carried into 1.53: area folders are declared in one list,
+and `agent.py notes check` fails on a note outside it, on a stale note (its
+folder changed since the commit it was checked at), and on memory-index
+links to missing files; the check runs agent-side in the steward loop and in
+the release recipe (the server starts no git, Q23); area notes stay out of
+the release zip; one before-and-after run of a small task, with and without
+a note, compares tokens, wrong claims and missed rulings.
+
 ## Ruling lookup before an agent edits (decided 2026-10-19)
 
 Wave 2's "ruling lookup before an agent acts" (STRATEGY.md, core engine:
