@@ -193,6 +193,26 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## Ruling lookup before an agent edits (decided 2026-10-19)
+
+Wave 2's "ruling lookup before an agent acts" (STRATEGY.md, core engine:
+"rulings touching this path"). Until 1.52 nothing answered which locked
+rulings touch a file: the CI check (1.36) compares a PR's changed files with
+the committed rulings after the fact, and the MCP server (1.35) has no
+rulings search. The hooks so far read files only and fail open. The server
+still starts no git and runs no project code (CONSOLE-kit/Q23, Q24).
+
+| # | Question | Decision |
+|---|---|---|
+| R1 | Where the lookup reads rulings from | **A** (owner): the running server over the agent socket (the newest locks and re-anchors), falling back to the committed `.overture/locked` files when the server is down. A short timeout; never fails closed. |
+| R2 | What an edit of a file a locked ruling covers does | **A** (owner): inform, and warn. The agent sees the rulings for that file before the edit; if the edit would break one (its excerpt or file condition would fail afterwards), it is warned by name, and the edit still goes through. The CI check still blocks the merge. |
+| R3 | How agents get it | **A** (owner): a PreToolUse hook on Edit, Write, MultiEdit and NotebookEdit for Claude; `agent.py rulings --path P` for scripts and skills; a `rulings` MCP tool for other agent tools. |
+| R4 | Which rulings touch a file | **A** (owner): both, labelled: "holds on this file" (a deciding condition is on it) and "cites this file" (its evidence or source points at it). |
+
+Weighed and not chosen: the committed files only, or the live server only
+(R1 B, C); inform only, or blocking a breaking edit (R2 B, C); no automatic
+hook, or the hook alone (R3 B, C); the deciding conditions only (R4 B).
+
 ## Sections, pop-outs and a calmer Inbox (decided 2026-10-16)
 
 The owner asked: "do multiple menus (with animation)… configuration and people
