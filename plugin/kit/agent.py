@@ -200,6 +200,7 @@ from overture import bundle as B  # noqa: E402
 from overture import devices as DV  # noqa: E402
 from overture import doorbell as D  # noqa: E402
 from overture import gitseam as G  # noqa: E402
+from overture import lookup as L  # noqa: E402
 from overture import names as N  # noqa: E402
 from overture import playbooks as PB  # noqa: E402
 from overture import notify as NT  # noqa: E402
@@ -460,6 +461,48 @@ def _check(state: Path, as_json: bool) -> int:
             if c.get("diff"):
                 print("\n".join("      " + ln for ln in c["diff"].splitlines()))
     return 0
+
+
+def _rulings(state: Path, raw: list[str], as_json: bool) -> int:
+    """The owner's rulings on each path (1.52.0): the console server, else the rulings committed in this checkout.
+
+    The same lookup the PreToolUse hook makes, in the same entry shape. Exit 2
+    for a path it will not look up (named); otherwise 0, whatever it found.
+    """
+    root = L.project_root(Path.cwd())
+    try:
+        paths = [L.clean_path(_inside_root(p, root)) for p in raw]
+    except L.PathRefused as e:
+        print(f"rulings: {e}", file=sys.stderr)
+        return 2
+    try:
+        res = L.lookup(state, root, paths)
+    except L.Refused as e:   # the server answered, and refused
+        print(f"rulings: the console server refused: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:  # noqa: BLE001 - no server and no readable committed rulings: said, not raised
+        print(f"rulings: no rulings could be read: {e}", file=sys.stderr)
+        return 0
+    if as_json:
+        sys.stdout.write(_json(res))
+        return 0
+    out = [res["note"]] if res.get("note") else []
+    for p in paths:
+        out.append(f"{p}:")
+        out += [L.line_of(h) for h in res["rulings"].get(p) or []] or ["  no rulings"]
+    print("\n".join(out))
+    return 0
+
+
+def _inside_root(p: str, root: Path | None) -> str:
+    """An absolute path inside the checkout, made relative to it (a trailing "/" kept); anything else as given."""
+    if root is None or not p.startswith("/"):
+        return p
+    try:
+        rel = Path(os.path.realpath(p)).relative_to(root).as_posix()
+    except ValueError:
+        return p
+    return rel + ("/" if p.endswith("/") and rel != "." else "")
 
 
 def _reanchor(state: Path, dry_run: bool, as_json: bool) -> int:
@@ -1699,6 +1742,10 @@ def main(argv=None) -> int:
     s.add_argument("fork")
     s = sub.add_parser("check")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("rulings")   # 1.52.0: the owner's rulings on these paths, before an edit
+    s.add_argument("--path", action="append", required=True, metavar="P",
+                   help="a project-relative file, or a folder ending in /; repeat for more")
+    s.add_argument("--json", action="store_true")
     s = sub.add_parser("reanchor")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--json", action="store_true")
@@ -2563,6 +2610,8 @@ def _run(a, bell: Path) -> int:
         return _fork_context(a.state, a.fork)
     if a.cmd == "check":
         return _check(a.state, a.json)
+    if a.cmd == "rulings":
+        return _rulings(a.state, a.path, a.json)
     if a.cmd == "reanchor":
         return _reanchor(a.state, a.dry_run, a.json)
     if a.cmd == "reply":

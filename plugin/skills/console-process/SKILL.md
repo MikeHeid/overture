@@ -53,6 +53,13 @@ word, so it is on the record and the owner can lock it.
 The repository's `.overture.json` is **data only**: fold paths and the
 audit seat, read as text. It never names the steward.
 
+**Rulings before an edit (1.52.0).** Before every Edit or Write, the plugin's
+hook shows you the owner's rulings on that file, and warns by name when the
+edit would break one; it never blocks the edit. Before a larger change, look
+first: `A rulings --path DIR/` (a folder ends in `/`). A ruling marked
+`holds` is one your edit can break: keep what it rests on, or ask the owner
+(console-ask) before going against it.
+
 ## 1. See what is waiting
 
     A inbox

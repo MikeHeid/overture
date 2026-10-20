@@ -4707,7 +4707,7 @@ class OneServerTests(_OneServer, unittest.TestCase):
     AGENT_GETS = ("/view", "/check", "/health", "/history-wants", "/no-such-route")
     AGENT_POSTS = ("/items", "/prs", "/issues", "/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/design-inventory", "/visual-export",
                    "/question", "/message", "/transcript", "/history-blob", "/history-specs", "/page-snapshot",
-                   "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/no-such-route")
+                   "/anchor-proposal", "/refactor-advice", "/playbook", "/item-move", "/rulings", "/no-such-route")
 
     def test_the_seam_is_the_only_admission_point(self):
         # K4 replaces `authorize` alone, so this is behaviour, not source text: with `authorize` refusing, EVERY
@@ -12271,6 +12271,76 @@ class WorktreeMarkTests(_Live, unittest.TestCase):
         cur = self.cursor()
         self.assertIn("LANE.1", cur["working"])
         self.assertEqual(cur["branches"], {})
+
+
+class RulingsRouteTests(_Live, unittest.TestCase):
+    """1.52.0 (owner R1-R4): POST /rulings on the agent socket, the live source of the ruling lookup."""
+
+    CITED = "def charge(cents):\n    return round_half_even(cents)\n"
+    EXCERPT = {"kind": "excerpt", "path": "src/pay.py", "text": "return round_half_even(cents)"}
+
+    def setUp(self):
+        _Live.setUp(self)
+        (self.cfg.root / "src").mkdir()
+        (self.cfg.root / "src/pay.py").write_text(self.CITED)
+        with self.console._lock:   # stored straight, as legacy_ask does: the route under test is not /question
+            self.console.store.append({**self.seed_q(qid="LANE.1/Q5", valid_if=[self.EXCERPT], source="src/pay.py:2",
+                                                     nonce="rulingq00001"),
+                                       "type": "question", "schemaVersion": SV.S.SCHEMA_VERSION, "by": "agent"})
+        from overture import operators as OP
+        OP.set_name(self.cfg.state, "owner@example.com", "ann")
+        code, a = self.req("POST", "/api/answer", self.answer(qid="LANE.1/Q5", picks=["b"], nonce="rulinga00001"),
+                           tok=token())
+        self.assertEqual(code, 200, a)
+        code, lk = self.req("POST", "/api/lock", {"qid": "LANE.1/Q5", "answer": a["record"]["id"],
+                                                  "nonce": "rulingl00001"}, tok=token())
+        self.assertEqual(code, 200, lk)
+
+    def rulings(self, *paths):
+        return self.agent_post("/rulings", {"paths": list(paths)})
+
+    def test_the_shape_is_the_lookups_entry_with_a_short_name_and_no_email(self):
+        # Catches: a route that leaks the login's email (the hook puts this in an agent's context), or one
+        # whose shape differs from the committed fallback's, so the hook reads two formats.
+        code, out = self.rulings("src/pay.py", "src/", "README")
+        self.assertEqual(code, 200, out)
+        [h] = out["rulings"]["src/pay.py"]
+        self.assertEqual({k: h[k] for k in ("qid", "label", "conditions", "stale", "locked_by_name", "answer")},
+                         {"qid": "LANE.1/Q5", "label": "holds", "conditions": [self.EXCERPT], "stale": False,
+                          "locked_by_name": "ann", "answer": "B ★"})
+        self.assertEqual(out["rulings"]["src/"], [h])
+        self.assertEqual(out["rulings"]["README"], [])
+        self.assertNotIn("@", json.dumps(out))
+
+    def test_a_stale_ruling_is_flagged_not_hidden(self):
+        # Catches: the server listing only fresh rulings, so an agent never learns one went stale.
+        (self.cfg.root / "src/pay.py").write_text("def charge(cents):\n    return int(cents)\n")
+        code, out = self.rulings("src/pay.py")
+        self.assertEqual(code, 200, out)
+        self.assertTrue(out["rulings"]["src/pay.py"][0]["stale"])
+
+    def test_bad_paths_are_refused_by_name(self):
+        # Catches: a lookup that reads outside the project or a secrets file because an agent asked.
+        for paths, words in ((["../x"], "leaves the project"), (["/etc/passwd"], "absolute"), ([".env"], ".env"),
+                             ([], "1 to"), ("src", "list"), ([3], "string")):
+            with self.subTest(paths=paths):
+                code, out = self.agent_post("/rulings", {"paths": paths})
+                self.assertEqual(code, 400, out)
+                self.assertIn(words, out["error"])
+
+    def test_at_most_fifty_paths_in_one_lookup(self):
+        # Catches: a 51st path accepted, so one request can make the server match without the cap it states.
+        code, out = self.rulings(*[f"f{i}.py" for i in range(50)])
+        self.assertEqual((code, len(out["rulings"])), (200, 50))
+        code, out = self.rulings(*[f"f{i}.py" for i in range(51)])
+        self.assertEqual(code, 400, out)
+        self.assertIn("1 to 50", out["error"])
+
+    def test_the_owner_door_does_not_serve_it(self):
+        # Catches: the route added to the owner's door too, where it is nothing the page needs.
+        for path in ("/rulings", "/api/rulings"):
+            code, _ = self.req("POST", path, {"paths": ["src/pay.py"]}, tok=token())
+            self.assertEqual(code, 404, path)
 
 
 if __name__ == "__main__":
