@@ -2301,6 +2301,7 @@
     // Taken BEFORE the clear: once detached, getElementById no longer finds it, and from 1.30.1 to
     // 1.34.6 the lookup came after, so every repaint threw an open wizard away mid-sentence.
     const auxPaneEl = document.getElementById('ck-launch-pane');
+    const entering = playingEnter();
     // 1.46 (L12): a Settings box being typed in keeps its focus (and caret) through the redraw; its text is kept
     // by settingsDraft. Other controls keep the focus rules they had (redrawKeepingPlace).
     const act = document.activeElement;
@@ -2331,7 +2332,7 @@
     } else if (currentItem) {
       renderItem(currentItem);
     }
-    markMotion();
+    markMotion(entering);
     // Keep the aux pane AT THE END of panelEl so it sits above everything. Re-append after
     // mode-specific render so a Launch Idea in-flight survives a live tick without the user
     // noticing. closeAuxPane() is called from openPanel() when currentItem changes, and from
@@ -2354,15 +2355,28 @@
   // draw shows a different one: another section crossfades, another sub-tab slides, another item or mode fades in. The
   // rail's indicator slides from the old section's place (--ck-rail-from, in buttons). The motion itself is CSS, and
   // only under prefers-reduced-motion: no-preference.
+  // A redraw of the same view while its fade still plays (openPanel's own fetch landing, a live tick) carries the fade
+  // on from where it was: through 1.52 the new .ck-body came without the class, so the fade was cut off part-way, or
+  // never seen at all when the fetch beat the first frame. Under reduced motion nothing plays, so nothing carries.
   let drawnView = null;
-  function markMotion() {
+  function playingEnter() {
+    const body = panelEl.querySelector('.ck-body');
+    const kind = body && ['section', 'tab', 'view'].find(k => body.classList.contains('ck-enter-' + k));
+    const run = kind && body.getAnimations ? body.getAnimations().find(a => a.playState !== 'finished') : null;
+    return run ? { kind, at: Number(run.currentTime) || 0 } : null;
+  }
+  function markMotion(entering) {
     const inbox = currentMode === 'inbox';
     const key = inbox ? 'tab:' + currentTab : currentMode + ':' + (currentItem || '') + ':' + (currentFork || '');
     const sec = inbox ? sectionOf(currentTab) : null;
     const prev = drawnView;
     drawnView = { key, sec };
-    if (!prev || prev.key === key) return;
     const body = panelEl.querySelector('.ck-body');
+    if (prev && prev.key === key && entering && body) {
+      body.classList.add('ck-enter-' + entering.kind);
+      body.style.animationDelay = -entering.at + 'ms';
+    }
+    if (!prev || prev.key === key) return;
     const kind = sec && prev.sec ? (sec !== prev.sec ? 'section' : 'tab') : 'view';
     if (body) body.classList.add('ck-enter-' + kind);
     const rail = kind === 'section' && panelEl.querySelector('.ck-rail');

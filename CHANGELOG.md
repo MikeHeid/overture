@@ -3032,6 +3032,8 @@ L1 to L9 are in OPEN-DECISIONS.md, "R1-R4 as decided".
 - **`agent.py rulings --path P [--path DIR/] [--json]`** and an MCP
   `rulings` tool give the same entries. Paths are project-relative; `..`,
   absolute paths and secrets files are refused by name.
+- **Opening another item fades it in all the way** (a fault since 1.48): the
+  redraw when its fetch lands carries the fade on instead of cutting it off.
 - `overture/lookup.py` holds the matching, shared by all three; rulecheck's
   reading of an export's deciding conditions moved there.
 - Docs: docs/features/inbox-and-rulings.md, mcp-and-ci.md, the README's hook

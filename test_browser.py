@@ -5150,9 +5150,42 @@ class SectionTests(unittest.TestCase):
                 page.evaluate("ConsoleKit.open('LANE.1')")
                 page.wait_for_selector(".ck-panel[data-open='true'] .ck-body")
                 page.wait_for_timeout(300)
-                page.evaluate("window.__body = document.querySelector('.ck-body')")
+                # Every .ck-body drawn from here on is noted as it lands: a later read of the one on screen raced the
+                # redraw openPanel's own fetch makes once the 120 ms fade is over, and failed under a loaded machine.
+                page.evaluate("""() => { window.__faded = false;
+                    new MutationObserver(() => { const b = document.querySelector('.ck-body');
+                        if (b && b.classList.contains('ck-enter-view')) window.__faded = true; })
+                      .observe(document.querySelector('.ck-panel'), { childList: true, subtree: true }); }""")
                 page.evaluate("ConsoleKit.open('LANE')")
-                _wait_for(page, "document.querySelector('.ck-body') !== window.__body")
+                _wait_for(page, "window.__faded === true", timeout=10000)
+
+    def test_the_redraw_that_follows_opening_an_item_keeps_its_fade(self):
+        # Catches: openPanel's own fetch landing while the new item's fade plays and redrawing a .ck-body without the
+        # class, so the fade was cut off part-way (or, when the fetch beat the first frame, never seen at all). The
+        # /api/view behind the second open is held and its fade paused part-way, so the redraw lands mid-fade.
+        for kind in BROWSERS:
+            with self.subTest(browser=kind):
+                url = self.serve()
+                page = self.page(kind, 1280, url)
+                page.evaluate("ConsoleKit.open('LANE.1')")
+                page.wait_for_selector(".ck-panel[data-open='true'] .ck-body")
+                page.wait_for_timeout(300)
+                held = []
+                page.route("**/api/view*", lambda r: held.append(r) if not held else r.fallback())
+                page.evaluate("ConsoleKit.open('LANE')")
+                deadline = time.monotonic() + 10
+                while not held and time.monotonic() < deadline:
+                    page.wait_for_timeout(50)
+                self.assertEqual(len(held), 1, "opening LANE never asked for /api/view")
+                paused = page.evaluate("""() => { const b = document.querySelector('.ck-body');
+                    b.dataset.first = '1';
+                    const run = b.getAnimations();
+                    run.forEach(a => { a.pause(); a.currentTime = 40; });
+                    return b.classList.contains('ck-enter-view') && run.length; }""")
+                self.assertTrue(paused, "the first draw of LANE did not start its fade")
+                held[0].fallback()
+                _wait_for(page, "() => { const b = document.querySelector('.ck-body'); return b && !b.dataset.first; }",
+                          timeout=10000)
                 self.assertIn("ck-enter-view", page.get_attribute(".ck-body", "class"))
 
     def test_the_phone_console_is_pinned_to_the_left_edge_of_a_wider_page(self):
