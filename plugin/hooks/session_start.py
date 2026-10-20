@@ -93,12 +93,12 @@ class Unsafe(ValueError):
     pass
 
 
-def _open(path: Path, flags: int, nofollow: bool = False, mode: int = 0o600) -> int:
-    """os.open, never blocking; with `nofollow` a symlink is refused, by O_NOFOLLOW where the OS has it, else by
-    lstat first (native Windows Python, which lacks the flag)."""
+def _open(path: Path, flags: int, nofollow: bool = False, mode: int = 0o600, block: bool = False) -> int:
+    """os.open, never blocking unless `block`; with `nofollow` a symlink is refused, by O_NOFOLLOW where the OS
+    has it, else by lstat first (native Windows Python, which lacks the flag)."""
     if nofollow and not O_NOFOLLOW and os.path.islink(path):
         raise Unsafe(f"{Path(path).name} is a symlink")
-    return os.open(path, flags | O_NONBLOCK | (O_NOFOLLOW if nofollow else 0), mode)
+    return os.open(path, flags | (0 if block else O_NONBLOCK) | (O_NOFOLLOW if nofollow else 0), mode)
 
 
 def _read_regular(path: Path, cap: int, nofollow: bool = False) -> bytes | None:
@@ -313,7 +313,7 @@ def record_session(state: Path, sid: str, name: str) -> bool:
         raise Unsafe("naming a session needs POSIX file locks, which native Windows Python lacks; "
                      "run Claude Code inside WSL, where the console runs")
     path = Path(state) / SESSIONS_FILE
-    lock = _open(Path(state) / SESSIONS_LOCK, os.O_RDWR | os.O_CREAT | O_CLOEXEC, nofollow=True)
+    lock = _open(Path(state) / SESSIONS_LOCK, os.O_RDWR | os.O_CREAT | O_CLOEXEC, nofollow=True, block=True)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         data, size = _read_tail(path, 4 * MAX_SESSIONS)

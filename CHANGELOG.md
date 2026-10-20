@@ -3011,7 +3011,9 @@ every session and prompt.
   an edit never shows a hook error.
 - The server side is unchanged: it runs in WSL on Windows (Hosting).
 - Tests: `test_kit.WindowsHookTests` runs each hook with `fcntl` and the
-  three flags taken away, as on Windows.
+  three flags taken away, as on Windows. It also holds POSIX to what it
+  did before: each open keeps its exact flags, and a broken kit still shows
+  as a hook error there instead of a silent stand-down.
 
 ## Area notes (1.53.0)
 

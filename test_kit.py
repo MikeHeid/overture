@@ -4597,6 +4597,34 @@ class WindowsHookTests(_Steward):
         self.assertIsNone(hook.session_name(self.state, SID5))
         self.assertEqual(hook._read_regular(target, 4096, nofollow=True), target.read_bytes())
 
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "POSIX flags")
+    def test_on_posix_each_open_keeps_its_flags(self):
+        # Catches: the Windows defaults changing what POSIX asks for, e.g. the sessions lock
+        # opened non-blocking, or the append and the tail read no longer refusing a symlink.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("session_start_posix", self.HOOKS / "session_start.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        seen, real = [], os.open
+        with mock.patch.object(hook.os, "open", lambda p, f, *a: seen.append((Path(p).name, f)) or real(p, f, *a)):
+            self.assertTrue(hook.record_session(self.state, SID5, "agent-6"))
+        self.assertEqual(seen, [   # the lock, the tail read, the append: as before 1.53.1
+            (hook.SESSIONS_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC),
+            ("sessions.jsonl", os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW),
+            ("sessions.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW)])
+
+    def test_on_posix_a_broken_kit_still_shows_as_a_hook_error(self):
+        # Catches: the Windows stand-down in ruling_lookup.py swallowing a broken kit on POSIX too,
+        # so the ruling lookup is silently off where it should run, and nobody is told.
+        shim = self.dir / "broken_kit_shim.py"
+        shim.write_text("import runpy, sys\nsys.modules['overture.anchors'] = None\n"
+                        "script = sys.argv.pop(1)\nsys.argv[0] = script\nrunpy.run_path(script, run_name='__main__')\n")
+        r = subprocess.run([sys.executable, str(shim), str(self.HOOKS / "ruling_lookup.py")], input="{}",
+                           env=self.env(CLAUDE_PROJECT_DIR=str(self.project)), capture_output=True, text=True,
+                           timeout=30)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ModuleNotFoundError: import of overture.anchors halted", r.stderr)
+
 
 class SessionNameTests(_Steward):
     """The UserPromptSubmit hook records session -> name; every check then reads it, never trusts it for the steward."""
