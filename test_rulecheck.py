@@ -710,7 +710,12 @@ class Lookup(Repo):
         # the first nine, or a path one past 512 characters let through; and a folder given as "src\\".
         for bad, words in (("src/a\x1bb.py", "control"), ("src/a\nb.py", "control"), ("\\etc\\passwd", "absolute"),
                            ("C:/x", "absolute"), ("src/../../x", "leaves the project"), ("a/b/../c", "leaves the project"),
-                           ("x" * 513, "over 512")):
+                           ("x" * 513, "over 512"),
+                           # Catches (1.52 clearing): DEL, a C1 next line, a Unicode line separator or a bidi
+                           # override in a path, which reach the agent's context raw in "Owner rulings on {path}"
+                           # and can break or disguise a line there.
+                           ("src/a\x7fb.py", "control"), ("src/a\x85b.py", "control"),
+                           ("src/a b.py", "control"), ("src/‮gnp.py", "control")):
             with self.subTest(bad=bad[:20]), self.assertRaisesRegex(L.PathRefused, words):
                 L.clean_path(bad)
         self.assertEqual(L.clean_path("x" * 512), "x" * 512)   # 512 is the cap, so 512 itself is a path

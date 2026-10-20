@@ -37,6 +37,7 @@ import json
 import os
 import socket
 import time
+import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -81,6 +82,13 @@ def _parts(path: str) -> list[str]:
     return [p for p in path.replace("\\", "/").split("/") if p not in ("", ".")]
 
 
+def _unsafe(ch: str) -> bool:
+    """A character a path never carries into the agent's context: any Unicode "other" (control, format such as a
+    bidi override, surrogate, private use, unassigned) or a line or paragraph separator."""
+    cat = unicodedata.category(ch)
+    return cat[0] == "C" or cat in ("Zl", "Zp")
+
+
 def clean_path(raw: object) -> str:
     """`raw` as a normalised project-relative path; a trailing "/" stays and means "everything under it".
 
@@ -89,7 +97,7 @@ def clean_path(raw: object) -> str:
     """
     if not isinstance(raw, str) or not raw.strip():
         raise PathRefused("a path is a non-empty string")
-    if len(raw) > MAX_PATH or any(ord(ch) < 32 for ch in raw):
+    if len(raw) > MAX_PATH or any(_unsafe(ch) for ch in raw):
         raise PathRefused(f"path {raw[:60]!r}: over {MAX_PATH} characters, or a control character")
     if raw.startswith(("/", "\\")) or (len(raw) > 1 and raw[1] == ":"):
         raise PathRefused(f"path {raw!r}: absolute; give it relative to the project root")
