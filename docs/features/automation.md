@@ -1,4 +1,4 @@
-# Automation: Delegate, playbooks, triggers and agent worktrees
+# Automation: Delegate, playbooks, triggers, agent worktrees and area notes
 
 [← Back to README](../../README.md)
 
@@ -272,7 +272,7 @@ permission prompt sees it like any other command. The copy comes from
 hand that PR your account. Unset, nothing is suggested, and `.venv` is never
 copied or linked for you.
 
-**The boundary.** The server starts no git (CONSOLE-kit/Q24): `worktree`
+**The boundary.** The server starts no git (CONSOLE-kit/Q23): `worktree`
 runs in the agent's own process, through the same seam as every other git
 call (git and `gh` only; the kit starts no other program for it), and the
 server only stores and shows the branch it is told. The registry beside the
@@ -285,3 +285,79 @@ heartbeat. A 1.50 `agent.py` talking to a 1.49 server, which refuses a mark
 with a branch, sends the mark again without it and says so, so the item still
 shows "agent active". The worktrees stay on disk; remove one with
 `git worktree remove <path>` from the project's checkout.
+
+## Memory in its own place: area notes (1.53)
+
+What an agent should know before it works somewhere is kept where that work
+happens, and nowhere else. The owner's decisions are in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#memory-in-its-own-place-area-notes-decided-2026-10-20)
+(M1 to M4).
+
+**Four tiers (M1).** Each kind of memory has one home:
+
+1. **Area facts**: a short `CLAUDE.md` (at most 10 lines) in a declared
+   folder of the repository. Claude Code loads it only when a session reads
+   in that folder, so it costs nothing elsewhere. It states facts with their
+   reason, and cites a ruling (`ITEM/Qn`) or a lesson by id instead of
+   copying it.
+2. **Release context**: one memory file per open release,
+   `memory/<project>-release-<version>.md`, linked from `MEMORY.md` while
+   the release is open and deleted, with its line, when it ships.
+3. **Where an agent stopped**: on the console item (its working mark, its
+   branch, its handoff).
+4. **Decisions**: the owner's rulings and OPEN-DECISIONS.md, only.
+
+Lanes, waves and phases are tags on items, not places for memory: they close
+when their work ends, and memory kept by them would close with them.
+
+**Declaring the folders.** A project opts in with one key in `.overture.json`:
+
+    {"areas": ["docs", "src/server", "src/web"]}
+
+A second, optional key, `"notes_ignore"`, lists files whose change alone
+makes no note stale, such as the files a release's version bump writes
+(`["src/server/version.py"]`). Each is checked like an area and must be a
+file committed at HEAD: a folder of any kind is refused, so no note's area,
+or a part of it, can be ignored away.
+
+Each note starts with the commit its facts were checked at:
+
+    <!-- area: src/server · checked: 1a2b3c4 -->
+
+**`agent.py notes check [--root DIR] [--memory DIR] [--json]`** reads the
+checkout and writes nothing. It needs no console (`--state` may be left
+out). It names a **stale** note (its folder's committed files changed since
+that commit; a nested declared folder, the note itself and the
+`"notes_ignore"` files do not count), an
+**undeclared** one (a `CLAUDE.md` in a folder not on the list; folders git
+ignores are never looked at), and a **malformed** one (no header, another
+folder's header, more than 10 lines). After a squash merge the checked
+commit may be on no branch; the last commit that changed the note's header
+line counts then, so fixing a typo lower in the note does not hide earlier
+changes. Changes made in the same commit as the stamp count as checked. The
+top-level `CLAUDE.md` is said as **always loaded** (read in every session
+here; not an area note), never as an error. With `--memory DIR` it also
+checks `DIR/MEMORY.md`: a line linking a file that is gone, a line linking
+outside that folder (never looked up), and a memory file no line links. It
+exits 0 with "N area notes current", 1 on any finding, and 2 when it refuses
+(not a git checkout, a shallow clone, no declared areas, no `MEMORY.md`),
+naming why.
+
+**Stamping a note.** After re-reading a folder and correcting its note,
+`agent.py notes stamp AREA` sets the note's checked commit to `HEAD`; only
+the first line changes. It refuses while that folder has uncommitted
+changes, and when the folder or the note is a symlink leading out of the
+checkout. `notes check` itself never writes.
+
+**The steward checks once a day.** The steward's `watch` runs the same check
+after its first heartbeat, at most once a day (the time kept in its state
+folder), and puts the counts in its heartbeat file (`watch.json`,
+`area_notes`: stale, undeclared, malformed, current), numbers only. A
+project that declares no areas is left alone. An error is said once and
+never stops the watch. The console does not show the counts yet (M3: that
+waits until the notes have been used for a while).
+
+**What stays out.** The release zip carries no `CLAUDE.md`, and
+`verify_vendor.py` neither asks a vendored copy for the kit's notes nor
+counts a project's own note beside it as drift. The global rules in your own
+`~/.claude` are not touched (M4: measured at under 2% of a long agent run).

@@ -193,6 +193,52 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## Memory in its own place: area notes (decided 2026-10-20)
+
+The owner asked whether each lane, wave or phase, and each function, should
+keep its context in its own place, to keep agents on track and spend fewer
+tokens. A three-seat panel (roar) and the advisory board (analyst, advisor,
+devops) answered: **per area of code, yes; per phase, only as a release file
+that is deleted when the release ships; per lane or wave, no.** Lanes and
+waves close when their work ends, so memory kept by them dies with them; they
+are tags. The owner said "do recommended" (every ★).
+
+| # | Question | Decision |
+|---|---|---|
+| M1 | The four memory tiers | **Yes** (owner ★). (1) Area facts: a short `CLAUDE.md` of 5–10 lines in a declared area folder, written as facts with their "why", never orders; loaded when an agent reads there. (2) Release context: one memory file per open release, deleted on ship. (3) Where an agent stopped: on the console item (working mark, claim, HANDOFF). (4) Decisions: rulings and this file only. A note cites a ruling (`ITEM/Qn`) or a lesson and never copies it. |
+| M2 | Build phases 0–2 now | **Yes** (owner ★), as 1.53. Phase 0 (measured): a subagent starts at about 19k–22k input tokens, about 40% of it the always-loaded rules and CLAUDE.md files; a long agent's run reaches about 10M, so cutting exploration matters more than the fixed start. |
+| M3 | Show area notes in the console | **Wait** (owner ★) until notes have been used for a while; then its own release, read by other agent tools too. |
+| M4 | Slim the owner's global always-loaded rules | **Measure first** (owner ★). Measured: under 2% of a long run, so not worth changing the owner's global setup now. |
+
+Board amendments carried into 1.53: area folders are declared in one list,
+and `agent.py notes check` fails on a note outside it, on a stale note (its
+folder changed since the commit it was checked at), and on memory-index
+links to missing files; the check runs agent-side in the steward loop and in
+the release recipe (the server starts no git, Q23); area notes stay out of
+the release zip; one before-and-after run of a small task, with and without
+a note, compares tokens, wrong claims and missed rulings.
+
+### M1-M4 as built (architect defaults, 1.53)
+
+- **N1** The declared folders are the checked repository's own, in
+  `.overture.json` `"areas"`, not a list inside the kit: the steward runs the
+  check on every registered project, and a kit-held list would call every
+  other project's `CLAUDE.md` undeclared. A project without the key is left
+  alone; the CLI refuses it by name.
+- **N2** The tests live at the repository root, where a `CLAUDE.md` would be
+  always loaded, so the test facts sit in the `plugin/kit` note (loaded
+  whenever an agent reads the code the tests cover). A nested declared folder
+  (`plugin/kit/overture`) does not make its parent stale.
+- **N3** Stale counts committed changes only, from the checked commit; when
+  that commit is not in the branch's history (a squash merge), from the
+  last commit that changed the note's header line (review C3: not its last
+  commit, which a typo fix would move). Changes in that same commit count as
+  checked. A note's checked commit therefore needs a commit of its own after
+  the code it describes (`notes stamp AREA`, its own verb so `notes check`
+  never writes; review C4). A shallow clone is refused by name (review C2).
+- **N4** The counts reach `watch.json` only (M3: no console view yet).
+  `verify_vendor.py` ignores `CLAUDE.md` both ways.
+
 ## Ruling lookup before an agent edits (decided 2026-10-19)
 
 Wave 2's "ruling lookup before an agent acts" (STRATEGY.md, core engine:

@@ -59,6 +59,16 @@ class LayoutTests(Base):
                 self.assertNotIn("/.git/", n)
                 self.assertNotIn("/dist/", n)
 
+    def test_no_area_note_ships_in_the_zip(self):
+        # Catches (1.53.0): Overture's own area notes (CLAUDE.md, facts about this repository's code) shipped in
+        # the plugin, where they would describe the kit's source to a user's sessions; the skip must hold for a
+        # note at any depth, and keep a file that merely has CLAUDE.md in its name.
+        for rel in ("kit/overture/CLAUDE.md", "hooks/CLAUDE.md", "skills/CLAUDE.md", "CLAUDE.md"):
+            self.assertTrue(B.SKIP.search(rel), rel)
+        self.assertFalse(B.SKIP.search("skills/NOT-CLAUDE.md.txt"))
+        names = zipfile.ZipFile(self.built()[0]).namelist()
+        self.assertEqual([n for n in names if Path(n).name == "CLAUDE.md"], [])
+
     def test_the_marketplace_points_at_the_plugin_at_the_same_version(self):
         z = zipfile.ZipFile(self.built()[0])
         market = json.loads(z.read("overture/.claude-plugin/marketplace.json"))
@@ -140,6 +150,90 @@ class NeutralTests(unittest.TestCase):
         r = subprocess.run(["git", "-C", str(B.ROOT), "grep", "-n", "-i", self.CONSUMER], capture_output=True,
                            text=True, timeout=60)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+
+class ReleaseNotesGateTests(unittest.TestCase):
+    """1.53 review C1: release.py runs `notes check` and refuses while it finds anything; no test reads this
+    repository's own notes, so the suites stay green mid-work, in a zip or in a vendored copy."""
+
+    GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True, text=True,
+                              timeout=60, env={**os.environ, **self.GIT_ENV}).stdout
+
+    @unittest.skipUnless(shutil.which("git"), "no git")
+    def test_the_gate_names_a_stale_note_in_a_repository_and_passes_a_current_one(self):
+        # Catches: a release gate that passes whatever the notes say (the check not run, or its exit ignored), or
+        # one that refuses a repository whose notes are current.
+        import release as REL
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.repo = Path(td.name)
+        self.git("init", "-q", "-b", "main")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/x.md").write_text("x\n")
+        (self.repo / ".overture.json").write_text(json.dumps({"areas": ["docs"]}))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "start")
+        sha = self.git("rev-parse", "--short", "HEAD").strip()
+        (self.repo / "docs/CLAUDE.md").write_text(f"<!-- area: docs · checked: {sha} -->\n- a fact\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "note")
+        with mock.patch.dict(os.environ, self.GIT_ENV):
+            self.assertIsNone(REL.notes_gate(self.repo))
+            (self.repo / "docs/x.md").write_text("changed\n")
+            self.git("commit", "-qam", "docs change")
+            said = REL.notes_gate(self.repo)
+        self.assertIsNotNone(said)
+        self.assertTrue(any(line.startswith("stale: docs/CLAUDE.md") for line in said), said)
+
+    @unittest.skipUnless((B.ROOT / ".overture.json").exists(), "no .overture.json (not a checkout)")
+    def test_every_file_the_version_bump_writes_in_an_area_is_in_notes_ignore(self):
+        # Catches: set_version writing a file inside a declared area that .overture.json "notes_ignore" does not
+        # list (a new version file, or the list trimmed), so every release stales that area's note and the next
+        # release is refused until someone re-stamps a note whose facts did not change; and a "notes_ignore"
+        # entry notes.py refuses (a '.claude-plugin' segment), which would refuse every notes check and release.
+        # The bump runs on a copy, never this tree.
+        import sys
+        import release as REL
+        sys.path.insert(0, str(B.ROOT / "plugin" / "kit"))
+        self.addCleanup(sys.path.remove, str(B.ROOT / "plugin" / "kit"))
+        from overture import notes as NO
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        copy = Path(td.name)
+        for rel in ("VERSION", "plugin/.claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
+                    "plugin/kit/overture/__init__.py"):
+            (copy / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(B.ROOT / rel, copy / rel)
+        with mock.patch.object(REL, "ROOT", copy):
+            written = REL.set_version("999.0.0")
+        self.assertEqual(len(written), 4, written)
+        declared = NO.areas(B.ROOT)
+        ignore = NO.ignored(B.ROOT, declared)
+        in_areas = sorted(f for f in written if any(f.startswith(a + "/") for a in declared))
+        self.assertIn("plugin/kit/overture/__init__.py", in_areas)
+        self.assertEqual([f for f in in_areas if f not in ignore], [])
+
+    def test_a_release_is_refused_before_the_bump_while_the_gate_finds_anything(self):
+        # Catches: release.py bumping the version (and listing the notes check as a mere next step) while the
+        # area notes are stale, or not saying which note held it back.
+        import contextlib
+        import io
+        import release as REL
+        err = io.StringIO()
+        with mock.patch.object(REL, "notes_gate", return_value=["stale: docs/CLAUDE.md (checked abc1234): ..."]), \
+                mock.patch.object(REL, "set_version") as bump, contextlib.redirect_stderr(err):
+            self.assertEqual(REL.main(["release.py", "9.9.9"]), 1)
+        bump.assert_not_called()
+        self.assertIn("stale: docs/CLAUDE.md", err.getvalue())
+        with mock.patch.object(REL, "notes_gate", return_value=None), \
+                mock.patch.object(REL, "set_version", return_value=[]) as bump, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(REL.main(["release.py", "9.9.9"]), 0)
+        bump.assert_called_once_with("9.9.9")
 
 
 class UnitTemplateTests(unittest.TestCase):

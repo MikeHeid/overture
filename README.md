@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.52.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.53.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1443-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1488-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -108,6 +108,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR lands (merged at its head) or closes · stale ones listed for the owner · a `worktree_setup` suggested, never run | [Automation](docs/features/automation.md#agent-worktrees-150) |
 | **macOS service** (1.51) | `server.py service install --start` on a Mac writes a launchd LaunchAgent (`~/Library/LaunchAgents/overture.console.plist`) and loads it · back after a crash and at every login · `status`, `health` and the one-server gate read `launchctl` · every hint names the Mac's own command | [Hosting](docs/features/hosting.md#macos-launchd-151) |
 | **Rulings before an edit** (1.52) | Before an agent edits a file, a hook shows it the owner's rulings on that file, labelled **holds on this file** or **cites this file** · a warning by name when the edit would break one, never a block · from the running console, or the committed rulings when it is down · three ways to ask: a hook before each edit · `agent.py rulings --path P` · an MCP `rulings` tool | [Inbox and rulings](docs/features/inbox-and-rulings.md#rulings-before-an-agent-edits-152) |
+| **Area notes** (1.53) | A short `CLAUDE.md` of facts in each folder `.overture.json` `"areas"` declares, read only when an agent works there · `agent.py notes check` names a stale, undeclared or malformed note, and with `--memory` a broken memory index · `notes stamp AREA` stamps a re-read note · the steward checks once a day · no note ships in the zip | [Automation](docs/features/automation.md#memory-in-its-own-place-area-notes-153) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units (Linux, WSL) or a launchd LaunchAgent (macOS) · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |
@@ -207,7 +208,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.52.0
+      - uses: MikeHeid/overture@v1.53.0
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
@@ -526,8 +527,10 @@ To build the release zip:
 It runs `claude plugin validate --strict` on the result. The deny file
 lists strings from your own deployment (hostnames, AUD tags, team
 domain, home path), and the build refuses if any of them appears in the
-zip. The zip carries the plugin and INSTALL.md; this README and
-`docs/features/` are read here on GitHub.
+zip. The zip carries the plugin and INSTALL.md, never an area note
+(`CLAUDE.md`); this README and `docs/features/` are read here on GitHub.
+Before the zip, `python3 plugin/kit/agent.py notes check` must say the area
+notes are current; `release.py` runs it first and bumps nothing until it does.
 
 ## Changelog
 
@@ -535,13 +538,14 @@ Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
 and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
 The latest three:
 
+- **1.53 — Area notes**: a short note of facts in each declared folder,
+  read only when an agent works there; `agent.py notes check` says when one
+  is stale, and the steward checks once a day.
 - **1.52 — Rulings before an edit**: before an agent edits a file it reads
   your rulings on it, and is warned by name when the edit would break one;
   never blocked. `agent.py rulings` and an MCP `rulings` tool too.
 - **1.51 — macOS service**: `server.py service install --start` runs the
   console as a launchd LaunchAgent on a Mac.
-- **1.50 — Agent worktrees**: each agent's file-changing work in its own
-  worktree, shown on the item, pruned once its PR lands.
 
 ## License
 
