@@ -9841,9 +9841,9 @@ class StewardNotesTests(unittest.TestCase):
         self.assertEqual(self.counts(), stored)
 
     def test_a_first_watch_from_another_folder_says_nothing_and_records_nothing(self):
-        # Catches (1.53 review N1): with no record yet, a watch outside the console's project reading counts off
-        # None, so the error is swallowed as "notes check skipped" and a record with no counts is written, which
-        # then holds the real check off for a day.
+        # Catches (1.53 review N1): a first watch outside the console's project (no record yet) saying "notes
+        # check skipped" or writing a record with no counts, which then holds the real check off for a day; the
+        # counts are read off a record that may be empty or None, never assumed to be a dict.
         import contextlib
         import io
         err = io.StringIO()
