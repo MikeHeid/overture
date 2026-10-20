@@ -1,0 +1,4 @@
+{
+  "areas": ["docs", "plugin/hooks", "plugin/kit", "plugin/kit/overture", "plugin/skills"],
+  "notes_ignore": ["plugin/kit/overture/__init__.py"]
+}

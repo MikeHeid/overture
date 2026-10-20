@@ -34,7 +34,8 @@ MARKET = "overture-local"
 # The plugin folder is the whole product: the kit lives in plugin/kit, so an install
 # from this zip and one straight from the repository carry the same files.
 PLUGIN_PARTS = [".claude-plugin", "hooks", "skills", "agents", "kit"]
-SKIP = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.DS_Store)(/|$)|\.pyc$")
+# 1.53.0: area notes (CLAUDE.md) are facts about this repository's code for its own agents, never the product.
+SKIP = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.DS_Store)(/|$)|\.pyc$|(^|/)CLAUDE\.md$")
 SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\"TunnelSecret\"|\"AccountTag\"|"
                     r"\bghp_[A-Za-z0-9]{30,}|\bsk-ant-[A-Za-z0-9_-]{20,}|\bAKIA[0-9A-Z]{16}\b")
 SECRET_NAMES = re.compile(r"(^|/)(cert\.pem|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json"

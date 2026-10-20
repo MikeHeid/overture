@@ -142,6 +142,20 @@ class VerifyVendorTests(unittest.TestCase):
         (self.kit / "plugin/kit/fold.py").write_text("dirty\n")
         self.assertEqual(self.run_cli(ref="v1.0.0")[0], 0)
 
+    def test_area_notes_are_never_required_and_a_projects_own_are_not_drift(self):
+        # Catches (1.53.0): the kit's own area notes (CLAUDE.md, facts about Overture's repository) demanded in a
+        # vendored copy, where they would load into the vendoring project's sessions; and a note the project
+        # keeps beside its copy read as a stray kit file.
+        for rel in ("plugin/kit/overture/CLAUDE.md", "plugin/hooks/CLAUDE.md", "plugin/skills/CLAUDE.md"):
+            (self.kit / rel).write_text("<!-- area: x · checked: abc1234 -->\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "1.1.0")
+        self.git("tag", "v1.1.0")
+        (self.copy / "overture" / "CLAUDE.md").write_text("the project's own note\n")
+        rep = VV.verify(self.kit, "v1.1.0", self.copy)
+        self.assertEqual((rep["missing"], rep["unexpected"], rep["differs"]), ([], [], []))
+        self.assertTrue(rep["ok"])
+
     def test_an_adapted_file_is_listed_not_compared_and_more_can_be_declared(self):
         (self.copy / "overture" / "local_patch.py").write_text("x\n")
         self.assertEqual(self.run_cli("--adapted", "overture/local_patch.py")[0], 0)
