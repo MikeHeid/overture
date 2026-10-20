@@ -325,17 +325,22 @@ that commit; a nested declared folder and the note itself do not count), an
 **undeclared** one (a `CLAUDE.md` in a folder not on the list; folders git
 ignores are never looked at), and a **malformed** one (no header, another
 folder's header, more than 10 lines). After a squash merge the checked
-commit may be on no branch; the note's own last commit counts then. The
-top-level `CLAUDE.md` is said as **always loaded**, never as an error. With
-`--memory DIR` it also checks `DIR/MEMORY.md`: a line linking a file that is
-gone, and a memory file no line links. It exits 0 with "N area notes
-current", 1 on any finding, and 2 when it refuses (not a git checkout, no
-declared areas, no `MEMORY.md`), naming why.
+commit may be on no branch; the last commit that changed the note's header
+line counts then, so fixing a typo lower in the note does not hide earlier
+changes. Changes made in the same commit as the stamp count as checked. The
+top-level `CLAUDE.md` is said as **always loaded** (read in every session
+here; not an area note), never as an error. With `--memory DIR` it also
+checks `DIR/MEMORY.md`: a line linking a file that is gone, a line linking
+outside that folder (never looked up), and a memory file no line links. It
+exits 0 with "N area notes current", 1 on any finding, and 2 when it refuses
+(not a git checkout, a shallow clone, no declared areas, no `MEMORY.md`),
+naming why.
 
 **Stamping a note.** After re-reading a folder and correcting its note,
-`notes check --update AREA` sets the note's checked commit to `HEAD`; only
-the first line changes, and it refuses while that folder has uncommitted
-changes.
+`agent.py notes stamp AREA` sets the note's checked commit to `HEAD`; only
+the first line changes. It refuses while that folder has uncommitted
+changes, and when the folder or the note is a symlink leading out of the
+checkout. `notes check` itself never writes.
 
 **The steward checks once a day.** The steward's `watch` runs the same check
 after its first heartbeat, at most once a day (the time kept in its state

@@ -951,8 +951,8 @@ def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | Non
 
     Modelled on `_watch_prune`'s throttle: called after the watch's first heartbeat, only for the project the
     working directory is in AND whose console this is, at most once per NOTES_EVERY (the time kept in STATE; in
-    between it hands back the last counts). `beat` runs while each git call waits, so "listening" never lapses.
-    A project whose `.overture.json` declares no areas is left alone, silently. Any error is said once, on
+    between, and from any other working directory, it hands back the last counts: 1.53 review C5). `beat` runs
+    while each git call waits, so "listening" never lapses. A project whose `.overture.json` declares no areas is left alone, silently. Any error is said once, on
     stderr, and never stops the watch: the time is recorded either way, so it is tried again the next day.
     """
     import time as _time
@@ -966,7 +966,7 @@ def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | Non
         cwd = Path.cwd()
         here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
         if not here or os.path.realpath(here[1].get("state", "")) != os.path.realpath(state):
-            return None
+            return rec.get("counts")   # 1.53 review C5: not this console's project; keep the counts the beat holds
         root = Path(here[0])
         if "areas" in _json_or_empty(root / NO.CONFIG):
             counts = NO.counts(NO.check(root, tick=beat))
@@ -987,12 +987,15 @@ def _json_or_empty(p: Path) -> dict:
 
 
 def _notes(a) -> int:
-    """`notes check [--root DIR] [--memory DIR] [--json] [--update AREA]` (1.53.0). Exit 0, 1 a finding, 2 refused."""
+    """`notes check [--root DIR] [--memory DIR] [--json]` / `notes stamp AREA [--root DIR]` (1.53.0).
+
+    Exit 0, 1 a finding, 2 refused. `check` never writes; `stamp` is its own verb (1.53 review C4).
+    """
     from overture import notes as NO
     try:
         root = a.root if a.root is not None else NO.top_of(Path.cwd())
-        if a.update:
-            got = NO.update(root, a.update)
+        if a.notes_cmd == "stamp":
+            got = NO.stamp(root, a.area)
             print(f"{got['note']}: checked {got['was']} -> {got['checked']}")
             return 0
         res = NO.check(root, memory=a.memory)
@@ -1842,14 +1845,18 @@ def main(argv=None) -> int:
     s = sub.add_parser("notes", description="1.53.0 (owner M1-M4): `check` the repository's area notes (a short "
                        "CLAUDE.md in a folder `.overture.json` \"areas\" declares): stale since the commit each was "
                        "checked at, undeclared, or malformed; with --memory, the auto-memory index too. Reads git "
-                       "here, never writes, needs no console. Exit 0 all current, 1 a finding, 2 refused.")
+                       "here, never writes, needs no console. `stamp AREA` marks a re-read note checked at HEAD. "
+                       "Exit 0 all current, 1 a finding, 2 refused.")
     ns = s.add_subparsers(dest="notes_cmd", required=True)
     s = ns.add_parser("check")
     s.add_argument("--root", type=Path, help="the top of the git checkout (default: the one the working directory is in)")
     s.add_argument("--memory", type=Path, metavar="DIR", help="also check DIR/MEMORY.md, the auto-memory index")
     s.add_argument("--json", action="store_true")
-    s.add_argument("--update", metavar="AREA", help="after re-reading AREA, stamp its note as checked at HEAD "
-                   "(only the note's first line changes; refused while AREA has uncommitted changes)")
+    s = ns.add_parser("stamp", description="after re-reading AREA, stamp its note as checked at HEAD: only the "
+                      "note's first line changes; refused while AREA has uncommitted changes, or when its folder "
+                      "or note is a symlink leading out of the checkout")
+    s.add_argument("area", metavar="AREA", help="a folder `.overture.json` \"areas\" declares, e.g. docs")
+    s.add_argument("--root", type=Path, help="the top of the git checkout (default: the one the working directory is in)")
     s = sub.add_parser("reanchor")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--json", action="store_true")

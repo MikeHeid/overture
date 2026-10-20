@@ -17,16 +17,24 @@ an area note. A note's first line says which commit its facts were checked at:
 - stale: the area's committed files changed after that commit (the note
   itself and any nested declared area left out). When the commit is not in
   this branch's history (a squash merge leaves the branch's commits behind),
-  the note's own last commit is the base instead;
+  the last commit that changed the note's header line is the base instead
+  (1.53 review C3: a typo fix lower in the note does not move it). Changes
+  that landed in the base commit itself count as checked;
 - undeclared: a CLAUDE.md below the root in a folder not on the list (the
   sprawl gate); files git ignores are never looked at;
 - malformed: no header, a header naming another folder, a commit that cannot
   be found, or more than MAX_LINES lines;
 - with `memory`, the auto-memory index MEMORY.md in that folder: links to
-  files that are not there, and *.md files no line links.
+  files that are not there, links that leave the folder (never looked up),
+  and *.md files no line links.
 
-`update` rewrites one note's header to HEAD after someone re-read the area,
-and changes nothing else in the file.
+A shallow clone is refused: its history stops short, so staleness cannot be
+judged (1.53 review C2). Every name and reason `lines` prints passes through
+`lookup._short`, so a hostile file name cannot reach a terminal as an escape
+sequence or a bidi override (1.53 review S1).
+
+`stamp` rewrites one note's header to HEAD after someone re-read the area,
+and changes nothing else in the file; `check` never writes (1.53 review C4).
 
 Agent side only. Every git call goes through `gitseam` (CONSOLE-kit/Q23), so
 inside the console server, where the seam is closed, it refuses rather than
@@ -42,8 +50,10 @@ import stat
 import tempfile
 from pathlib import Path
 from typing import Callable
+from urllib.parse import unquote
 
 from . import gitseam as G
+from .lookup import _short, _unsafe
 
 NOTE = "CLAUDE.md"
 CONFIG = ".overture.json"
@@ -56,7 +66,9 @@ MAX_CHANGED = 20         # files named per stale note; the count is always whole
 GIT_SECONDS = 30.0
 HEADER = re.compile(r"^<!-- area: (?P<area>\S+) · checked: (?P<sha>[0-9a-f]{7,40}) -->\Z")
 AREA = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*(/[A-Za-z0-9_][A-Za-z0-9_.\-]*)*\Z")
-LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+LINK = re.compile(r"\[[^\]]*\]\((?:<([^<>\n]+)>|([^)\s]+))")   # [t](a%20b.md) and [t](<a b.md>), C8
+SAY = 300                # characters of one name or reason `lines` prints, at most
+HEADER_LINE = "^<!-- area: .* checked: [0-9a-f]"   # git log -G: a commit that added or removed a header line
 
 
 class NotesError(Exception):
@@ -132,15 +144,16 @@ def _pathspec(area: str, declared: list[str]) -> list[str]:
 
 def _base(root: Path, sha: str, note_rel: str, tick) -> tuple[str | None, str]:
     """(commit to measure from, where it came from): the checked commit when this branch holds it, else the
-    note's own last commit; (None, why) when there is neither."""
+    last commit that changed the note's header line (C3: not its last commit, which a typo fix would move);
+    (None, why) when there is neither. An ambiguous short sha is not a commit here, so it falls back too."""
     rc, full = _git(root, ["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], tick)
     if rc == 0 and _git(root, ["merge-base", "--is-ancestor", full.strip(), "HEAD"], tick)[0] == 0:
         return full.strip(), "checked"
-    rc, last = _git(root, ["log", "-1", "--format=%H", "--", note_rel], tick)
+    rc, last = _git(root, ["log", "-1", "--format=%H", f"-G{HEADER_LINE}", "--", note_rel], tick)
     if rc == 0 and last.strip():
-        return last.strip(), "note-commit"
-    return None, (f"checked commit {sha} is not in this branch's history, and the note was never committed, so "
-                  f"nothing says what it was checked against")
+        return last.strip(), "header-commit"
+    return None, (f"checked commit {sha} is not in this branch's history, and the note's header was never "
+                  f"committed, so nothing says what it was checked against")
 
 
 def _parse(root: Path, rel: str, area: str) -> tuple[str | None, str | None]:
@@ -155,8 +168,10 @@ def _parse(root: Path, rel: str, area: str) -> tuple[str | None, str | None]:
     m = HEADER.match(lines[0]) if lines else None
     if not m:
         return None, f"its first line is not `<!-- area: {area} · checked: <commit> -->`"
+    if any(_unsafe(ch) for ch in m["area"]):   # S1: an ESC or a bidi override is refused by name, never echoed
+        return None, "its header's area holds a control or format character"
     if m["area"] != area:
-        return None, f"its header names {m['area']}, but it sits in {area}"
+        return None, f"its header names {_short(m['area'], SAY)}, but it sits in {area}"
     return m["sha"], None
 
 
@@ -167,6 +182,9 @@ def check(root: Path | str, *, memory: Path | str | None = None, tick: Callable[
     rc, head = _git(top, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], tick)
     if rc != 0:
         raise NotesError(f"{top} has no commit yet")
+    rc, shallow = _git(top, ["rev-parse", "--is-shallow-repository"], tick)
+    if rc != 0 or shallow.strip() != "false":   # C2: a cut history would make every checked commit look absent
+        raise NotesError("shallow clone: staleness can't be judged; fetch full history (git fetch --unshallow)")
     rc, listed = _git(top, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
                             NOTE, f":(glob)**/{NOTE}"], tick)
     if rc != 0:
@@ -201,12 +219,15 @@ def check(root: Path | str, *, memory: Path | str | None = None, tick: Callable[
     if memory is not None:
         res["memory"] = memory_index(memory)
     res["ok"] = not (res["stale"] or res["undeclared"] or res["malformed"]
-                     or (res["memory"] and (res["memory"]["missing"] or res["memory"]["unlinked"])))
+                     or (res["memory"] and (res["memory"]["missing"] or res["memory"]["outside"]
+                                            or res["memory"]["unlinked"])))
     return res
 
 
 def memory_index(folder: Path | str) -> dict:
-    """The auto-memory index MEMORY.md in `folder`: links to missing files, and *.md files no line links."""
+    """The auto-memory index MEMORY.md in `folder`: links to missing files, links that leave the folder (S3: an
+    absolute or `..` target, or one resolving out through a symlink, is named and never looked up), and *.md
+    files no line links. A link's `%20` and `<a b.md>` spellings are read as the file they name (C8)."""
     d = Path(folder)
     if not d.is_dir():
         raise NotesError(f"--memory {d}: not a folder")
@@ -217,19 +238,26 @@ def memory_index(folder: Path | str) -> dict:
         raise NotesError(f"{index} does not exist: no memory index to check") from None
     except (OSError, UnicodeDecodeError) as e:
         raise NotesError(f"{index}: cannot be read: {e}") from None
-    missing, linked = [], set()
-    for target in LINK.findall(text):
-        path = target.split("#", 1)[0]
+    missing, outside, linked = [], [], set()
+    real_d = os.path.realpath(d)
+    for angled, bare in LINK.findall(text):
+        path = (angled or bare).split("#", 1)[0]
         if not path or "://" in path or path.startswith("mailto:"):
             continue
+        path = unquote(path)
+        if "\0" not in path and (os.path.isabs(path) or ".." in Path(path).parts   # a %00 names no file: missing
+                                 or os.path.commonpath([real_d, os.path.realpath(d / path)]) != real_d):
+            if path not in outside:
+                outside.append(path)
+            continue
         p = d / path
-        if p.is_file():
+        if "\0" not in path and p.is_file():
             linked.add(os.path.realpath(p))
         elif path not in missing:
             missing.append(path)
     unlinked = sorted(p.name for p in d.glob("*.md")
                       if p.name != "MEMORY.md" and os.path.realpath(p) not in linked)
-    return {"index": str(index), "missing": missing, "unlinked": unlinked}
+    return {"index": str(index), "missing": missing, "outside": outside, "unlinked": unlinked}
 
 
 def counts(res: dict) -> dict:
@@ -239,31 +267,46 @@ def counts(res: dict) -> dict:
 
 
 def lines(res: dict) -> list[str]:
-    """The check in words, one finding a line; the last line is the count."""
-    out = [f"always loaded: {r} (read in every session here; not an area note)" for r in res["always_loaded"]]
+    """The check in words, one finding a line; the last line is the count. Every name and reason passes through
+    `_short` (S1): a file name holding an ESC or a bidi override is shown with `?` in its place."""
+    def q(x: object) -> str:
+        return _short(x, SAY)
+    out = [f"always loaded: {q(r)} (read in every session here; not an area note)" for r in res["always_loaded"]]
     for s in res["stale"]:
         more = f" and {s['changed_count'] - len(s['changed'])} more" if s["changed_count"] > len(s["changed"]) else ""
-        out.append(f"stale: {s['note']} (checked {s['checked']}): {s['changed_count']} file(s) changed since: "
-                   f"{', '.join(s['changed'])}{more}; re-read them, then `notes check --update {s['area']}`")
-    out += [f"undeclared: {r}: its folder is not in {CONFIG} \"areas\"" for r in res["undeclared"]]
-    out += [f"malformed: {m['note']}: {m['why']}" for m in res["malformed"]]
+        out.append(f"stale: {q(s['note'])} (checked {q(s['checked'])}): {s['changed_count']} file(s) changed since: "
+                   f"{', '.join(q(c) for c in s['changed'])}{more}; re-read them, then `notes stamp {q(s['area'])}`")
+    out += [f"undeclared: {q(r)}: its folder is not in {CONFIG} \"areas\"" for r in res["undeclared"]]
+    out += [f"malformed: {q(m['note'])}: {q(m['why'])}" for m in res["malformed"]]
     mem = res.get("memory")
     if mem:
-        out += [f"memory: {mem['index']} links to {t}, which is not there" for t in mem["missing"]]
-        out += [f"memory: {u} is linked from no line of {mem['index']}" for u in mem["unlinked"]]
+        out += [f"memory: {q(mem['index'])} links to {q(t)}, which is not there" for t in mem["missing"]]
+        out += [f"memory: {q(mem['index'])} links to {q(t)}, outside the memory folder; never looked up"
+                for t in mem["outside"]]
+        out += [f"memory: {q(u)} is linked from no line of {q(mem['index'])}" for u in mem["unlinked"]]
     n, total = len(res["current"]), len(res["current"]) + len(res["stale"]) + len(res["malformed"])
     out.append(f"{n} area notes current" if res["ok"] else f"{n} of {total} area notes current")
     return out
 
 
-def update(root: Path | str, area: str, *, tick: Callable[[], None] | None = None) -> dict:
-    """Stamp `area`'s note as checked at HEAD, after someone re-read the area. Only its first line changes."""
+def stamp(root: Path | str, area: str, *, tick: Callable[[], None] | None = None) -> dict:
+    """Stamp `area`'s note as checked at HEAD, after someone re-read the area. Only its first line changes.
+
+    `notes stamp AREA` (1.53 review C4: its own verb, so `check` never writes). S2: refused when the area's
+    folder resolves outside the repository (a committed symlink) or the note is a symlink, so the write can
+    never land outside the checkout.
+    """
     top = _top(root, tick)
     declared = areas(top)
     if area not in declared:
-        raise NotesError(f"{area} is not a declared area ({', '.join(declared)})")
+        raise NotesError(f"{_short(area, SAY)} is not a declared area ({', '.join(declared)})")
     rel = f"{area}/{NOTE}"
     p = top / rel
+    real_top = os.path.realpath(top)
+    if os.path.commonpath([real_top, os.path.realpath(p.parent)]) != real_top:
+        raise NotesError(f"{area} resolves outside the repository (a symlinked folder); nothing is stamped there")
+    if p.is_symlink():
+        raise NotesError(f"{rel} is a symlink; only a regular file is stamped")
     try:
         data = _read(p, MAX_NOTE)
     except FileNotFoundError:

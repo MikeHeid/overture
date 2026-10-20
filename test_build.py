@@ -152,6 +152,62 @@ class NeutralTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
 
 
+class ReleaseNotesGateTests(unittest.TestCase):
+    """1.53 review C1: release.py runs `notes check` and refuses while it finds anything; no test reads this
+    repository's own notes, so the suites stay green mid-work, in a zip or in a vendored copy."""
+
+    GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True, text=True,
+                              timeout=60, env={**os.environ, **self.GIT_ENV}).stdout
+
+    @unittest.skipUnless(shutil.which("git"), "no git")
+    def test_the_gate_names_a_stale_note_in_a_repository_and_passes_a_current_one(self):
+        # Catches: a release gate that passes whatever the notes say (the check not run, or its exit ignored), or
+        # one that refuses a repository whose notes are current.
+        import release as REL
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.repo = Path(td.name)
+        self.git("init", "-q", "-b", "main")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/x.md").write_text("x\n")
+        (self.repo / ".overture.json").write_text(json.dumps({"areas": ["docs"]}))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "start")
+        sha = self.git("rev-parse", "--short", "HEAD").strip()
+        (self.repo / "docs/CLAUDE.md").write_text(f"<!-- area: docs · checked: {sha} -->\n- a fact\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "note")
+        with mock.patch.dict(os.environ, self.GIT_ENV):
+            self.assertIsNone(REL.notes_gate(self.repo))
+            (self.repo / "docs/x.md").write_text("changed\n")
+            self.git("commit", "-qam", "docs change")
+            said = REL.notes_gate(self.repo)
+        self.assertIsNotNone(said)
+        self.assertTrue(any(line.startswith("stale: docs/CLAUDE.md") for line in said), said)
+
+    def test_a_release_is_refused_before_the_bump_while_the_gate_finds_anything(self):
+        # Catches: release.py bumping the version (and listing the notes check as a mere next step) while the
+        # area notes are stale, or not saying which note held it back.
+        import contextlib
+        import io
+        import release as REL
+        err = io.StringIO()
+        with mock.patch.object(REL, "notes_gate", return_value=["stale: docs/CLAUDE.md (checked abc1234): ..."]), \
+                mock.patch.object(REL, "set_version") as bump, contextlib.redirect_stderr(err):
+            self.assertEqual(REL.main(["release.py", "9.9.9"]), 1)
+        bump.assert_not_called()
+        self.assertIn("stale: docs/CLAUDE.md", err.getvalue())
+        with mock.patch.object(REL, "notes_gate", return_value=None), \
+                mock.patch.object(REL, "set_version", return_value=[]) as bump, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(REL.main(["release.py", "9.9.9"]), 0)
+        bump.assert_called_once_with("9.9.9")
+
+
 class UnitTemplateTests(unittest.TestCase):
     """The rendered unit passes the server only flags it defines, and not `--page` (Q28) or `--adapter` (Q24): never read."""
 

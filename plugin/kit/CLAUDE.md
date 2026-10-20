@@ -5,5 +5,5 @@
 - A project's adapter runs in the steward's process and reaches a server only as data (`items-push`, Q24).
 - The tests live at the repository root (test_kit, test_server, test_browser with OVERTURE_BROWSER=1, ...). Each test's comment starts "Catches:" with the wrong implementation it exists to catch.
 - Test processes get a throwaway config home (OVERTURE_TEST_CONFIG), so none reads or writes the user's real registry (0.8.3).
-- A new test is shown red by reverting the fix it guards, then green; one that passes both ways guards nothing.
+- A new test is shown red by reverting the fix it guards, then green; one that passes both ways guards nothing. No test reads this repository's own notes or working tree; release.py's `notes_gate` does (1.53 review C1).
 - A "mutant killed" claim holds once someone other than its author re-applies the mutant: at 1.50 a writer's claims fell short on re-run (the clearing round), and 1.52 added tests for the survivors (f2abddc).

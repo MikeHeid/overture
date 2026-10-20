@@ -3010,21 +3010,33 @@ code. The architect defaults are in OPEN-DECISIONS.md, "M1-M4 as built".
   never looked at), and a malformed one. The top-level `CLAUDE.md` is said as
   "always loaded". `--memory DIR` checks `DIR/MEMORY.md` for links to missing
   files and memory files no line links. Exit 0, 1 on a finding, 2 refused by
-  name. It writes nothing; `--update AREA` stamps one re-read note at `HEAD`
-  (its first line only, refused over uncommitted changes in that folder).
-  Its git goes through the seam, so inside the server it refuses (Q23).
+  name. It writes nothing; `notes stamp AREA` stamps one re-read note at
+  `HEAD` (its first line only, refused over uncommitted changes in that
+  folder). Its git goes through the seam, so inside the server it refuses
+  (Q23).
 - **The steward checks once a day**, after its first heartbeat and only when
   no signal waits, as it prunes worktrees; the counts ride `watch.json`
   (`area_notes`, numbers only). A project with no `"areas"` is left alone; an
   error is said once and never stops the watch. No console view (M3 waits).
 - **Packaging.** `build_zip.py` leaves every `CLAUDE.md` out of the zip;
   `verify_vendor.py` neither requires the kit's notes in a vendored copy nor
-  counts a project's own note beside it as drift. `release.py` lists the
-  notes check among its next steps.
+  counts a project's own note beside it as drift. `release.py` runs the
+  notes check first and refuses the release, naming each note, until it
+  passes.
 - Docs: docs/features/automation.md "Memory in its own place: area notes
   (1.53)", the RUNBOOK ("`notes check` names a stale, undeclared or
   malformed note"), the README. Also fixed: automation.md cited Q24 for the
   server's no-git rule, which is Q23.
+- **Review fixes.** The live check of this repository's own notes left the
+  unit suite for `release.py`'s gate (C1). A shallow clone is refused by name
+  (C2). After a squash, the base is the last commit that changed the note's
+  header, so a typo fix elsewhere in the note no longer hides earlier changes
+  (C3). Stamping is its own verb, `notes stamp AREA`, and refuses a folder or
+  note that is a symlink out of the checkout (C4, S2). A watch run from
+  another folder keeps the heartbeat's counts (C5). Every name the check
+  prints passes the lookup's `_short`, so an escape or bidi character shows
+  as `?` (S1). A memory link leaving its folder is named and never looked up
+  (S3); `%20` and `<a b.md>` links are read as the file they name (C8).
 
 ## Ruling lookup before an agent edits (1.52.0)
 

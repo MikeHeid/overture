@@ -12,6 +12,12 @@ Writes the new version to:
 Prints what changed and the next steps. Does not touch CHANGELOG.md, commit,
 build or push: the operator still writes release notes and runs test_build.py.
 
+1.53 review C1: first it runs `agent.py notes check` on this checkout and
+refuses the release while it finds anything (a stale, undeclared or
+malformed area note, or a refusal such as a shallow clone), naming each. This
+is the release gate for the area notes; no unit test reads this repository's
+own notes, so a suite stays green mid-work, in a zip or in a vendored copy.
+
 Added in 0.9.2 after /health kept showing 0.8.18 across the 0.9.0 and 0.9.1
 releases: `__version__` and the repo-marketplace manifest had drifted from
 VERSION. `test_build.py::test_the_version_matches_everywhere_kit_is_installed`
@@ -22,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -70,10 +77,31 @@ def set_version(version: str) -> list[str]:
     return changed
 
 
+def notes_gate(root: Path = ROOT) -> list[str] | None:
+    """None when `notes check` says every area note at `root` is current, else what it said (C1's gate)."""
+    try:
+        r = subprocess.run([sys.executable, str(ROOT / "plugin" / "kit" / "agent.py"), "notes", "check",
+                            "--root", str(root)], capture_output=True, text=True, timeout=600,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"notes check could not run: {e}"]
+    if r.returncode == 0:
+        return None
+    return (r.stdout + r.stderr).strip().splitlines() or [f"notes check exited {r.returncode}"]
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
+    said = notes_gate()
+    if said is not None:
+        print("release: refused: the area notes are not current; re-read each named area, fix its note,",
+              file=sys.stderr)
+        print("  commit, then `python3 plugin/kit/agent.py notes stamp AREA` and commit that:", file=sys.stderr)
+        for line in said:
+            print(f"  {line}", file=sys.stderr)
+        return 1
     try:
         changed = set_version(argv[1])
     except (ValueError, OSError) as e:
@@ -91,8 +119,8 @@ def main(argv: list[str]) -> int:
     print("  2. python3 test_build.py              # asserts the four files stay equal")
     print("  3. git switch -c release-" + argv[1])
     print("  4. git add -A && git commit -m 'release: " + argv[1] + "'")
-    print("  5. python3 plugin/kit/agent.py notes check   # 1.53: each stale area note named; re-read that area,")
-    print("     fix the note, `notes check --update AREA`, commit; again until it says the notes are current")
+    print("  5. python3 plugin/kit/agent.py notes check   # the bump itself moves plugin/kit/overture: re-read,")
+    print("     `notes stamp AREA`, commit; again until it says the notes are current (this script's gate)")
     print("  6. git push -u origin release-" + argv[1] + " && gh pr create ...")
     print("  7. After merge, build the zip with build_zip.py (in WSL for LF endings). Never zip the")
     print("     repository itself: INSTALL.md's local route needs build_zip's plugins/overture/ layout")

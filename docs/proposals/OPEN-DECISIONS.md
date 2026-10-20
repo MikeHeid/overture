@@ -231,8 +231,11 @@ a note, compares tokens, wrong claims and missed rulings.
   (`plugin/kit/overture`) does not make its parent stale.
 - **N3** Stale counts committed changes only, from the checked commit; when
   that commit is not in the branch's history (a squash merge), from the
-  note's own last commit. A note's checked commit therefore needs a commit of
-  its own after the code it describes (`notes check --update AREA`).
+  last commit that changed the note's header line (review C3: not its last
+  commit, which a typo fix would move). Changes in that same commit count as
+  checked. A note's checked commit therefore needs a commit of its own after
+  the code it describes (`notes stamp AREA`, its own verb so `notes check`
+  never writes; review C4). A shallow clone is refused by name (review C2).
 - **N4** The counts reach `watch.json` only (M3: no console view yet).
   `verify_vendor.py` ignores `CLAUDE.md` both ways.
 

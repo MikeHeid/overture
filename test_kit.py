@@ -9199,13 +9199,13 @@ class AreaNotesTests(unittest.TestCase):
     def check(self, **kw):
         return self.NO.check(self.repo, **kw)
 
-    def cli(self, *args):
+    def cli(self, *args, verb="check"):
         import contextlib
         import io
         import agent as AG
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = AG.main(["notes", "check", *args])
+            rc = AG.main(["notes", verb, *args])
         return rc, out.getvalue(), err.getvalue()
 
     def test_a_current_note_passes_and_says_how_many(self):
@@ -9373,9 +9373,10 @@ class AreaNotesTests(unittest.TestCase):
                 with self.assertRaisesRegex(self.NO.NotesError, "areas"):
                     self.check()
 
-    def test_a_checked_commit_squashed_away_counts_from_the_notes_own_last_commit(self):
+    def test_a_checked_commit_squashed_away_counts_from_the_commit_that_last_changed_the_header(self):
         # Catches: every note read as malformed after a squash merge (its branch commit is on no branch any
-        # more), or one never stale again once that happens; the note's last commit is the base then.
+        # more), or one never stale again once that happens; and (1.53 review C3) the base taken from the note's
+        # LAST commit, so a typo fixed lower in the note, after the area changed, hides that change.
         self.note("plugin/hooks", sha="abcdef1234")   # a commit this history does not hold
         self.commit("note, squashed")
         res = self.check()
@@ -9383,28 +9384,191 @@ class AreaNotesTests(unittest.TestCase):
         self.write("plugin/hooks/a.py", "later\n")
         self.commit("later")
         self.assertEqual([s["area"] for s in self.check()["stale"]], ["plugin/hooks"])
+        self.note("plugin/hooks", sha="abcdef1234", body=("- a fact, and why (Q23), typo fixed.",))
+        self.commit("typo in the note's body")
+        [st] = self.check()["stale"]
+        self.assertEqual((st["area"], st["base"], st["changed"]),
+                         ("plugin/hooks", "header-commit", ["plugin/hooks/a.py"]))
 
-    def test_update_rewrites_only_the_header_and_only_for_a_committed_area(self):
-        # Catches: --update re-stamping a note over uncommitted work (the stamp would claim what was never
-        # committed), changing anything but its first line, or stamping an undeclared folder.
+    def test_stamp_rewrites_only_the_header_and_only_for_a_committed_area(self):
+        # Catches: a stamp over uncommitted work (it would claim what was never committed), changing anything but
+        # the first line, or stamping an undeclared folder.
         self.note("plugin/hooks", body=("- fact one (Q23).", "- fact two"))
         self.commit("note")
         self.write("plugin/hooks/a.py", "v2\n")
         head = self.commit("change")
         before = (self.repo / "plugin/hooks/CLAUDE.md").read_text().splitlines()
-        rc, out, err = self.cli("--root", str(self.repo), "--update", "plugin/hooks")
+        rc, out, err = self.cli("plugin/hooks", "--root", str(self.repo), verb="stamp")
         self.assertEqual(rc, 0, err)
         after = (self.repo / "plugin/hooks/CLAUDE.md").read_text().splitlines()
         self.assertEqual(after[1:], before[1:])
         self.assertEqual(after[0], f"<!-- area: plugin/hooks · checked: {head} -->")
         self.assertTrue(self.check()["ok"])
         self.write("plugin/hooks/a.py", "v3, uncommitted\n")
-        rc, _, err = self.cli("--root", str(self.repo), "--update", "plugin/hooks")
+        rc, _, err = self.cli("plugin/hooks", "--root", str(self.repo), verb="stamp")
         self.assertEqual(rc, 2)
         self.assertIn("uncommitted", err)
-        rc, _, err = self.cli("--root", str(self.repo), "--update", "plugin/other")
+        rc, _, err = self.cli("plugin/other", "--root", str(self.repo), verb="stamp")
         self.assertEqual(rc, 2)
         self.assertIn("not a declared area", err)
+
+    def test_check_never_writes_the_stamp_is_its_own_verb(self):
+        # Catches (1.53 review C4): `notes check --update` writing from a command documented as never writing,
+        # with --json and --memory silently ignored beside it.
+        import contextlib
+        import io
+        self.note("plugin/hooks")
+        self.commit("note")
+        self.write("plugin/hooks/a.py", "v2\n")
+        self.commit("change")
+        before = (self.repo / "plugin/hooks/CLAUDE.md").read_bytes()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.cli("--root", str(self.repo), "--update", "plugin/hooks")
+        self.assertEqual((self.repo / "plugin/hooks/CLAUDE.md").read_bytes(), before)
+        self.assertFalse(hasattr(self.NO, "update"))
+
+    def test_stamp_never_writes_outside_the_checkout(self):
+        # Catches (1.53 review S2): a committed symlinked area folder leading out of the repository, so the stamp's
+        # temp file and rename land outside it (O_NOFOLLOW covers only the last part); and a symlinked note.
+        outside = self.dir / "outside"
+        outside.mkdir()
+        sha = wt_git(self.repo, "rev-parse", "--short", "HEAD").strip()
+        (outside / "CLAUDE.md").write_text(f"<!-- area: docs · checked: {sha} -->\n- x\n")
+        (outside / "x.md").write_text("d\n")
+        shutil.rmtree(self.repo / "docs")
+        (self.repo / "docs").symlink_to(outside)
+        self.commit("docs is a symlink now")
+        before = (outside / "CLAUDE.md").read_bytes()
+        rc, _, err = self.cli("docs", "--root", str(self.repo), verb="stamp")
+        self.assertEqual(rc, 2)
+        self.assertIn("outside the repository", err)
+        self.assertEqual((outside / "CLAUDE.md").read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), ["CLAUDE.md", "x.md"])   # no temp file left
+        (outside / "hooks-note.md").write_text(f"<!-- area: plugin/hooks · checked: {sha} -->\n- x\n")
+        (self.repo / "plugin/hooks/CLAUDE.md").symlink_to(outside / "hooks-note.md")
+        self.commit("a symlinked note")
+        rc, _, err = self.cli("plugin/hooks", "--root", str(self.repo), verb="stamp")
+        self.assertEqual(rc, 2)
+        self.assertIn("is a symlink", err)
+
+    def test_names_shown_in_words_carry_no_escape_or_bidi_character(self):
+        # Catches (1.53 review S1): a file or folder name holding an ESC sequence or a bidi override printed raw,
+        # so it rewrites the terminal or reverses what follows; and a header whose area holds one passed on.
+        esc, rlo = "\x1b[2J", "\u202e"
+        self.note("plugin/hooks")
+        self.write(f"plugin/x{esc}/CLAUDE.md", "- x\n")
+        self.write("docs/CLAUDE.md", f"<!-- area: docs{esc} · checked: abc1234 -->\n- x\n")
+        self.commit("notes")
+        self.write(f"plugin/hooks/{rlo}evil.py", "x\n")
+        self.commit("a hostile name")
+        res = self.check()
+        self.assertEqual([m["why"] for m in res["malformed"]], ["its header's area holds a control or format character"])
+        said = "\n".join(self.NO.lines(res))
+        self.assertNotIn("\x1b", said)
+        self.assertNotIn(rlo, said)
+        self.assertIn("plugin/hooks/?evil.py", said)
+        self.assertIn("undeclared: plugin/x?[2J/CLAUDE.md", said)
+
+    def test_a_shallow_clone_is_refused_by_name(self):
+        # Catches (1.53 review C2): a shallow clone, where the checked commit is cut off, falling back to a base at
+        # HEAD so every note reads "current" whatever changed.
+        self.note("plugin/hooks")
+        self.commit("note")
+        self.write("plugin/hooks/a.py", "v2\n")
+        self.commit("change")
+        clone = self.dir / "shallow"
+        wt_git(self.dir, "clone", "-q", "--depth", "1", "file://" + str(self.repo), str(clone))
+        rc, out, err = self.cli("--root", str(clone))
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("shallow clone: staleness can't be judged; fetch full history", err)
+
+    def test_an_ambiguous_checked_sha_falls_back_to_the_header_commit(self):
+        # Catches: a short checked sha that names two commits taken as malformed, as a crash, or (with 1.53 review
+        # C3 undone) measured from the note's last commit, so a later edit of its body hides an area change.
+        import hashlib
+        tree = subprocess.run(["git", "mktree"], cwd=self.repo, input="", capture_output=True, text=True,
+                              check=True, env={**os.environ, **GIT_ENV}).stdout.strip()
+        seen = {}
+        for i in range(1 << 20):   # two commit objects whose sha1s share 7 hex digits (a birthday search)
+            body = f"tree {tree}\nauthor t <t@example.com> 0 +0000\ncommitter t <t@example.com> 0 +0000\n\nn{i}\n"
+            h = hashlib.sha1(f"commit {len(body)}\0{body}".encode()).hexdigest()[:7]
+            if h in seen:
+                break
+            seen[h] = body
+        for b in (seen[h], body):
+            subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"], cwd=self.repo, input=b,
+                           capture_output=True, text=True, check=True, env={**os.environ, **GIT_ENV})
+        self.note("plugin/hooks", sha=h)
+        self.commit("note")
+        self.write("plugin/hooks/a.py", "v2\n")
+        self.commit("change")
+        self.note("plugin/hooks", sha=h, body=("- a fact, and why (Q23); reworded.",))
+        self.commit("note body")
+        res = self.check()
+        self.assertEqual(res["malformed"], [])
+        self.assertEqual([(s["area"], s["base"]) for s in res["stale"]], [("plugin/hooks", "header-commit")])
+
+    def test_a_changed_file_whose_name_has_spaces_is_named_whole(self):
+        # Catches: git's output split on whitespace, so "my file.py" is named as two files that do not exist.
+        self.note("plugin/hooks")
+        self.commit("note")
+        self.write("plugin/hooks/my file.py", "x\n")
+        self.commit("a spaced name")
+        [st] = self.check()["stale"]
+        self.assertEqual(st["changed"], ["plugin/hooks/my file.py"])
+        self.assertIn("plugin/hooks/my file.py", "\n".join(self.NO.lines(self.check())))
+
+    def test_a_renamed_area_is_stale_for_the_files_moved_into_it(self):
+        # Catches: a folder renamed with its note (the files moved, the facts maybe not) read as current because
+        # only files modified in place count, not ones added or moved in.
+        self.note("docs")
+        self.commit("note")
+        wt_git(self.repo, "mv", "docs", "guide")
+        self.write(".overture.json", json.dumps({"areas": [*self.AREAS[:-1], "guide"]}))
+        text = (self.repo / "guide/CLAUDE.md").read_text().replace("area: docs ", "area: guide ")
+        self.write("guide/CLAUDE.md", text)
+        self.commit("docs -> guide")
+        [st] = self.check()["stale"]
+        self.assertEqual((st["area"], st["changed"]), ("guide", ["guide/x.md"]))
+
+    def test_the_default_root_is_the_top_of_the_checkout_from_a_subfolder(self):
+        # Catches: the working directory taken as the root when --root is left out, so running it from a subfolder
+        # is refused as "not the top" instead of checking the checkout it is in.
+        self.note("docs")
+        self.commit("note")
+        here = os.getcwd()
+        try:
+            os.chdir(self.repo / "docs")
+            rc, out, err = self.cli()
+        finally:
+            os.chdir(here)
+        self.assertEqual((rc, out.strip()), (0, "1 area notes current"), err)
+
+    def test_memory_links_spelled_with_percent_twenty_or_angle_brackets_are_found(self):
+        # Catches (1.53 review C8): `[x](my%20file.md)` and `[x](<my file.md>)` read as links to files that are
+        # not there, and the files they name as linked from nowhere.
+        mem = self.dir / "memory"
+        mem.mkdir()
+        (mem / "my file.md").write_text("x\n")
+        (mem / "other file.md").write_text("x\n")
+        (mem / "MEMORY.md").write_text("- [A](my%20file.md) — one\n- [B](<other file.md>) — two\n")
+        got = self.NO.memory_index(mem)
+        self.assertEqual((got["missing"], got["outside"], got["unlinked"]), ([], [], []))
+
+    def test_memory_links_leaving_the_folder_are_named_and_never_looked_up(self):
+        # Catches (1.53 review S3): an index line linking `../x.md` or an absolute path probed with is_file (an
+        # existence test anywhere on the disk) and counted as a good link when the file happens to exist.
+        mem = self.dir / "memory"
+        mem.mkdir()
+        (self.dir / "secret.md").write_text("x\n")
+        (mem / "MEMORY.md").write_text(f"- [Up](../secret.md) — up\n- [Abs]({self.dir / 'secret.md'}) — abs\n")
+        got = self.NO.memory_index(mem)
+        self.assertEqual((got["missing"], got["outside"]), ([], ["../secret.md", str(self.dir / "secret.md")]))
+        self.note("docs")
+        self.commit("n")
+        res = self.check(memory=mem)
+        self.assertFalse(res["ok"])
+        self.assertIn("outside the memory folder", "\n".join(self.NO.lines(res)))
 
     def test_the_server_never_runs_it(self):
         # Catches (CONSOLE-kit/Q23): the check starting git inside the console server, where the seam is closed.
@@ -9413,14 +9577,6 @@ class AreaNotesTests(unittest.TestCase):
         with mock.patch.object(G, "_OPEN", False):
             with self.assertRaisesRegex(self.NO.NotesError, "no git"):
                 self.check()
-
-    @unittest.skipUnless((HERE / ".git").exists() and shutil.which("git"), "not a git checkout")
-    def test_this_repositorys_own_notes_pass(self):
-        # Catches: a release whose area notes went stale, sprawled or lost their header; the release recipe
-        # re-reads each named area and stamps it (`notes check --update AREA`) before this passes.
-        res = self.NO.check(HERE)
-        self.assertEqual((res["stale"], res["undeclared"], res["malformed"]), ([], [], []), res)
-        self.assertGreaterEqual(len(res["current"]), 5)
 
 
 class StewardNotesTests(unittest.TestCase):
@@ -9516,6 +9672,47 @@ class StewardNotesTests(unittest.TestCase):
             self.assertNotIn("notes check skipped", self.watch()[1])
         self.assertIsNone(self.counts())
         self.assertFalse(D.listening(self.state)["state"] == "listening")
+
+    def test_a_watch_from_another_folder_keeps_the_counts_the_heartbeat_holds(self):
+        # Catches (1.53 review C5): a watch run outside the console's project handing back None, so the heartbeat
+        # it seeded with the stored counts is rewritten without them and the owner's count vanishes.
+        import contextlib
+        import io
+        self.watch()
+        stored = self.counts()
+        self.assertEqual(stored["undeclared"], 1)
+        self.age(86401)
+        here = os.getcwd()
+        try:
+            os.chdir(self.dir)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.AG.main(["--state", str(self.state), "watch", "--timeout", "0", "--poll", "0.05"])
+        finally:
+            os.chdir(here)
+        self.assertEqual(self.counts(), stored)
+
+    def test_a_record_from_the_future_does_not_hold_the_check_off(self):
+        # Catches: a clock set back (or a record written ahead) trusted as "checked a moment ago" for as long as
+        # the skew lasts, so the check never runs and its old counts ride the heartbeat.
+        import time
+        (self.state / self.AG.NOTES_FILE).write_text(json.dumps(
+            {"at": time.time() + 10 * 86400, "counts": {"current": 0, "malformed": 0, "stale": 9, "undeclared": 0}}))
+        self.watch()
+        self.assertEqual((self.counts()["stale"], self.counts()["undeclared"]), (0, 1))
+
+    def test_a_corrupt_record_is_read_as_none_and_the_check_runs(self):
+        # Catches: a damaged .notes-check.json (cut short, not JSON, a bool for a time, a negative count) stopping
+        # the watch before its first heartbeat, or trusted as a time or as counts.
+        for text in ("{not json", json.dumps({"at": True, "counts": {}}), json.dumps([1, 2])):
+            with self.subTest(record=text):
+                (self.state / self.AG.NOTES_FILE).write_text(text)
+                self.assertEqual(self.AG._notes_record(self.state), {})
+                self.assertEqual(self.watch()[0], 3)
+                self.assertEqual(self.counts()["undeclared"], 1)
+        (self.state / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": -1}}))
+        self.assertEqual(self.AG._notes_record(self.state), {"at": 5.0, "counts": None})
+        (self.state / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": 2, "current": 1}}))
+        self.assertEqual(self.AG._notes_record(self.state), {"at": 5.0, "counts": {"current": 1, "stale": 2}})
 
     def test_a_project_that_declares_no_areas_is_left_alone(self):
         # Catches: the steward reporting every CLAUDE.md of a project that never opted in as "undeclared".
