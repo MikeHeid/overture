@@ -5555,17 +5555,8 @@ def agent_request(sock_path: Path, method: str, path: str, body: object = None,
 
 
 def main(argv: list[str] | None = None) -> int:
-    # hard platform guard. The store, names, costs, serverfile and multiserver modules all
-    # rely on fcntl.flock for append-only locking; fcntl is POSIX-only and would ImportError (or,
-    # worse, silently no-op) on Windows. Refuse to start with a clear message instead of corrupting
-    # STATE under Win32 — adversarial review flagged this as a real risk since the dev workspace is
-    # Windows. WSL / Linux / macOS stewards are unaffected.
-    if os.name != "posix":
-        sys.stderr.write(
-            "overture: this server is POSIX-only (systemd user units + Unix sockets + fcntl locks). "
-            "Run inside WSL on Windows, or on Linux/macOS. See https://github.com/MikeHeid/overture#install.\n"
-        )
-        return 2
+    # Native Windows is refused by name in server.py, before this module's imports (fcntl, Unix
+    # sockets) fail there (1.53.2, overture/posix.py); a check here was never reached.
     ap = argparse.ArgumentParser(description="Serve the owner console behind Cloudflare Access.")
     ap.add_argument("--root", type=Path, required=True)
     ap.add_argument("--page", type=Path, default=None,

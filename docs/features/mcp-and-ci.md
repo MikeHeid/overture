@@ -10,7 +10,10 @@ Agents other than Claude Code reach the console through an MCP server,
 `plugin/kit/mcp_server.py`. Any client that speaks the Model Context
 Protocol (Cursor, Codex, Copilot, Claude and others) launches it over
 stdio. Register the project first (`agent.py register`, as for Claude
-Code), then add it to the client's MCP config:
+Code), then add it to the client's MCP config. The MCP server runs where
+the console runs: Linux, macOS or WSL, since it reaches the console's Unix
+socket. On native Windows it refuses in one line on stderr
+([Windows](hosting.md#windows)).
 
 ```json
 {

@@ -8,13 +8,29 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
 
 **What you need:**
 
-- **Python 3.11 or newer.**
+- **Python 3.11 or newer**, as `python3` on PATH: the hooks run as
+  `python3`. Get it from your package manager or [python.org](https://www.python.org/downloads/)
+  (Linux, macOS). On Windows, Python's install manager provides `python3`, from
+  python.org or the [Microsoft Store](https://apps.microsoft.com/search?query=python);
+  the old full installer does not. A missing Python cannot be scanned for,
+  since the scan is Python.
 - **`systemd --user`** (Linux or WSL2) or **launchd** (macOS) to keep the
   server running.
 - **`git`**, which agents use for their own worktrees, and optionally
   **`gh`**, the GitHub CLI, for the PR tab, merging from it, and removing an
   agent's worktree once its PR merges or closes. Without `gh` everything else
   works and agent worktrees are kept until you remove them.
+- **On Windows, WSL2:** the console and Claude Code itself run inside WSL
+  (the CLI there). See `docs/features/hosting.md#windows`.
+
+**The scan (1.53.2).** The first session after an install or upgrade lists
+any of these that is missing, with the command that installs it on your
+platform where one command is right, and a link. Run it again at any time,
+route tools included:
+
+    python3 ~/overture/plugins/overture/kit/onboard.py prereqs [--json]
+
+It exits 1 while a required one is missing. Onboarding runs it first.
 
 **Reaching the console from outside this machine** is your choice, and none
 of the routes needs the others:
@@ -46,7 +62,8 @@ status` and `server.py health` say how it is. The per-project
 `deploy/install.sh` is systemd only and refuses on a Mac. For a Cloudflare
 tunnel, `cloudflared service install` is Cloudflare's own launchd installer.
 
-**WSL2 users:** run `loginctl enable-linger $USER` **once** on first install
+**WSL2 users:** run Claude Code inside WSL too, with the CLI: Claude
+Desktop has no plugins in its WSL sessions. Run `loginctl enable-linger $USER` **once** on first install
 so `systemd --user` units keep running after you close every terminal (the
 default is to tear them down with your last session). WSL itself can still
 stop when no Windows process uses it; a `wsl.exe -d <distro> echo ok` from a

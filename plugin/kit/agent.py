@@ -196,6 +196,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from overture.posix import require  # noqa: E402
+require("agent.py")   # 1.53.2: before the imports below, which fail on native Windows
 from overture import bundle as B  # noqa: E402
 from overture import devices as DV  # noqa: E402
 from overture import doorbell as D  # noqa: E402

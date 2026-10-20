@@ -48,7 +48,7 @@ Confirm with the user:
 Once the user has confirmed, run:
 
 ```bash
-python3 ~/.local/share/overture/kit/agent.py --state <STATE> scaffold-dashboard \
+python3 "${CLAUDE_SKILL_DIR}/../../kit/agent.py" --state <STATE> scaffold-dashboard \
     --project <PROJECT_ROOT> --page <PAGE_PATH> --adapter <ADAPTER_PATH> --name <PROJECT_NAME>
 ```
 

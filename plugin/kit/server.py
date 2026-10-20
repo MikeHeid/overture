@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from overture.posix import require  # noqa: E402
+require("server.py")   # 1.53.2: before the imports below, which fail on native Windows
 
 if __name__ == "__main__":
     if sys.argv[1:2] and sys.argv[1] in ("daemon", "service", "status", "health"):
