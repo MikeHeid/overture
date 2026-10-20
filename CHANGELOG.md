@@ -3005,7 +3005,9 @@ code. The architect defaults are in OPEN-DECISIONS.md, "M1-M4 as built".
 - **`agent.py notes check [--root DIR] [--memory DIR] [--json]`** (no
   `--state` needed) names a stale note (its folder's committed files changed
   since that commit; nested declared folders and the note itself do not
-  count; after a squash merge the note's own last commit counts), an
+  count, nor do the files `"notes_ignore"` lists, such as the version bump's;
+  after a squash merge the last commit that changed the note's header
+  counts), an
   undeclared one (a `CLAUDE.md` in a folder not declared; ignored folders are
   never looked at), and a malformed one. The top-level `CLAUDE.md` is said as
   "always loaded". `--memory DIR` checks `DIR/MEMORY.md` for links to missing
@@ -3037,6 +3039,10 @@ code. The architect defaults are in OPEN-DECISIONS.md, "M1-M4 as built".
   prints passes the lookup's `_short`, so an escape or bidi character shows
   as `?` (S1). A memory link leaving its folder is named and never looked up
   (S3); `%20` and `<a b.md>` links are read as the file they name (C8).
+  `"notes_ignore"` names committed files only, never a folder or a whole
+  area, so a release's version bump does not make a note stale. Clearing
+  and mutation testing added boundary tests (10 lines, 20 changed files
+  shown) and closed every surviving mutant.
 
 ## Ruling lookup before an agent edits (1.52.0)
 
