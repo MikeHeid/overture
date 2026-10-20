@@ -82,11 +82,14 @@ def _parts(path: str) -> list[str]:
     return [p for p in path.replace("\\", "/").split("/") if p not in ("", ".")]
 
 
+_JOINERS = ("‌", "‍")   # ZWNJ, ZWJ: in Persian and Indic names and emoji sequences; neither breaks a line
+
+
 def _unsafe(ch: str) -> bool:
-    """A character a path never carries into the agent's context: any Unicode "other" (control, format such as a
-    bidi override, surrogate, private use, unassigned) or a line or paragraph separator."""
+    """A character that never reaches the agent's context as itself: any Unicode "other" (control, format such as
+    a bidi override, surrogate, private use, unassigned) or a line or paragraph separator; the two joiners pass."""
     cat = unicodedata.category(ch)
-    return cat[0] == "C" or cat in ("Zl", "Zp")
+    return ch not in _JOINERS and (cat[0] == "C" or cat in ("Zl", "Zp"))
 
 
 def clean_path(raw: object) -> str:
@@ -144,19 +147,18 @@ def cited_paths(e: dict) -> list[str]:
     return [p for p in out if p]
 
 
-_CONTROLS = {c: "?" for c in (*range(0x20), *range(0x7F, 0xA0))}   # every Cc character (C0, DEL, C1)
-
-
 def _short(text: object, n: int) -> str:
     """`text` on one line, at most `n` long; a `"` becomes `'`, so it cannot close the quotes it is shown in (S3).
 
     1.52 C2: and no control character survives: a line break is a space (as
     `normalise` makes every whitespace run), any other (an ESC, a NUL) a `?`,
     so a hostile file NAME cannot start a line of its own in an agent's context.
+    Nor can a bidi override reverse what follows it: every `_unsafe`
+    character is a `?`.
     """
     s = A.normalise(text).replace('"', "'") if isinstance(text, str) else ""
     s = s if len(s) <= n else s[:n - 1].rstrip() + "…"
-    return s.translate(_CONTROLS)
+    return "".join("?" if _unsafe(ch) else ch for ch in s)
 
 
 def answer_words(lk: dict) -> str:
