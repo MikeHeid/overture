@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.52.0 released — Ruling lookup before an agent edits** (PR #179, `f2abddc`, zip sha 4f9126de…c1a5): owner R1–R4 (all ★); "Ruling lookup".
+  PreToolUse hook on Edit/Write/MultiEdit/NotebookEdit adds the locked rulings for the file (holds / cites) as additionalContext, never a permission decision; warns when an edit would break one; live over the agent socket (POST /rulings, 1.5 s) with the committed .overture/locked fallback; `agent.py rulings`, MCP `rulings`. Hostile-repo hardening: verified worktree back-links, sanitised names and paths.
+  1443 tests; 78 mutants, every real survivor tested and re-checked independently. Also fixed: a fade-in cut short by a redraw. One unidentified test_server error under load (did not recur). Next: Docker image, real signing, or symbol anchors (Wave 2).
+
 - **v1.51.0 released — The console as a macOS service** (PR #178, `08453b9`, zip sha 3e0ac001…883d): owner D2 ★ B; "Go".
   `server.py service install|uninstall`, `status`, `health` via a launchd LaunchAgent (overture.console; plistlib, atomic 0644; bootout→enable→bootstrap gui/<uid>; login-session hint); every hint platform-aware; install.sh refuses on macOS. Also fixed (since 1.0): PRs tab / projects list stuck on "Loading…" after a redraw.
   1375 tests; 56 mutants, every real survivor tested and re-checked by an independent runner. Not yet run on a real Mac (fake launchctl). Next: owner to try it on a Mac; MCP real-client test (owner).
@@ -156,7 +160,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.51.0 (PR #178), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.52.0 (PR #179), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
