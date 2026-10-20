@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.53.2 released — Windows, honestly** (PR #182, `6dc574a`, zip sha ae4dd4cf…d10c): owner "Honest + no errors (Recommended)" after a Windows audit (scratchpad windows-audit.md), plus the owner's prerequisite scan on install.
+  Kit entry scripts refuse by name on native Windows (overture/posix.py); onFailure "continue" on the PreToolUse hooks; onboarding says to onboard in WSL; install banner + hosting.md tell the truth (Claude Desktop has no plugins in WSL sessions; console + CLI run in WSL). New overture/prereqs.py: banner lists only what is missing with per-platform commands + links; `onboard.py prereqs [--json]`; console-onboard runs it first (stops on native Windows).
+  1513 tests; install commands checked against vendor docs (apt gh replaced by GitHub's repo link). Not run on real Windows. Next: native Windows agent side needs a TCP agent door (owner decision, not taken); the 1.53 A/B check.
+
 - **v1.53.1 released — Hooks on Windows** (PR #181, `42410f0`, zip sha 231d5712…9736): a bug report pasted by the owner (Windows 11, Store Python, 1.49.0).
   Every hook failed at import on native Windows Python (top-level `import fcntl`, and `os.O_NONBLOCK`/`O_NOFOLLOW`/`O_CLOEXEC`); ruling_lookup also failed through the kit's atfile.py. Now optional, with an lstat symlink check where O_NOFOLLOW is missing; `/overture:as` there refuses by name (needs POSIX locks: use WSL); ruling_lookup stands down only where fcntl is missing. POSIX flags unchanged (tested).
   1493 tests; cleared twice independently. Not run on a real Windows machine (simulated). Next: the owner or the reporter confirms on Windows; the 1.53 A/B check.
@@ -168,7 +172,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.53.1 (PR #181), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.53.2 (PR #182), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
