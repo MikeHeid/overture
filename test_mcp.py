@@ -115,6 +115,26 @@ class McpEndToEndTests(_Live, unittest.TestCase):
         self.assertFalse(err, text)
         self.assertIn("LANE.1/Q7", json.loads(text)["stale"])
 
+    def test_rulings_lists_the_rulings_on_a_path_as_the_socket_does(self):
+        # Catches (1.52.0): a `rulings` tool that never reaches the console, reads another shape than the
+        # agent socket's, or drops one of several paths.
+        self.client.tool("ask", question=self.question())
+        code, a = self.req("POST", "/api/answer", self.answer(qid="LANE.1/Q7", picks=["three"],
+                                                              nonce="mcpanswer002"), tok=token())
+        self.assertEqual(code, 200, a)
+        self.assertEqual(self.req("POST", "/api/lock", {"qid": "LANE.1/Q7", "answer": a["record"]["id"],
+                                                        "nonce": "mcplock00002"}, tok=token())[0], 200)
+        text, err = self.client.tool("rulings", paths=["spec.md", "docs/"])
+        self.assertFalse(err, text)
+        doc = json.loads(text)
+        self.assertEqual(doc["source"], "server")
+        self.assertEqual([h["qid"] for h in doc["rulings"]["spec.md"]], ["LANE.1/Q7"])
+        self.assertEqual(doc["rulings"]["docs/"], [])
+        self.assertEqual(doc["rulings"], self.agent_post("/rulings", {"paths": ["spec.md", "docs/"]})[1]["rulings"])
+        text, err = self.client.tool("rulings", paths=["../x"])
+        self.assertTrue(err)
+        self.assertIn("leaves the project", text)
+
     def test_a_refused_question_comes_back_as_a_tool_error_naming_why(self):
         # Catches: a refusal turned into a protocol error (the model never sees it, so cannot fix it),
         # or one reported as success; and a re-ask of a minted qid getting through.
@@ -219,7 +239,7 @@ class McpProtocolTests(unittest.TestCase):
         # checkout writer (the exports, lessons --fold) exposed to any client that connects.
         tools = self.call("tools/list")["result"]["tools"]
         self.assertEqual({t["name"] for t in tools}, {"todo", "view", "answers", "check", "lesson_match", "health",
-                                                      "ask", "reply", "working"})
+                                                      "ask", "reply", "working", "rulings"})
         for t in tools:
             self.assertFalse(t["inputSchema"]["additionalProperties"], t["name"])
 

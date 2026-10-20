@@ -2990,6 +2990,41 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Ruling lookup before an agent edits (1.52.0)
+
+The owner's R1 to R4 (2026-10-19, every recommendation): before an agent
+edits a file it reads the owner's rulings on that file, and is warned by name
+when the edit would break one. It is never blocked. The architect defaults
+L1 to L9 are in OPEN-DECISIONS.md, "R1-R4 as decided".
+
+- **A PreToolUse hook on Edit, Write, MultiEdit and NotebookEdit**
+  (`plugin/hooks/ruling_lookup.py`, registered projects only) adds the
+  rulings to the agent's context, each labelled **holds on this file** (a
+  deciding condition is on it) or **cites this file** (its source or
+  evidence is). It prints `additionalContext` only, never a permission
+  decision, so the edit goes through the owner's normal prompt. Shown once
+  per session per file, and again when the rulings change; at most five
+  rulings and 2000 characters, then the command for the rest. A stale
+  ruling is marked; a withdrawn, untracked or superseded one is not listed.
+- **Would-break.** The hook works out the file after the edit (Write's
+  content, Edit's replacement, MultiEdit's edits in order) and names each
+  ruling whose excerpt would be gone or whose file hash would change; a hash
+  breaks on any change, and the warning says so. A notebook, a file past
+  2 MiB, or an `old_string` that is not there is informed only.
+- **Live, with fallback.** The rulings come from the console server's agent
+  socket (`POST /rulings`, the one server's `/p/<project>/rulings` with its
+  token) within 1.5 s; otherwise from the rulings committed in the checkout,
+  and the note says so. A 1.50 agent worktree is mapped to its main checkout
+  by its `.git` file, with no git run. Any error prints nothing.
+- **`agent.py rulings --path P [--path DIR/] [--json]`** and an MCP
+  `rulings` tool give the same entries. Paths are project-relative; `..`,
+  absolute paths and secrets files are refused by name.
+- `overture/lookup.py` holds the matching, shared by all three; rulecheck's
+  reading of an export's deciding conditions moved there.
+- Docs: docs/features/inbox-and-rulings.md, mcp-and-ci.md, the README's hook
+  table, RUNBOOK ("The ruling lookup says nothing"), the console-process and
+  console-ux skills.
+
 ## The console as a macOS service (1.51.0)
 
 The owner's D2 (B, "Go" on 2026-10-19): the command Linux and WSL got in

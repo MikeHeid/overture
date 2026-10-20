@@ -318,7 +318,7 @@ friction aimed at decision quality rather than speed.
 
 | Lane | Progress | Next items |
 |---|---|---|
-| Core decision engine | 70% | Symbol/AST anchors; "rulings touching this path" lookup before an agent edits; rulings as a CI check; an open spec for the schema; ruling search and dependencies |
+| Core decision engine | 75% | Symbol/AST anchors; an open spec for the schema; ruling search and dependencies. Shipped: rulings as a CI check (1.36), the "rulings touching this path" lookup before an agent edits (1.52) |
 | Trust & security | 65% | sigstore/minisign signing; operator identity on locks; same-UID isolation recipe; built-in webhook HMAC; collaborator-only backlinks |
 | Ecosystem & integrations | 40% | MCP server for non-Claude agents; Linear/Jira adapters; Slack/email doorbell; ruling-aware PR comments; MADR/ADR templates |
 | Onboarding & distribution | 35% | Identity backend other than Cloudflare (Tailscale/OIDC/solo loopback); launchd and Docker; hosted demo; 5-minute path with no adapter; fix the USER-GUIDE drift |

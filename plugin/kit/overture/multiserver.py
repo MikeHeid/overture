@@ -69,7 +69,7 @@ FORBIDDEN = {"error": "forbidden"}   # one body for every refusal at the agent d
 # unread body of that 404, and of every 403 and 503 here, within its own total deadline.
 POST_ROUTES = {"/cursor", "/working", "/reanchor", "/visual", "/asset", "/ux-export", "/component-source", "/design-inventory", "/visual-export", "/history-blob", "/history-specs",
                "/items", "/prs", "/issues", "/page-snapshot", "/anchor-proposal", "/refactor-advice",
-               "/playbook", "/item-move", *SV.AGENT_ROUTES}
+               "/playbook", "/item-move", "/rulings", *SV.AGENT_ROUTES}
 BEARER = re.compile(r"^Bearer (ck1_[A-Za-z0-9_-]{43})\Z")
 NO_HASH = "0" * 64   # compared against when a project has no hash, so an unknown project costs the same compare
 

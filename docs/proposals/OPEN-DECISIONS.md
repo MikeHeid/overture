@@ -213,6 +213,52 @@ Weighed and not chosen: the committed files only, or the live server only
 (R1 B, C); inform only, or blocking a breaking edit (R2 B, C); no automatic
 hook, or the hook alone (R3 B, C); the deciding conditions only (R4 B).
 
+### R1-R4 as decided (architect defaults, 1.52)
+
+The lead's architect defaults for the owner's four picks.
+
+- **L1** One stdlib module, `overture/lookup.py`, safe to import from a hook
+  (no store or server at import time): `match`, `would_break`,
+  `from_export_dir` (rulecheck's reader), and one entry shape for every
+  delivery: qid, item, question, answer (short), locked_at, locked_by_name
+  (a short name, never an email), label `holds` or `cites`, the deciding
+  conditions on the path, `stale`. rulecheck's `conditions` moved there.
+- **L2** The server answers on the agent socket only, from the store's
+  current rulings built as `fold.py export` builds them: settled rulings
+  (withdrawn, kept unchecked, superseded) are left out, stale ones flagged.
+  Paths are relative and normalised; `..`, absolute paths and secrets files
+  are refused by name; a trailing `/` is a folder. No git, no project code.
+  **Changed in building:** the route is `POST /rulings` with `{"paths": [...]}`,
+  not `GET /rulings?path=P`, because the one server's `/p/<project>/…`
+  admission takes no query string; POST is how the agent door already does
+  its other reads (`/ux-export`, `/visual-export`).
+- **L3** The file's checkout is the nearest folder holding `.git` (a folder,
+  or a worktree's file whose `gitdir:` names the main checkout), found by
+  walking up, with no git run. The console is the registry's for that
+  checkout, its main checkout, or the session's directory; an unregistered
+  checkout gets nothing.
+- **L4** After-edit text: Write's content; Edit's first replacement (all with
+  `replace_all`); MultiEdit's edits in order. An `old_string` not found, a
+  NotebookEdit, or a file past `anchors.MAX_READ` is informed only. A
+  whole-file hash breaks on any change, and the warning says so. A condition
+  that already fails before the edit is not warned again.
+- **L5** The hook prints `hookSpecificOutput` with `additionalContext` only,
+  never `permissionDecision` (no allow, which skips the owner's prompt; no
+  deny, which R2 ruled out). Checked against the Claude Code hooks reference:
+  PreToolUse takes `additionalContext`, and a hook with no decision leaves
+  the normal permission flow in place.
+- **L6** A file's rulings are said once per session, again when the set
+  changes; a would-break warning every time. At most 5 rulings, each line at
+  most 300 characters, the note at most 2000, then "and N more" with the
+  command. Nothing for a file with no rulings.
+- **L7** Socket timeout 1.5 s, hook timeout 5 s, fail open and silent. The
+  committed rulings answer only when the socket is absent, refuses, times
+  out or runs a kit with no lookup, and the note says so.
+- **L8** `agent.py rulings --path P [--path Q] [--json]`, exit 0 unless a
+  path is refused (2); an MCP `rulings` tool, `{paths: [...]}`.
+- **L9** The writing skills (console-process, console-ux) say once that the
+  hook shows rulings before an edit, and to run `rulings --path DIR/` first.
+
 ## Sections, pop-outs and a calmer Inbox (decided 2026-10-16)
 
 The owner asked: "do multiple menus (with animation)… configuration and people

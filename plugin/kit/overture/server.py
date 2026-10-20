@@ -111,6 +111,7 @@ from . import designs as DG
 from . import prs as PR
 from . import issues as IS
 from . import lessons as LN   # owner's withdraw/untrack reasons become lessons future sessions read
+from . import lookup as L     # 1.52.0: the ruling lookup before an agent edits
 from . import tickets as TK
 from . import assets as AS
 from . import names as N
@@ -3122,6 +3123,32 @@ class Console:
         return {"stale": A.check(self.store, self.cfg.root, self._status(items), history=self._history()),
                 **self._history_note()}
 
+    def rulings(self, body: object) -> dict:
+        """The owner's rulings on each path, for the ruling lookup before an agent edits (1.52.0, owner R1-R4).
+
+        A read, like `check`. Built from the store's CURRENT rulings exactly as
+        `fold.py export` writes them (the deciding conditions, a settled ruling
+        carrying its `outcome`, the owner-set short name and never the email),
+        then matched by `lookup`, so the committed fallback answers in the same
+        shape. Reads only the store and the files the conditions name, through
+        `anchors.Tree`: no git, no project code (Q23, Q24).
+        """
+        paths = body.get("paths") if isinstance(body, dict) else None
+        if not isinstance(paths, list) or not 1 <= len(paths) <= L.MAX_PATHS:
+            raise RequestError(400, f"`paths` is a list of 1 to {L.MAX_PATHS} project-relative paths")
+        try:
+            clean = [L.clean_path(p) for p in paths]
+        except L.PathRefused as e:
+            raise RequestError(400, str(e)) from None
+        from . import fold as F   # here: the export lives with the fold, which the server needs for nothing else
+        entries = list(F.export(self.store, None, F.lock_names_beside(self.cfg.store)).values())
+        try:
+            statuses, known = self._status(self.items()), True
+        except Exception:  # noqa: BLE001 - no register just now: an item status is then unchecked, never "holds"
+            statuses, known = {}, False
+        holds = L.holds_fn(A.Tree(self.cfg.root, statuses), known)
+        return {"source": "server", "rulings": {p: L.match(entries, p, holds) for p in clean}}
+
     @staticmethod
     def _no_git(key: str) -> dict:
         """`{key: "unavailable (no git in the server)"}` once the seam is closed (as `serve` closes it), else {}."""
@@ -5160,6 +5187,8 @@ class AgentHandler(_Handler):
                 return self._send(200, {"working": working, "branches": self.console.read_branches()})
             if self.path == "/reanchor":
                 return self._send(200, self.console.reanchor(self._body()))
+            if self.path == "/rulings":   # 1.52.0: a read (a POST for its list of paths); the agent door only
+                return self._send(200, self.console.rulings(self._body()))
             if self.path == "/visual":  # 0.8.1: the server stores the file in STATE, never in the project
                 return self._send(200, self.console.add_visual(self._body(), agent))
             if self.path == "/asset":   # 1.32: a screenshot or recording, stored in STATE (FEED-ASSETS.md)

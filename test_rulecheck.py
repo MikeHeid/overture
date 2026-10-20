@@ -10,11 +10,14 @@ makes the change a pull request would and runs `rulecheck.py` as CI does.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -529,6 +532,359 @@ class Action(Repo):
         rc, out, _, calls = self.step("7")
         self.assertEqual((rc, out), (0, "pass"))
         self.assertEqual(len(calls), 1)   # only the lookup for an earlier comment
+
+
+# -- 1.52.0: the ruling lookup before an agent edits (owner R1-R4) ------------------------------------
+
+from overture import lookup as L  # noqa: E402
+
+HOOK = Path(__file__).resolve().parent / "plugin" / "hooks" / "ruling_lookup.py"
+LEDGER = {"kind": "excerpt", "path": "src/ledger.py", "text": "return round_half_even(cents)"}
+
+
+def exported(**over) -> dict:
+    """An entry shaped as `fold.export` writes one, for the matching rules alone."""
+    e = {"qid": "LANE.1/Q9", "item": "LANE.1", "question": "Which?", "source": "docs/x.md",
+         "valid_if": [], "locked": {"picked_labels": ["Option B"], "own_text": "", "locked_at": "2026-10-13T00:00:01Z"}}
+    e.update(over)
+    return e
+
+
+class Lookup(Repo):
+    """Which rulings bear on a path, how they are labelled, and what an edit would break."""
+
+    def entries(self):
+        return L.from_export_dir(self.root / ".overture/locked")
+
+    def test_a_deciding_condition_on_the_file_holds_on_it(self):
+        # Catches: a lookup that finds nothing in a real export, or one that loses what the owner answered.
+        [h] = L.match(self.entries(), "src/pay.py")
+        self.assertEqual((h["qid"], h["label"], h["conditions"], h["stale"]), ("LANE.1/Q1", "holds", [EXCERPT], False))
+        self.assertIn("Option B", h["answer"])
+        self.assertEqual(L.match(self.entries(), "README"), [])
+
+    def test_a_source_or_evidence_path_only_cites_the_file(self):
+        # Catches: every path a ruling mentions labelled "holds", so an agent is told an edit can break a
+        # ruling no condition of which reads the file.
+        es = [exported(source="src/pay.py:2"),
+              exported(qid="LANE.1/Q8", evidence=[{"cite": "src/pay.py:1-2", "text": "x"}]),
+              exported(qid="LANE.1/Q7", source="src/other.py")]
+        self.assertEqual([(h["qid"], h["label"], h["conditions"]) for h in L.match(es, "src/pay.py")],
+                         [("LANE.1/Q8", "cites", []), ("LANE.1/Q9", "cites", [])])
+
+    def test_the_deciding_order_is_the_exports_a_reanchor_overrides_valid_if(self):
+        # Catches: a lookup that reads valid_if after an `anchor` record moved the ruling to another file:
+        # it would warn about the old file and say nothing about the one that now decides it.
+        lk = self.store.lock_of(self.a1["id"])
+        self.store.append({"type": "anchor", "schemaVersion": 1, "qid": "LANE.1/Q1", "lock": lk["id"],
+                           "anchors": [LEDGER], "basis": "evidence", "by": "agent", "nonce": "reanchor0001"})
+        self.export()
+        self.assertEqual([(h["label"], h["conditions"]) for h in L.match(self.entries(), "src/ledger.py")],
+                         [("holds", [LEDGER])])
+        self.assertEqual([h["label"] for h in L.match(self.entries(), "src/pay.py")], ["cites"])  # its source
+
+    def test_a_settled_ruling_is_never_listed(self):
+        # Catches: a withdrawn or superseded ruling shown as one to follow, which is the owner's past word.
+        for kind in ("withdrawn", "untracked", "superseded"):
+            with self.subTest(kind=kind):
+                e = {**self.entries()[0], "outcome": {"kind": kind}}
+                self.assertEqual(L.match([e], "src/pay.py"), [])
+
+    def test_a_stale_ruling_is_listed_and_flagged(self):
+        # Catches: a stale ruling hidden (the agent never learns it exists) or shown as if it still held.
+        self.break_code()
+        [h] = L.committed(self.root, ["src/pay.py"])["src/pay.py"]
+        self.assertTrue(h["stale"])
+        self.assertIn("STALE", L.line_of(h))
+
+    def test_a_trailing_slash_is_everything_under_the_folder(self):
+        # Catches: a folder lookup that matches by string prefix ("sr" finding src/) or not at all.
+        self.assertEqual(len(L.match(self.entries(), "src/")), 1)
+        for p in ("sr/", "src", "src/pay"):
+            self.assertEqual(L.match(self.entries(), p), [], p)
+
+    def test_paths_are_normalised_and_refused_by_name(self):
+        # Catches: "./src//pay.py" missing the ruling on src/pay.py; and a lookup that reads (or shows)
+        # a path outside the project or a secrets file.
+        self.assertEqual(L.clean_path("./src//pay.py"), "src/pay.py")
+        self.assertEqual(L.clean_path("src/"), "src/")
+        for bad, words in (("../x", "leaves the project"), ("/etc/passwd", "absolute"), (".env", ".env"),
+                           ("a/.git/config", ".git"), ("", "non-empty"), (".", "names no file"), (3, "string")):
+            with self.subTest(bad=bad), self.assertRaisesRegex(L.PathRefused, words):
+                L.clean_path(bad)
+
+    def test_a_forged_committed_file_is_refused_not_read(self):
+        # Catches: a fallback that trusts any JSON in the folder, so a branch could plant a "ruling".
+        self.ruling().write_text(json.dumps({"qid": "X"}))
+        with self.assertRaises(RC.CheckError):
+            self.entries()
+
+
+class WouldBreak(unittest.TestCase):
+    """What an edit's result would break, worked out before the edit runs."""
+
+    def test_an_excerpt_kept_moved_or_rewrapped_is_not_broken(self):
+        # Catches: a check by line number (adding an import above would warn) or by exact whitespace.
+        for new in ("import x\n\n" + CITED, "def charge(cents):\n    return\n        round_half_even(cents)\n"):
+            self.assertEqual(L.would_break([EXCERPT], "src/pay.py", new, CITED), [])
+
+    def test_an_excerpt_removed_is_broken_and_named(self):
+        # Catches: a warning that never fires, which is the whole point of R2.
+        [b] = L.would_break([EXCERPT], "src/pay.py", "def charge(cents):\n    return int(cents)\n", CITED)
+        self.assertEqual(b["condition"], EXCERPT)
+        self.assertIn("changes or removes", b["words"])
+
+    def test_a_whole_file_hash_breaks_on_any_change_and_says_so(self):
+        # Catches: a hash condition read as "holds" after an edit (it cannot), or a warning that hides why.
+        sha = {"kind": "file_sha256", "path": "src/pay.py", "sha256": hashlib.sha256(CITED.encode()).hexdigest()}
+        [b] = L.would_break([sha], "src/pay.py", CITED + "# note\n", CITED)
+        self.assertIn("any change", b["words"])
+        self.assertEqual(L.would_break([sha], "src/pay.py", CITED, CITED), [])
+
+    def test_a_condition_already_failing_is_not_warned_again(self):
+        # Catches: every edit of a file with a stale ruling warning that it breaks it (it is broken already).
+        self.assertEqual(L.would_break([EXCERPT], "src/pay.py", "x = 1\n", "y = 2\n"), [])
+
+    def test_edit_replaces_once_or_all(self):
+        # Catches: replace_all ignored (the check then reads a file the edit will not produce).
+        ti = {"file_path": "/p/f", "old_string": "a", "new_string": "b"}
+        self.assertEqual(L.post_edit("Edit", ti, "a a a"), "b a a")
+        self.assertEqual(L.post_edit("Edit", {**ti, "replace_all": True}, "a a a"), "b b b")
+
+    def test_multiedit_applies_its_edits_in_order(self):
+        # Catches: edits applied to the original each time, or in reverse.
+        edits = [{"old_string": "x", "new_string": "y"}, {"old_string": "y", "new_string": "z"}]
+        self.assertEqual(L.post_edit("MultiEdit", {"edits": edits}, "x"), "z")
+
+    def test_no_check_when_the_result_cannot_be_known(self):
+        # Catches: a warning computed from a guess: an old_string the tool will not find, a notebook's
+        # cells, or a file that could not be read.
+        ti = {"old_string": "missing", "new_string": "b"}
+        self.assertIsNone(L.post_edit("Edit", ti, "a"))
+        self.assertIsNone(L.post_edit("MultiEdit", {"edits": [{"old_string": "a", "new_string": "b"}, ti]}, "a"))
+        self.assertIsNone(L.post_edit("NotebookEdit", {"new_source": "x"}, "a"))
+        self.assertIsNone(L.post_edit("Edit", {"old_string": "a", "new_string": "b"}, None))
+        self.assertEqual(L.post_edit("Write", {"content": "new"}, None), "new")
+
+
+class _Registered(Repo):
+    """The checkout registered in a temporary user registry, as `agent.py register` writes it."""
+
+    def setUp(self):
+        super().setUp()
+        d = Path(self._td.name)
+        self.cfg_home, self.xstate, self.state = d / "cfg", d / "xstate", d / "state"
+        self.state.mkdir()
+        self.registered(self.root)
+
+    def registered(self, *roots: Path) -> None:
+        (self.cfg_home / "overture").mkdir(parents=True, exist_ok=True)
+        (self.cfg_home / "overture" / "projects.json").write_text(json.dumps(
+            {"projects": {os.path.realpath(r): {"state": str(self.state), "kit": str(KIT)} for r in roots}}))
+
+    def env(self) -> dict:
+        e = {k: v for k, v in os.environ.items() if k not in ("OVERTURE_AGENT", "CLAUDE_PROJECT_DIR")}
+        e.update(XDG_CONFIG_HOME=str(self.cfg_home), XDG_STATE_HOME=str(self.xstate))
+        return e
+
+
+class LookupHook(_Registered):
+    """The PreToolUse hook on Edit|Write|MultiEdit|NotebookEdit: it informs and warns, and never decides."""
+
+    def payload(self, tool="Edit", path="src/pay.py", sid="sess1", cwd=None, **ti):
+        key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+        if tool == "Edit":
+            ti = {"old_string": "def charge", "new_string": "def charge", **ti}
+        return {"session_id": sid, "cwd": str(cwd or self.root), "hook_event_name": "PreToolUse",
+                "tool_name": tool, "tool_input": {key: str((cwd or self.root) / path), **ti}}
+
+    def hook(self, stdin=None, **kw) -> tuple[int, str, float]:
+        t = time.monotonic()
+        r = subprocess.run([sys.executable, str(HOOK)], input=stdin if stdin is not None else json.dumps(
+            self.payload(**kw)), env=self.env(), capture_output=True, text=True, timeout=30)
+        self.assertNotIn("permissionDecision", r.stdout)   # L5: never allow (no owner prompt), never deny (R2)
+        return r.returncode, r.stdout, time.monotonic() - t
+
+    def note(self, **kw) -> str | None:
+        rc, out, _ = self.hook(**kw)
+        self.assertEqual(rc, 0)
+        if not out.strip():
+            return None
+        o = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(set(o), {"hookEventName", "additionalContext"})
+        self.assertEqual(o["hookEventName"], "PreToolUse")
+        return o["additionalContext"]
+
+    def test_hooks_json_runs_it_on_every_editing_tool(self):
+        # Catches: a lookup nothing runs, one matched to every tool, or a timeout past the 5 s budget.
+        hooks = json.loads((HOOK.parent / "hooks.json").read_text())["hooks"]["PreToolUse"]
+        [entry] = [h for h in hooks if "ruling_lookup.py" in json.dumps(h)]
+        self.assertEqual(entry["matcher"], "Edit|Write|MultiEdit|NotebookEdit")
+        [h] = entry["hooks"]
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/hooks/ruling_lookup.py", h["command"])
+        self.assertLessEqual(h["timeout"], 5)
+
+    def test_with_no_server_it_says_the_committed_rulings_and_where_they_came_from(self):
+        # Catches: a lookup that says nothing when the console is down (R1: fall back, never fail closed),
+        # or one that does not say its answer may be behind the console's.
+        text = self.note()
+        self.assertIn("holds on this file: LANE.1/Q1", text)
+        self.assertIn(L.FALLBACK_NOTE, text)
+        self.assertIn("Option B", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_a_file_with_no_rulings_gets_nothing(self):
+        # Catches: a note on every edit, which teaches the agent to skip them.
+        self.assertIsNone(self.note(path="README"))
+        self.assertIsNone(self.note(path="src/new.py", tool="Write", content="x = 1\n"))
+
+    def test_said_once_per_session_and_again_when_the_rulings_change(self):
+        # Catches: the same list before every edit of a file (noise), one shown to a single session ever,
+        # and a re-lock that the agent never hears about.
+        self.assertIsNotNone(self.note())
+        self.assertIsNone(self.note())
+        self.assertIsNotNone(self.note(sid="sess2"))
+        a2 = self.store.append(answer(picks=("a",), supersedes=self.a1["id"], reason="A after all"))
+        self.store.append(lock(a2))
+        self.export()
+        self.assertIn("Option A", self.note())
+
+    def test_an_edit_that_breaks_a_ruling_is_always_warned_by_name(self):
+        # Catches: a warning swallowed by the once-per-session rule, or a "warning" that blocks (R2).
+        self.assertIsNotNone(self.note())
+        text = self.note(old_string="round_half_even(cents)", new_string="int(cents)")
+        self.assertIn("WARNING: this edit would break the owner's ruling LANE.1/Q1", text)
+        self.assertIn("not blocked", text)
+        self.assertNotIn("holds on this file", text)   # the list was said already this session
+        for tool, ti in (("Write", {"content": "def charge(c):\n    return c\n"}),
+                         ("MultiEdit", {"edits": [{"old_string": "round_half_even", "new_string": "floor"}]})):
+            with self.subTest(tool=tool):
+                self.assertIn("WARNING", self.note(tool=tool, sid="s-" + tool, **ti))
+
+    def test_notebooks_and_huge_files_are_only_informed(self):
+        # Catches: a would-break check run on text it cannot know (a notebook's cells) or read (past MAX_READ).
+        self.assertNotIn("WARNING", self.note(tool="NotebookEdit", new_source="x"))
+        (self.root / "src/pay.py").write_text(CITED + "#" * (2 << 20))
+        text = self.note(sid="big", old_string="round_half_even(cents)", new_string="int(cents)")
+        self.assertIn("LANE.1/Q1", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_many_rulings_are_capped_and_the_rest_named(self):
+        # Catches: a note that floods the context; and a cut list that does not say how to see the rest.
+        for n in range(2, 10):
+            self.store.append(question(qid=f"LANE.1/Q{n}", valid_if=[EXCERPT], source="src/pay.py:2"))
+            self.store.append(lock(self.store.append(answer(qid=f"LANE.1/Q{n}", own_text="x" * 400))))
+        self.export()
+        text = self.note()
+        self.assertLessEqual(len(text), L.SAY_TOTAL)
+        self.assertLessEqual(sum(1 for ln in text.splitlines() if ln.startswith("- holds")), L.SAY_RULINGS)
+        self.assertIn("more: `python3 ", text)
+        self.assertIn("rulings --path src/pay.py`", text)
+        self.assertTrue(all(len(ln) <= L.SAY_LINE for ln in text.splitlines() if ln.startswith("- ")))
+
+    def test_it_fails_open_and_silent(self):
+        # Catches: a hook that errors (Claude Code shows it on every edit) or blocks when it cannot read.
+        for stdin in ("not json", "", "[1]", json.dumps({"tool_name": "Edit", "tool_input": {"file_path": 3}})):
+            rc, out, _ = self.hook(stdin=stdin)
+            self.assertEqual((rc, out), (0, ""), stdin)
+        self.ruling().write_text("{forged")
+        self.assertIsNone(self.note())
+        (self.cfg_home / "overture" / "projects.json").write_text("not json")
+        self.assertIsNone(self.note(sid="other"))
+
+    def test_an_unregistered_checkout_gets_nothing(self):
+        # Catches: a hook that reads any clone's committed files: trust comes from the user's registry.
+        self.registered()
+        self.assertIsNone(self.note())
+
+    def test_a_linked_worktree_maps_to_its_main_checkout_without_git(self):
+        # Catches: a 1.50 agent worktree (a `.git` FILE, outside the registered root) getting nothing.
+        wt = Path(self._td.name) / "wt"
+        git(self.root, "worktree", "add", "-q", "-b", "agent/x", str(wt))
+        self.assertEqual(L.main_checkout(wt), Path(os.path.realpath(self.root)))
+        self.assertEqual(L.project_root(wt / "src"), Path(os.path.realpath(wt)))
+        self.assertIn("LANE.1/Q1", self.note(cwd=wt))
+
+    def serve(self, handler) -> None:
+        """A console stand-in on STATE/agent.sock, answering POST /rulings with `handler(body)`."""
+        import http.server
+        import socketserver
+        import threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def address_string(self):
+                return "agent"
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                code, out = handler(self.path, body)
+                data = json.dumps(out).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        srv = socketserver.UnixStreamServer(str(self.state / "agent.sock"), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+
+    def test_a_live_server_answers_first(self):
+        # Catches: a hook that always reads the committed files (R1: the running server first, it has
+        # rulings locked since the last export).
+        seen = []
+        hit = {"qid": "LIVE/Q9", "item": "LIVE", "question": "Live?", "answer": "Yes", "label": "holds",
+               "locked_at": "2026-10-19T00:00:00Z", "conditions": [EXCERPT], "stale": False}
+        self.serve(lambda path, body: (seen.append((path, body)) or (200, {"rulings": {"src/pay.py": [hit]}})))
+        text = self.note()
+        self.assertIn("LIVE/Q9", text)
+        self.assertNotIn(L.FALLBACK_NOTE, text)
+        self.assertEqual(seen, [("/rulings", {"paths": ["src/pay.py"]})])
+
+    def test_a_server_that_never_answers_falls_back_within_the_budget(self):
+        # Catches: a hook that waits on a hung console past Claude Code's 5 s timeout, which then
+        # kills it and the agent sees nothing at all.
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(str(self.state / "agent.sock"))
+        s.listen(1)   # accepts the connection into the backlog, and never answers
+        self.addCleanup(s.close)
+        rc, out, took = self.hook()
+        self.assertLess(took, 4.0)
+        self.assertIn(L.FALLBACK_NOTE, json.loads(out)["hookSpecificOutput"]["additionalContext"])
+
+
+class RulingsCommand(_Registered):
+    """`agent.py rulings --path P`: the same lookup, for a person or a skill."""
+
+    def agent(self, *args) -> tuple[int, str, str]:
+        r = subprocess.run([sys.executable, str(KIT / "agent.py"), "--state", str(self.state), "rulings", *args],
+                           env=self.env(), cwd=self.root, capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout, r.stderr
+
+    def test_text_names_each_path_and_says_where_the_answer_came_from(self):
+        # Catches: a command that reads only one --path, or hides that the server was not asked.
+        rc, out, err = self.agent("--path", "src/pay.py", "--path", "README")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("src/pay.py:\n- holds on this file: LANE.1/Q1", out)
+        self.assertIn("README:\n  no rulings", out)
+        self.assertIn(L.FALLBACK_NOTE, out)
+
+    def test_json_is_the_shared_entry_shape(self):
+        # Catches: a second shape for the same answer, which the MCP client and the skills would then parse twice.
+        rc, out, err = self.agent("--path", "src/", "--json")
+        self.assertEqual(rc, 0, err)
+        doc = json.loads(out)
+        self.assertEqual(doc["source"], "committed")
+        self.assertEqual(doc["rulings"], L.committed(self.root, ["src/"]))
+
+    def test_a_bad_path_is_refused_by_name(self):
+        # Catches: a path outside the project looked up, or refused with no reason.
+        rc, out, err = self.agent("--path", "../etc/passwd")
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("leaves the project", err)
 
 
 if __name__ == "__main__":

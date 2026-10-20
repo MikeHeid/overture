@@ -68,6 +68,7 @@ ruling) holds for every agent until the code it rests on changes.
    {"kind": "excerpt", "path": "docs/x.md", "text": "the exact sentence"}; never hash a big living file.
 4. The owner answers later. Poll `answers` (or `view` with `since`) for it; do not re-ask.
 5. `check` lists stale rulings, condition by condition. A stale ruling's evidence moved: do not rely on it.
+6. Before editing a file, `rulings` with its path (or `dir/` before a larger change) lists the rulings on it.
 """
 
 _READ = {"readOnlyHint": True, "openWorldHint": False}
@@ -120,8 +121,14 @@ TOOLS = {
                "reply_to": {"type": "string", "description": "the record id replied to"}}, _WRITE),
     "working": ("Show the owner 'agent active' on these items; it lapses after an hour.",
                 {"items": {"type": "array", "items": _ITEM, "minItems": 1}}, _WRITE),
+    "rulings": ("The owner's rulings on these files or folders, BEFORE you edit them (1.52.0). Each is labelled "
+                "`holds` (a condition deciding it is on the path: an edit can break it) or `cites` (the path is "
+                "its source or evidence: context). Follow them; a `stale` one's evidence moved since it was locked.",
+                {"paths": {"type": "array", "minItems": 1, "maxItems": 50, "items": {
+                    "type": "string", "description": "project-relative; a folder ends in /"}}}, _READ),
 }
-REQUIRED = {"lesson_match": ["text", "item"], "ask": ["question"], "reply": ["item", "text"], "working": ["items"]}
+REQUIRED = {"lesson_match": ["text", "item"], "ask": ["question"], "reply": ["item", "text"], "working": ["items"],
+            "rulings": ["paths"]}
 
 
 class BadArguments(Exception):
@@ -175,6 +182,11 @@ def _argv(name: str, args: dict, tmp: Path) -> list[str]:
         if not isinstance(items, list) or not items or not all(isinstance(i, str) and i and i != "--" for i in items):
             raise BadArguments("`items` must be a non-empty list of item ids, none exactly `--`")
         return ["working", "--", *items]
+    if name == "rulings":
+        paths = args.get("paths")
+        if not isinstance(paths, list) or not paths or not all(isinstance(p, str) and p for p in paths):
+            raise BadArguments("`paths` must be a non-empty list of project-relative paths")
+        return ["rulings", "--json", *(f"--path={p}" for p in paths)]
     q = args.get("question")
     if not isinstance(q, dict):
         raise BadArguments("`question` must be a JSON object")

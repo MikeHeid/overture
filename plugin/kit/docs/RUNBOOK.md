@@ -464,6 +464,28 @@ disappeared, or a status changed.
 - **Goes stale after every unrelated edit**: the question hashes a busy file.
   Ask it again citing an `excerpt`.
 
+## The ruling lookup says nothing, or says "committed rulings" (1.52.0)
+
+Before an edit, `plugin/hooks/ruling_lookup.py` adds the owner's rulings on
+the file to the agent's context. Ask by hand what it would have said:
+
+    python3 <vendored>/agent.py --state <state> rulings --path src/pay.py
+
+- **It says nothing** when the file has no rulings (that is the usual case),
+  when this session was already shown them and they have not changed (a
+  would-break warning is still always shown), when the checkout is not in
+  your registry (`agent.py register`), or when anything failed: it fails open
+  and silent, so a damaged ruling file or registry gives no note. The
+  command above names a path it refuses (absolute, `..`, a secrets file).
+- **It says "from the committed rulings; the console server is not
+  answering"** when the agent socket was absent, refused, took over 1.5 s,
+  or runs a kit older than 1.52 (restart it on the new kit). The rulings
+  then come from `.overture.json` `fold.locked` in the checkout, so a lock
+  made since the last fold is missing. `server.py status` says why the
+  server is down.
+- It never blocks an edit; the CI check (`rulecheck.py`) still guards the
+  merge.
+
 ## The fold refuses
 
 The fold is all or nothing: one refused file refuses the lot, and each reason

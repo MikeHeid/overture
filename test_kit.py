@@ -2778,7 +2778,7 @@ class QuestionHookTests(_Steward):
     def test_hooks_json_runs_the_guard_on_ask_user_question(self):
         # Catches: a guard script nothing runs, or one matched to every tool.
         hooks = json.loads((HERE / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]
-        [entry] = hooks["PreToolUse"]
+        [entry] = [e for e in hooks["PreToolUse"] if "ask_guard.py" in json.dumps(e)]   # 1.52.0: beside the lookup
         self.assertEqual(entry["matcher"], "AskUserQuestion")
         [h] = entry["hooks"]
         self.assertEqual(h["type"], "command")
