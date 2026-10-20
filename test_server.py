@@ -12328,6 +12328,14 @@ class RulingsRouteTests(_Live, unittest.TestCase):
                 self.assertEqual(code, 400, out)
                 self.assertIn(words, out["error"])
 
+    def test_at_most_fifty_paths_in_one_lookup(self):
+        # Catches: a 51st path accepted, so one request can make the server match without the cap it states.
+        code, out = self.rulings(*[f"f{i}.py" for i in range(50)])
+        self.assertEqual((code, len(out["rulings"])), (200, 50))
+        code, out = self.rulings(*[f"f{i}.py" for i in range(51)])
+        self.assertEqual(code, 400, out)
+        self.assertIn("1 to 50", out["error"])
+
     def test_the_owner_door_does_not_serve_it(self):
         # Catches: the route added to the owner's door too, where it is nothing the page needs.
         for path in ("/rulings", "/api/rulings"):

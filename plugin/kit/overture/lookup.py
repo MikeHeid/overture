@@ -58,7 +58,9 @@ SAY_RULINGS = 5          # rulings the hook names for one file (L6)...
 SAY_LINE = 300           # ...each line at most this long...
 SAY_TOTAL = 2000         # ...and the whole note at most this long, the warnings first (C4)
 MAX_RULING_FILES = 500   # committed ruling files the fallback reads, at most (S2: a hostile checkout's 10^5 files)...
-MAX_RULING_BYTES = 16 << 20   # ...and bytes in all; past either it says "(first N ruling files)"
+MAX_RULING_BYTES = 16 << 20   # ...and bytes in all; past either it says "(first N ruling files)"...
+MAX_RULING_ENTRIES = 1000     # ...and *.json entries examined in all, the bad ones too (1.52 S2: 10^5 symlinks)...
+MAX_LISTED = 10_000           # ...of at most this many folder entries listed; the rest are counted, never read
 
 
 class PathRefused(ValueError):
@@ -134,10 +136,19 @@ def cited_paths(e: dict) -> list[str]:
     return [p for p in out if p]
 
 
+_CONTROLS = {c: "?" for c in (*range(0x20), *range(0x7F, 0xA0))}   # every Cc character (C0, DEL, C1)
+
+
 def _short(text: object, n: int) -> str:
-    """`text` on one line, at most `n` long; a `"` becomes `'`, so it cannot close the quotes it is shown in (S3)."""
+    """`text` on one line, at most `n` long; a `"` becomes `'`, so it cannot close the quotes it is shown in (S3).
+
+    1.52 C2: and no control character survives: a line break is a space (as
+    `normalise` makes every whitespace run), any other (an ESC, a NUL) a `?`,
+    so a hostile file NAME cannot start a line of its own in an agent's context.
+    """
     s = A.normalise(text).replace('"', "'") if isinstance(text, str) else ""
-    return s if len(s) <= n else s[:n - 1].rstrip() + "…"
+    s = s if len(s) <= n else s[:n - 1].rstrip() + "…"
+    return s.translate(_CONTROLS)
 
 
 def answer_words(lk: dict) -> str:
@@ -263,7 +274,11 @@ def from_export_dir(d: Path, notes: list[str] | None = None, shown: str | None =
     C2: one bad file (not a plain file, too big, not JSON, not a valid ruling)
     is skipped and named in `notes` as `shown/NAME`, and the rest are still
     read. S2: at most MAX_RULING_FILES files and MAX_RULING_BYTES bytes, in
-    name order; past that `notes` says "(first N ruling files)". Three skipped files are named, the rest counted. Unlike the CI
+    name order; past that `notes` says "(first N ruling files)". Three skipped files are named, the rest counted.
+    1.52 S2: a bad file counts too: at most MAX_RULING_ENTRIES are examined, of
+    at most MAX_LISTED folder entries listed, and `notes` counts the files not
+    read. C2: a skipped file's name is quoted and shown through `_short`, so
+    no control character in it reaches an agent's context. Unlike the CI
     check (rulecheck.from_dir, which refuses the lot), this is advice before
     an edit, so a partial answer that says it is partial beats none.
     """
@@ -272,11 +287,19 @@ def from_export_dir(d: Path, notes: list[str] | None = None, shown: str | None =
     if not d.is_dir():
         return []
     shown = shown or d.name
-    out, skipped, total, read = [], [], 0, 0
-    names = sorted(p.name for p in d.iterdir() if p.name.endswith(".json"))
+    out, skipped, total, read, examined, listed, more = [], [], 0, 0, 0, [], False
+    with os.scandir(d) as it:
+        for n, de in enumerate(it):
+            if n >= MAX_LISTED:
+                more = True
+                break
+            if de.name.endswith(".json"):
+                listed.append(de.name)
+    names = sorted(listed)
     for name in names:
-        if read >= MAX_RULING_FILES:
+        if read >= MAX_RULING_FILES or examined >= MAX_RULING_ENTRIES:
             break
+        examined += 1
         p = d / name
         try:
             if p.is_symlink() or not p.is_file():
@@ -285,14 +308,18 @@ def from_export_dir(d: Path, notes: list[str] | None = None, shown: str | None =
             if size > A.MAX_READ:
                 raise RC.CheckError(f"over {A.MAX_READ >> 20} MiB")
             if total + size > MAX_RULING_BYTES:
+                examined -= 1   # not read: it is one of the files the note counts
                 break
             total, read = total + size, read + 1
             out += RC.parse({name: p.read_bytes()}, None, "").values()
         except (OSError, RC.CheckError) as e:
             why = str(e).rsplit("\n  ", 1)[-1]
-            skipped.append(f"skipped {shown}/{name}: {_short(why.removeprefix(name + ': '), 120)}")
+            skipped.append(f"skipped \"{_short(f'{shown}/{name}', 160)}\": {_short(why.removeprefix(name + ': '), 120)}")
+    unread = len(names) - examined
     if read < len(names) - len(skipped):
         notes.append(f"(first {read} ruling files)")
+    if unread or more:
+        notes.append(f"({unread}{'+' if more else ''} more ruling files not read)")
     if skipped:
         notes.append("; ".join(skipped[:3]) + (f" (and {len(skipped) - 3} more skipped)" if len(skipped) > 3 else ""))
     return out

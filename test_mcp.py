@@ -135,6 +135,13 @@ class McpEndToEndTests(_Live, unittest.TestCase):
         self.assertTrue(err)
         self.assertIn("leaves the project", text)
 
+    def test_a_path_shaped_like_an_option_is_still_a_path(self):
+        # Catches: each path passed as its own argv word after `--path`, so a file named "-n.md" is read by
+        # agent.py as an option (an error, or another option's value) instead of the path it is.
+        text, err = self.client.tool("rulings", paths=["-n.md"])
+        self.assertFalse(err, text)
+        self.assertEqual(json.loads(text)["rulings"], {"-n.md": []})
+
     def test_a_refused_question_comes_back_as_a_tool_error_naming_why(self):
         # Catches: a refusal turned into a protocol error (the model never sees it, so cannot fix it),
         # or one reported as success; and a re-ask of a minted qid getting through.
