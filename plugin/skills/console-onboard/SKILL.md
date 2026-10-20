@@ -48,17 +48,23 @@ incomplete.
 Run `python3 "KIT/onboard.py" prereqs` first (read-only; it works on native
 Windows too). Each `ok:` line is present; each `- NAME (required|optional)`
 line is missing, with the command that fixes it on this platform and a link.
-When one is missing, show the user its lines word for word, then ask with
-AskUserQuestion, never a blank question:
+The last line counts what is missing.
+
+**On native Windows, stop here, before any question.** The scan lists
+"Claude Code inside WSL" there every time, since this session is not in
+WSL, so re-running it never clears. Show the user its lines word for word,
+then say what to do: install WSL, run the Claude Code CLI inside it, and
+onboard there.
+
+On every other platform, when one is missing, show the user its lines word
+for word, then ask with AskUserQuestion, never a blank question:
 
 > Some prerequisites are missing. How do you want to go on?
 > **A** I install them now, then you re-run the check · **B** go on without the optional ones · **C** stop here
 
 Put ★ on **A** when a required one is missing (onboarding cannot finish
 without it; `prereqs` exits 1), else on **B**. Never run a fix command
-yourself: each installs software, which is the user's act. On native Windows
-the scan always lists "Claude Code inside WSL": say that onboarding belongs in
-the Claude Code CLI inside WSL, and stop.
+yourself: each installs software, which is the user's act.
 
 ## 1b. Ask how the console will be reached (1.47)
 

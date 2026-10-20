@@ -790,14 +790,12 @@ class PrereqTests(unittest.TestCase):
         linux, wsl, mac, win = (self.scan(p) for p in ("linux", "wsl", "macos", "windows"))
         self.assertEqual(set(linux), {"Python 3.11 or newer", "git", "gh, the GitHub CLI", "systemd --user"})
         self.assertTrue(linux["git"]["fix"][0].startswith("sudo apt install git"))
-        self.assertIn("or your distribution's package manager", linux["gh, the GitHub CLI"]["fix"][0])
-        self.assertEqual(wsl["systemd --user"]["link"], "https://learn.microsoft.com/windows/wsl/systemd")
-        self.assertIn("/etc/wsl.conf", wsl["systemd --user"]["fix"][0])
-        self.assertIn("wsl.exe --shutdown", wsl["systemd --user"]["fix"][1])
-        self.assertNotIn("wsl.conf", " ".join(linux["systemd --user"]["fix"]))
+        self.assertEqual(wsl["systemd --user"]["link"], "https://learn.microsoft.com/en-us/windows/wsl/systemd")
+        self.assertIn("/etc/wsl.conf", wsl["systemd --user"]["why"])
+        self.assertNotIn("wsl.conf", linux["systemd --user"]["why"] + " ".join(linux["systemd --user"]["fix"]))
         self.assertEqual(set(mac), {"Python 3.11 or newer", "git", "gh, the GitHub CLI", "launchd"})
         self.assertEqual((mac["git"]["fix"], mac["gh, the GitHub CLI"]["fix"]), (["brew install git"], ["brew install gh"]))
-        self.assertEqual(win["WSL"]["fix"], ["wsl --install"])
+        self.assertTrue(win["WSL"]["fix"][0].startswith("wsl --install"))
         self.assertEqual(win["Git for Windows (git and Git Bash)"]["fix"], ["winget install --id Git.Git -e"])
         self.assertEqual(win["python3 on PATH"]["link"], "https://apps.microsoft.com/search?query=python")
         self.assertEqual(win["gh, the GitHub CLI"]["fix"], ["winget install --id GitHub.cli -e"])
@@ -811,6 +809,77 @@ class PrereqTests(unittest.TestCase):
         self.assertEqual(routes["cloudflared"]["fix"], ["brew install cloudflared"])
         self.assertFalse(any(routes[n]["required"] for n in ("cloudflared", "tailscale", "zerotier-cli")))
         self.assertNotIn("cloudflared", self.scan("macos"))   # route tools only when asked for
+
+    def test_gh_on_debian_and_ubuntu_is_githubs_apt_repository_not_the_distributions(self):
+        # Catches (1.53.2 review F1): `sudo apt install gh` printed on Linux or WSL, which installs the
+        # distribution's gh (2.4 to 2.46), one GitHub calls broken; the fix is GitHub's own apt repository.
+        for plat in ("linux", "wsl"):
+            gh = self.scan(plat)["gh, the GitHub CLI"]
+            with self.subTest(plat=plat):
+                self.assertEqual(gh["fix"], [])
+                self.assertEqual(gh["link"], "https://github.com/cli/cli/blob/trunk/docs/install_linux.md")
+                self.assertIn("add GitHub's apt repository first", gh["why"])
+        self.assertEqual(self.scan("macos")["gh, the GitHub CLI"]["link"], "https://cli.github.com")
+
+    def test_the_python_apt_line_says_which_releases_ship_3_11(self):
+        # Catches (1.53.2 review F2): a bare `sudo apt install python3`, which gives 3.10 on Ubuntu 22.04 and
+        # 3.9 on Debian 11, both too old, with nothing saying so.
+        for plat in ("linux", "wsl"):
+            with self.subTest(plat=plat):
+                fix = self.scan(plat)["Python 3.11 or newer"]["fix"]
+                self.assertEqual(fix, ["sudo apt install python3   # Ubuntu 24.04+ and Debian 12+ ship 3.11 or "
+                                       "newer; else see the link"])
+
+    def test_windows_says_how_to_get_wsl_and_python3_and_lists_wsl_first(self):
+        # Catches (1.53.2 review F3, F4, F7): `wsl --install` without "PowerShell as administrator" (it fails
+        # elsewhere); the out-of-date "a python.org install gives only python and py" (its install manager ships
+        # python3; only the old full installer lacks it); and "Claude Code inside WSL" listed before WSL itself.
+        PQ = prereqs_module()
+        with mock.patch.object(PQ.shutil, "which", lambda n: None):
+            names = [i["name"] for i in PQ.scan(plat="windows")]
+        self.assertEqual(names[1:3], ["WSL", "Claude Code inside WSL"])
+        win = self.scan("windows")
+        self.assertEqual(win["WSL"]["fix"], ["wsl --install   # in PowerShell, run as administrator"])
+        why = win["python3 on PATH"]["why"]
+        self.assertIn("Python's install manager (from python.org or the Microsoft Store) provides it", why)
+        self.assertIn("the old full installer gives only `python` and `py`", why)
+
+    def test_wsl_systemd_is_edited_under_boot_never_appended_blind(self):
+        # Catches (1.53.2 review F5): `printf '[boot]...' | sudo tee -a /etc/wsl.conf`, which adds a second
+        # [boot] section to a wsl.conf that has one; Debian left without systemd-sysv; the old docs link.
+        it = self.scan("wsl")["systemd --user"]
+        self.assertEqual(it["fix"], [])
+        self.assertNotIn("tee", it["why"])
+        for words in ("add `systemd=true` under `[boot]` in /etc/wsl.conf (create the section if it isn't there)",
+                      "then run `wsl --shutdown` from Windows", "Debian needs `systemd-sysv` too"):
+            self.assertIn(words, it["why"])
+        self.assertEqual(it["link"], "https://learn.microsoft.com/en-us/windows/wsl/systemd")
+
+    def test_the_cloudflared_link_is_the_page_itself_not_a_redirect(self):
+        # Catches (1.53.2 review F9): the old connect-networks downloads link, which only redirects.
+        self.assertEqual(self.scan("linux", routes=True)["cloudflared"]["link"],
+                         "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/"
+                         "downloads/")
+
+    def test_the_scan_ends_with_one_total_line(self):
+        # Catches (1.53.2 review F8): `onboard.py prereqs` and the banner block ending on the last item, with no
+        # count, or a count that mixes required with optional.
+        PQ = prereqs_module()
+        it = lambda req, ok: {"name": "n", "required": req, "ok": ok, "why": "w", "fix": [], "link": "L"}
+        self.assertEqual(PQ.total_line([it(True, True), it(False, False)]), "nothing required is missing")
+        self.assertEqual(PQ.total_line([it(True, False), it(True, False), it(False, False), it(False, True)]),
+                         "2 required, 1 optional missing")
+        self.assertEqual(PQ.missing_block([it(True, False)])[-1], "1 required, 0 optional missing")
+        everything = ("git", "gh", "cloudflared", "tailscale", "zerotier-cli")
+        for have, systemd, last in ((everything, True, "nothing required is missing"),
+                                    (("git", "gh"), False, "1 required, 3 optional missing"),
+                                    ((), False, "2 required, 4 optional missing")):
+            out = io.StringIO()
+            with self.subTest(have=have), mock.patch.object(PQ, "detect", lambda: "linux"), \
+                    mock.patch.object(PQ.shutil, "which", lambda n: "/usr/bin/" + n if n in have else None), \
+                    mock.patch.object(PQ, "_systemd_user", lambda: systemd), contextlib.redirect_stdout(out):
+                O.main(["prereqs"])
+            self.assertEqual(out.getvalue().splitlines()[-1], last)
 
     def test_detect_tells_wsl_from_linux(self):
         # Catches: WSL taken for plain Linux (no wsl.conf fix), by either sign, or Windows and macOS misread.
@@ -882,7 +951,8 @@ class PrereqBannerTests(unittest.TestCase):
                     self.assertEqual(mod._instructions(), body)
                 with mock.patch.object(PQ, "scan", lambda: gone):
                     self.assertEqual(mod._instructions(), body + "\n\nMissing prerequisites:\n"
-                                     "  - git (required): w\n      sudo apt install git\n      L")
+                                     "  - git (required): w\n      sudo apt install git\n      L\n"
+                                     "1 required, 0 optional missing")
 
     def test_on_windows_the_banners_say_where_the_console_runs_and_print_no_command(self):
         # Catches (1.53.2): the Windows banner telling people to run "the printed install commands" in WSL (they

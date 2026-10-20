@@ -4684,7 +4684,7 @@ class WindowsEntryTests(unittest.TestCase):
 
     def test_the_pretooluse_hooks_never_block_a_tool_when_they_fail(self):
         # Catches: ask_guard.py or ruling_lookup.py without `"onFailure": "continue"`: where `python3` is missing
-        # (a python.org install on Windows), a failing PreToolUse hook could block every edit or question.
+        # (the old full Python installer on Windows), a failing PreToolUse hook could block every edit or question.
         hooks = json.loads((HERE / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]["PreToolUse"]
         got = {h["command"].rsplit("/", 1)[1].rstrip('"'): h.get("onFailure") for g in hooks for h in g["hooks"]}
         self.assertEqual(got, {"ask_guard.py": "continue", "ruling_lookup.py": "continue"})

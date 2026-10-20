@@ -3013,9 +3013,11 @@ everywhere, instead of failing with a traceback.
 - **A prerequisite scan on install.** The first session after an install or
   upgrade lists what this machine is missing (Python, git, gh, systemd or
   launchd, and WSL, Git for Windows and `python3` on Windows), each with the
-  command for your platform and a link. Nothing is printed when nothing is
-  missing. `onboard.py prereqs [--json]` runs it again, route tools
-  included, and console-onboard runs it first.
+  command for your platform where one command is right, and a link. A last
+  line counts what is missing. Nothing is printed when nothing is missing.
+  `onboard.py prereqs [--json]` runs it again, route tools included, and
+  console-onboard runs it first. On native Windows it always lists "Claude
+  Code inside WSL", so onboarding stops there and says to onboard in WSL.
 - **scaffold-dashboard** runs the plugin's own kit, not a fixed
   `~/.local/share/overture` path.
 - **Docs.** Hosting has a Windows section; MCP, INSTALL and the README say

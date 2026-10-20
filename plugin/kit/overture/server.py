@@ -5557,7 +5557,7 @@ def agent_request(sock_path: Path, method: str, path: str, body: object = None,
 def main(argv: list[str] | None = None) -> int:
     # Native Windows is refused by name in server.py, before this module's imports (fcntl, Unix
     # sockets) fail there (1.53.2, overture/posix.py); a check here was never reached.
-    ap =argparse.ArgumentParser(description="Serve the owner console behind Cloudflare Access.")
+    ap = argparse.ArgumentParser(description="Serve the owner console behind Cloudflare Access.")
     ap.add_argument("--root", type=Path, required=True)
     ap.add_argument("--page", type=Path, default=None,
                     help="IGNORED since Q28: the server never reads a page from a project; it serves the "

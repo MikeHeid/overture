@@ -658,6 +658,7 @@ def prereqs(as_json: bool) -> int:
     else:
         for it in items:
             print("\n".join(PQ.item_lines(it)) if not it["ok"] else f"  ok: {it['name']}")
+        print(PQ.total_line(items))
     return 1 if any(it["required"] and not it["ok"] for it in items) else 0
 
 

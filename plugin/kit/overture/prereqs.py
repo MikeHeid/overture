@@ -59,38 +59,44 @@ def _systemd_user() -> bool:
 
 
 def _base(plat: str) -> list[dict]:
-    py_fix = {LINUX: ["sudo apt install python3" + APT], WSL: ["sudo apt install python3" + APT],
-              MACOS: ["brew install python"], WINDOWS: []}[plat]
+    py_apt = "sudo apt install python3   # Ubuntu 24.04+ and Debian 12+ ship 3.11 or newer; else see the link"
+    py_fix = {LINUX: [py_apt], WSL: [py_apt], MACOS: ["brew install python"], WINDOWS: []}[plat]
     items = [_item("Python 3.11 or newer", True, sys.version_info >= (3, 11),
                    f"the console, the kit and the hooks run on it (this is {platform.python_version()})",
                    py_fix, "https://www.python.org/downloads/")]
     if plat == WINDOWS:
         return items + [
+            _item("WSL", True, shutil.which("wsl") is not None, "the console server runs inside WSL2",
+                  ["wsl --install   # in PowerShell, run as administrator"],
+                  "https://learn.microsoft.com/windows/wsl/install"),
             _item("Claude Code inside WSL", True, False,
                   "the console and its agent side run inside WSL, so run the Claude Code CLI there; "
                   "native Windows sessions get only the hooks, which stay silent",
                   ["wsl", "curl -fsSL https://claude.ai/install.sh | bash   # inside WSL"],
                   "https://code.claude.com/docs/en/setup"),
-            _item("WSL", True, shutil.which("wsl") is not None, "the console server runs inside WSL2",
-                  ["wsl --install"], "https://learn.microsoft.com/windows/wsl/install"),
             _item("Git for Windows (git and Git Bash)", True, shutil.which("git") is not None,
                   "agents use git for their own worktrees; Claude Code runs hooks in Git Bash, else PowerShell",
                   ["winget install --id Git.Git -e"], "https://git-scm.com/download/win"),
             _item("python3 on PATH", True, shutil.which("python3") is not None,
-                  "the hooks run as `python3`; the Microsoft Store's Python provides it (a python.org "
-                  "install gives only `python` and `py`, and `python3` then opens the Store)",
+                  "the hooks run as `python3`; Python's install manager (from python.org or the Microsoft "
+                  "Store) provides it, the old full installer gives only `python` and `py`",
                   [], "https://apps.microsoft.com/search?query=python"),
             _item("gh, the GitHub CLI", False, shutil.which("gh") is not None,
                   "the PR tab, merging from it, and pruning an agent's worktree once its PR closes",
                   ["winget install --id GitHub.cli -e"], "https://cli.github.com"),
         ]
     pkg = (lambda name: [f"brew install {name}"]) if plat == MACOS else (lambda name: [f"sudo apt install {name}" + APT])
+    gh_why = "the PR tab, merging from it, and pruning an agent's worktree once its PR closes"
+    # 1.53.2 review F1: Debian's and Ubuntu's own gh is one GitHub calls broken, so no apt line; their repository.
+    gh = (_item("gh, the GitHub CLI", False, shutil.which("gh") is not None, gh_why, ["brew install gh"],
+                "https://cli.github.com") if plat == MACOS else
+          _item("gh, the GitHub CLI", False, shutil.which("gh") is not None,
+                gh_why + "; on Debian or Ubuntu add GitHub's apt repository first, as the link shows", [],
+                "https://github.com/cli/cli/blob/trunk/docs/install_linux.md"))
     items += [
         _item("git", True, shutil.which("git") is not None, "agents use it for their own worktrees",
               pkg("git"), "https://git-scm.com/downloads"),
-        _item("gh, the GitHub CLI", False, shutil.which("gh") is not None,
-              "the PR tab, merging from it, and pruning an agent's worktree once its PR closes",
-              pkg("gh"), "https://cli.github.com"),
+        gh,
     ]
     if plat == MACOS:
         items.append(_item("launchd", True, shutil.which("launchctl") is not None,
@@ -98,10 +104,10 @@ def _base(plat: str) -> list[dict]:
                            "https://github.com/MikeHeid/overture/blob/main/INSTALL.md"))
     elif plat == WSL:
         items.append(_item("systemd --user", True, _systemd_user(),
-                           "keeps the console server running; WSL starts systemd only when wsl.conf asks",
-                           ["printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf",
-                            "wsl.exe --shutdown   # then open WSL again"],
-                           "https://learn.microsoft.com/windows/wsl/systemd"))
+                           "keeps the console server running; WSL starts systemd only when wsl.conf asks: add "
+                           "`systemd=true` under `[boot]` in /etc/wsl.conf (create the section if it isn't "
+                           "there), then run `wsl --shutdown` from Windows; Debian needs `systemd-sysv` too",
+                           [], "https://learn.microsoft.com/en-us/windows/wsl/systemd"))
     else:
         items.append(_item("systemd --user", True, _systemd_user(),
                            "keeps the console server running; `systemctl --user` must reach your user manager",
@@ -122,7 +128,7 @@ def _routes(plat: str) -> list[dict]:
                          WINDOWS: ["winget install --id ZeroTier.ZeroTierOne -e"]},
     }
     rows = (("cloudflared", "for the Cloudflare Access route",
-             "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"),
+             "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/"),
             ("tailscale", "for sign-in links on a Tailscale tailnet", "https://tailscale.com/download"),
             ("zerotier-cli", "for sign-in links with --listen on a ZeroTier network",
              "https://www.zerotier.com/download/"))
@@ -148,4 +154,11 @@ def missing_block(items: list[dict]) -> list[str]:
     gone = [it for it in items if not it["ok"]]
     if not gone:
         return []
-    return ["", "Missing prerequisites:"] + [line for it in gone for line in item_lines(it)]
+    return ["", "Missing prerequisites:"] + [line for it in gone for line in item_lines(it)] + [total_line(items)]
+
+
+def total_line(items: list[dict]) -> str:
+    """The scan's last line: "nothing required is missing", else "N required, M optional missing"."""
+    req = sum(1 for it in items if it["required"] and not it["ok"])
+    opt = sum(1 for it in items if not it["required"] and not it["ok"])
+    return f"{req} required, {opt} optional missing" if req else "nothing required is missing"

@@ -9,9 +9,11 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
 **What you need:**
 
 - **Python 3.11 or newer**, as `python3` on PATH: the hooks run as
-  `python3`. Get it from your package manager, [python.org](https://www.python.org/downloads/)
-  (Linux, macOS) or the [Microsoft Store](https://apps.microsoft.com/search?query=python)
-  (Windows). A missing Python cannot be scanned for, since the scan is Python.
+  `python3`. Get it from your package manager or [python.org](https://www.python.org/downloads/)
+  (Linux, macOS). On Windows, Python's install manager provides `python3`, from
+  python.org or the [Microsoft Store](https://apps.microsoft.com/search?query=python);
+  the old full installer does not. A missing Python cannot be scanned for,
+  since the scan is Python.
 - **`systemd --user`** (Linux or WSL2) or **launchd** (macOS) to keep the
   server running.
 - **`git`**, which agents use for their own worktrees, and optionally
@@ -23,7 +25,8 @@ overture comes as one zip, `overture-<version>.zip`. It holds:
 
 **The scan (1.53.2).** The first session after an install or upgrade lists
 any of these that is missing, with the command that installs it on your
-platform and a link. Run it again at any time, route tools included:
+platform where one command is right, and a link. Run it again at any time,
+route tools included:
 
     python3 ~/overture/plugins/overture/kit/onboard.py prereqs [--json]
 

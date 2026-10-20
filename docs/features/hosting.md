@@ -240,10 +240,15 @@ to it.
   (`agent.py`, `mcp_server.py`, `fold.py`, `rulecheck.py`, `server.py`)
   refuses in one line that names this section. `onboard.py` says to onboard
   again inside WSL; `onboard.py prereqs` runs there and lists what is missing.
+- **`prereqs` on native Windows always exits 1.** It always lists "Claude
+  Code inside WSL" as missing, because a native Windows session is not in
+  WSL. Installing things in Windows never clears it: run
+  Claude Code inside WSL and onboard there.
 - **`python3`.** Claude Code runs hooks in Git Bash when Git for Windows is
-  installed, else in PowerShell. The hooks are called as `python3`. The
-  Microsoft Store's Python provides it; a python.org install provides only
-  `python` and `py`, and `python3` then opens the Store.
+  installed, else in PowerShell. The hooks are called as `python3`. Python's
+  install manager provides it, from python.org or the Microsoft Store; only
+  the old full installer provides just `python` and `py`
+  ([Python on Windows](https://docs.python.org/3/using/windows.html)).
 - **Default branch.** `page-snapshot --from-ref origin/main` is the
   default and fails on a repository whose default is anything else. Pass
   `--from-ref HEAD --unreviewed` while bootstrapping, or point
