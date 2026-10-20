@@ -7,6 +7,10 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **v1.53.1 released — Hooks on Windows** (PR #181, `42410f0`, zip sha 231d5712…9736): a bug report pasted by the owner (Windows 11, Store Python, 1.49.0).
+  Every hook failed at import on native Windows Python (top-level `import fcntl`, and `os.O_NONBLOCK`/`O_NOFOLLOW`/`O_CLOEXEC`); ruling_lookup also failed through the kit's atfile.py. Now optional, with an lstat symlink check where O_NOFOLLOW is missing; `/overture:as` there refuses by name (needs POSIX locks: use WSL); ruling_lookup stands down only where fcntl is missing. POSIX flags unchanged (tested).
+  1493 tests; cleared twice independently. Not run on a real Windows machine (simulated). Next: the owner or the reporter confirms on Windows; the 1.53 A/B check.
+
 - **v1.53.0 released — Area notes** (PR #180, `3ea8cd2`, zip sha c8d24050…ff0e): owner M1–M4 ("do recommended", after the roar and advisory board on localized memory).
   A ≤10-line `CLAUDE.md` of facts per folder declared in `.overture.json` "areas", loaded only when an agent works there; `agent.py notes check` (stale / undeclared / malformed, `--memory` index lint, never writes) and `notes stamp AREA`; "notes_ignore" for the version bump; steward checks daily (watch.json `area_notes`); `release.py` refuses while a note is stale; no CLAUDE.md in the zip. Squash-merge fallback = the commit that last changed the note's header (verified on main after the merge).
   1488 tests; 30 mutants, 29 killed / 0 survived / 1 skipped, re-run by an independent clearer. Lesson: a stale .pyc can fake a mutant result — run with PYTHONDONTWRITEBYTECODE=1. Next: the A/B check (same small task with and without a note); console view of notes (M3) waits.
@@ -164,7 +168,7 @@ All seven items below are done.
 
 ## State
 
-- `main` = v1.53.0 (PR #180), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
+- `main` = v1.53.1 (PR #181), tagged and released. No open PRs. (Below: the state as handed over at v1.34.1.)
 - `main` is protected (2026-10-15, owner request): no force-push, no deletion, admins included; reviews not required.
 - Releases in the last session: 1.33.0 Lessons, 1.33.1 review fixes, 1.34.0 Lesson Match, 1.34.1 housekeeping.
 - Tests at release (run under WSL): `test_kit.py` 386, `test_server.py` 334, `test_onboard.py` 37, `test_vendor.py` 11. All pass.
