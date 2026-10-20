@@ -8,9 +8,12 @@ When the plugin upgrades (zip replaces this hook file), the version embedded her
 changes and the flag path with it, so the banner fires again on the first session
 after the upgrade. On the version it was written for, it never fires twice.
 
-The banner names the registration path for Linux / macOS, WSL on Windows, and
-PowerShell on Windows that drives WSL for the server side (the server runs on
-POSIX; Windows users host it in WSL).
+On native Windows the banner says where the console runs: inside WSL, with the
+Claude Code CLI run there too (1.53.2). It prints no command there, because the
+kit's paths on this side are Windows paths, which a WSL shell cannot run.
+
+Either banner ends with what this machine still lacks, each with its fix and a link
+(overture/prereqs.py, 1.53.2), and with nothing when nothing is missing.
 
 Trust: this hook does nothing more than stdout + one flag file write. It never
 reads project state and never fails the session.
@@ -113,6 +116,7 @@ def _restart_cmd() -> str:
 
 KIT = Path(__file__).resolve().parent.parent / "kit"   # the kit this plugin carries, wherever it was installed
 JOIN = "https://github.com/MikeHeid/overture/blob/main/docs/JOIN.md"
+WINDOWS = "https://github.com/MikeHeid/overture/blob/main/docs/features/hosting.md#windows"
 
 
 def _install_lines() -> list[str]:
@@ -131,11 +135,16 @@ def _install_lines() -> list[str]:
         "and prints the commands that install and start the console server as a user",
         "service. You run those yourself; nothing is installed behind your back.",
     ]
-    if _is_windows_native():
+    if _is_windows_native():   # 1.53.2: the truth, in place of commands that cannot work here
         lines += [
             "",
-            "  On Windows the server runs inside WSL2 (it needs POSIX file locks). Run the",
-            "  printed install commands in your WSL shell, e.g. `wsl -d Ubuntu-24.04`.",
+            "  On Windows, the console and its agent side run inside WSL2. Use the Claude",
+            "  Code CLI inside WSL (e.g. `wsl -d Ubuntu-24.04`, then `claude`), install this",
+            "  plugin there, and onboard from there.",
+            "  In Claude Desktop the plugin loads only in native Windows sessions, where the",
+            "  console is not reachable (Desktop has no plugins in its WSL sessions).",
+            "  The hooks here need a `python3` on PATH; the Microsoft Store's Python has one.",
+            "  More: " + WINDOWS,
         ]
     lines += [
         "",
@@ -155,6 +164,18 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
     `deploy/install.sh` copied, until install.sh copies the new one and restarts the unit.
     """
     from_ver = prior[-1] if prior else "an earlier version"
+    if _is_windows_native():   # 1.53.2: the paths here are Windows paths; a WSL shell cannot run them
+        return [
+            f"Upgraded to Overture {VERSION} (from {from_ver}).",
+            "",
+            "On Windows the console server runs inside WSL. Update the plugin in the Claude",
+            "Code CLI inside WSL too: its first session there prints the upgrade commands,",
+            "with paths that work there.",
+            "",
+            "  More: " + WINDOWS,
+            "  Changelog: https://github.com/MikeHeid/overture/blob/main/CHANGELOG.md",
+            "  This reminder shows once per version.",
+        ]
     if sys.platform == "darwin":       # 1.51: no install.sh on a Mac; re-installing the LaunchAgent re-points and restarts it
         return [
             f"Upgraded to Overture {VERSION} (from {from_ver}).",
@@ -180,8 +201,6 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
         "",
         "    " + _restart_cmd(),
     ]
-    if _is_windows_native():
-        lines += ["", "  On Windows, run these inside WSL."]
     lines += [
         "",
         "  Changelog: https://github.com/MikeHeid/overture/blob/main/CHANGELOG.md",
@@ -190,10 +209,24 @@ def _upgrade_lines(prior: list[str]) -> list[str]:
     return lines
 
 
+def _prereq_lines() -> list[str]:
+    """1.53.2: a "Missing prerequisites" block from this plugin's own kit, or nothing.
+
+    Nothing too when the kit will not import or the scan fails: the banner then prints as before.
+    """
+    try:
+        if str(KIT) not in sys.path:
+            sys.path.insert(0, str(KIT))   # this plugin's own kit, as ruling_lookup.py imports it
+        from overture import prereqs as PQ
+        return PQ.missing_block(PQ.scan())
+    except Exception:
+        return []
+
+
 def _instructions() -> str:
     prior = _prior_versions()
     lines = _upgrade_lines(prior) if prior else _install_lines()
-    return "\n".join(lines)
+    return "\n".join(lines + _prereq_lines())
 
 
 def main() -> int:

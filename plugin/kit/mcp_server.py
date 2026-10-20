@@ -44,6 +44,8 @@ import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from overture.posix import require  # noqa: E402
+require("mcp_server.py")   # 1.53.2: before the imports below, which fail on native Windows
 import agent as AG  # noqa: E402
 from overture import __version__  # noqa: E402
 from overture import names as N  # noqa: E402

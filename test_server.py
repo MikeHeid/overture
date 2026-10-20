@@ -4069,6 +4069,8 @@ SPAWN_ALLOWED = {
     "hosting.py": "operator tool: `server.py daemon|service|status|health` run systemctl or launchctl and "
                   "detach the server; the server never imports it",
     "onboard.py": "operator setup/verify tool (1.24.0 verify runs curl/systemctl); never imported by the server",
+    "overture/prereqs.py": "1.53.2 prerequisite scan for the install banner and `onboard.py prereqs`: one "
+                           "`systemctl --user` call with a 1 s timeout; the server never imports it",
     "tools/": "operator tools (verify_vendor.py runs git on a kit clone); never imported by the server",
 }
 SPAWN_MODULES = ("subprocess", "pty", "multiprocessing")

@@ -4626,6 +4626,77 @@ class WindowsHookTests(_Steward):
         self.assertIn("ModuleNotFoundError: import of overture.anchors halted", r.stderr)
 
 
+# -- 1.53.2: every kit entry point refuses native Windows by name, before an import that fails there --
+
+ENTRY_SHIM = WINDOWS_SHIM.replace("script = sys.argv.pop(1)", """import socket
+if hasattr(socket, "AF_UNIX"):
+    delattr(socket, "AF_UNIX")   # nor Unix sockets
+script = sys.argv.pop(1)""")
+
+
+class WindowsEntryTests(unittest.TestCase):
+    """On native Windows each entry script says why it cannot run and what to do, in one line; POSIX is unchanged.
+
+    On POSIX each still runs: agent.py throughout this file, mcp_server.py in test_mcp, fold.py in FoldLockPathTests
+    here, rulecheck.py in test_rulecheck, server.py and hosting.py in test_server.
+    """
+
+    ENTRIES = ("agent.py", "mcp_server.py", "fold.py", "rulecheck.py", "server.py", "hosting.py")
+
+    def run_windows(self, script, *args):
+        with tempfile.TemporaryDirectory() as td:
+            shim = Path(td) / "windows_shim.py"
+            shim.write_text(ENTRY_SHIM)
+            return subprocess.run([sys.executable, str(shim), str(script), *args], capture_output=True, text=True,
+                                  timeout=30, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_each_entry_script_refuses_by_name_with_the_one_fix(self):
+        # Catches: an entry script whose imports run before the check (fcntl in names.py, the Unix server in
+        # server.py, fcntl in hosting.py), so native Windows shows a traceback instead of the fix; a check
+        # that prints to stdout (mcp_server.py's stdout is the protocol stream), or exits 0 or 1.
+        from overture import posix
+        for name in self.ENTRIES:
+            with self.subTest(script=name):
+                r = self.run_windows(KIT / name, "--help")
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", f"{name}: {posix.WHY}\n"))
+        self.assertIn("run Claude Code inside WSL (docs/features/hosting.md#windows)", posix.WHY)
+
+    def test_require_refuses_where_os_name_is_not_posix_and_passes_on_posix(self):
+        # Catches: a check on fcntl alone, which a Windows Python that ever ships an fcntl stub would pass,
+        # and a check that refuses on POSIX (every agent.py call here would then exit 2).
+        from overture import posix
+        import contextlib
+        import io
+        self.assertIsNone(posix.require("agent.py"))
+        err = io.StringIO()
+        with mock.patch.object(posix.os, "name", "nt"), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit) as cm:
+            posix.require("agent.py")
+        self.assertEqual((cm.exception.code, err.getvalue()), (2, f"agent.py: {posix.WHY}\n"))
+
+    def test_the_prereq_scan_runs_there(self):
+        # Catches: prereqs.py (or onboard.py, which runs it) importing anything native Windows lacks, so the
+        # install banner and `onboard.py prereqs` would die where people most need to be told what is missing.
+        r = self.run_windows(KIT / "onboard.py", "prereqs", "--json")
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        self.assertEqual(r.stderr, "")
+        self.assertTrue(all({"name", "required", "ok", "why", "fix", "link"} == set(i) for i in json.loads(r.stdout)))
+
+    def test_the_pretooluse_hooks_never_block_a_tool_when_they_fail(self):
+        # Catches: ask_guard.py or ruling_lookup.py without `"onFailure": "continue"`: where `python3` is missing
+        # (the old full Python installer on Windows), a failing PreToolUse hook could block every edit or question.
+        hooks = json.loads((HERE / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]["PreToolUse"]
+        got = {h["command"].rsplit("/", 1)[1].rstrip('"'): h.get("onFailure") for g in hooks for h in g["hooks"]}
+        self.assertEqual(got, {"ask_guard.py": "continue", "ruling_lookup.py": "continue"})
+
+    def test_no_skill_names_the_old_installed_kit_path(self):
+        # Catches: a skill running `~/.local/share/overture/kit/agent.py` (scaffold-dashboard until 1.53.2), a
+        # path only deploy/install.sh makes, on POSIX: a plugin-only install, and every Windows one, has none.
+        for skill in sorted((HERE / "plugin" / "skills").glob("*/SKILL.md")):
+            with self.subTest(skill=skill.parent.name):
+                self.assertNotIn("~/.local/share/overture", skill.read_text())
+
+
 class SessionNameTests(_Steward):
     """The UserPromptSubmit hook records session -> name; every check then reads it, never trusts it for the steward."""
 

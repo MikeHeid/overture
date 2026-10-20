@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
 import http.client
 import json
 import os
@@ -32,6 +31,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from overture.posix import require  # noqa: E402
+require("hosting.py")   # 1.53.2: before the imports below, which fail on native Windows
+import fcntl  # noqa: E402
 from overture import serverfile as SF  # noqa: E402
 
 UNIT = "overture-console.service"
@@ -609,9 +611,6 @@ def _print(doc: dict, as_json: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if os.name != "posix":
-        print("overture: hosting commands are POSIX-only; run them inside WSL, Linux or macOS", file=sys.stderr)
-        return 2
     ap = argparse.ArgumentParser(prog="server.py", description="Run the one console server.")
     ap.add_argument("--server-file", type=Path, help="default: server.json beside your registry")
     sub = ap.add_subparsers(dest="cmd", required=True)

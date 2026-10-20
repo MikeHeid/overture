@@ -736,5 +736,249 @@ class InstallNoticeTests(unittest.TestCase):
             self.assertEqual(run(), "")
 
 
+class WindowsOnboardTests(Base):
+    """1.53.2: onboarding on native Windows names WSL once, instead of commands a WSL shell cannot run."""
+
+    def test_next_steps_say_once_to_onboard_again_inside_wsl(self):
+        # Catches: the POSIX steps printed there: `bash "C:\...\install.sh"` and Windows --state paths, which
+        # cannot be pasted into WSL, in either way in.
+        for answers in (GOOD, {"name": "acme", "auth": "link"}):
+            a = O.check(answers)   # Path("...") would be a WindowsPath under "nt", which POSIX cannot make
+            with self.subTest(auth=a["auth"]), mock.patch.object(O.os, "name", "nt"):
+                steps = O.next_steps(self.project, a)
+                self.assertIn("Run onboarding again inside\nWSL", steps)
+                self.assertIn("/overture:console-onboard", steps)
+                self.assertNotIn('bash "', steps)
+                self.assertNotIn("--state", steps)
+
+    def test_verify_does_not_raise_without_getuid(self):
+        # Catches: `os.getuid()` in verify, an AttributeError on native Windows, where there is no uid and
+        # no console socket to find.
+        self.write()
+        env = {k: v for k, v in os.environ.items() if k != "XDG_RUNTIME_DIR"}
+        real = os.getuid
+        del os.getuid
+        try:
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch("shutil.which", lambda _: None), \
+                    mock.patch("subprocess.run", side_effect=OSError("no systemctl")):
+                got = {step: (status, detail) for step, status, detail in O.verify(self.project)}
+        finally:
+            os.getuid = real
+        self.assertEqual(got["agent socket"][0], "fail")
+        self.assertIn("run verify inside WSL", got["agent socket"][1])
+
+
+def prereqs_module():
+    sys.path.insert(0, str(O.KIT))
+    from overture import prereqs as PQ
+    return PQ
+
+
+class PrereqTests(unittest.TestCase):
+    """1.53.2: what this machine still needs, with the fix for THIS platform and a link (owner, 2026-10-20)."""
+
+    def scan(self, plat, have=(), routes=False, systemd=False):
+        PQ = prereqs_module()
+        which = lambda name: f"/usr/bin/{name}" if name in have else None
+        with mock.patch.object(PQ.shutil, "which", which), mock.patch.object(PQ, "_systemd_user", lambda: systemd):
+            return {i["name"]: i for i in PQ.scan(routes=routes, plat=plat)}
+
+    def test_each_platform_gets_its_own_items_and_fixes(self):
+        # Catches: one platform's fix printed on another (apt on a Mac, brew on Windows), WSL told nothing of
+        # wsl.conf, Windows not told of WSL, Git for Windows, python3 or that Claude Code belongs in WSL, and a
+        # required item marked optional (gh is the only optional one).
+        linux, wsl, mac, win = (self.scan(p) for p in ("linux", "wsl", "macos", "windows"))
+        self.assertEqual(set(linux), {"Python 3.11 or newer", "git", "gh, the GitHub CLI", "systemd --user"})
+        self.assertTrue(linux["git"]["fix"][0].startswith("sudo apt install git"))
+        self.assertEqual(wsl["systemd --user"]["link"], "https://learn.microsoft.com/en-us/windows/wsl/systemd")
+        self.assertIn("/etc/wsl.conf", wsl["systemd --user"]["why"])
+        self.assertNotIn("wsl.conf", linux["systemd --user"]["why"] + " ".join(linux["systemd --user"]["fix"]))
+        self.assertEqual(set(mac), {"Python 3.11 or newer", "git", "gh, the GitHub CLI", "launchd"})
+        self.assertEqual((mac["git"]["fix"], mac["gh, the GitHub CLI"]["fix"]), (["brew install git"], ["brew install gh"]))
+        self.assertTrue(win["WSL"]["fix"][0].startswith("wsl --install"))
+        self.assertEqual(win["Git for Windows (git and Git Bash)"]["fix"], ["winget install --id Git.Git -e"])
+        self.assertEqual(win["python3 on PATH"]["link"], "https://apps.microsoft.com/search?query=python")
+        self.assertEqual(win["gh, the GitHub CLI"]["fix"], ["winget install --id GitHub.cli -e"])
+        self.assertEqual(win["Claude Code inside WSL"]["link"], "https://code.claude.com/docs/en/setup")
+        for got in (linux, wsl, mac, win):
+            self.assertEqual({n for n, i in got.items() if not i["required"]}, {"gh, the GitHub CLI"})
+            self.assertTrue(got["Python 3.11 or newer"]["ok"])
+            self.assertTrue(all(not i["ok"] for n, i in got.items() if n != "Python 3.11 or newer"))
+        self.assertTrue(self.scan("linux", have=("git", "gh"), systemd=True)["systemd --user"]["ok"])
+        routes = self.scan("macos", routes=True)
+        self.assertEqual(routes["cloudflared"]["fix"], ["brew install cloudflared"])
+        self.assertFalse(any(routes[n]["required"] for n in ("cloudflared", "tailscale", "zerotier-cli")))
+        self.assertNotIn("cloudflared", self.scan("macos"))   # route tools only when asked for
+
+    def test_gh_on_debian_and_ubuntu_is_githubs_apt_repository_not_the_distributions(self):
+        # Catches (1.53.2 review F1): `sudo apt install gh` printed on Linux or WSL, which installs the
+        # distribution's gh (2.4 to 2.46), one GitHub calls broken; the fix is GitHub's own apt repository.
+        for plat in ("linux", "wsl"):
+            gh = self.scan(plat)["gh, the GitHub CLI"]
+            with self.subTest(plat=plat):
+                self.assertEqual(gh["fix"], [])
+                self.assertEqual(gh["link"], "https://github.com/cli/cli/blob/trunk/docs/install_linux.md")
+                self.assertIn("add GitHub's apt repository first", gh["why"])
+        self.assertEqual(self.scan("macos")["gh, the GitHub CLI"]["link"], "https://cli.github.com")
+
+    def test_the_python_apt_line_says_which_releases_ship_3_11(self):
+        # Catches (1.53.2 review F2): a bare `sudo apt install python3`, which gives 3.10 on Ubuntu 22.04 and
+        # 3.9 on Debian 11, both too old, with nothing saying so.
+        for plat in ("linux", "wsl"):
+            with self.subTest(plat=plat):
+                fix = self.scan(plat)["Python 3.11 or newer"]["fix"]
+                self.assertEqual(fix, ["sudo apt install python3   # Ubuntu 24.04+ and Debian 12+ ship 3.11 or "
+                                       "newer; else see the link"])
+
+    def test_windows_says_how_to_get_wsl_and_python3_and_lists_wsl_first(self):
+        # Catches (1.53.2 review F3, F4, F7): `wsl --install` without "PowerShell as administrator" (it fails
+        # elsewhere); the out-of-date "a python.org install gives only python and py" (its install manager ships
+        # python3; only the old full installer lacks it); and "Claude Code inside WSL" listed before WSL itself.
+        PQ = prereqs_module()
+        with mock.patch.object(PQ.shutil, "which", lambda n: None):
+            names = [i["name"] for i in PQ.scan(plat="windows")]
+        self.assertEqual(names[1:3], ["WSL", "Claude Code inside WSL"])
+        win = self.scan("windows")
+        self.assertEqual(win["WSL"]["fix"], ["wsl --install   # in PowerShell, run as administrator"])
+        why = win["python3 on PATH"]["why"]
+        self.assertIn("Python's install manager (from python.org or the Microsoft Store) provides it", why)
+        self.assertIn("the old full installer gives only `python` and `py`", why)
+
+    def test_wsl_systemd_is_edited_under_boot_never_appended_blind(self):
+        # Catches (1.53.2 review F5): `printf '[boot]...' | sudo tee -a /etc/wsl.conf`, which adds a second
+        # [boot] section to a wsl.conf that has one; Debian left without systemd-sysv; the old docs link.
+        it = self.scan("wsl")["systemd --user"]
+        self.assertEqual(it["fix"], [])
+        self.assertNotIn("tee", it["why"])
+        for words in ("add `systemd=true` under `[boot]` in /etc/wsl.conf (create the section if it isn't there)",
+                      "then run `wsl --shutdown` from Windows", "Debian needs `systemd-sysv` too"):
+            self.assertIn(words, it["why"])
+        self.assertEqual(it["link"], "https://learn.microsoft.com/en-us/windows/wsl/systemd")
+
+    def test_the_cloudflared_link_is_the_page_itself_not_a_redirect(self):
+        # Catches (1.53.2 review F9): the old connect-networks downloads link, which only redirects.
+        self.assertEqual(self.scan("linux", routes=True)["cloudflared"]["link"],
+                         "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/"
+                         "downloads/")
+
+    def test_the_scan_ends_with_one_total_line(self):
+        # Catches (1.53.2 review F8): `onboard.py prereqs` and the banner block ending on the last item, with no
+        # count, or a count that mixes required with optional.
+        PQ = prereqs_module()
+        it = lambda req, ok: {"name": "n", "required": req, "ok": ok, "why": "w", "fix": [], "link": "L"}
+        self.assertEqual(PQ.total_line([it(True, True), it(False, False)]), "nothing required is missing")
+        self.assertEqual(PQ.total_line([it(True, False), it(True, False), it(False, False), it(False, True)]),
+                         "2 required, 1 optional missing")
+        self.assertEqual(PQ.missing_block([it(True, False)])[-1], "1 required, 0 optional missing")
+        everything = ("git", "gh", "cloudflared", "tailscale", "zerotier-cli")
+        for have, systemd, last in ((everything, True, "nothing required is missing"),
+                                    (("git", "gh"), False, "1 required, 3 optional missing"),
+                                    ((), False, "2 required, 4 optional missing")):
+            out = io.StringIO()
+            with self.subTest(have=have), mock.patch.object(PQ, "detect", lambda: "linux"), \
+                    mock.patch.object(PQ.shutil, "which", lambda n: "/usr/bin/" + n if n in have else None), \
+                    mock.patch.object(PQ, "_systemd_user", lambda: systemd), contextlib.redirect_stdout(out):
+                O.main(["prereqs"])
+            self.assertEqual(out.getvalue().splitlines()[-1], last)
+
+    def test_detect_tells_wsl_from_linux(self):
+        # Catches: WSL taken for plain Linux (no wsl.conf fix), by either sign, or Windows and macOS misread.
+        PQ = prereqs_module()
+        with tempfile.TemporaryDirectory() as td:
+            rel = Path(td) / "osrelease"
+            for system, env, kernel, want in (("Windows", {}, "", "windows"), ("Darwin", {}, "", "macos"),
+                                              ("Linux", {"WSL_DISTRO_NAME": "Ubuntu"}, "6.1.0", "wsl"),
+                                              ("Linux", {}, "6.6.87.2-microsoft-standard-WSL2", "wsl"),
+                                              ("Linux", {}, "6.1.0-18-amd64", "linux")):
+                rel.write_text(kernel)
+                plain = {k: v for k, v in os.environ.items() if k != "WSL_DISTRO_NAME"}
+                with self.subTest(want=want, kernel=kernel), mock.patch.object(PQ.platform, "system", lambda: system), \
+                        mock.patch.object(PQ, "OSRELEASE", rel), mock.patch.dict(os.environ, {**plain, **env}, clear=True):
+                    self.assertEqual(PQ.detect(), want)
+
+    def test_the_one_subprocess_has_a_one_second_timeout(self):
+        # Catches: a `systemctl --user` call with no timeout (or a longer one), which could hold the 5 s banner
+        # hook past its own limit, and more than two subprocesses in one scan.
+        PQ = prereqs_module()
+        calls = []
+        run = lambda *a, **k: calls.append(k.get("timeout")) or subprocess.CompletedProcess(a[0], 0)
+        with mock.patch.object(PQ.shutil, "which", lambda n: "/usr/bin/" + n), mock.patch.object(PQ.subprocess, "run", run):
+            for plat in ("linux", "wsl", "macos", "windows"):
+                PQ.scan(routes=True, plat=plat)
+        self.assertEqual(calls, [1.0, 1.0])   # linux and wsl, one each
+
+    def test_onboard_prereqs_exits_1_only_when_a_required_one_is_missing(self):
+        # Catches: `onboard.py prereqs` exiting 0 with git missing (a script cannot tell), 1 for a missing
+        # optional one, its --json not the scan's own items, and the route tools left out of it.
+        PQ = prereqs_module()
+        for have, want in ((("git", "gh"), 0), (("git",), 0), (("gh",), 1)):
+            out = io.StringIO()
+            which = lambda n: "/usr/bin/" + n if n in have else None
+            with self.subTest(have=have), mock.patch.object(PQ, "detect", lambda: "linux"), \
+                    mock.patch.object(PQ.shutil, "which", which), mock.patch.object(PQ, "_systemd_user", lambda: True), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(O.main(["prereqs", "--json"]), want)
+            items = json.loads(out.getvalue())
+            self.assertEqual([i["name"] for i in items][-3:], ["cloudflared", "tailscale", "zerotier-cli"])
+            self.assertTrue(all(set(i) == {"name", "required", "ok", "why", "fix", "link"} for i in items))
+        out = io.StringIO()
+        with mock.patch.object(PQ, "detect", lambda: "linux"), mock.patch.object(PQ.shutil, "which", lambda n: None), \
+                mock.patch.object(PQ, "_systemd_user", lambda: False), contextlib.redirect_stdout(out):
+            self.assertEqual(O.main(["prereqs"]), 1)
+        self.assertIn("  - git (required): agents use it for their own worktrees\n      sudo apt install git", out.getvalue())
+
+
+class PrereqBannerTests(unittest.TestCase):
+    """1.53.2: the install banner ends with what is missing, and is unchanged when nothing is."""
+
+    def notice(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("install_notice_pq", InstallNoticeTests.HOOK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_a_missing_one_is_listed_with_its_command_and_link_and_none_adds_nothing(self):
+        # Catches: no scan on install (the owner's ask), a block printed when nothing is missing, and a block
+        # without the fix command or the link, on the first-install and the upgrade banner alike.
+        mod, PQ = self.notice(), prereqs_module()
+        ok = [{"name": "git", "required": True, "ok": True, "why": "w", "fix": ["sudo apt install git"], "link": "L"}]
+        gone = [{**ok[0], "ok": False}]
+        for prior in ([], ["0.0.1"]):
+            body = "\n".join(mod._upgrade_lines(prior) if prior else mod._install_lines())
+            with self.subTest(prior=prior), mock.patch.object(mod, "_prior_versions", lambda: prior):
+                with mock.patch.object(PQ, "scan", lambda: ok):
+                    self.assertEqual(mod._instructions(), body)
+                with mock.patch.object(PQ, "scan", lambda: gone):
+                    self.assertEqual(mod._instructions(), body + "\n\nMissing prerequisites:\n"
+                                     "  - git (required): w\n      sudo apt install git\n      L\n"
+                                     "1 required, 0 optional missing")
+
+    def test_on_windows_the_banners_say_where_the_console_runs_and_print_no_command(self):
+        # Catches (1.53.2): the Windows banner telling people to run "the printed install commands" in WSL (they
+        # print Windows paths), never saying Claude Code itself must run in WSL, that Desktop has no plugins in
+        # its WSL sessions, or that the hooks need a python3; and the upgrade banner's `bash "C:\\...install.sh"`.
+        mod = self.notice()
+        with mock.patch.object(mod, "_is_windows_native", lambda: True):
+            first, upgrade = "\n".join(mod._install_lines()), "\n".join(mod._upgrade_lines(["0.0.1"]))
+        for words in ("the console and its agent side run inside WSL2", "Use the Claude\n  Code CLI inside WSL",
+                      "Desktop has no plugins in its WSL sessions", "need a `python3` on PATH", mod.WINDOWS):
+            self.assertIn(words, first)
+        self.assertNotIn("printed install commands", first)
+        self.assertIn("runs inside WSL. Update the plugin in the Claude\nCode CLI inside WSL too", upgrade)
+        for wrong in ("install.sh", "systemctl", "server.py"):
+            self.assertNotIn(wrong, upgrade)
+        self.assertTrue(mod.WINDOWS.endswith("docs/features/hosting.md#windows"))
+
+    def test_a_failing_scan_leaves_the_banner_as_before(self):
+        # Catches: an error in the scan (or its import) costing the user the banner, or the session a hook
+        # error: the hooks fail open.
+        mod, PQ = self.notice(), prereqs_module()
+        body = "\n".join(mod._install_lines())
+        with mock.patch.object(mod, "_prior_versions", lambda: []), \
+                mock.patch.object(PQ, "scan", side_effect=OSError("boom")):
+            self.assertEqual(mod._instructions(), body)
+
+
 if __name__ == "__main__":
     unittest.main()
