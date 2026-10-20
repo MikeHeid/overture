@@ -40,7 +40,6 @@ absolute path of plain characters. Anything else is `?`, never passed through.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -49,6 +48,16 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:   # native Windows Python (1.53.1): no POSIX locks; the console itself runs in WSL
+    fcntl = None
+
+# Native Windows Python has none of these; 0 leaves the open as it was asked, and _open refuses a symlink itself.
+O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link", "pr-merge")     # overture/doorbell.py
 CURSOR_FILE = "agent-cursor.json"      # overture/doorbell.py
@@ -84,13 +93,21 @@ class Unsafe(ValueError):
     pass
 
 
+def _open(path: Path, flags: int, nofollow: bool = False, mode: int = 0o600) -> int:
+    """os.open, never blocking; with `nofollow` a symlink is refused, by O_NOFOLLOW where the OS has it, else by
+    lstat first (native Windows Python, which lacks the flag)."""
+    if nofollow and not O_NOFOLLOW and os.path.islink(path):
+        raise Unsafe(f"{Path(path).name} is a symlink")
+    return os.open(path, flags | O_NONBLOCK | (O_NOFOLLOW if nofollow else 0), mode)
+
+
 def _read_regular(path: Path, cap: int, nofollow: bool = False) -> bytes | None:
     """As overture/registry.read_regular: a regular file's bytes, None when absent, never blocking.
 
     With `nofollow` a symlink is refused too (the sessions file, whose writer refuses one).
     """
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (os.O_NOFOLLOW if nofollow else 0))
+        fd = _open(path, os.O_RDONLY, nofollow)
     except FileNotFoundError:
         return None
     try:
@@ -228,7 +245,7 @@ def _read_tail(path: Path, cap: int) -> tuple[bytes, int]:
     symlink or anything but a regular file is refused (Unsafe or OSError).
     """
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        fd = _open(path, os.O_RDONLY, nofollow=True)
     except FileNotFoundError:
         return b"", 0
     try:
@@ -292,9 +309,11 @@ def record_session(state: Path, sid: str, name: str) -> bool:
         raise Unsafe("not a session id and an agent name")
     if not os.path.isdir(state):
         raise Unsafe(f"the console's state directory {state} does not exist")
+    if fcntl is None:
+        raise Unsafe("naming a session needs POSIX file locks, which native Windows Python lacks; "
+                     "run Claude Code inside WSL, where the console runs")
     path = Path(state) / SESSIONS_FILE
-    flags = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    lock = os.open(Path(state) / SESSIONS_LOCK, os.O_RDWR | os.O_CREAT | flags, 0o600)
+    lock = _open(Path(state) / SESSIONS_LOCK, os.O_RDWR | os.O_CREAT | O_CLOEXEC, nofollow=True)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         data, size = _read_tail(path, 4 * MAX_SESSIONS)
@@ -311,7 +330,7 @@ def record_session(state: Path, sid: str, name: str) -> bool:
             return True
         if data and not data.endswith(b"\n"):
             line = "\n" + line      # never glue a line onto a cut-short one
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | flags, 0o600)
+        fd = _open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | O_CLOEXEC, nofollow=True)
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise Unsafe(f"{SESSIONS_FILE} is not a regular file")

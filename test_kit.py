@@ -4523,6 +4523,81 @@ class AgentNamesFileTests(Tmp):
 SID5, SID6 = "0120efbe-7f88-40cf-831b-b18e5a678fdf", "1e5d962e-a2b8-43ad-8a1f-afd0be23414c"
 
 
+# -- 1.53.1: the hooks load on native Windows Python (no fcntl, no O_NONBLOCK / O_NOFOLLOW / O_CLOEXEC) --
+
+WINDOWS_SHIM = """import os, runpy, sys
+sys.modules["fcntl"] = None   # as native Windows Python: no fcntl, and none of these open flags
+for f in ("O_NONBLOCK", "O_NOFOLLOW", "O_CLOEXEC"):
+    if hasattr(os, f):
+        delattr(os, f)
+script = sys.argv.pop(1)
+sys.argv[0] = script
+runpy.run_path(script, run_name="__main__")
+"""
+
+
+class WindowsHookTests(_Steward):
+    """Claude Code runs every hook on a Windows machine too; there each must load, and stand down by name."""
+
+    HOOKS = HERE / "plugin" / "hooks"
+
+    def run_windows(self, hook, payload):
+        shim = self.dir / "windows_shim.py"
+        shim.write_text(WINDOWS_SHIM)
+        env = self.env(CLAUDE_PROJECT_DIR=str(self.project))
+        for k in ("OVERTURE_SESSION", "CLAUDE_ENV_FILE"):
+            env.pop(k, None)
+        return subprocess.run([sys.executable, str(shim), str(self.HOOKS / hook)], env=env,
+                              input=payload if isinstance(payload, str) else json.dumps(payload),
+                              capture_output=True, text=True, timeout=30)
+
+    def prompt(self, text):
+        return {"session_id": SID5, "transcript_path": str(self.dir / "t.jsonl"), "cwd": str(self.project),
+                "permission_mode": "default", "hook_event_name": "UserPromptSubmit", "prompt": text}
+
+    def test_every_hook_loads_and_stays_silent_in_an_unregistered_project(self):
+        # Catches: a top-level `import fcntl` or `os.O_NOFOLLOW` in a hook or anything it imports (the
+        # reported 1.49 crash in session_start.py, and the kit's atfile.py under ruling_lookup.py): the
+        # hook then dies before its fail-open `main`, and Claude Code shows a hook error on every session,
+        # prompt or edit, or "the SessionStart check failed" when the flags fail inside the check.
+        edit = {"session_id": SID5, "cwd": str(self.project), "hook_event_name": "PreToolUse",
+                "tool_name": "Edit", "tool_input": {"file_path": str(self.project / "a.py"),
+                                                    "old_string": "x", "new_string": "y"}}
+        cases = {"session_start.py": "", "name_session.py": self.prompt("hello"),
+                 "ask_guard.py": QuestionHookTests.payload(self), "ruling_lookup.py": edit}
+        for hook, payload in cases.items():
+            with self.subTest(hook=hook):
+                r = self.run_windows(hook, payload)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_naming_a_session_there_says_it_needs_wsl_and_writes_nothing(self):
+        # Catches: a missing fcntl reaching fcntl.flock in record_session, which says only
+        # "/overture:as failed (AttributeError)", or a sessions file written without its lock.
+        self.register()
+        r = self.run_windows("name_session.py", self.prompt("/overture:as agent-6"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        note = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("nothing recorded, because naming a session needs POSIX file locks", note)
+        self.assertIn("inside WSL", note)
+        self.assertFalse((self.state / "sessions.jsonl").exists())
+
+    def test_without_o_nofollow_a_symlink_is_still_refused(self):
+        # Catches: O_NOFOLLOW defaulting to 0 with nothing in its place, so a planted symlink
+        # sessions file is followed and its names trusted where the OS has no such flag.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("session_start_win", self.HOOKS / "session_start.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        hook.O_NOFOLLOW = 0
+        target = self.dir / "elsewhere.jsonl"
+        target.write_text(json.dumps({"agent": "agent-6", "session": SID5, "ts": "2026-10-20T00:00:00Z"}) + "\n")
+        (self.state / "sessions.jsonl").symlink_to(target)
+        with self.assertRaises(hook.Unsafe):
+            hook._read_regular(self.state / "sessions.jsonl", 4096, nofollow=True)
+        self.assertIsNone(hook.session_name(self.state, SID5))
+        self.assertEqual(hook._read_regular(target, 4096, nofollow=True), target.read_bytes())
+
+
 class SessionNameTests(_Steward):
     """The UserPromptSubmit hook records session -> name; every check then reads it, never trusts it for the steward."""
 
