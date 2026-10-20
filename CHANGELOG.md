@@ -2990,6 +2990,37 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Windows, honestly (1.53.2)
+
+On native Windows the console cannot run, and Overture now says so plainly
+everywhere, instead of failing with a traceback.
+
+- **Every kit command refuses by name there.** `agent.py`, `mcp_server.py`,
+  `fold.py`, `rulecheck.py`, `server.py` and `hosting.py` print one line on
+  stderr and exit 2: the console needs a POSIX system, so run Claude Code
+  inside WSL. The check runs before any import that fails there; the old
+  checks in `server.py` and `hosting.py` were never reached.
+- **A failing PreToolUse hook never blocks a tool.** `ask_guard.py` and
+  `ruling_lookup.py` carry `"onFailure": "continue"`, so a missing `python3`
+  never costs an edit or a question.
+- **Onboarding on Windows says to go to WSL.** It prints that once, in place
+  of commands with Windows paths a WSL shell cannot run. `verify` no longer
+  raises there.
+- **The install banner tells the truth on Windows.** The console and its
+  agent side run in WSL; use the Claude Code CLI there. Claude Desktop loads
+  the plugin only in native sessions, where the console is not reachable.
+  The hooks need a `python3` on PATH.
+- **A prerequisite scan on install.** The first session after an install or
+  upgrade lists what this machine is missing (Python, git, gh, systemd or
+  launchd, and WSL, Git for Windows and `python3` on Windows), each with the
+  command for your platform and a link. Nothing is printed when nothing is
+  missing. `onboard.py prereqs [--json]` runs it again, route tools
+  included, and console-onboard runs it first.
+- **scaffold-dashboard** runs the plugin's own kit, not a fixed
+  `~/.local/share/overture` path.
+- **Docs.** Hosting has a Windows section; MCP, INSTALL and the README say
+  Claude Code runs in WSL on Windows.
+
 ## Hooks on Windows (1.53.1)
 
 A report from a Windows 11 machine (Store Python, Overture 1.49.0): every

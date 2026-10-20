@@ -216,18 +216,34 @@ refuses the old token from the next request.
   listens on `STATE/agent.sock`, that socket answers without a token.
   Stop it before relying on the token.
 
-## Windows + WSL2 (optional)
+<a id="windows"></a>
+## Windows (0.9.1, 1.26, 1.53.2)
 
-The server, the tunnel and the systemd units are POSIX; a convenient
-layout on a Windows host is to run them in WSL2 while a Claude Code
-session lives on either side. A few traps worth knowing:
+The console runs on POSIX: Unix sockets, `fcntl` locks, systemd or launchd.
+On a Windows machine it runs inside WSL2, and so does everything that talks
+to it.
 
-- **CRLF.** `git config core.autocrlf=true` on Windows gives every file
-  in the plugin cache CRLF endings. `install.sh` then fails at once
-  (`set: pipefail: invalid option name`), and systemd unit files with a
-  `\r` silently misbehave. Install the kit from a copy stripped of CR
-  (`sed -i 's/\r$//'` on each `*.sh`, `*.in`, `*.py`, `*.js`, `*.css`,
-  `*.html`) or clone with `core.autocrlf=false`.
+- **The server runs in WSL2.** Install and start it from a WSL shell, as on
+  Linux.
+- **Claude Code must run in WSL too.** Use the Claude Code CLI inside WSL
+  ([setup](https://code.claude.com/docs/en/setup)). The agent's door is a
+  Unix socket in WSL, which Windows cannot open, so a native Windows session
+  cannot reach the console.
+- **Claude Desktop.** Its Code tab loads plugins only in native Windows
+  sessions; plugins are not available in its WSL sessions
+  ([Desktop](https://code.claude.com/docs/en/desktop)). There the console's
+  features are unavailable. Use the CLI inside WSL.
+- **What a native Windows session still gets.** The hooks load and stay
+  silent (1.53.1). The PreToolUse hooks carry `"onFailure": "continue"`, so a
+  failing hook never blocks an edit or a question
+  ([hooks](https://code.claude.com/docs/en/hooks)). Every kit command
+  (`agent.py`, `mcp_server.py`, `fold.py`, `rulecheck.py`, `server.py`)
+  refuses in one line that names this section. `onboard.py` says to onboard
+  again inside WSL; `onboard.py prereqs` runs there and lists what is missing.
+- **`python3`.** Claude Code runs hooks in Git Bash when Git for Windows is
+  installed, else in PowerShell. The hooks are called as `python3`. The
+  Microsoft Store's Python provides it; a python.org install provides only
+  `python` and `py`, and `python3` then opens the Store.
 - **Default branch.** `page-snapshot --from-ref origin/main` is the
   default and fails on a repository whose default is anything else. Pass
   `--from-ref HEAD --unreviewed` while bootstrapping, or point
@@ -239,12 +255,10 @@ session lives on either side. A few traps worth knowing:
   `agent.py --state STATE items-push --adapter PATH` once (and whenever
   the item list changes); until then `ask` on any item but `PROJECT` is
   refused.
-- **Reaching the server from Windows.** The agent socket lives in WSL
-  and Windows cannot open a WSL2 Unix socket. Options: run the
-  agent-side session inside WSL (`wsl -e bash` wrapper), or use the
-  one-server HTTP door with a project token on loopback.
 - **Linger.** Systemd user units stop when WSL shuts down. Run
   `loginctl enable-linger $USER` in WSL; a Windows process that keeps
   WSL alive still helps when nothing else holds it.
-- **Platform guard (1.26+).** `server.py` refuses to start on non-POSIX
-  rather than corrupting state under a half-working runtime.
+- **Line endings.** `.gitattributes` pins LF, so a Windows checkout no
+  longer breaks `install.sh` with CRLF (0.9.1).
+- **Not yet:** an agent door Windows can reach (TCP), Windows file locks,
+  Windows drive paths in the registry, and a `python` fallback for the hooks.

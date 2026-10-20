@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.53.1-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.53.2-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-1493-2da44e">
@@ -208,7 +208,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.53.1
+      - uses: MikeHeid/overture@v1.53.2
 ```
 
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
@@ -280,7 +280,8 @@ shortcuts, and **Operator Shift** reports the week as Markdown.
 One server hosts every project on the machine, as a daemon, a systemd user
 unit (Linux, WSL) or a launchd LaunchAgent (macOS, 1.51), with `status` and
 `health` to check it. Each project's agents use their
-own token. Windows hosts run it in WSL2.
+own token. Windows hosts run it in WSL2, and Claude Code runs there too (the
+CLI inside WSL).
 
     <py> <kit>/server.py service install --start   # systemd (Linux, WSL) or launchd (macOS)
     <py> <kit>/server.py status                    # which mode, pid, each project's port

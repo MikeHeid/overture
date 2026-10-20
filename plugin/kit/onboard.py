@@ -401,7 +401,17 @@ no Cloudflare, no tunnel.
 """
 
 
+WINDOWS_NEXT = """
+Next: this is native Windows, where the console cannot run, and the commands onboarding
+prints would name Windows paths that a WSL shell cannot use. Run onboarding again inside
+WSL: start the Claude Code CLI there and type /overture:console-onboard in the project.
+See docs/features/hosting.md#windows.
+"""
+
+
 def next_steps(project: Path, a: dict) -> str:
+    if os.name != "posix":   # 1.53.2: say where to go once, instead of commands with C:\ paths
+        return WINDOWS_NEXT
     if a.get("auth") == "link":   # 1.47.0 (L7); the Cloudflare steps below are 1.46's, unchanged
         return _link_next_steps(project.resolve(), a)
     project = project.resolve()
@@ -520,8 +530,12 @@ def verify(project: Path) -> list[tuple[str, str, str]]:
     except (OSError, subprocess.TimeoutExpired) as e:
         results.append(("service", "warn", f"could not query systemctl: {e}"))
 
-    sock = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "overture.sock"
-    if not sock.exists():
+    uid = getattr(os, "getuid", None)   # 1.53.2: native Windows has none, and no console socket
+    sock = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid()}") / "overture.sock" if uid else None
+    if sock is None:
+        results.append(("agent socket", "fail",
+                        "native Windows has no console socket: run verify inside WSL (docs/features/hosting.md#windows)"))
+    elif not sock.exists():
         results.append(("agent socket", "fail",
                         f"{sock} missing — the service is not running or has not written its socket"))
     else:
@@ -633,6 +647,20 @@ def tunnel(project: Path, tunnel_id: str, force: bool = False) -> str:
     return _write(_target(Path.home() / ".cloudflared", f"config-{env['CONSOLE_TUNNEL']}.yml"), MARK + "\n" + text, force)
 
 
+def prereqs(as_json: bool) -> int:
+    """1.53.2: print every prerequisite, route tools included; 1 when a required one is missing."""
+    if str(KIT) not in sys.path:
+        sys.path.insert(0, str(KIT))
+    from overture import prereqs as PQ   # import-safe on native Windows, unlike the rest of the kit
+    items = PQ.scan(routes=True)
+    if as_json:
+        print(json.dumps(items))
+    else:
+        for it in items:
+            print("\n".join(PQ.item_lines(it)) if not it["ok"] else f"  ok: {it['name']}")
+    return 1 if any(it["required"] and not it["ok"] for it in items) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Onboard a project onto the owner console.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -672,6 +700,9 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("detect", help="list this machine's ZeroTier and Tailscale addresses (1.47), and any "
                                       "network overlapping one")
     d.add_argument("--json", action="store_true")
+    q = sub.add_parser("prereqs", help="what this machine still needs, with the fix for each (1.53.2); "
+                                       "exit 1 when a required one is missing. Works on native Windows too")
+    q.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "write" and (a.auth or "cloudflare") == "cloudflare":
         missing = [f for f, v in (("--team-domain", a.team_domain), ("--aud", a.aud), ("--hostname", a.hostname))
@@ -679,6 +710,8 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             w.error(f"the following arguments are required: {', '.join(missing)}")
     try:
+        if a.cmd == "prereqs":
+            return prereqs(a.json)
         if a.cmd == "detect":
             got = detect()
             if a.json:
