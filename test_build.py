@@ -59,6 +59,16 @@ class LayoutTests(Base):
                 self.assertNotIn("/.git/", n)
                 self.assertNotIn("/dist/", n)
 
+    def test_no_area_note_ships_in_the_zip(self):
+        # Catches (1.53.0): Overture's own area notes (CLAUDE.md, facts about this repository's code) shipped in
+        # the plugin, where they would describe the kit's source to a user's sessions; the skip must hold for a
+        # note at any depth, and keep a file that merely has CLAUDE.md in its name.
+        for rel in ("kit/overture/CLAUDE.md", "hooks/CLAUDE.md", "skills/CLAUDE.md", "CLAUDE.md"):
+            self.assertTrue(B.SKIP.search(rel), rel)
+        self.assertFalse(B.SKIP.search("skills/NOT-CLAUDE.md.txt"))
+        names = zipfile.ZipFile(self.built()[0]).namelist()
+        self.assertEqual([n for n in names if Path(n).name == "CLAUDE.md"], [])
+
     def test_the_marketplace_points_at_the_plugin_at_the_same_version(self):
         z = zipfile.ZipFile(self.built()[0])
         market = json.loads(z.read("overture/.claude-plugin/marketplace.json"))

@@ -913,6 +913,99 @@ def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | Non
     return stale[:WT.MAX_STALE_REPORT]
 
 
+NOTES_FILE = ".notes-check.json"   # in STATE: when the watch last checked the area notes, and its counts
+NOTES_EVERY = 86400.0   # 1.53.0: the watch checks the area notes at most once a day
+MAX_NOTES_FILE = 4096
+
+
+def _notes_record(state: Path) -> dict:
+    """The watch's last notes check: {"at": epoch, "counts": dict | None}; {} if none."""
+    try:
+        data = R.read_regular(Path(state) / NOTES_FILE, MAX_NOTES_FILE, nofollow=True)
+        rec = json.loads(data.decode("utf-8")) if data is not None else {}
+    except (OSError, ValueError, RecursionError, R.RegistryError):
+        return {}
+    if not (isinstance(rec, dict) and isinstance(rec.get("at"), (int, float)) and not isinstance(rec["at"], bool)):
+        return {}
+    c = rec.get("counts")
+    ok = isinstance(c, dict) and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in c.values())
+    return {"at": float(rec["at"]), "counts": {k: c[k] for k in sorted(c) if isinstance(k, str)} if ok else None}
+
+
+def _write_notes_record(state: Path, rec: dict) -> None:
+    import tempfile
+    p = Path(state) / NOTES_FILE
+    with contextlib.suppress(OSError):
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".notes-check.", suffix=".tmp")   # 0600
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, sort_keys=True) + "\n")
+            os.replace(tmp, p)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
+
+def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | None:
+    """The steward's daily area-notes check (1.53.0): its counts for the heartbeat, or None (nothing said).
+
+    Modelled on `_watch_prune`'s throttle: called after the watch's first heartbeat, only for the project the
+    working directory is in AND whose console this is, at most once per NOTES_EVERY (the time kept in STATE; in
+    between it hands back the last counts). `beat` runs while each git call waits, so "listening" never lapses.
+    A project whose `.overture.json` declares no areas is left alone, silently. Any error is said once, on
+    stderr, and never stops the watch: the time is recorded either way, so it is tried again the next day.
+    """
+    import time as _time
+    from overture import notes as NO
+    t = _time.time() if now is None else now
+    rec = _notes_record(state)
+    if rec and 0 <= t - rec["at"] < NOTES_EVERY:
+        return rec["counts"]
+    counts = None
+    try:
+        cwd = Path.cwd()
+        here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
+        if not here or os.path.realpath(here[1].get("state", "")) != os.path.realpath(state):
+            return None
+        root = Path(here[0])
+        if "areas" in _json_or_empty(root / NO.CONFIG):
+            counts = NO.counts(NO.check(root, tick=beat))
+    except Exception as e:  # noqa: BLE001 - a broken check (git, a bug) never costs the owner the steward's watch
+        print(f"notes check skipped: {e}", file=sys.stderr)
+    _write_notes_record(state, {"at": t, "counts": counts})
+    return counts
+
+
+def _json_or_empty(p: Path) -> dict:
+    """A small JSON object file, or {} when it is absent or is not one (the check itself names a bad file)."""
+    try:
+        data = R.read_regular(p, 64 * 1024, nofollow=True)
+        doc = json.loads(data.decode("utf-8")) if data is not None else {}
+    except (OSError, ValueError, RecursionError, R.RegistryError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _notes(a) -> int:
+    """`notes check [--root DIR] [--memory DIR] [--json] [--update AREA]` (1.53.0). Exit 0, 1 a finding, 2 refused."""
+    from overture import notes as NO
+    try:
+        root = a.root if a.root is not None else NO.top_of(Path.cwd())
+        if a.update:
+            got = NO.update(root, a.update)
+            print(f"{got['note']}: checked {got['was']} -> {got['checked']}")
+            return 0
+        res = NO.check(root, memory=a.memory)
+    except NO.NotesError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    if a.json:
+        sys.stdout.write(_json(res))
+    else:
+        print("\n".join(NO.lines(res)))
+    return 0 if res["ok"] else 1
+
+
 def _costs(a) -> int:
     """`costs collect` / `costs show --fork ID` (K2). Reads transcripts here, in the session; the server never does."""
     from overture import costs as C
@@ -1706,7 +1799,7 @@ def _refused_note(files: list, n: int, why: str | None, rc: int = 1) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--state", type=Path, required=True)
+    ap.add_argument("--state", type=Path, help="the console's state folder (required by every command but `notes`)")
     ap.add_argument("--as", dest="agent", metavar="NAME",
                     help=f"this session's agent name, e.g. agent-6 (default: this session's /overture:as, "
                          f"then ${N.ENV}; none: unnamed, as in 0.8.1)")
@@ -1746,6 +1839,17 @@ def main(argv=None) -> int:
     s.add_argument("--path", action="append", required=True, metavar="P",
                    help="a project-relative file, or a folder ending in /; repeat for more")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("notes", description="1.53.0 (owner M1-M4): `check` the repository's area notes (a short "
+                       "CLAUDE.md in a folder `.overture.json` \"areas\" declares): stale since the commit each was "
+                       "checked at, undeclared, or malformed; with --memory, the auto-memory index too. Reads git "
+                       "here, never writes, needs no console. Exit 0 all current, 1 a finding, 2 refused.")
+    ns = s.add_subparsers(dest="notes_cmd", required=True)
+    s = ns.add_parser("check")
+    s.add_argument("--root", type=Path, help="the top of the git checkout (default: the one the working directory is in)")
+    s.add_argument("--memory", type=Path, metavar="DIR", help="also check DIR/MEMORY.md, the auto-memory index")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--update", metavar="AREA", help="after re-reading AREA, stamp its note as checked at HEAD "
+                   "(only the note's first line changes; refused while AREA has uncommitted changes)")
     s = sub.add_parser("reanchor")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--json", action="store_true")
@@ -2063,6 +2167,10 @@ def main(argv=None) -> int:
     g.add_argument("address", nargs="?", metavar="ADDR")
     g.add_argument("--clear", action="store_true", help="every owner door on 127.0.0.1 only")
     a = ap.parse_args(argv)
+    if a.cmd == "notes":   # 1.53.0: a reading of the repository alone; no console, no door, no agent name
+        return _notes(a)
+    if a.state is None:
+        ap.error("the following arguments are required: --state")
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
     # an empty variable counts as unset.
     a.agent, where = SN.resolve(a.agent, a.state)
@@ -2576,10 +2684,12 @@ def _run(a, bell: Path) -> int:
         return 0
     if a.cmd == "watch":
         since = a.since if a.since is not None else D.read_cursor(a.state)
-        beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"))  # "agent listening" (0.6.0)
+        beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"),   # "agent listening" (0.6.0)
+                           notes=_notes_record(a.state).get("counts"))
         beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
         if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
             beat.update(_watch_prune(a.state, beat=beat))   # W3: throttled and time-capped; the stale ones ride the heartbeat
+            beat.update_notes(_watch_notes(a.state, beat=beat))   # 1.53.0: once a day; the counts ride it too
         # A session that ends kills its watch with SIGTERM or SIGHUP; turn those into an
         # ordinary exit so `finally` says "stopped" now, rather than the owner seeing
         # "listening" until the promise lapses. SIGKILL cannot be caught: that is the lapse's job.

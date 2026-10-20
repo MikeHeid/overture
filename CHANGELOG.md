@@ -2990,6 +2990,42 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Area notes (1.53.0)
+
+The owner's M1 to M4 (2026-10-20, "do recommended"): what an agent should
+know about a folder is kept in that folder, short, and checked against the
+code. The architect defaults are in OPEN-DECISIONS.md, "M1-M4 as built".
+
+- **Area notes.** A `CLAUDE.md` of at most 10 lines in each folder a
+  project declares in `.overture.json` `"areas"`, read by Claude Code only
+  when a session works there. Facts with their reason; a ruling or lesson is
+  cited by id, never copied. The first line names the commit the facts were
+  checked at: `<!-- area: AREA · checked: SHA -->`. Overture's own: `docs`,
+  `plugin/hooks`, `plugin/kit`, `plugin/kit/overture`, `plugin/skills`.
+- **`agent.py notes check [--root DIR] [--memory DIR] [--json]`** (no
+  `--state` needed) names a stale note (its folder's committed files changed
+  since that commit; nested declared folders and the note itself do not
+  count; after a squash merge the note's own last commit counts), an
+  undeclared one (a `CLAUDE.md` in a folder not declared; ignored folders are
+  never looked at), and a malformed one. The top-level `CLAUDE.md` is said as
+  "always loaded". `--memory DIR` checks `DIR/MEMORY.md` for links to missing
+  files and memory files no line links. Exit 0, 1 on a finding, 2 refused by
+  name. It writes nothing; `--update AREA` stamps one re-read note at `HEAD`
+  (its first line only, refused over uncommitted changes in that folder).
+  Its git goes through the seam, so inside the server it refuses (Q23).
+- **The steward checks once a day**, after its first heartbeat and only when
+  no signal waits, as it prunes worktrees; the counts ride `watch.json`
+  (`area_notes`, numbers only). A project with no `"areas"` is left alone; an
+  error is said once and never stops the watch. No console view (M3 waits).
+- **Packaging.** `build_zip.py` leaves every `CLAUDE.md` out of the zip;
+  `verify_vendor.py` neither requires the kit's notes in a vendored copy nor
+  counts a project's own note beside it as drift. `release.py` lists the
+  notes check among its next steps.
+- Docs: docs/features/automation.md "Memory in its own place: area notes
+  (1.53)", the RUNBOOK ("`notes check` names a stale, undeclared or
+  malformed note"), the README. Also fixed: automation.md cited Q24 for the
+  server's no-git rule, which is Q23.
+
 ## Ruling lookup before an agent edits (1.52.0)
 
 The owner's R1 to R4 (2026-10-19, every recommendation): before an agent

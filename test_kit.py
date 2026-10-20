@@ -9156,5 +9156,376 @@ class WritingSkillWorktreeTests(unittest.TestCase):
                     self.assertNotIn("worktree new", text)
 
 
+class AreaNotesTests(unittest.TestCase):
+    """`agent.py notes check` and overture/notes.py (1.53.0, owner M1-M4): area notes, their checked commit, and
+    the memory index, in throwaway git repositories."""
+
+    AREAS = ["plugin/hooks", "plugin/kit", "plugin/kit/overture", "docs"]
+
+    def setUp(self):
+        from unittest import mock
+        from overture import notes as NO
+        self.NO = NO
+        self._td = tempfile.TemporaryDirectory()
+        self.dir = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        env = mock.patch.dict(os.environ, GIT_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+        self.repo = self.dir / "repo"
+        self.repo.mkdir()
+        wt_git(self.repo, "init", "-q", "-b", "main")
+        for rel, text in {"plugin/hooks/a.py": "a\n", "plugin/kit/agent.py": "k\n",
+                          "plugin/kit/overture/server.py": "s\n", "docs/x.md": "d\n",
+                          ".overture.json": json.dumps({"areas": self.AREAS})}.items():
+            self.write(rel, text)
+        self.commit("start")
+
+    def write(self, rel, text):
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def commit(self, msg):
+        wt_git(self.repo, "add", "-A")
+        wt_git(self.repo, "commit", "-qm", msg)
+        return wt_git(self.repo, "rev-parse", "--short", "HEAD").strip()
+
+    def note(self, area, sha=None, body=("- a fact, and why (Q23).",)):
+        sha = sha or wt_git(self.repo, "rev-parse", "--short", "HEAD").strip()
+        return self.write(f"{area}/CLAUDE.md", f"<!-- area: {area} · checked: {sha} -->\n" + "\n".join(body) + "\n")
+
+    def check(self, **kw):
+        return self.NO.check(self.repo, **kw)
+
+    def cli(self, *args):
+        import contextlib
+        import io
+        import agent as AG
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = AG.main(["notes", "check", *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_a_current_note_passes_and_says_how_many(self):
+        # Catches: a check that fails a note nobody's area changed under, counts the wrong thing, or needs a
+        # console (--state) for what is only a reading of the repository.
+        self.note("plugin/hooks")
+        self.note("docs")
+        self.commit("notes")
+        res = self.check()
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(sorted(res["current"]), ["docs", "plugin/hooks"])
+        rc, out, err = self.cli("--root", str(self.repo))
+        self.assertEqual((rc, out.strip().splitlines()[-1]), (0, "2 area notes current"), err)
+
+    def test_an_area_changed_after_the_checked_commit_is_stale_and_names_the_files(self):
+        # Catches: a stale note that passes (the area's code moved on and the note still claims the old facts),
+        # one that says "stale" with no file to re-read, and a stale note that exits 0.
+        self.note("plugin/hooks")
+        self.commit("note")
+        self.write("plugin/hooks/a.py", "changed\n")
+        self.commit("hooks change")
+        res = self.check()
+        self.assertFalse(res["ok"])
+        [st] = res["stale"]
+        self.assertEqual((st["area"], st["changed"]), ("plugin/hooks", ["plugin/hooks/a.py"]))
+        rc, out, _ = self.cli("--root", str(self.repo))
+        self.assertEqual(rc, 1)
+        self.assertIn("stale: plugin/hooks/CLAUDE.md", out)
+        self.assertIn("plugin/hooks/a.py", out)
+
+    def test_a_notes_own_edit_and_an_uncommitted_change_do_not_make_it_stale(self):
+        # Catches: the note's own commit counted as a change to its area (every note would be stale the moment it
+        # is committed), and work in progress counted before it is committed (the stamp is a commit).
+        self.note("plugin/hooks")
+        self.commit("note")
+        self.note("plugin/hooks", body=("- a fact, and why (Q23).", "- one more fact."))
+        self.commit("note edit")
+        self.write("plugin/hooks/a.py", "not yet committed\n")
+        self.assertEqual(self.check()["stale"], [])
+
+    def test_a_nested_area_does_not_make_its_parent_stale(self):
+        # Catches: plugin/kit's note going stale for every change in plugin/kit/overture, which has its own note;
+        # and a change in the parent's own files missed.
+        self.note("plugin/kit")
+        self.note("plugin/kit/overture")
+        self.commit("notes")
+        self.write("plugin/kit/overture/server.py", "s2\n")
+        self.commit("server")
+        self.assertEqual([s["area"] for s in self.check()["stale"]], ["plugin/kit/overture"])
+        self.note("plugin/kit/overture")
+        self.commit("re-read")
+        self.write("plugin/kit/agent.py", "k2\n")
+        self.commit("agent")
+        self.assertEqual([s["area"] for s in self.check()["stale"]], ["plugin/kit"])
+
+    def test_a_note_outside_the_declared_areas_fails_the_check(self):
+        # Catches (the sprawl gate): a CLAUDE.md dropped in any folder passing unnoticed, so notes multiply
+        # until no one keeps them true; and an ignored folder (a virtualenv) swept into the count.
+        self.note("plugin/hooks")
+        self.write("plugin/other/CLAUDE.md", "<!-- area: plugin/other · checked: abc1234 -->\n- x\n")
+        self.write(".gitignore", ".venv/\n")
+        self.write(".venv/lib/CLAUDE.md", "a dependency's own note\n")
+        self.commit("notes")
+        res = self.check()
+        self.assertEqual(res["undeclared"], ["plugin/other/CLAUDE.md"])
+        self.assertFalse(res["ok"])
+        rc, out, _ = self.cli("--root", str(self.repo))
+        self.assertEqual(rc, 1)
+        self.assertIn("undeclared: plugin/other/CLAUDE.md", out)
+
+    def test_a_malformed_note_fails_the_check_and_says_why(self):
+        # Catches: a note with no checked commit (it can never be stale), a header naming another area (copied
+        # from a sibling), a commit that does not exist, and a note grown past ten lines (it is read on every
+        # visit, so it costs tokens on every visit).
+        cases = {
+            "no header": ("- just a fact\n", "first line"),
+            "other area": ("<!-- area: docs · checked: {sha} -->\n- x\n", "names docs"),
+            "unknown commit": ("<!-- area: plugin/hooks · checked: 0123456789 -->\n- x\n", "0123456789"),
+            "too long": ("<!-- area: plugin/hooks · checked: {sha} -->\n" + "- x\n" * 10, "11 lines"),
+        }
+        for name, (text, why) in cases.items():
+            with self.subTest(case=name):
+                sha = wt_git(self.repo, "rev-parse", "--short", "HEAD").strip()
+                self.write("plugin/hooks/CLAUDE.md", text.format(sha=sha))
+                res = self.check()
+                [bad] = res["malformed"]
+                self.assertEqual(bad["note"], "plugin/hooks/CLAUDE.md")
+                self.assertIn(why, bad["why"])
+                self.assertFalse(res["ok"])
+
+    def test_the_root_claude_md_is_reported_as_always_loaded_not_as_an_error(self):
+        # Catches: the repository's own top-level CLAUDE.md failed as an undeclared note (it is not an area note;
+        # it loads in every session there), or passed over without saying it costs every session.
+        self.write("CLAUDE.md", "the project's rules\n")
+        self.note("docs")
+        self.commit("root")
+        res = self.check()
+        self.assertTrue(res["ok"], res)
+        self.assertEqual((res["always_loaded"], res["undeclared"]), (["CLAUDE.md"], []))
+        rc, out, _ = self.cli("--root", str(self.repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("always loaded: CLAUDE.md", out)
+
+    def test_the_memory_index_names_links_to_missing_files_and_files_no_line_links(self):
+        # Catches: an index line pointing at a deleted memory file (an agent reads a promise that is gone), and a
+        # memory file no line links (nothing ever loads it); and a web link or a link's #part taken as a file.
+        mem = self.dir / "memory"
+        mem.mkdir()
+        (mem / "kept.md").write_text("x\n")
+        (mem / "orphan.md").write_text("x\n")
+        (mem / "MEMORY.md").write_text("- [Kept](kept.md#why) — yes\n- [Gone](gone.md) — deleted\n"
+                                       "- [Site](https://example.com/a.md) — a web page\n")
+        self.note("docs")
+        self.commit("n")
+        res = self.check(memory=mem)
+        self.assertEqual((res["memory"]["missing"], res["memory"]["unlinked"]), (["gone.md"], ["orphan.md"]))
+        self.assertFalse(res["ok"])
+        rc, out, _ = self.cli("--root", str(self.repo), "--memory", str(mem))
+        self.assertEqual(rc, 1)
+        self.assertIn("gone.md", out)
+        self.assertIn("orphan.md", out)
+        (mem / "orphan.md").unlink()
+        (mem / "MEMORY.md").write_text("- [Kept](kept.md) — yes\n")
+        self.assertTrue(self.check(memory=mem)["ok"])
+
+    def test_json_has_one_stable_shape(self):
+        # Catches: a --json a script cannot rely on (keys present only on failure, or text where a list belongs).
+        self.note("docs")
+        self.commit("n")
+        rc, out, _ = self.cli("--root", str(self.repo), "--json")
+        doc = json.loads(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(set(doc), {"root", "head", "areas", "current", "stale", "undeclared", "malformed",
+                                    "always_loaded", "memory", "ok"})
+        self.assertEqual((doc["current"], doc["stale"], doc["memory"], doc["ok"]), (["docs"], [], None, True))
+
+    def test_refusals_are_named_and_exit_2(self):
+        # Catches: a check that reports "0 notes current" (a pass) for a folder that is not a git checkout, a
+        # --root that does not exist, a subfolder of a checkout, a repository that declares no areas, or a
+        # --memory folder with no MEMORY.md; each must be refused, by name, and never read as clean.
+        plain = self.dir / "plain"
+        plain.mkdir()
+        mem = self.dir / "nomem"
+        mem.mkdir()
+        bare = self.dir / "bare"
+        bare.mkdir()
+        wt_git(bare, "init", "-q")
+        wt_git(bare, "commit", "--allow-empty", "-qm", "x")
+        for args, words in (((str(plain),), "not a git checkout"), ((str(self.dir / "nope"),), "not a folder"),
+                            ((str(self.repo / "docs"),), "not the top"), ((str(bare),), "declares no areas")):
+            with self.subTest(root=args[0]):
+                rc, out, err = self.cli("--root", *args)
+                self.assertEqual((rc, out), (2, ""))
+                self.assertIn(words, err)
+        rc, _, err = self.cli("--root", str(self.repo), "--memory", str(mem))
+        self.assertEqual(rc, 2)
+        self.assertIn("MEMORY.md", err)
+
+    def test_the_declared_areas_are_checked_like_any_other_path(self):
+        # Catches: an areas list that climbs out of the repository or names the root itself, so a note anywhere
+        # (or everywhere) counts as declared.
+        for bad in (["../up"], ["."], ["/abs"], "docs", [""], ["docs", "docs"]):
+            with self.subTest(areas=bad):
+                self.write(".overture.json", json.dumps({"areas": bad}))
+                with self.assertRaisesRegex(self.NO.NotesError, "areas"):
+                    self.check()
+
+    def test_a_checked_commit_squashed_away_counts_from_the_notes_own_last_commit(self):
+        # Catches: every note read as malformed after a squash merge (its branch commit is on no branch any
+        # more), or one never stale again once that happens; the note's last commit is the base then.
+        self.note("plugin/hooks", sha="abcdef1234")   # a commit this history does not hold
+        self.commit("note, squashed")
+        res = self.check()
+        self.assertEqual((res["malformed"], res["current"]), ([], ["plugin/hooks"]))
+        self.write("plugin/hooks/a.py", "later\n")
+        self.commit("later")
+        self.assertEqual([s["area"] for s in self.check()["stale"]], ["plugin/hooks"])
+
+    def test_update_rewrites_only_the_header_and_only_for_a_committed_area(self):
+        # Catches: --update re-stamping a note over uncommitted work (the stamp would claim what was never
+        # committed), changing anything but its first line, or stamping an undeclared folder.
+        self.note("plugin/hooks", body=("- fact one (Q23).", "- fact two"))
+        self.commit("note")
+        self.write("plugin/hooks/a.py", "v2\n")
+        head = self.commit("change")
+        before = (self.repo / "plugin/hooks/CLAUDE.md").read_text().splitlines()
+        rc, out, err = self.cli("--root", str(self.repo), "--update", "plugin/hooks")
+        self.assertEqual(rc, 0, err)
+        after = (self.repo / "plugin/hooks/CLAUDE.md").read_text().splitlines()
+        self.assertEqual(after[1:], before[1:])
+        self.assertEqual(after[0], f"<!-- area: plugin/hooks · checked: {head} -->")
+        self.assertTrue(self.check()["ok"])
+        self.write("plugin/hooks/a.py", "v3, uncommitted\n")
+        rc, _, err = self.cli("--root", str(self.repo), "--update", "plugin/hooks")
+        self.assertEqual(rc, 2)
+        self.assertIn("uncommitted", err)
+        rc, _, err = self.cli("--root", str(self.repo), "--update", "plugin/other")
+        self.assertEqual(rc, 2)
+        self.assertIn("not a declared area", err)
+
+    def test_the_server_never_runs_it(self):
+        # Catches (CONSOLE-kit/Q23): the check starting git inside the console server, where the seam is closed.
+        from unittest import mock
+        from overture import gitseam as G
+        with mock.patch.object(G, "_OPEN", False):
+            with self.assertRaisesRegex(self.NO.NotesError, "no git"):
+                self.check()
+
+    @unittest.skipUnless((HERE / ".git").exists() and shutil.which("git"), "not a git checkout")
+    def test_this_repositorys_own_notes_pass(self):
+        # Catches: a release whose area notes went stale, sprawled or lost their header; the release recipe
+        # re-reads each named area and stamps it (`notes check --update AREA`) before this passes.
+        res = self.NO.check(HERE)
+        self.assertEqual((res["stale"], res["undeclared"], res["malformed"]), ([], [], []), res)
+        self.assertGreaterEqual(len(res["current"]), 5)
+
+
+class StewardNotesTests(unittest.TestCase):
+    """1.53.0: the steward's watch runs `notes check` at most once a day, after its first heartbeat."""
+
+    def setUp(self):
+        from unittest import mock
+        self._td = tempfile.TemporaryDirectory()
+        self.dir = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        env = mock.patch.dict(os.environ, GIT_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+        self.repo = self.dir / "repo"
+        (self.repo / "docs").mkdir(parents=True)
+        wt_git(self.repo, "init", "-q", "-b", "main")
+        (self.repo / ".overture.json").write_text(json.dumps({"areas": ["docs"]}))
+        (self.repo / "docs/x.md").write_text("x\n")
+        wt_git(self.repo, "add", "-A")
+        wt_git(self.repo, "commit", "-qm", "start")
+        sha = wt_git(self.repo, "rev-parse", "--short", "HEAD").strip()
+        (self.repo / "docs/CLAUDE.md").write_text(f"<!-- area: docs · checked: {sha} -->\n- fact\n")
+        (self.repo / "stray").mkdir()
+        (self.repo / "stray/CLAUDE.md").write_text("no header\n")
+        wt_git(self.repo, "add", "-A")
+        wt_git(self.repo, "commit", "-qm", "notes")
+        self.state = self.dir / "state"
+        self.state.mkdir()
+        R.register(self.repo, self.state, KIT)
+        import agent as AG
+        self.AG = AG
+        nop = mock.patch.object(AG, "_watch_prune", return_value=None)   # the prune has its own tests
+        nop.start()
+        self.addCleanup(nop.stop)
+
+    def watch(self):
+        import contextlib
+        import io
+        err = io.StringIO()
+        here = os.getcwd()
+        try:
+            os.chdir(self.repo)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = self.AG.main(["--state", str(self.state), "watch", "--timeout", "0", "--poll", "0.05"])
+        finally:
+            os.chdir(here)
+        return rc, err.getvalue()
+
+    def counts(self):
+        return json.loads((self.state / D.WATCH_FILE).read_text()).get("area_notes")
+
+    def age(self, seconds):
+        p = self.state / self.AG.NOTES_FILE
+        rec = json.loads(p.read_text())
+        rec["at"] -= seconds
+        p.write_text(json.dumps(rec))
+
+    def test_the_watch_checks_the_notes_once_a_day_after_its_first_heartbeat_and_the_counts_ride_it(self):
+        # Catches: the check run before the heartbeat (the owner sees "idle" while git runs), on every cycle (a
+        # watch re-armed every few seconds would run git each time), its counts never reaching the heartbeat, or
+        # dropped from it by a cycle that skips the check.
+        from unittest import mock
+        from overture import notes as NO
+        seen = []
+        real = NO.check
+        def checked(*a, **kw):
+            seen.append(D.listening(self.state)["state"])
+            return real(*a, **kw)
+        with mock.patch.object(NO, "check", side_effect=checked):
+            self.assertEqual(self.watch()[0], 3)
+            self.assertEqual(seen, ["listening"])
+            want = {"stale": 0, "undeclared": 1, "malformed": 0}
+            self.assertEqual({k: self.counts()[k] for k in want}, want)
+            (self.repo / "docs/x.md").write_text("changed\n")
+            wt_git(self.repo, "commit", "-qam", "docs change")
+            self.watch()
+            self.assertEqual(len(seen), 1)                               # a day has not passed
+            self.assertEqual(self.counts()["stale"], 0)                  # and the last counts still ride the beat
+            self.age(86401)
+            self.watch()
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(self.counts()["stale"], 1)
+
+    def test_a_failing_check_never_stops_the_watch(self):
+        # Catches: an error in the notes check (a broken git, a bug) ending the steward's watch, or said on
+        # every cycle instead of once a day.
+        from unittest import mock
+        from overture import notes as NO
+        with mock.patch.object(NO, "check", side_effect=RuntimeError("boom")):
+            rc, err = self.watch()
+            self.assertEqual(rc, 3)                                       # the watch ran to its timeout
+            self.assertIn("notes check skipped: boom", err)
+            self.assertNotIn("notes check skipped", self.watch()[1])
+        self.assertIsNone(self.counts())
+        self.assertFalse(D.listening(self.state)["state"] == "listening")
+
+    def test_a_project_that_declares_no_areas_is_left_alone(self):
+        # Catches: the steward reporting every CLAUDE.md of a project that never opted in as "undeclared".
+        (self.repo / ".overture.json").write_text("{}")
+        wt_git(self.repo, "commit", "-qam", "no areas")
+        rc, err = self.watch()
+        self.assertEqual(rc, 3)
+        self.assertIsNone(self.counts())
+        self.assertNotIn("notes check", err)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

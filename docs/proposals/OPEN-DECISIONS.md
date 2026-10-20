@@ -218,6 +218,24 @@ the release recipe (the server starts no git, Q23); area notes stay out of
 the release zip; one before-and-after run of a small task, with and without
 a note, compares tokens, wrong claims and missed rulings.
 
+### M1-M4 as built (architect defaults, 1.53)
+
+- **N1** The declared folders are the checked repository's own, in
+  `.overture.json` `"areas"`, not a list inside the kit: the steward runs the
+  check on every registered project, and a kit-held list would call every
+  other project's `CLAUDE.md` undeclared. A project without the key is left
+  alone; the CLI refuses it by name.
+- **N2** The tests live at the repository root, where a `CLAUDE.md` would be
+  always loaded, so the test facts sit in the `plugin/kit` note (loaded
+  whenever an agent reads the code the tests cover). A nested declared folder
+  (`plugin/kit/overture`) does not make its parent stale.
+- **N3** Stale counts committed changes only, from the checked commit; when
+  that commit is not in the branch's history (a squash merge), from the
+  note's own last commit. A note's checked commit therefore needs a commit of
+  its own after the code it describes (`notes check --update AREA`).
+- **N4** The counts reach `watch.json` only (M3: no console view yet).
+  `verify_vendor.py` ignores `CLAUDE.md` both ways.
+
 ## Ruling lookup before an agent edits (decided 2026-10-19)
 
 Wave 2's "ruling lookup before an agent acts" (STRATEGY.md, core engine:

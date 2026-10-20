@@ -59,6 +59,9 @@ RULES = (
 ADAPTED = (".claude-plugin/marketplace.json", "test_kit.py", "test_server.py", "test_browser.py")
 IGNORED_PARTS = ("__pycache__", ".pytest_cache")
 IGNORED_SUFFIXES = (".pyc",)
+# 1.53.0: area notes are facts about the kit's own repository, for its own agents: never required in a copy,
+# and a note the vendoring project keeps beside its copy is its own, neither compared nor a stray.
+IGNORED_NAMES = ("CLAUDE.md",)
 
 
 class GitError(Exception):
@@ -89,14 +92,16 @@ def resolve(kit: Path, ref: str) -> tuple[str, list[str]]:
 
 
 def kit_files(kit: Path, commit: str) -> set[str]:
-    return set(_git(kit, "ls-tree", "-r", "-z", "--name-only", commit).decode("utf-8").split("\0")) - {""}
+    names = set(_git(kit, "ls-tree", "-r", "-z", "--name-only", commit).decode("utf-8").split("\0")) - {""}
+    return {n for n in names if n.rsplit("/", 1)[-1] not in IGNORED_NAMES}
 
 
 def vendored_files(root: Path) -> list[str]:
     out = []
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if any(part in IGNORED_PARTS for part in rel.split("/")) or rel.endswith(IGNORED_SUFFIXES):
+        if (any(part in IGNORED_PARTS for part in rel.split("/")) or rel.endswith(IGNORED_SUFFIXES)
+                or p.name in IGNORED_NAMES):
             continue
         if p.is_symlink() or not p.is_file():
             if p.is_symlink():

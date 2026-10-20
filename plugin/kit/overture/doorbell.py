@@ -126,16 +126,20 @@ def _parse_ts(v: object) -> float | None:
 
 
 def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: float | None = None,
-                stale: list | None = None) -> None:
+                stale: list | None = None, notes: dict | None = None) -> None:
     """Record whether a watch is waiting now; `every` is how soon it promises to write again.
 
     1.50.0: `stale` is the steward's last list of stale agent worktrees (W3), branch and age only, folded into
     this heartbeat so no new route was needed; an older server reads the file and ignores the key.
+    1.53.0: `notes` is the steward's last area-notes check, as counts only (`notes.counts`), the same way.
     """
     t = time.time() if now is None else now
     rec = {"watching": watching, "at": _ts(t), "until": _ts(t + every + BEAT_GRACE) if watching else None}
     if stale is not None:
         rec["stale_worktrees"] = _stale_rows(stale)
+    if notes is not None:
+        rec["area_notes"] = {k: v for k, v in notes.items() if isinstance(k, str) and isinstance(v, int)
+                             and not isinstance(v, bool)}
     p = Path(state) / WATCH_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".watch.", suffix=".tmp")  # 0600 from creation
     try:
@@ -243,9 +247,11 @@ class Heartbeat:
     """
 
     def __init__(self, state: Path, poll: float, *, clock: Callable[[], float] = time.monotonic,
-                 warn: Callable[[str], None] | None = None, stale: list | None = None) -> None:
+                 warn: Callable[[str], None] | None = None, stale: list | None = None,
+                 notes: dict | None = None) -> None:
         self.state = Path(state)
         self.stale = stale      # 1.50.0: the steward's stale worktrees, carried on every beat (None: say nothing)
+        self.notes = notes      # 1.53.0: the steward's last area-notes counts, the same way
         self.every = max(BEAT_EVERY, poll)  # a slow poll promises its own, longer, interval
         self.clock = clock
         self.warn = warn or (lambda m: sys.stderr.write(m + "\n"))
@@ -255,6 +261,8 @@ class Heartbeat:
     def _write(self, watching: bool) -> None:
         try:
             extra = {} if self.stale is None else {"stale": self.stale}   # unchanged when there is nothing to say
+            if self.notes is not None:
+                extra["notes"] = self.notes
             write_watch(self.state, watching, every=self.every, **extra)
         except OSError as e:
             if not self._warned:
@@ -271,6 +279,12 @@ class Heartbeat:
     def update(self, stale: list | None) -> None:
         """1.50.0: the steward's prune finished after the first beat: carry its stale list, written now."""
         self.stale = stale
+        self._last = self.clock()
+        self._write(True)
+
+    def update_notes(self, notes: dict | None) -> None:
+        """1.53.0: the steward's notes check finished after the first beat: carry its counts, written now."""
+        self.notes = notes
         self._last = self.clock()
         self._write(True)
 

@@ -496,6 +496,30 @@ the file to the agent's context. Ask by hand what it would have said:
 - It never blocks an edit; the CI check (`rulecheck.py`) still guards the
   merge.
 
+## `notes check` names a stale, undeclared or malformed note (1.53.0)
+
+Area notes are the short `CLAUDE.md` files in the folders `.overture.json`
+`"areas"` declares. Check them from the checkout, before a release and
+whenever the steward's heartbeat counts one:
+
+    python3 <vendored>/agent.py notes check [--memory DIR]
+
+- **stale: AREA/CLAUDE.md (checked SHA): N file(s) changed since**: the
+  area's code moved on after the commit the note was checked at. Re-read
+  the files it names, correct the note, commit, then stamp it with `notes
+  check --update AREA` (only its first line changes; refused while the area
+  has uncommitted changes) and commit that.
+- **undeclared: X/CLAUDE.md**: a note in a folder not on the list. Fold its
+  facts into the nearest declared note, or add the folder to `"areas"`.
+- **malformed**: no `<!-- area: AREA · checked: SHA -->` first line, a header
+  naming another folder, or more than 10 lines.
+- **memory:** with `--memory`, a MEMORY.md line links a file that is gone,
+  or a memory file no line links.
+- **always loaded: CLAUDE.md** is the repository's top-level file, read in
+  every session there: said, never an error.
+- **refused: ... declares no areas**: the project has not opted in; the
+  steward's watch leaves such a project alone.
+
 ## The fold refuses
 
 The fold is all or nothing: one refused file refuses the lot, and each reason
