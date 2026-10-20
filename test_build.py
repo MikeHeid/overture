@@ -190,11 +190,17 @@ class ReleaseNotesGateTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("stale: docs/CLAUDE.md") for line in said), said)
 
     @unittest.skipUnless((B.ROOT / ".overture.json").exists(), "no .overture.json (not a checkout)")
-    def test_every_file_the_version_bump_writes_is_in_notes_ignore(self):
-        # Catches: set_version writing a file that .overture.json "notes_ignore" does not list (a new version file,
-        # or the list trimmed), so every release stales that file's area note and the next release is refused
-        # until someone re-stamps a note whose facts did not change. The bump runs on a copy, never this tree.
+    def test_every_file_the_version_bump_writes_in_an_area_is_in_notes_ignore(self):
+        # Catches: set_version writing a file inside a declared area that .overture.json "notes_ignore" does not
+        # list (a new version file, or the list trimmed), so every release stales that area's note and the next
+        # release is refused until someone re-stamps a note whose facts did not change; and a "notes_ignore"
+        # entry notes.py refuses (a '.claude-plugin' segment), which would refuse every notes check and release.
+        # The bump runs on a copy, never this tree.
+        import sys
         import release as REL
+        sys.path.insert(0, str(B.ROOT / "plugin" / "kit"))
+        self.addCleanup(sys.path.remove, str(B.ROOT / "plugin" / "kit"))
+        from overture import notes as NO
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         copy = Path(td.name)
@@ -205,8 +211,11 @@ class ReleaseNotesGateTests(unittest.TestCase):
         with mock.patch.object(REL, "ROOT", copy):
             written = REL.set_version("999.0.0")
         self.assertEqual(len(written), 4, written)
-        ignore = json.loads((B.ROOT / ".overture.json").read_text(encoding="utf-8")).get("notes_ignore") or []
-        self.assertEqual(sorted(set(written) - set(ignore)), [])
+        declared = NO.areas(B.ROOT)
+        ignore = NO.ignored(B.ROOT, declared)
+        in_areas = sorted(f for f in written if any(f.startswith(a + "/") for a in declared))
+        self.assertIn("plugin/kit/overture/__init__.py", in_areas)
+        self.assertEqual([f for f in in_areas if f not in ignore], [])
 
     def test_a_release_is_refused_before_the_bump_while_the_gate_finds_anything(self):
         # Catches: release.py bumping the version (and listing the notes check as a mere next step) while the

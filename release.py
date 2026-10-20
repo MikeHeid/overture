@@ -17,9 +17,9 @@ refuses the release while it finds anything (a stale, undeclared or
 malformed area note, or a refusal such as a shallow clone), naming each. This
 is the release gate for the area notes; no unit test reads this repository's
 own notes, so a suite stays green mid-work, in a zip or in a vendored copy.
-Every file the bump writes is listed in `.overture.json` "notes_ignore", so the
-bump alone makes no note stale and the next release is not held back by it
-(test_build.py asserts the list covers them).
+Every file the bump writes inside a declared area is listed in `.overture.json`
+"notes_ignore", so the bump alone makes no note stale and the next release is
+not held back by it (test_build.py asserts the list covers them).
 
 Added in 0.9.2 after /health kept showing 0.8.18 across the 0.9.0 and 0.9.1
 releases: `__version__` and the repo-marketplace manifest had drifted from

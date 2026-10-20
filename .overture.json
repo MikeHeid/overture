@@ -1,5 +1,4 @@
 {
   "areas": ["docs", "plugin/hooks", "plugin/kit", "plugin/kit/overture", "plugin/skills"],
-  "notes_ignore": ["VERSION", ".claude-plugin/marketplace.json", "plugin/.claude-plugin/plugin.json",
-                   "plugin/kit/overture/__init__.py"]
+  "notes_ignore": ["plugin/kit/overture/__init__.py"]
 }
