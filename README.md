@@ -14,7 +14,7 @@
   <img alt="version" src="https://img.shields.io/badge/version-1.52.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
-  <img alt="tests" src="https://img.shields.io/badge/tests-1410-2da44e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1421-2da44e">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-24292f">
 </p>
 
@@ -107,7 +107,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Pop-outs and a calmer Inbox** (1.49) | Flowcharts, graphs, visuals, rounds, long rulings and screenshots pop out beside the console, three at a time, with Pin · the Inbox grouped by lane, with an outline · `j`/`k` through the unanswered questions · a sticky Mine | [Finding your way around](docs/features/navigation.md#pop-outs-149) |
 | **Agent worktrees** (1.50) | Each agent's file-changing work in its own worktree under `~/.overture/worktrees`, made by `agent.py worktree new` · its branch shown on the item, its tickets and its PR · a warning when two agents meet on one item · pruned once its PR lands (merged at its head) or closes · stale ones listed for the owner · a `worktree_setup` suggested, never run | [Automation](docs/features/automation.md#agent-worktrees-150) |
 | **macOS service** (1.51) | `server.py service install --start` on a Mac writes a launchd LaunchAgent (`~/Library/LaunchAgents/overture.console.plist`) and loads it · back after a crash and at every login · `status`, `health` and the one-server gate read `launchctl` · every hint names the Mac's own command | [Hosting](docs/features/hosting.md#macos-launchd-151) |
-| **Rulings before an edit** (1.52) | Before an agent edits a file, a hook shows it the owner's rulings on that file, labelled **holds on this file** or **cites this file** · a warning by name when the edit would break one, never a block · from the running console, or the committed rulings when it is down · `agent.py rulings --path P` and an MCP `rulings` tool | [Inbox and rulings](docs/features/inbox-and-rulings.md#rulings-before-an-agent-edits-152) |
+| **Rulings before an edit** (1.52) | Before an agent edits a file, a hook shows it the owner's rulings on that file, labelled **holds on this file** or **cites this file** · a warning by name when the edit would break one, never a block · from the running console, or the committed rulings when it is down · three ways to ask: a hook before each edit · `agent.py rulings --path P` · an MCP `rulings` tool | [Inbox and rulings](docs/features/inbox-and-rulings.md#rulings-before-an-agent-edits-152) |
 | **Keyboard** | `?` for shortcuts · `g <letter>` to hop tabs · `g 1`–`g 4` for sections · `j`/`k` next or previous unanswered question · **Ctrl+K** command palette with full-text search | [Finding your way around](docs/features/navigation.md#tabs-themes-and-reports) |
 | **Multi-agent / multi-project** | Named sessions · one steward · portfolio federation · Machine role (steward / worker) · active-agents fold · project tokens | [Hosting](docs/features/hosting.md) |
 | **Hosting** | `server.py daemon` / `service install` / `status` / `health` · systemd user units (Linux, WSL) or a launchd LaunchAgent (macOS) · health and readiness probes · Windows + WSL2 | [Hosting](docs/features/hosting.md) |

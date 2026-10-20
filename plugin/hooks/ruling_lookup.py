@@ -10,24 +10,30 @@ and "deny" is not what the owner chose (R2). The edit always goes through the
 normal permission flow.
 
 **Which project.** The file's checkout is the nearest folder above it holding
-`.git` (a folder, or a linked worktree's file, whose `gitdir:` line names the
-main checkout; no git is run). The console is the one the user's registry
-names for that checkout, its main checkout, or the session's directory, read
-as the SessionStart hook reads it. In any other project it prints nothing.
+`.git`. The console is the one the user's registry names for EXACTLY that
+checkout, or for the main checkout it is a linked worktree of: its `.git` file
+says "gitdir: MAIN/.git/worktrees/NAME" and git's back link
+(`MAIN/.git/worktrees/NAME/gitdir`) names it again (no git is run). A file in
+any other repository (a sibling clone, a repo nested in the registered one, a
+folder whose `.git` file merely claims a project) gets nothing, whatever the
+session's directory: only the registered checkout's rulings are ever said, and
+only its paths are sent to its server (AS1, S1).
 
 **Where the rulings come from.** The console server, over its agent socket
 (`POST /rulings`, the one server's `/p/<project>/rulings` with its token), with
-a 1.5 s timeout. When the socket is absent, refuses, times out, or runs a kit
-with no lookup, the rulings committed in the checkout answer instead
-(`.overture.json` `fold.locked`), and the note says so.
+one 1.5 s deadline for the whole exchange. When the socket is absent, times
+out, answers 401, 403 or 5xx, or runs a kit with no lookup, the rulings
+committed in the checkout answer instead (`.overture.json` `fold.locked`), and
+the note says so; a bad committed file is skipped and named, at most 500 are
+read. Only a 400 naming its error (the server refusing this request) silences it.
 
 **Noise.** A file's rulings are said once per session (STATE_HOME/overture/
 rulings-shown.json, keyed by session, path and the set of rulings), and again
 when that set changes; a would-break warning is said every time. Nothing is
 printed for a file with no rulings.
 
-**It fails OPEN and silent**: input it cannot read, an unreadable registry, a
-forged ruling file, any error at all prints nothing and exits 0.
+**It fails OPEN and silent**: input it cannot read, an unreadable registry,
+any error at all prints nothing and exits 0.
 
 Unlike the other hooks it imports kit code: `overture.lookup` from the kit
 inside THIS plugin's own folder (`../kit`), never the kit the registry names
@@ -39,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -75,7 +82,12 @@ def _load_shown(p: Path) -> dict:
 
 
 def seen_before(sid: str | None, path: str, digest: str) -> bool:
-    """Whether this session was shown this file's rulings, as they are now; records it when not. Never raises."""
+    """Whether this session was shown this file's rulings, as they are now; records it when not. Never raises.
+
+    C6: the read-modify-write is not locked. Two edits racing in one session
+    can each miss the other's record, so a list may be shown twice; that is
+    the worst case (never a list withheld), and accepted for no lock file.
+    """
     if sid is None:
         return False
     p, key, now = _shown_path(), f"{sid}\0{path}", time.time()
@@ -112,15 +124,19 @@ def _current(f: Path) -> str | None:
         return None
 
 
-def _entry_for(payload: dict, root: Path) -> dict | None:
+def _entry_for(root: Path) -> dict | None:
+    """The registry entry for exactly this checkout, or for the main checkout it is a verified worktree of; else None."""
     found = SS.projects()
-    main = L.main_checkout(root)
-    for start in (main, root):
-        if start is not None:
-            e = SS.registered(start, found)
-            if e is not None:
-                return e
-    return SS.enclosing_entry(payload)
+    for start in (Path(os.path.realpath(root)), L.main_checkout(root)):
+        e = found.get(str(start)) if start is not None else None
+        if e is not None:
+            return SS.checked(e)
+    return None
+
+
+def more_command(e: dict, rel: str) -> str:
+    """The command that lists every ruling on `rel`, each part shell-quoted (AS2: an agent may run it as it stands)."""
+    return shlex.join(["python3", str(Path(e["kit"]) / "agent.py"), "--state", e["state"], "rulings", "--path", rel])
 
 
 def note(payload: object) -> str | None:
@@ -135,7 +151,7 @@ def note(payload: object) -> str | None:
     root = L.project_root(f.parent)
     if root is None:
         return None
-    e = _entry_for(payload, root)
+    e = _entry_for(root)
     if e is None:
         return None
     rel = L.clean_path(f.relative_to(root).as_posix())
@@ -143,13 +159,13 @@ def note(payload: object) -> str | None:
     hits = res["rulings"].get(rel) or []
     if not hits:
         return None
-    breaks = []
+    breaks = []   # C5: only with the current text read is anything a would-break
     current = None if tool == "NotebookEdit" else _current(f)
     after = None if current is None else L.post_edit(tool, ti, current)
     if after is not None and len(after.encode("utf-8")) <= A.MAX_READ:
         breaks = [(h, L.would_break(h.get("conditions") or [], rel, after, current))
                   for h in hits if h.get("label") == L.HOLDS]
-    more = f"python3 {Path(e['kit']) / 'agent.py'} --state {e['state']} rulings --path {rel}"
+    more = more_command(e, rel)
     info = not seen_before(SS.session_id(payload), rel, _digest(hits))
     return L.say(rel, hits, breaks, res.get("note"), more, info=info)
 

@@ -36,25 +36,29 @@ import http.client
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from typing import Callable, Iterable
 
 from . import anchors as A
 from . import schema as S
 
-TIMEOUT = 1.5            # seconds the socket may take before the committed rulings answer instead (L7)
+TIMEOUT = 1.5            # seconds the WHOLE socket exchange may take before the committed rulings answer (L7, C7)
 MAX_PATHS = 50           # paths one lookup may name
 MAX_PATH = 512           # characters of one path
 MAX_RESPONSE = 4 << 20   # bytes of a server answer read, at most
 QUESTION_CHARS = 160     # a ruling's question, shortened to this in an entry
 ANSWER_CHARS = 160       # and its answer
 HOLDS, CITES = "holds", "cites"
-LABELS = {HOLDS: "holds on this file", CITES: "cites this file"}
+LABELS = {HOLDS: "holds on this file (this edit can break it)",   # U3: the words say what each label means;
+          CITES: "cites this file (its condition is elsewhere; context)"}   # --json keeps the bare "holds"/"cites"
 SERVER_SOCKET = "server.sock"   # the one server's agent socket beside server.json (multiserver.SOCKET)
 FALLBACK_NOTE = "(from the committed rulings; the console server is not answering)"
 SAY_RULINGS = 5          # rulings the hook names for one file (L6)...
 SAY_LINE = 300           # ...each line at most this long...
-SAY_TOTAL = 2000         # ...and the whole note at most this long
+SAY_TOTAL = 2000         # ...and the whole note at most this long, the warnings first (C4)
+MAX_RULING_FILES = 500   # committed ruling files the fallback reads, at most (S2: a hostile checkout's 10^5 files)...
+MAX_RULING_BYTES = 16 << 20   # ...and bytes in all; past either it says "(first N ruling files)"
 
 
 class PathRefused(ValueError):
@@ -62,11 +66,11 @@ class PathRefused(ValueError):
 
 
 class Unreachable(Exception):
-    """The console server did not answer the lookup (no socket, refused, timed out, or an older kit)."""
+    """The console server did not answer the lookup: no socket, timed out, an older kit, or (C1) a 401, 403 or 5xx."""
 
 
 class Refused(Exception):
-    """The console server answered the lookup, and refused it (its words)."""
+    """The console server answered the lookup with a 400 naming its error: it refused THIS request (its words)."""
 
 
 # -- paths ------------------------------------------------------------------------------
@@ -131,7 +135,8 @@ def cited_paths(e: dict) -> list[str]:
 
 
 def _short(text: object, n: int) -> str:
-    s = A.normalise(text) if isinstance(text, str) else ""
+    """`text` on one line, at most `n` long; a `"` becomes `'`, so it cannot close the quotes it is shown in (S3)."""
+    s = A.normalise(text).replace('"', "'") if isinstance(text, str) else ""
     return s if len(s) <= n else s[:n - 1].rstrip() + "…"
 
 
@@ -223,47 +228,119 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def would_break(conds: list[dict], path: str, new_text: str, old_text: str | None = None) -> list[dict]:
-    """The conditions on `path` that fail on `new_text`, each with why; with `old_text`, only those that held on it.
+def would_break(conds: list[dict], path: str, new_text: str, old_text: str | None) -> list[dict]:
+    """The conditions on `path` that hold on `old_text` (the file now) and fail on `new_text`, each with why.
 
-    An excerpt breaks when its text (whitespace normalised, as the check reads
+    C5: only a condition that holds NOW and fails after is one this edit
+    breaks; with `old_text` None (absent, unreadable) nothing is checked. An
+    excerpt breaks when its text (whitespace normalised, as the check reads
     it) is no longer in the file. A whole-file hash breaks on any change at
     all: that is what such a condition means, and the words say so.
     """
+    if old_text is None:
+        return []
     out = []
-    new_norm, old_norm = A.normalise(new_text), None if old_text is None else A.normalise(old_text)
+    new_norm, old_norm = A.normalise(new_text), A.normalise(old_text)
     for c in conds:
         if not covers(path, c.get("path")):
             continue
         if c.get("kind") == "excerpt":
             t = A.normalise(c.get("text") or "")
-            if t not in new_norm and (old_norm is None or t in old_norm):
-                out.append({"condition": c, "words": f"it changes or removes the text the ruling cites "
+            if t in old_norm and t not in new_norm:
+                out.append({"condition": c, "words": f"it changes or removes the text the ruling rests on "
                                                      f"(\"{_short(c.get('text'), 80)}\")"})
         elif c.get("kind") == "file_sha256":
-            if _sha(new_text) != c.get("sha256") and (old_text is None or _sha(old_text) == c.get("sha256")):
-                out.append({"condition": c, "words": "the ruling pins this whole file's hash, so any change to "
-                                                     "the file breaks it"})
+            if _sha(old_text) == c.get("sha256") and _sha(new_text) != c.get("sha256"):
+                out.append({"condition": c, "words": "it changes the file the ruling pins"})
     return out
 
 
 # -- where the rulings come from ---------------------------------------------------------------
 
-def from_export_dir(d: Path) -> list[dict]:
-    """Every committed ruling in `d`, each held to fold's own rules (rulecheck's reader); CheckError if one is not."""
+def from_export_dir(d: Path, notes: list[str] | None = None, shown: str | None = None) -> list[dict]:
+    """The committed rulings in `d`, each held to fold's own rules (rulecheck's parse); a file that is not, skipped.
+
+    C2: one bad file (not a plain file, too big, not JSON, not a valid ruling)
+    is skipped and named in `notes` as `shown/NAME`, and the rest are still
+    read. S2: at most MAX_RULING_FILES files and MAX_RULING_BYTES bytes, in
+    name order; past that `notes` says "(first N ruling files)". Three skipped files are named, the rest counted. Unlike the CI
+    check (rulecheck.from_dir, which refuses the lot), this is advice before
+    an edit, so a partial answer that says it is partial beats none.
+    """
     from . import rulecheck as RC   # here, not at import: it pulls in the fold and the store
-    return list(RC.parse(RC.from_dir(Path(d)), None, "").values())
+    d, notes = Path(d), notes if notes is not None else []
+    if not d.is_dir():
+        return []
+    shown = shown or d.name
+    out, skipped, total, read = [], [], 0, 0
+    names = sorted(p.name for p in d.iterdir() if p.name.endswith(".json"))
+    for name in names:
+        if read >= MAX_RULING_FILES:
+            break
+        p = d / name
+        try:
+            if p.is_symlink() or not p.is_file():
+                raise RC.CheckError("not a plain file; a ruling file is never a symlink")
+            size = p.stat().st_size
+            if size > A.MAX_READ:
+                raise RC.CheckError(f"over {A.MAX_READ >> 20} MiB")
+            if total + size > MAX_RULING_BYTES:
+                break
+            total, read = total + size, read + 1
+            out += RC.parse({name: p.read_bytes()}, None, "").values()
+        except (OSError, RC.CheckError) as e:
+            why = str(e).rsplit("\n  ", 1)[-1]
+            skipped.append(f"skipped {shown}/{name}: {_short(why.removeprefix(name + ': '), 120)}")
+    if read < len(names) - len(skipped):
+        notes.append(f"(first {read} ruling files)")
+    if skipped:
+        notes.append("; ".join(skipped[:3]) + (f" (and {len(skipped) - 3} more skipped)" if len(skipped) > 3 else ""))
+    return out
 
 
-def committed(root: Path, paths: list[str]) -> dict[str, list[dict]]:
-    """path -> rulings, from the files `fold.py export` committed in the checkout at `root`."""
+def committed(root: Path, paths: list[str], notes: list[str] | None = None) -> dict[str, list[dict]]:
+    """path -> rulings, from the files `fold.py export` committed in the checkout at `root`; `notes` says what was not read.
+
+    An item_status condition is UNCHECKED here (a checkout has no register),
+    so it never makes a ruling stale; the server, which has one, does check it
+    (the one difference from the live answer; test_rulecheck holds the two alike otherwise).
+    """
     from . import fold as F
     from . import rulecheck as RC
     root = Path(root).resolve()
-    d = F.inside(root, RC._locked_default(root, None), "fold.locked")
-    entries = from_export_dir(d)
+    rel = RC._locked_default(root, None)
+    d = F.inside(root, rel, "fold.locked")
+    entries = from_export_dir(d, notes, d.relative_to(root).as_posix())
     holds = holds_fn(A.Tree(root, {}), statuses_known=False)
     return {p: match(entries, p, holds) for p in paths}
+
+
+class _DeadlineSocket(socket.socket):
+    """A Unix socket with ONE wall-clock deadline for every operation together (C7), not a timeout per operation:
+    a console dripping a byte at a time would otherwise hold the hook for as long as it likes."""
+    deadline = 0.0
+
+    def _left(self) -> None:
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the console server took over the lookup's deadline")
+        self.settimeout(left)
+
+    def connect(self, address) -> None:  # type: ignore[override]
+        self._left()
+        super().connect(address)
+
+    def sendall(self, data, *a) -> None:  # type: ignore[override]
+        self._left()
+        super().sendall(data, *a)
+
+    def recv_into(self, buf, *a) -> int:  # type: ignore[override]   (what http.client's reads come through)
+        self._left()
+        return super().recv_into(buf, *a)
+
+    def recv(self, n, *a) -> bytes:  # type: ignore[override]
+        self._left()
+        return super().recv(n, *a)
 
 
 class _UnixConn(http.client.HTTPConnection):
@@ -272,16 +349,21 @@ class _UnixConn(http.client.HTTPConnection):
         self.sock_path = sock_path
 
     def connect(self) -> None:
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(str(self.sock_path))
+        s = _DeadlineSocket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.deadline = time.monotonic() + self.timeout
+        self.sock = s
+        s.connect(str(self.sock_path))
 
 
 def fetch(sock: Path, paths: list[str], project: str | None = None, token: str | None = None,
           timeout: float = TIMEOUT) -> dict[str, list[dict]]:
     """path -> rulings from the console server's agent socket; Unreachable when it does not answer in `timeout`.
 
-    A server that answers with a refusal raises Refused with its words.
+    `timeout` is one deadline for the whole exchange (C7). C1: only a 400
+    naming its `error` is the server refusing this request (Refused, its
+    words); a 401 or 403 (a token gone stale), a 5xx (a crash), a 404 (a kit
+    with no lookup) or any other answer is the server not answering, so the
+    committed rulings answer instead (Unreachable).
     """
     route = f"/p/{project}/rulings" if project else "/rulings"
     headers = {"Content-Type": "application/json"}
@@ -302,10 +384,12 @@ def fetch(sock: Path, paths: list[str], project: str | None = None, token: str |
         out = json.loads(raw) if len(raw) <= MAX_RESPONSE else None
     except ValueError:
         out = None
-    if resp.status != 200 or not isinstance(out, dict) or not isinstance(out.get("rulings"), dict):
-        why = out.get("error") if isinstance(out, dict) else None
-        raise Refused(why or f"the console server answered {resp.status}")
-    return out["rulings"]
+    if resp.status == 200 and isinstance(out, dict) and isinstance(out.get("rulings"), dict):
+        return out["rulings"]
+    why = out.get("error") if isinstance(out, dict) else None
+    if resp.status == 400 and isinstance(why, str) and why:
+        raise Refused(why)
+    raise Unreachable(f"the console server answered {resp.status}")
 
 
 def door(state: Path) -> tuple[Path, str | None, str | None]:
@@ -323,7 +407,8 @@ def lookup(state: Path | None, root: Path | None, paths: list[str], timeout: flo
     """{"source": "server"|"committed", "note": str|None, "rulings": {path: [entry]}}: the server, else the checkout.
 
     The committed rulings answer only when the server does not (Unreachable);
-    a refusal from a server that did answer is raised (Refused).
+    a refusal from a server that did answer is raised (Refused). The note
+    says the answer is the committed one, and any ruling file not read.
     """
     why = "no console state"
     if state is not None:
@@ -338,7 +423,9 @@ def lookup(state: Path | None, root: Path | None, paths: list[str], timeout: flo
             why = f"{type(e).__name__}: {e}"
     if root is None:
         raise Unreachable(f"the console server did not answer ({why}) and there is no checkout to read")
-    return {"source": "committed", "note": FALLBACK_NOTE, "why": why, "rulings": committed(root, paths)}
+    notes: list[str] = []
+    found = committed(root, paths, notes)
+    return {"source": "committed", "note": " ".join([FALLBACK_NOTE, *notes]), "why": why, "rulings": found}
 
 
 # -- the checkout a file is in -----------------------------------------------------------------
@@ -352,22 +439,37 @@ def project_root(start: Path) -> Path | None:
     return None
 
 
-def main_checkout(root: Path) -> Path | None:
-    """For a linked worktree (`.git` is a file: "gitdir: MAIN/.git/worktrees/NAME"), MAIN; else None. No git is run."""
-    f = Path(root) / ".git"
+def _gitdir_line(f: Path, key: str) -> Path | None:
+    """The path a small plain git link file names ("gitdir: P", or just "P" for key ""), relative to its folder; else None."""
     try:
         if f.is_symlink() or not f.is_file() or f.stat().st_size > 4096:
             return None
         line = f.read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return None
-    if not line.startswith("gitdir:"):
+    if key:
+        if not line.startswith(key):
+            return None
+        line = line[len(key):].strip()
+    if not line:
         return None
-    gd = Path(line[len("gitdir:"):].strip())
-    if not gd.is_absolute():
-        gd = Path(root) / gd
-    gd = Path(os.path.realpath(gd))
-    if gd.parent.name != "worktrees" or gd.parent.parent.name != ".git":
+    p = Path(line)
+    return Path(os.path.realpath(p if p.is_absolute() else f.parent / p))
+
+
+def main_checkout(root: Path) -> Path | None:
+    """For a linked worktree of MAIN, MAIN; else None. No git is run.
+
+    The worktree's `.git` file says "gitdir: MAIN/.git/worktrees/NAME", and
+    (S1) git's own back link must agree: `MAIN/.git/worktrees/NAME/gitdir`
+    names this `.git` file. Without that, any folder could write a `.git` file
+    naming a registered project and borrow its console and rulings.
+    """
+    root = Path(os.path.realpath(root))
+    gd = _gitdir_line(root / ".git", "gitdir:")
+    if gd is None or gd.parent.name != "worktrees" or gd.parent.parent.name != ".git":
+        return None
+    if _gitdir_line(gd / "gitdir", "") != root / ".git":
         return None
     return gd.parent.parent.parent
 
@@ -390,26 +492,36 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
     """The hook's note for one file, or None when it has nothing to say.
 
     `info` False leaves out the list (already shown this session); a warning
-    that the edit would break a ruling is always said.
+    that the edit would break a ruling is always said. C4: the warnings come
+    first and always fit, each whole (three lines, U2); the list gets what is
+    left of SAY_TOTAL. `more` is the command that shows everything.
     """
-    out = []
+    warned, out = [], []
     warn = [(h, b) for h, b in breaks if b]
+    for i, (h, b) in enumerate(warn):
+        w = "\n".join([f"WARNING: this edit would break ruling {h['qid']} (\"{_short(h['question'], 80)}\").",
+                       _cut(f"  Why: {'; '.join(x['words'] for x in b)}."),
+                       "  What to do: keep what the ruling rests on, or ask the owner to re-lock it (`agent.py ask`). "
+                       "The edit is not blocked."])
+        tail = f"- and {len(warn) - i - 1} more would break: `{more}`" if i < len(warn) - 1 else ""
+        if len("\n".join(warned + [w, tail])) > SAY_TOTAL and warned:
+            warned.append(f"- and {len(warn) - i} more would break: `{more}`")
+            break
+        warned.append(w)
+    left = SAY_TOTAL - len("\n".join(warned)) - (1 if warned else 0)
     if info and hits:
-        out.append(f"Owner rulings on {path}{' ' + note if note else ''}. Follow them; to go against one, ask "
-                   f"the owner first (console-ask):")
+        out.append(f"Owner rulings on {path}{' ' + note if note else ''}. Follow them; to go against one, ask the "
+                   f"owner first with a new question (`agent.py ask`; the console-ask skill shows how):")
         shown = [line_of(h) for h in hits[:SAY_RULINGS]]
         rest = len(hits) - len(shown)
-        while shown and len("\n".join(out + shown)) > SAY_TOTAL - 200:
+        tail = lambda n: [f"- and {n} more: `{more}`"] if n else []  # noqa: E731
+        while shown and len("\n".join(out + shown + tail(rest))) > left:
             shown.pop()
             rest += 1
-        out += shown
-        if rest:
-            out.append(f"- and {rest} more: `{more}`")
-    for h, b in warn:
-        out.append(f"WARNING: this edit would break the owner's ruling {h['qid']} (\"{_short(h['question'], 80)}\"): "
-                   f"{'; '.join(x['words'] for x in b)}. The edit is not blocked. If the change is right, tell the "
-                   f"owner and ask for a re-lock; otherwise keep what the ruling rests on.")
-    if not out:
-        return None
-    text = "\n".join(out)
-    return text if len(text) <= SAY_TOTAL else text[:SAY_TOTAL - 1] + "…"
+        out = out + shown + tail(rest) if len("\n".join(out + shown + tail(rest))) <= left else []
+    text = "\n".join(warned + out)
+    return text or None
+
+
+def _cut(s: str) -> str:
+    return s if len(s) <= SAY_LINE else s[:SAY_LINE - 1] + "…"

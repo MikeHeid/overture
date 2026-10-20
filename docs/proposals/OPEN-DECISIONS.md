@@ -235,8 +235,10 @@ The lead's architect defaults for the owner's four picks.
 - **L3** The file's checkout is the nearest folder holding `.git` (a folder,
   or a worktree's file whose `gitdir:` names the main checkout), found by
   walking up, with no git run. The console is the registry's for that
-  checkout, its main checkout, or the session's directory; an unregistered
-  checkout gets nothing.
+  checkout, or its main checkout; an unregistered checkout gets nothing.
+  **Changed in review (AS1, S1):** never the session's directory (a file in
+  another repo got that project's console), and a worktree maps only when
+  git's back link `<main>/.git/worktrees/NAME/gitdir` names it again.
 - **L4** After-edit text: Write's content; Edit's first replacement (all with
   `replace_all`); MultiEdit's edits in order. An `old_string` not found, a
   NotebookEdit, or a file past `anchors.MAX_READ` is informed only. A
@@ -254,6 +256,9 @@ The lead's architect defaults for the owner's four picks.
 - **L7** Socket timeout 1.5 s, hook timeout 5 s, fail open and silent. The
   committed rulings answer only when the socket is absent, refuses, times
   out or runs a kit with no lookup, and the note says so.
+- **C1 (review, lead):** a 401, 403 or 5xx from the server counts as no answer (Unreachable: the committed rulings answer, with the note); only a 400 naming its `error` is a refusal.
+- **C2 (review, lead):** a bad committed ruling file (not plain, too big, not JSON, not valid) is skipped and named in the note ("skipped .overture/locked/X.json: why"), the rest still read; at most 500 files and 16 MiB, "(first N ruling files)".
+- **C5 (review, lead):** a would-break is only a condition that holds now and fails after the edit; when the current file cannot be read, there is no would-break check.
 - **L8** `agent.py rulings --path P [--path Q] [--json]`, exit 0 unless a
   path is refused (2); an MCP `rulings` tool, `{paths: [...]}`.
 - **L9** The writing skills (console-process, console-ux) say once that the
