@@ -9285,13 +9285,35 @@ class AreaNotesTests(unittest.TestCase):
     def test_notes_ignore_is_checked_like_the_areas(self):
         # Catches: a "notes_ignore" entry that climbs out of the repository, names the root, or names a declared
         # area (or a folder holding one), so a whole area's changes are ignored and its note is never stale.
-        for bad in (["../up"], ["."], ["/abs"], "docs/x.md", [""], [], ["docs/x.md", "docs/x.md"], ["docs"],
-                    ["plugin"], [7]):
+        for bad in (["../up"], ["."], ["/abs"], "docs/x.md", [""], [], ["docs/x.md", "docs/x.md"], [7]):
             with self.subTest(notes_ignore=bad):
                 self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": bad}))
                 with self.assertRaisesRegex(self.NO.NotesError, "notes_ignore"):
                     self.check()
+        for bad in (["docs"], ["plugin"]):
+            with self.subTest(notes_ignore=bad):
+                self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": bad}))
+                with self.assertRaisesRegex(self.NO.NotesError, "notes_ignore names .*, a declared area"):
+                    self.check()
+        self.write("VERSION", "1.0.0\n")
+        self.commit("a version file")
         self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": ["docs/x.md", "VERSION"]}))
+        self.check()
+
+    def test_notes_ignore_refuses_a_folder_inside_an_area_or_a_file_not_committed(self):
+        # Catches (1.53 review N2): a "notes_ignore" entry naming a subfolder inside an area (not a declared area,
+        # not holding one), so every change in that subtree is ignored and the note is never stale for it; and an
+        # entry naming no committed file (a typo, or a folder spelled like a file), accepted as if it were one.
+        self.write("plugin/hooks/lib/b.py", "b\n")
+        self.commit("a subfolder")
+        for bad in (["plugin/hooks/lib"], ["plugin/hooks/nope.py"], ["docs/x.md", "plugin/hooks/lib"]):
+            with self.subTest(notes_ignore=bad):
+                self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": bad}))
+                with self.assertRaisesRegex(self.NO.NotesError, "not a file committed at HEAD"):
+                    self.check()
+                with self.assertRaisesRegex(self.NO.NotesError, "not a file committed at HEAD"):
+                    self.NO.stamp(self.repo, "plugin/hooks")
+        self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": ["plugin/hooks/lib/b.py"]}))
         self.check()
 
     def test_a_note_outside_the_declared_areas_fails_the_check(self):
@@ -9603,6 +9625,100 @@ class AreaNotesTests(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("outside the memory folder", "\n".join(self.NO.lines(res)))
 
+    def test_a_memory_link_through_a_symlink_leading_out_is_named_and_never_looked_up(self):
+        # Catches (1.53 review S3): the realpath check dropped, so a link to a symlink inside the memory folder (a
+        # file, or a folder, pointing outside it) is probed with is_file and counted as a good link.
+        from unittest import mock
+        mem = self.dir / "memory"
+        mem.mkdir()
+        out = self.dir / "elsewhere"
+        out.mkdir()
+        (out / "secret.md").write_text("x\n")
+        (mem / "link.md").symlink_to(out / "secret.md")
+        (mem / "sub").symlink_to(out)
+        (mem / "MEMORY.md").write_text("- [L](link.md) — a file link\n- [S](sub/secret.md) — a folder link\n")
+        probed = []
+        real = Path.is_file
+        def is_file(p):
+            probed.append(str(p))
+            return real(p)
+        with mock.patch.object(Path, "is_file", is_file):
+            got = self.NO.memory_index(mem)
+        self.assertEqual((got["missing"], got["outside"]), ([], ["link.md", "sub/secret.md"]))
+        self.assertEqual(probed, [])
+
+    def test_a_ten_line_note_passes_and_an_eleven_line_one_does_not(self):
+        # Catches: the line limit off by one (MAX_LINES 9), so a note of exactly ten lines, the documented most,
+        # is refused as malformed.
+        self.note("plugin/hooks", body=tuple(f"- fact {i}" for i in range(9)))
+        self.commit("ten lines")
+        self.assertEqual(len((self.repo / "plugin/hooks/CLAUDE.md").read_text().splitlines()), 10)
+        res = self.check()
+        self.assertEqual((res["malformed"], res["current"]), ([], ["plugin/hooks"]))
+        self.note("plugin/hooks", body=tuple(f"- fact {i}" for i in range(10)))
+        [bad] = self.check()["malformed"]
+        self.assertIn("11 lines; a note holds at most 10", bad["why"])
+
+    def test_a_stale_note_names_at_most_twenty_files_and_counts_the_rest(self):
+        # Catches: the shown-names cap off by one either way (19 or 21 for MAX_CHANGED 20), and an "and N more"
+        # remainder that is missing, miscounted, or said when every file is already named.
+        self.note("plugin/hooks")
+        self.commit("note")
+        for i in range(20):
+            self.write(f"plugin/hooks/f{i:02d}.py", "x\n")
+        self.commit("twenty files")
+        [st] = self.check()["stale"]
+        self.assertEqual((st["changed_count"], len(st["changed"])), (20, 20))
+        self.assertNotIn(" more;", "\n".join(self.NO.lines(self.check())))
+        self.write("plugin/hooks/f20.py", "x\n")
+        self.commit("twenty-one files")
+        res = self.check()
+        [st] = res["stale"]
+        self.assertEqual((st["changed_count"], st["changed"]), (21, [f"plugin/hooks/f{i:02d}.py" for i in range(20)]))
+        [line] = [x for x in self.NO.lines(res) if x.startswith("stale:")]
+        self.assertIn("plugin/hooks/f19.py and 1 more; re-read them", line)
+        self.assertNotIn("f20.py", line)
+
+    def test_a_checked_value_that_is_not_seven_to_forty_lower_case_hex_is_malformed(self):
+        # Catches: the header's commit pattern loosened (upper case, fewer than 7 digits, letters past f), so a
+        # header that names no commit git would print falls back to the header commit and reads as current.
+        for sha in ("ABCDEF1", "abc12", "abcdefg", "GHIJKLM", "a" * 41):
+            with self.subTest(checked=sha):
+                self.note("plugin/hooks", sha=sha)
+                self.commit(f"note {sha}")
+                res = self.check()
+                self.assertEqual(res["current"], [])
+                [bad] = res["malformed"]
+                self.assertIn("its first line is not", bad["why"])
+
+    def test_counts_tell_current_from_stale(self):
+        # Catches: counts() handing the heartbeat the stale count as "current" (or the reverse), which no test
+        # with equal numbers of each can see.
+        self.note("plugin/hooks")
+        self.note("docs")
+        self.note("plugin/kit")
+        self.commit("notes")
+        self.write("plugin/kit/agent.py", "k2\n")
+        self.commit("kit change")
+        self.assertEqual(self.NO.counts(self.check()), {"current": 2, "stale": 1, "undeclared": 0, "malformed": 0})
+
+    def test_a_malformed_reason_holding_the_root_path_carries_no_escape(self):
+        # Catches (1.53 review S1, mutation M3): the reason of a malformed note printed raw. A note too large to
+        # read is refused with its full path, so a checkout folder whose name holds an ESC sequence or a bidi
+        # override reaches the terminal through the reason unless it passes through _short.
+        esc, rlo = "\x1b[2J", "‮"
+        repo = self.dir / f"re{esc}po{rlo}"
+        shutil.copytree(self.repo, repo, symlinks=True)
+        sha = wt_git(repo, "rev-parse", "--short", "HEAD").strip()
+        (repo / "docs/CLAUDE.md").write_text(f"<!-- area: docs · checked: {sha} -->\n" + "x" * (self.NO.MAX_NOTE + 1))
+        res = self.NO.check(repo)
+        [bad] = res["malformed"]
+        self.assertIn(esc, bad["why"])                       # the hostile name does reach the reason
+        said = "\n".join(self.NO.lines(res))
+        self.assertIn("malformed: docs/CLAUDE.md: cannot be read: ", said)
+        self.assertNotIn("\x1b", said)
+        self.assertNotIn(rlo, said)
+
     def test_the_server_never_runs_it(self):
         # Catches (CONSOLE-kit/Q23): the check starting git inside the console server, where the seam is closed.
         from unittest import mock
@@ -9723,6 +9839,25 @@ class StewardNotesTests(unittest.TestCase):
         finally:
             os.chdir(here)
         self.assertEqual(self.counts(), stored)
+
+    def test_a_first_watch_from_another_folder_says_nothing_and_records_nothing(self):
+        # Catches (1.53 review N1): with no record yet, a watch outside the console's project reading counts off
+        # None, so the error is swallowed as "notes check skipped" and a record with no counts is written, which
+        # then holds the real check off for a day.
+        import contextlib
+        import io
+        err = io.StringIO()
+        here = os.getcwd()
+        try:
+            os.chdir(self.dir)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.AG.main(["--state", str(self.state), "watch", "--timeout", "0", "--poll", "0.05"])
+        finally:
+            os.chdir(here)
+        self.assertNotIn("notes check skipped", err.getvalue())
+        self.assertFalse((self.state / self.AG.NOTES_FILE).exists())
+        self.watch()
+        self.assertEqual(self.counts()["undeclared"], 1)
 
     def test_a_record_from_the_future_does_not_hold_the_check_off(self):
         # Catches: a clock set back (or a record written ahead) trusted as "checked a moment ago" for as long as

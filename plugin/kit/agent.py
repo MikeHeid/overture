@@ -966,7 +966,7 @@ def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | Non
         cwd = Path.cwd()
         here = R.enclosing(cwd) or _enclosing_via_worktree(cwd)
         if not here or os.path.realpath(here[1].get("state", "")) != os.path.realpath(state):
-            return rec.get("counts")   # 1.53 review C5: not this console's project; keep the counts the beat holds
+            return (rec or {}).get("counts")   # 1.53 review C5 (N1: no record yet on a first watch): not this console's project; keep the counts the beat holds
         root = Path(here[0])
         if "areas" in _json_or_empty(root / NO.CONFIG):
             counts = NO.counts(NO.check(root, tick=beat))

@@ -147,10 +147,11 @@ def areas(root: Path) -> list[str]:
     return list(got)
 
 
-def ignored(root: Path, declared: list[str]) -> list[str]:
+def ignored(root: Path, declared: list[str], tick: Callable[[], None] | None = None) -> list[str]:
     """`.overture.json` "notes_ignore": files whose change alone makes no note stale (the files a release's
     version bump writes). Checked like "areas"; a declared area, or a folder holding one, is refused, so no
-    note's whole area can be ignored away. Absent: none."""
+    note's whole area can be ignored away, and so is any entry that is not a file committed at HEAD (1.53
+    review N2: a folder inside an area would hide its whole subtree). Absent: none."""
     got = _config(root).get("notes_ignore")
     if got is None:
         return []
@@ -161,6 +162,12 @@ def ignored(root: Path, declared: list[str]) -> list[str]:
         if any(d == f or d.startswith(f + "/") for d in declared):
             raise NotesError(f"{CONFIG}: notes_ignore names {f}, a declared area or a folder holding one; "
                              f"name the files a version bump writes, not a whole area")
+    rc, out = _git(root, ["ls-tree", "-z", "HEAD", "--", *got], tick)
+    files = {e.split("\t", 1)[1] for e in out.split("\0") if "\t" in e and e.split(" ", 2)[1:2] == ["blob"]}
+    for f in got:
+        if rc != 0 or f not in files:
+            raise NotesError(f"{CONFIG}: notes_ignore names {f}, which is not a file committed at HEAD; "
+                             f"name files, never a folder")
     return list(got)
 
 
@@ -208,10 +215,10 @@ def check(root: Path | str, *, memory: Path | str | None = None, tick: Callable[
     """Every note under `root` (the top of a git checkout) judged; see the module docstring. Never writes."""
     top = _top(root, tick)
     declared = areas(top)
-    ignore = ignored(top, declared)
     rc, head = _git(top, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], tick)
     if rc != 0:
         raise NotesError(f"{top} has no commit yet")
+    ignore = ignored(top, declared, tick)
     rc, shallow = _git(top, ["rev-parse", "--is-shallow-repository"], tick)
     if rc != 0 or shallow.strip() != "false":   # C2: a cut history would make every checked commit look absent
         raise NotesError("shallow clone: staleness can't be judged; fetch full history (git fetch --unshallow)")
@@ -328,7 +335,7 @@ def stamp(root: Path | str, area: str, *, tick: Callable[[], None] | None = None
     """
     top = _top(root, tick)
     declared = areas(top)
-    ignore = ignored(top, declared)
+    ignore = ignored(top, declared, tick)
     if area not in declared:
         raise NotesError(f"{_short(area, SAY)} is not a declared area ({', '.join(declared)})")
     rel = f"{area}/{NOTE}"

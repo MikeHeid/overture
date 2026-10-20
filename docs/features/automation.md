@@ -316,9 +316,9 @@ when their work ends, and memory kept by them would close with them.
 
 A second, optional key, `"notes_ignore"`, lists files whose change alone
 makes no note stale, such as the files a release's version bump writes
-(`["src/server/version.py"]`). Each is checked like an area, and a declared
-folder, or one holding a declared folder, is refused, so no note's whole
-area can be ignored away.
+(`["src/server/version.py"]`). Each is checked like an area and must be a
+file committed at HEAD: a folder of any kind is refused, so no note's area,
+or a part of it, can be ignored away.
 
 Each note starts with the commit its facts were checked at:
 
