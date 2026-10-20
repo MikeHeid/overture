@@ -7,6 +7,8 @@ The previous session's job ended with 1.34.1 shipped; your first job is to **che
 
 All seven items below are done.
 
+- **Decisions after 1.53.2** (PR #183 `a37cd8d`, results PR #184 `5a9089b`; OPEN-DECISIONS.md A1–A5): no native-Windows door now (A1); this branch's history was rewritten to replace 4 real details with example values (A3, the repo is public; old commits stay fetchable by SHA until GitHub removes them; re-create local copies of this branch from origin)
+  A2 A/B on one hooks task: 107.6k vs 109.4k tokens with/without the note, same rules kept, no wider run. A4: MCP server ran under a real `claude -p` client; LiveConsoleTests' real-server CSP + lesson chip passes in Chromium and Firefox 155 (items 4 and 6 below are covered). Owner still: real Windows, Mac `service install`.
 - **v1.53.2 released — Windows, honestly** (PR #182, `6dc574a`, zip sha ae4dd4cf…d10c): owner "Honest + no errors (Recommended)" after a Windows audit (scratchpad windows-audit.md), plus the owner's prerequisite scan on install.
   Kit entry scripts refuse by name on native Windows (overture/posix.py); onFailure "continue" on the PreToolUse hooks; onboarding says to onboard in WSL; install banner + hosting.md tell the truth (Claude Desktop has no plugins in WSL sessions; console + CLI run in WSL). New overture/prereqs.py: banner lists only what is missing with per-platform commands + links; `onboard.py prereqs [--json]`; console-onboard runs it first (stops on native Windows).
   1513 tests; install commands checked against vendor docs (apt gh replaced by GitHub's repo link). Not run on real Windows. Next: native Windows agent side needs a TCP agent door (owner decision, not taken); the 1.53 A/B check.
