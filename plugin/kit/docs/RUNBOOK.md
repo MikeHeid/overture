@@ -525,7 +525,9 @@ whenever the steward's heartbeat counts one:
   be judged. Run `git fetch --unshallow` and check again; the steward skips
   that day's check and says why once.
 - **release: refused: the area notes are not current**: `release.py` runs
-  the check first and bumps nothing until it passes.
+  the check first and bumps nothing until it passes. The files the version
+  bump writes are listed in `.overture.json` `"notes_ignore"`, so a release
+  alone never stales a note; re-stamp only a note whose area really changed.
 
 ## The fold refuses
 

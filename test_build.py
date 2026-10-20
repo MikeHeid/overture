@@ -189,6 +189,25 @@ class ReleaseNotesGateTests(unittest.TestCase):
         self.assertIsNotNone(said)
         self.assertTrue(any(line.startswith("stale: docs/CLAUDE.md") for line in said), said)
 
+    @unittest.skipUnless((B.ROOT / ".overture.json").exists(), "no .overture.json (not a checkout)")
+    def test_every_file_the_version_bump_writes_is_in_notes_ignore(self):
+        # Catches: set_version writing a file that .overture.json "notes_ignore" does not list (a new version file,
+        # or the list trimmed), so every release stales that file's area note and the next release is refused
+        # until someone re-stamps a note whose facts did not change. The bump runs on a copy, never this tree.
+        import release as REL
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        copy = Path(td.name)
+        for rel in ("VERSION", "plugin/.claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
+                    "plugin/kit/overture/__init__.py"):
+            (copy / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(B.ROOT / rel, copy / rel)
+        with mock.patch.object(REL, "ROOT", copy):
+            written = REL.set_version("999.0.0")
+        self.assertEqual(len(written), 4, written)
+        ignore = json.loads((B.ROOT / ".overture.json").read_text(encoding="utf-8")).get("notes_ignore") or []
+        self.assertEqual(sorted(set(written) - set(ignore)), [])
+
     def test_a_release_is_refused_before_the_bump_while_the_gate_finds_anything(self):
         # Catches: release.py bumping the version (and listing the notes check as a mere next step) while the
         # area notes are stale, or not saying which note held it back.

@@ -15,7 +15,9 @@ an area note. A note's first line says which commit its facts were checked at:
 `check` reads the repository and says, never writing anything:
 
 - stale: the area's committed files changed after that commit (the note
-  itself and any nested declared area left out). When the commit is not in
+  itself, any nested declared area and any file `.overture.json`
+  "notes_ignore" names left out: a release's version bump writes such a file
+  and changes no fact). When the commit is not in
   this branch's history (a squash merge leaves the branch's commits behind),
   the last commit that changed the note's header line is the base instead
   (1.53 review C3: a typo fix lower in the note does not move it). Changes
@@ -118,28 +120,55 @@ def _read(p: Path, cap: int) -> bytes:
         os.close(fd)
 
 
-def areas(root: Path) -> list[str]:
-    """The declared area roots, from the repository's `.overture.json` "areas"; refused by name when unusable."""
+def _config(root: Path) -> dict:
     try:
         doc = json.loads(_read(Path(root) / CONFIG, MAX_CONFIG).decode("utf-8"))
     except FileNotFoundError:
         doc = {}
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
         raise NotesError(f"{CONFIG}: cannot be read: {e}") from None
-    got = doc.get("areas") if isinstance(doc, dict) else None
+    return doc if isinstance(doc, dict) else {}
+
+
+def _plain(got: object) -> bool:
+    """1 to MAX_AREAS distinct relative paths inside the repository: no '.', '..' or leading '/'."""
+    return isinstance(got, list) and 0 < len(got) <= MAX_AREAS and len(set(got)) == len(got) and all(
+        isinstance(a, str) and AREA.match(a) and ".." not in a.split("/") and "." not in a.split("/") for a in got)
+
+
+def areas(root: Path) -> list[str]:
+    """The declared area roots, from the repository's `.overture.json` "areas"; refused by name when unusable."""
+    got = _config(root).get("areas")
     if got is None:
         raise NotesError(f"{root} declares no areas ({CONFIG} \"areas\": a list of folders that may hold a note)")
-    if not (isinstance(got, list) and 0 < len(got) <= MAX_AREAS and all(
-            isinstance(a, str) and AREA.match(a) and ".." not in a.split("/") and "." not in a.split("/")
-            for a in got)) or len(set(got)) != len(got):
+    if not _plain(got):
         raise NotesError(f"{CONFIG}: areas must be 1 to {MAX_AREAS} distinct relative folders inside the "
                          f"repository (no '.', '..' or leading '/'), e.g. [\"docs\", \"src/server\"]")
     return list(got)
 
 
-def _pathspec(area: str, declared: list[str]) -> list[str]:
-    """The area's files: its folder, less its own note and any nested declared area (which has its own)."""
-    return [area, f":(exclude){area}/{NOTE}", *(f":(exclude){d}" for d in declared if d.startswith(area + "/"))]
+def ignored(root: Path, declared: list[str]) -> list[str]:
+    """`.overture.json` "notes_ignore": files whose change alone makes no note stale (the files a release's
+    version bump writes). Checked like "areas"; a declared area, or a folder holding one, is refused, so no
+    note's whole area can be ignored away. Absent: none."""
+    got = _config(root).get("notes_ignore")
+    if got is None:
+        return []
+    if not _plain(got):
+        raise NotesError(f"{CONFIG}: notes_ignore must be 1 to {MAX_AREAS} distinct relative files inside the "
+                         f"repository (no '.', '..' or leading '/'), e.g. [\"src/server/version.py\"]")
+    for f in got:
+        if any(d == f or d.startswith(f + "/") for d in declared):
+            raise NotesError(f"{CONFIG}: notes_ignore names {f}, a declared area or a folder holding one; "
+                             f"name the files a version bump writes, not a whole area")
+    return list(got)
+
+
+def _pathspec(area: str, declared: list[str], ignore: list[str]) -> list[str]:
+    """The area's files: its folder, less its own note, any nested declared area (which has its own) and any
+    file "notes_ignore" names."""
+    return [area, f":(exclude){area}/{NOTE}", *(f":(exclude){d}" for d in declared if d.startswith(area + "/")),
+            *(f":(exclude){f}" for f in ignore if f.startswith(area + "/"))]
 
 
 def _base(root: Path, sha: str, note_rel: str, tick) -> tuple[str | None, str]:
@@ -179,6 +208,7 @@ def check(root: Path | str, *, memory: Path | str | None = None, tick: Callable[
     """Every note under `root` (the top of a git checkout) judged; see the module docstring. Never writes."""
     top = _top(root, tick)
     declared = areas(top)
+    ignore = ignored(top, declared)
     rc, head = _git(top, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], tick)
     if rc != 0:
         raise NotesError(f"{top} has no commit yet")
@@ -206,7 +236,7 @@ def check(root: Path | str, *, memory: Path | str | None = None, tick: Callable[
             res["malformed"].append({"note": rel, "why": came})
             continue
         rc, out = _git(top, ["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base, "HEAD", "--",
-                             *_pathspec(area, declared)], tick)
+                             *_pathspec(area, declared, ignore)], tick)
         if rc != 0:
             res["malformed"].append({"note": rel, "why": f"git diff from {sha} failed"})
             continue
@@ -298,6 +328,7 @@ def stamp(root: Path | str, area: str, *, tick: Callable[[], None] | None = None
     """
     top = _top(root, tick)
     declared = areas(top)
+    ignore = ignored(top, declared)
     if area not in declared:
         raise NotesError(f"{_short(area, SAY)} is not a declared area ({', '.join(declared)})")
     rel = f"{area}/{NOTE}"
@@ -316,7 +347,7 @@ def stamp(root: Path | str, area: str, *, tick: Callable[[], None] | None = None
     sha, why = _parse(top, rel, area)
     if sha is None:
         raise NotesError(f"{rel}: {why}; only a well-formed note is stamped")
-    rc, dirty = _git(top, ["status", "--porcelain", "-z", "--", *_pathspec(area, declared)], tick)
+    rc, dirty = _git(top, ["status", "--porcelain", "-z", "--", *_pathspec(area, declared, ignore)], tick)
     if rc != 0 or dirty:
         raise NotesError(f"{area} has uncommitted changes; the stamp names a commit, so commit them first")
     rc, head = _git(top, ["rev-parse", "--short", "HEAD"], tick)

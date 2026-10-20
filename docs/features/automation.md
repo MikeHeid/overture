@@ -314,6 +314,12 @@ when their work ends, and memory kept by them would close with them.
 
     {"areas": ["docs", "src/server", "src/web"]}
 
+A second, optional key, `"notes_ignore"`, lists files whose change alone
+makes no note stale, such as the files a release's version bump writes
+(`["src/server/version.py"]`). Each is checked like an area, and a declared
+folder, or one holding a declared folder, is refused, so no note's whole
+area can be ignored away.
+
 Each note starts with the commit its facts were checked at:
 
     <!-- area: src/server · checked: 1a2b3c4 -->
@@ -321,7 +327,8 @@ Each note starts with the commit its facts were checked at:
 **`agent.py notes check [--root DIR] [--memory DIR] [--json]`** reads the
 checkout and writes nothing. It needs no console (`--state` may be left
 out). It names a **stale** note (its folder's committed files changed since
-that commit; a nested declared folder and the note itself do not count), an
+that commit; a nested declared folder, the note itself and the
+`"notes_ignore"` files do not count), an
 **undeclared** one (a `CLAUDE.md` in a folder not on the list; folders git
 ignores are never looked at), and a **malformed** one (no header, another
 folder's header, more than 10 lines). After a squash merge the checked

@@ -17,6 +17,9 @@ refuses the release while it finds anything (a stale, undeclared or
 malformed area note, or a refusal such as a shallow clone), naming each. This
 is the release gate for the area notes; no unit test reads this repository's
 own notes, so a suite stays green mid-work, in a zip or in a vendored copy.
+Every file the bump writes is listed in `.overture.json` "notes_ignore", so the
+bump alone makes no note stale and the next release is not held back by it
+(test_build.py asserts the list covers them).
 
 Added in 0.9.2 after /health kept showing 0.8.18 across the 0.9.0 and 0.9.1
 releases: `__version__` and the repo-marketplace manifest had drifted from
@@ -119,8 +122,8 @@ def main(argv: list[str]) -> int:
     print("  2. python3 test_build.py              # asserts the four files stay equal")
     print("  3. git switch -c release-" + argv[1])
     print("  4. git add -A && git commit -m 'release: " + argv[1] + "'")
-    print("  5. python3 plugin/kit/agent.py notes check   # the bump itself moves plugin/kit/overture: re-read,")
-    print("     `notes stamp AREA`, commit; again until it says the notes are current (this script's gate)")
+    print("  5. python3 plugin/kit/agent.py notes check   # the bump alone stales no note (\"notes_ignore\");")
+    print("     a note it names: re-read its area, `notes stamp AREA`, commit (this script's gate)")
     print("  6. git push -u origin release-" + argv[1] + " && gh pr create ...")
     print("  7. After merge, build the zip with build_zip.py (in WSL for LF endings). Never zip the")
     print("     repository itself: INSTALL.md's local route needs build_zip's plugins/overture/ layout")

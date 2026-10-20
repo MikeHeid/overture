@@ -9261,6 +9261,39 @@ class AreaNotesTests(unittest.TestCase):
         self.commit("agent")
         self.assertEqual([s["area"] for s in self.check()["stale"]], ["plugin/kit"])
 
+    def test_a_file_notes_ignore_names_does_not_make_its_area_stale(self):
+        # Catches: "notes_ignore" not applied, so every release's version bump stales plugin/kit/overture's note
+        # and the next release is refused until someone re-stamps a note whose facts did not change; and an
+        # ignored file hiding a real change committed beside it in the same area.
+        self.write("plugin/kit/overture/__init__.py", '__version__ = "1.0.0"\n')
+        self.write(".overture.json", json.dumps({"areas": self.AREAS,
+                                                 "notes_ignore": ["plugin/kit/overture/__init__.py"]}))
+        self.commit("ignore the version file")
+        self.note("plugin/kit/overture")
+        self.commit("note")
+        self.write("plugin/kit/overture/__init__.py", '__version__ = "1.0.1"\n')
+        self.commit("release: 1.0.1")
+        res = self.check()
+        self.assertTrue(res["ok"], res)
+        self.assertIn("plugin/kit/overture", res["current"])
+        self.write("plugin/kit/overture/__init__.py", '__version__ = "1.0.2"\n')
+        self.write("plugin/kit/overture/server.py", "s2\n")
+        self.commit("release: 1.0.2 and a server change")
+        [st] = self.check()["stale"]
+        self.assertEqual((st["area"], st["changed"]), ("plugin/kit/overture", ["plugin/kit/overture/server.py"]))
+
+    def test_notes_ignore_is_checked_like_the_areas(self):
+        # Catches: a "notes_ignore" entry that climbs out of the repository, names the root, or names a declared
+        # area (or a folder holding one), so a whole area's changes are ignored and its note is never stale.
+        for bad in (["../up"], ["."], ["/abs"], "docs/x.md", [""], [], ["docs/x.md", "docs/x.md"], ["docs"],
+                    ["plugin"], [7]):
+            with self.subTest(notes_ignore=bad):
+                self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": bad}))
+                with self.assertRaisesRegex(self.NO.NotesError, "notes_ignore"):
+                    self.check()
+        self.write(".overture.json", json.dumps({"areas": self.AREAS, "notes_ignore": ["docs/x.md", "VERSION"]}))
+        self.check()
+
     def test_a_note_outside_the_declared_areas_fails_the_check(self):
         # Catches (the sprawl gate): a CLAUDE.md dropped in any folder passing unnoticed, so notes multiply
         # until no one keeps them true; and an ignored folder (a virtualenv) swept into the count.
