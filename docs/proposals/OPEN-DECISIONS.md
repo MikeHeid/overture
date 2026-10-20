@@ -193,6 +193,20 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## After 1.53.2 (decided 2026-10-20)
+
+The owner asked for every open question in one deliberation. They chose the ★
+on Q1, Q2 and Q4. On Q3 they chose B once it was clear the repository is public.
+Q5 was not put to them, so it is an *architect default*.
+
+| # | Question | Decision |
+|---|---|---|
+| A1 | Can a native Windows session reach the console? | **Not now** (owner ★). 1.53.2 stays: on native Windows the kit refuses by name and points to WSL. A TCP agent door with a token would be a new listener, and native Windows also lacks POSIX locks, `dir_fd` and drive-path handling. That needs its own deliberation, and only if someone works from Claude Desktop on Windows. |
+| A2 | Measure area notes (M2) | **Run a small A/B now** (owner ★). One task in `plugin/hooks` is run twice in throwaway worktrees, once with the area's `CLAUDE.md` and once without, and tokens, turns and correctness are compared. A wider run over 3 areas follows only if the gap is large. |
+| A3 | Real network details in old HANDOFF entries | **Replace them and rewrite the handoff branch's history** (owner, B). The repository is public. Example values replace the details, and the branch is force-pushed; `main` is never force-pushed. GitHub may still serve the old commits by SHA until it removes them. |
+| A4 | Checks never run for real | **Split** (owner ★). An agent runs the MCP server against a real client (the `claude` CLI), and checks the lesson chip and the owner-page CSP in a real browser. The owner runs 1.53.1/1.53.2 on real Windows and `service install` on a Mac. |
+| A5 | 1.53.2's skipped LOWs | **Leave them** (architect default). The prerequisite scan links to the vendor's own systemd and launchd steps instead of printing them. Revisit if an operator gets stuck there. |
+
 ## Memory in its own place: area notes (decided 2026-10-20)
 
 The owner asked whether each lane, wave or phase, and each function, should
