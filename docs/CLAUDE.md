@@ -1,4 +1,4 @@
-<!-- area: docs · checked: 9aa3736 -->
+<!-- area: docs · checked: 4bf7897 -->
 - These pages are for the owner and the people who run a console: plain, short sentences, bold lead-ins, no hype.
 - Feature pages title each section with the releases that built it (`## Agent worktrees (1.50)`) and link the owner's decisions in proposals/OPEN-DECISIONS.md by id (W1, R2, M1).
 - OPEN-DECISIONS.md is where decisions live: other pages and notes cite a row by id and never copy it, so it stays the one place that changes.
