@@ -18,10 +18,11 @@ change to them means.
   declarations by one line.
 
 **The body hash** is the sha256 of the definition's text with comments
-dropped, whitespace normalised (it counts only between two word characters)
-and the definition's own name blanked, so a rename alone keeps the hash and a
-moved or renamed body can be found by it. Docstrings and string literals are
-code and do count. Line endings never count.
+dropped, whitespace in code normalised (it counts only between two word
+characters) and the definition's own name blanked, so a rename alone keeps the
+hash and a moved or renamed body can be found by it. Docstrings and literals
+are code and count verbatim, whitespace inside them included (1.54 review C1).
+Line endings never count.
 
 **Never a guess.** A file this cannot read (an unknown extension, a syntax
 error, an unclosed literal, braces that do not balance, past its bounds) raises
@@ -225,13 +226,14 @@ _TPL_STOP = re.compile(r"[\\`]|\$\{")
 class _Lexed(NamedTuple):
     mask: str                       # the text, comments as spaces and literals as LIT, newlines kept
     comments: list[tuple[int, int]]
+    literals: list[tuple[int, int]]   # each literal's [start, end): its text counts verbatim in a body's hash
     pairs: dict[int, int]           # each code `{` offset -> its `}` offset
     owner: list[int]                # per line: the offset of the innermost `{` open at its start, or -1
 
 
 def _lex(text: str, lang: str) -> _Lexed:
     n, stops = len(text), _STOPS[lang]
-    pieces, comments, last = [], [], 0
+    pieces, comments, literals, last = [], [], [], 0
     pairs: dict[int, int] = {}
     braces: list[int] = []
     tpl: list[int] = []            # JS: per open `${`, the depth of plain braces inside it
@@ -241,6 +243,8 @@ def _lex(text: str, lang: str) -> _Lexed:
         nonlocal last
         pieces.append(text[last:a])
         pieces.append(_BLANK.sub(ch, text[a:b]))
+        if ch == LIT:
+            literals.append((a, b))
         last = b
 
     def line_of(i: int) -> int:
@@ -392,7 +396,7 @@ def _lex(text: str, lang: str) -> _Lexed:
             k += 1
         owner.append(cur)
         pos += len(line) + 1
-    return _Lexed(mask, comments, pairs, owner)
+    return _Lexed(mask, comments, literals, pairs, owner)
 
 
 def _block_comment_end(text: str, i: int, nested: bool) -> int:
@@ -703,8 +707,8 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
 
     chain: list[tuple[_Def, int]] = []      # the definitions around the current one, with where each ends
     out = []
-    comments = lx.comments
-    cstarts = [a for a, _ in comments]
+    cuts = sorted([(s, e, " ") for s, e in lx.comments] + [(s, e, None) for s, e in lx.literals])
+    cstarts = [s for s, _, _ in cuts]
     for d in defs:
         a, b = extent(d)
         while chain and chain[-1][1] <= a:
@@ -718,7 +722,7 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
             continue
         q = prefix + d.name
         kind = "method" if d.kind == "function" and chain[:-1] and chain[-2][0].scope else d.kind
-        body = _normalise(text, a, b, comments, cstarts, d.name_span)
+        body = _normalise(text, a, b, cuts, cstarts, d.name_span)
         out.append(Symbol(q, kind, line(a), line(b - 1), _digest(body)))
         if len(out) > MAX_SYMBOLS:
             raise Unresolvable(f"it has over {MAX_SYMBOLS} definitions")
@@ -726,21 +730,39 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
 
 
 _GAP = re.compile(r"(?<=[^\w$])\s+|\s+(?=[^\w$])")
+_HOLE = "\x05"   # where a literal sits in the code being normalised; never in code these languages take
 
 
-def _normalise(text: str, a: int, b: int, comments: list[tuple[int, int]], cstarts: list[int],
+def _normalise(text: str, a: int, b: int, cuts: list[tuple[int, int, str | None]], cstarts: list[int],
                name: tuple[int, int]) -> str:
-    """text[a:b] with comments dropped, the definition's own name blanked, and whitespace counted only between words."""
-    parts, pos = [], a
+    """text[a:b] with comments dropped, the definition's own name blanked, and whitespace counted only between words.
+
+    1.54 review C1: whitespace counts only in code. A literal (a string, a
+    template's text, a regex, a raw or verbatim string) is kept verbatim, its
+    length before it, so `join(", ")` and `join(",")` hash apart.
+    """
     k = bisect.bisect_left(cstarts, a)
-    cuts = [(name[0], name[1], "\x00")] if a <= name[0] < b and name[1] > name[0] else []
-    while k < len(comments) and comments[k][0] < b:
-        cuts.append((comments[k][0], min(comments[k][1], b), " "))
+    while k > 0 and cuts[k - 1][1] > a:   # a cut that starts before the definition and reaches into it
+        k -= 1
+    marks = [(name[0], name[1], "\x00")] if a <= name[0] < b and name[1] > name[0] else []
+    while k < len(cuts) and cuts[k][0] < b:
+        s, e, rep = cuts[k]
+        marks.append((max(s, a), min(e, b), rep))
         k += 1
-    for s, e, rep in sorted(cuts):
+    code, lits, pos = [], [], a
+    for s, e, rep in sorted(marks, key=lambda m: (m[0], m[1])):
         if s < pos:
             continue
-        parts += [text[pos:s], rep]
+        code.append(text[pos:s])
+        if rep is None:
+            lits.append(text[s:e])
+            code.append(_HOLE)
+        else:
+            code.append(rep)
         pos = e
-    parts.append(text[pos:b])
-    return _GAP.sub("", " ".join("".join(parts).split()))
+    code.append(text[pos:b])
+    flat = "".join(code)
+    if flat.count(_HOLE) != len(lits):
+        raise Unresolvable("it holds a \\x05 control character outside a literal")
+    out = _GAP.sub("", " ".join(flat.split())).split(_HOLE)
+    return "".join(piece + (f"{_HOLE}{len(lits[i])}:{lits[i]}" if i < len(lits) else "") for i, piece in enumerate(out))

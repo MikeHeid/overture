@@ -10491,5 +10491,49 @@ class SymbolAnchorTests(Tmp):
                 self.assertIn(words, why)
 
 
+class SymbolReviewHashTests(unittest.TestCase):
+    """1.54 review: what the body hash must count, so a real change is never read as holding."""
+
+    def test_whitespace_inside_a_literal_counts(self):
+        # Catches (1.54 review C1, mutant S1): whitespace normalised inside string, template, regex, raw and
+        # verbatim literals, so `join(", ")` -> `join(",")` or `"x = 1"` -> `"x=1"` keeps the hash and CI says
+        # "touched, still holds" for a change of what the code outputs.
+        for path, q, a, b in (
+                ("a.js", "f", 'function f(a) { return a.join(", "); }\n', 'function f(a) { return a.join(","); }\n'),
+                ("a.js", "f", 'function f() { return "a  b"; }\n', 'function f() { return "a b"; }\n'),
+                ("a.js", "f", "function f() { return 'x = 1'; }\n", "function f() { return 'x=1'; }\n"),
+                ("a.ts", "f", "function f(a) { return `${a}  x`; }\n", "function f(a) { return `${a} x`; }\n"),
+                ("a.js", "f", 'function f(s) { return s.replace(/a  b/, ""); }\n',
+                 'function f(s) { return s.replace(/a b/, ""); }\n'),
+                ("a.go", "f", "package p\nfunc f() string { return `a  b` }\n",
+                 "package p\nfunc f() string { return `a b` }\n"),
+                ("a.go", "f", "package p\nfunc f() string { return `a\nb` }\n",
+                 "package p\nfunc f() string { return `ab` }\n"),
+                ("a.cs", "C.F", 'class C {\n  string F() { return @"p  q"; }\n}\n',
+                 'class C {\n  string F() { return @"p q"; }\n}\n'),
+                ("A.java", "A.m", 'class A {\n  String m() { return """\n    a  b"""; }\n}\n',
+                 'class A {\n  String m() { return """\n    a b"""; }\n}\n'),
+                ("a.rs", "f", 'fn f() -> &str { r#"a  b"# }\n', 'fn f() -> &str { r#"a b"# }\n'),
+                ("a.rs", "f", "fn f() -> char { ' ' }\n", "fn f() -> char { '\t' }\n")):
+            with self.subTest(path=path, a=a):
+                self.assertNotEqual(body(path, a, q), body(path, b, q))
+
+    def test_whitespace_around_a_literal_still_does_not_count(self):
+        # Catches: the C1 fix overshooting, so a reformat around a literal (`f( ", " )`) breaks a ruling (K2).
+        self.assertEqual(body("a.js", 'function f(a) { return a.join( ", " ); }\n', "f"),
+                         body("a.js", 'function f(a) {\n  return a.join(", ");\n}\n', "f"))
+        self.assertEqual(body("a.ts", "function f(a) { return `x${ a }y`; }\n", "f"),
+                         body("a.ts", "function f(a) { return `x${a}y`; }\n", "f"))
+
+    def test_a_slash_after_a_closing_bracket_divides(self):
+        # Catches: `)` or `]` counted among the operators a regex may follow, so `(a) / 2 + (b) / 3` is read
+        # as a literal whose spacing counts (C1), and a reformat breaks a ruling (or a brace in it is hidden).
+        # (The review's mutant S8, dropping `if prev in ")]"`, is equivalent: neither is in _REGEX_AFTER.)
+        self.assertEqual(body("a.js", "function f(a, b) { return (a) / 2 + (b) / 3; }\n", "f"),
+                         body("a.js", "function f(a, b) { return (a)/2 + (b)/3; }\n", "f"))
+        self.assertEqual(body("a.js", "function f(a) { return a[0] / 2 + a[1] / 3; }\n", "f"),
+                         body("a.js", "function f(a) { return a[0]/2 + a[1]/3; }\n", "f"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
