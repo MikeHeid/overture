@@ -214,9 +214,12 @@ def _python(text: str) -> list[Symbol]:
     rebound: dict[tuple[str, str], list[tuple[int, int]]] = {}
     starred: dict[str, list[tuple[int, int]]] = {}   # scope prefix -> where a `from x import *` sits
     defs_at: dict[str, tuple[int, int]] = {}      # qualname -> where its def or class statement sits
-    stack: list[tuple[ast.AST, str, bool]] = [(tree, "", False)]
+    # Each node with its scope's prefix, whether that scope is a class, and whether it sits under a block that
+    # may or may not run (try/except, if, with, for, while, match) within that scope.
+    stack: list[tuple[ast.AST, str, bool, bool]] = [(tree, "", False, False)]
+    conditional: set[str] = set()   # the qualnames of defs that sit under such a block
     while stack:    # iterative: a deep tree costs memory, never Python's stack
-        node, prefix, in_class = stack.pop()
+        node, prefix, in_class, cond = stack.pop()
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 q = prefix + child.name
@@ -225,12 +228,14 @@ def _python(text: str) -> list[Symbol]:
                 kind = "class" if cls else "method" if in_class else "function"
                 first = min([child.lineno] + [d.lineno for d in child.decorator_list])
                 defs.append((q, kind, first, child.end_lineno or child.lineno, child.lineno, child.name))
+                if cond:
+                    conditional.add(q)
                 if len(defs) > MAX_SYMBOLS:
                     raise Unresolvable(f"it has over {MAX_SYMBOLS} definitions")
-                stack.append((child, q + ".", cls))
+                stack.append((child, q + ".", cls, False))
             elif not isinstance(child, (ast.expr_context, ast.operator, ast.unaryop, ast.cmpop, ast.boolop)):
                 _bindings(child, prefix, rebound, starred)
-                stack.append((child, prefix, in_class))
+                stack.append((child, prefix, in_class, cond or isinstance(child, _BLOCKS)))
     try:
         toks = [t for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in _SKIP_TOKENS]
     except (tokenize.TokenError, SyntaxError) as e:
@@ -252,12 +257,18 @@ def _python(text: str) -> list[Symbol]:
         out.append(Symbol(q, kind, first, last, _digest(" ".join(words))))
         scope = q[:len(q) - len(name)]
         here = defs_at.get(q, (at, 0))
-        after = [w for w in rebound.get((scope, name), []) + starred.get(scope, []) if w > here]
+        bound = rebound.get((scope, name), []) + starred.get(scope, [])
+        # 1.54 review, round 3: a def that may not run (`except ImportError: def f` after `from fast import f`)
+        # is not the one that runs when anything else binds its name, before it or after; an unconditional
+        # def overrides what came before it, so only a later binding counts.
+        after = sorted(bound) if q in conditional else [w for w in bound if w > here]
         if after:   # 1.54 review M2: bound again after its def (`f = ...`, `for f in`, `global f`): unchecked
             out.append(Symbol(q, kind, after[0][0], after[0][0], ""))
     return sorted(out, key=lambda s: (s.start_line, -s.end_line))
 
 
+_BLOCKS = tuple(getattr(ast, n) for n in ("Try", "TryStar", "If", "With", "AsyncWith", "For", "AsyncFor", "While",
+                                          "Match") if hasattr(ast, n))   # a block whose body may not run
 _LATER = (1 << 30, 0)   # a binding whose time cannot be told (a function's `global f`): after every def
 
 

@@ -10688,6 +10688,28 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(SY.resolve("a.py", text, "f").state, "found")
 
+    def test_a_conditional_python_def_with_any_other_binding_is_unchecked(self):
+        # Catches (1.54 review, round 3): a def under try/except/if/with/for/while whose scope binds the name
+        # elsewhere BEFORE it, read as the one that runs: `try: from fast import f` / `except ImportError: def f`
+        # runs the import when it succeeds, and `f = lambda: 2` then `if False: def f()` never runs the def.
+        d = "    def f():\n        return 1\n"
+        for label, text in (
+                ("try import", "try:\n    from fast import f\nexcept ImportError:\n" + d),
+                ("if False", "f = lambda: 2\nif False:\n" + d),
+                ("with", "f = 2\nwith open('x'):\n" + d),
+                ("for", "f = 2\nfor _ in ():\n" + d),
+                ("while", "import f\nwhile False:\n" + d),
+                ("else branch", "if True:\n    f = 2\nelse:\n" + d),
+                ("nested blocks", "f = 2\nif True:\n    try:\n    " + d.replace("\n    ", "\n        ") + "    except OSError:\n        pass\n"),
+                ("class body", "class A:\n    f = 2\n    if True:\n        def f(self):\n            return 1\n")):
+            q = "A.f" if label == "class body" else "f"
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.py", text, q).state, "unchecked")
+        # An unconditional def keeps the rule: a binding before it is overridden by it.
+        self.assertEqual(SY.resolve("a.py", "f = None\ndef f():\n    return 1\n", "f").state, "found")
+        # A conditional def with no other binding of its name is found.
+        self.assertEqual(SY.resolve("a.py", "if True:\n" + d + "g = 2\n", "f").state, "found")
+
     def test_a_same_name_in_another_scope_is_no_redefinition(self):
         # Catches: the M2 check overshooting, so every ruled `render` is unchecked because an object literal,
         # another class or a nested function also has one, or an anonymous function is taken for one.
