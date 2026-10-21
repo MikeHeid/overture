@@ -41,6 +41,7 @@ import bisect
 import hashlib
 import io
 import re
+import threading
 import tokenize
 from typing import NamedTuple
 
@@ -50,7 +51,11 @@ MAX_CHARS = 1 << 20      # a larger file is not read for symbols (its anchor rep
 MAX_SYMBOLS = 5000       # definitions in one file, at most
 MAX_SIGNATURE = 4000     # characters between a definition's name and its body's opening brace
 MAX_DEF_LINE = 2000      # a longer line is never read as a definition line
+MEMO_SIZE = 8            # texts whose parse `find` keeps (oldest first out)
 HASH_PREFIX = "overture-symbol-1\n"   # changes only if the normalisation does
+
+_MEMO: dict[tuple[str, str], tuple[Symbol, ...] | str] = {}
+_MEMO_LOCK = threading.Lock()   # the console server reads symbols on several threads
 
 LANGS = {".py": "python", ".pyi": "python",
          ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "js", ".ts": "js", ".mts": "js", ".cts": "js",
@@ -99,7 +104,36 @@ def split(ref: object) -> tuple[str, str] | None:
 
 
 def find(path: str, text: str) -> list[Symbol]:
-    """Every definition in `text` (the content of `path`), in file order; Unresolvable when it cannot be read."""
+    """Every definition in `text` (the content of `path`), in file order; Unresolvable when it cannot be read.
+
+    Memoised on (path, text) for the last few texts (1.54 review M1): the
+    lookup reads one file's old and new text for every condition of every
+    ruling on it, and each parse is one pass over up to MAX_CHARS.
+    """
+    key = (path, text)
+    with _MEMO_LOCK:
+        got = _MEMO.get(key)
+    if got is None:
+        try:
+            got = tuple(_find(path, text))
+        except Unresolvable as e:
+            got = str(e)
+        with _MEMO_LOCK:
+            _MEMO[key] = got
+            while len(_MEMO) > MEMO_SIZE:
+                del _MEMO[next(iter(_MEMO))]
+    if isinstance(got, str):
+        raise Unresolvable(got)
+    return list(got)
+
+
+def clear_cache() -> None:
+    """Forget every memoised parse (a test that counts them starts here)."""
+    with _MEMO_LOCK:
+        _MEMO.clear()
+
+
+def _find(path: str, text: str) -> list[Symbol]:
     lang = language(path)
     if lang is None:
         raise Unresolvable(f"{path} is not a language this reads (Python, JS/TS, Go, Rust, Java, C#)")
@@ -530,8 +564,8 @@ _CS_ATTR = r"(?:\[[^\]\n]*\]\s*)*"
 _RET = r"(?:[\w.$?]+(?:<[^;{}()=\n]*>)?(?:\[\s*\])*\??\s+)?"
 _PATTERNS = {
     "js": [
-        ("any", "function", re.compile(r"\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\b\s*\*?"
-                                        r"\s*(?P<name>[A-Za-z_$][\w$]*)")),
+        ("any", "function", re.compile(r"\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\b\s*(?:\*\s*)?"
+                                        r"(?P<name>[A-Za-z_$][\w$]*)")),
         ("any", "class", re.compile(r"\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:abstract\s+)?class\s+"
                                      r"(?P<name>[A-Za-z_$][\w$]*)")),
         ("any", "interface", re.compile(r"\s*(?:export\s+)?(?:declare\s+)?interface\s+(?P<name>[A-Za-z_$][\w$]*)")),
@@ -540,12 +574,13 @@ _PATTERNS = {
                                          r"(?P<name>[A-Za-z_$][\w$]*)\s*(?:\{|\Z)")),
         ("any", "arrow", re.compile(r"\s*(?:export\s+)?(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*"
                                      r"(?::[^=\n]+)?=\s*(?:async\s+)?(?=function\b|\(|[A-Za-z_$][\w$]*\s*=>)")),
-        ("type", "method", re.compile(r"\s*" + _JS_MODS + r"\*?\s*(?P<name>#?[A-Za-z_$][\w$]*)\s*[?!]?\s*(?:<[^>\n]*>)?\s*\(")),
+        ("type", "method", re.compile(r"\s*" + _JS_MODS + r"(?:\*\s*)?(?P<name>#?[A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?"
+                                      r"(?:<[^>\n]*>\s*)?\(")),
         ("type", "field-arrow", re.compile(r"\s*" + _JS_MODS + r"(?P<name>#?[A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*"
                                             r"(?:async\s+)?(?=\(|[A-Za-z_$][\w$]*\s*=>|function\b)")),
     ],
     "go": [
-        ("any", "function", re.compile(r"func\s*(?:\(\s*(?:[A-Za-z_]\w*\s+)?\*?\s*(?P<recv>[A-Za-z_]\w*)"
+        ("any", "function", re.compile(r"func\s*(?:\(\s*(?:[A-Za-z_]\w*\s+)?(?:\*\s*)?(?P<recv>[A-Za-z_]\w*)"
                                         r"(?:\[[^\]\n]*\])?\s*\)\s*)?(?P<name>[A-Za-z_]\w*)")),
         ("any", "type", re.compile(r"type\s+(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]\n]*\]\s*)?(?P<what>struct|interface)\b")),
     ],
@@ -566,8 +601,8 @@ _PATTERNS = {
         ("any", "namespace", re.compile(r"\s*namespace\s+[\w.]+\s*(?:\{|$)(?P<name>)")),
         ("any", "type", re.compile(r"\s*" + _CS_ATTR + _CS_MODS + r"(?P<what>class|interface|struct|enum|record"
                                    r"(?:\s+(?:class|struct))?)\s+(?P<name>[A-Za-z_]\w*)")),
-        ("type", "method", re.compile(r"\s*" + _CS_ATTR + _CS_MODS + _RET + r"(?P<name>[A-Za-z_]\w*)\s*(?:<[^>\n]*>)?"
-                                      r"\s*\(")),
+        ("type", "method", re.compile(r"\s*" + _CS_ATTR + _CS_MODS + _RET + r"(?P<name>[A-Za-z_]\w*)\s*(?:<[^>\n]*>\s*)?"
+                                      r"\(")),
     ],
 }
 # Statement words that are never a method's name where a definition line is read (a type's body holds no
@@ -601,8 +636,11 @@ def _lexical(text: str, lang: str, jsx: bool = False) -> list[Symbol]:
     for ln, line in enumerate(lines):
         if len(line) > MAX_DEF_LINE or not line.strip():
             continue
+        # 1.54 review M1: matched from the line's indent, so a pattern's leading `\s*` never re-reads it (a
+        # line of spaces was quadratic). Go's patterns name a top-level definition: column 0 only, as before.
+        indent = 0 if lang == "go" else len(line) - len(line.lstrip(" \t"))
         for scope, kind, pat in _PATTERNS[lang]:
-            m = pat.match(line)
+            m = pat.match(line, indent)
             if not m:
                 continue
             name = m.group("name")

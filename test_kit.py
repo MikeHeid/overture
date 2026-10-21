@@ -10574,6 +10574,58 @@ class SymbolReviewHashTests(unittest.TestCase):
                          "unchecked")   # an interpolated string inside a hole: not read, never guessed
 
 
+class SymbolReviewBoundsTests(unittest.TestCase):
+    """1.54 review M1: a hostile file within MAX_CHARS reads in bounded time, and is read once per call."""
+
+    def test_definition_line_patterns_do_not_backtrack(self):
+        # Catches (1.54 review M1): adjacent `\s*`s in the definition-line patterns (`\*?\s*`, `\s*[?!]?\s*`,
+        # Go's receiver), so a 1 MB file of 500 lines of 1990 spaces and an `x` took 16 s per parse, past the
+        # hook's timeout. The bound is generous on purpose: quadratic is seconds a line, linear is milliseconds.
+        import time
+        W = 1990
+        shapes = {"spaces then x": (" " * W + "x\n") * 500, "x spaces y": ("x" + " " * W + "y\n") * 500,
+                  "function spaces": ("function" + " " * W + "(\n") * 500,
+                  "func ( spaces": ("func (" + " " * W + ")\n") * 500,
+                  "name spaces <": ("  x" + " " * W + "<\n") * 500, "public*": ("public " * 280 + "x\n") * 500}
+        for path in ("a.js", "a.ts", "A.java", "a.cs", "a.rs", "a.go"):
+            for label, text in shapes.items():
+                with self.subTest(path=path, shape=label):
+                    t = time.monotonic()
+                    try:
+                        SY.find(path, text)
+                    except SY.Unresolvable:
+                        pass
+                    self.assertLess(time.monotonic() - t, 2.0)
+
+    def test_the_patterns_still_read_what_they_read(self):
+        # Catches: the M1 fix dropping a definition the patterns found before (an indented method, a generator,
+        # an optional or generic method, a Go pointer receiver).
+        src = ("class S {\n  *gen() { yield 1; }\n  async  *agen() { yield 2; }\n  opt?(): void {}\n"
+               "  gen2 <T>(a: T) { return a; }\n  static   get   size() { return 1; }\n}\n"
+               "function  *  g() { yield 1; }\n")
+        self.assertEqual(qn("a.ts", src), ["S", "S.gen", "S.agen", "S.opt", "S.gen2", "S.size", "g"])
+        self.assertEqual(qn("a.go", "package p\nfunc ( s  *  T ) M() {\n}\nfunc (T) N() {\n}\n"), ["T.M", "T.N"])
+        self.assertEqual(qn("a.cs", "class C {\n  public  T  Get <T> (int a) { return default; }\n}\n"), ["C", "C.Get"])
+
+    def test_one_call_parses_a_text_once(self):
+        # Catches (1.54 review M1): the lookup parsing the same old and new text for every ruling's every
+        # condition (4+ parses a ruling), so even a linear parse of a big file adds up past the hook's timeout.
+        from unittest import mock
+        from overture import lookup as L
+        old = "".join(f"function f{i}(a) {{\n  return a + {i};\n}}\n" for i in range(50))
+        new = old.replace("a + 7", "a + 8")
+        conds = [{"kind": "symbol", "path": "a.js", "symbol": f"f{i}",
+                  "sha256": SY.resolve("a.js", old, f"f{i}").symbol.body_sha256} for i in range(10)]
+        SY.clear_cache()
+        with mock.patch.object(SY, "_lexical", wraps=SY._lexical) as lexical:
+            self.assertEqual(len(L.would_break(conds, "a.js", new, old)), 1)
+            self.assertEqual(L.follows(conds, "a.js", new, old), [])
+        self.assertEqual(lexical.call_count, 2)
+        syms = SY.find("a.js", old)
+        syms.clear()   # a caller's list is its own: the memo is never changed through it
+        self.assertEqual(len(SY.find("a.js", old)), 50)
+
+
 class SymbolReviewAnchorTests(Tmp):
     """1.54 review: anchors.Tree on a `symbol` condition, where the first round read a change as holding."""
 
