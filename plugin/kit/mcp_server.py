@@ -68,6 +68,8 @@ ruling) holds for every agent until the code it rests on changes.
    needs a one-line `description` saying what it does and what it costs; `star` is the one you recommend.
    `valid_if` says what must stay true for the answer to stand: prefer an excerpt of the lines it rests on,
    {"kind": "excerpt", "path": "docs/x.md", "text": "the exact sentence"}; never hash a big living file.
+   For code, name the definition instead, "src/pay.py::Ledger.charge": it holds while that body is unchanged
+   and follows a rename (Python, JS/TS, Go, Rust, Java, C#; `agent.py symbol-at path:a-b` finds it).
 4. The owner answers later. Poll `answers` (or `view` with `since`) for it; do not re-ask.
 5. `check` lists stale rulings, condition by condition. A stale ruling's evidence moved: do not rely on it.
 6. Before editing a file, `rulings` with its path (or `dir/` before a larger change) lists the rulings on it.
@@ -94,7 +96,8 @@ QUESTION_SCHEMA = {
                            "description": {"type": "string", "description": "what it does and what it costs"}}}},
         "star": {"type": ["string", "null"], "description": "the option id you recommend, or null"},
         "star_by": {"type": "string", "description": "whose recommendation the star is, e.g. architect"},
-        "valid_if": {"type": "array", "description": "conditions that must keep holding for the answer to stand"},
+        "valid_if": {"type": "array", "description": "conditions that must keep holding for the answer to stand; "
+                                                     "a definition as \"path::Class.method\""},
         "source": {"type": "string", "description": "the repo path it rests on, optionally :line or :line-line"},
         "evidence": {"type": "array", "description": "up to 8 {cite, command?, result?} rows"},
     },

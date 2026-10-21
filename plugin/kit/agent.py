@@ -198,6 +198,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from overture.posix import require  # noqa: E402
 require("agent.py")   # 1.53.2: before the imports below, which fail on native Windows
+from overture import anchors as A  # noqa: E402
 from overture import bundle as B  # noqa: E402
 from overture import devices as DV  # noqa: E402
 from overture import doorbell as D  # noqa: E402
@@ -211,6 +212,7 @@ from overture import roles as RO  # noqa: E402
 from overture import registry as R  # noqa: E402
 from overture import sessions as SN  # noqa: E402
 from overture import settings as SET  # noqa: E402
+from overture import symbols as SY  # noqa: E402
 from overture import view as V  # noqa: E402
 from overture.server import agent_request  # noqa: E402
 
@@ -493,6 +495,42 @@ def _rulings(state: Path, raw: list[str], as_json: bool) -> int:
         out.append(f"{p}:")
         out += [L.line_of(h) for h in res["rulings"].get(p) or []] or ["  no rulings"]
     print("\n".join(out))
+    return 0
+
+
+def _symbol_at(source: str, as_json: bool) -> int:
+    """1.54 (K1): the `path::Class.method` condition for the definition that holds `source`'s lines, or why not.
+
+    Read from this checkout through `anchors.Tree` (the same confinement and
+    secrets rule the server reads with); the server reads it again, and fills
+    in the hash, when the question is asked.
+    """
+    root = L.project_root(Path.cwd())
+    rng_path = A.SOURCE_RANGE.match(source or "")
+    if root is None or rng_path is None:
+        print(f"symbol-at: {source!r} is not PATH:FIRST-LAST inside a git checkout", file=sys.stderr)
+        return 2
+    try:
+        path = L.clean_path(_inside_root(rng_path.group("path"), root))
+    except L.PathRefused as e:
+        print(f"symbol-at: {e}", file=sys.stderr)
+        return 2
+    first = int(rng_path.group("a"))
+    last = int(rng_path.group("b") or first)
+    status, text = A.Tree(root, {}).text(path)
+    if status != "ok":
+        print(f"symbol-at: {path} {A.UNREADABLE[status]}", file=sys.stderr)
+        return 2
+    r = SY.enclosing(path, text, first, last)
+    if r.state != "found":
+        print(f"symbol-at: {r.reason}; anchor on the lines with an excerpt instead", file=sys.stderr)
+        return 1
+    ref = A.symbol_ref(path, r.symbol.qualname)
+    if as_json:
+        sys.stdout.write(_json({"kind": "symbol", "path": path, "symbol": r.symbol.qualname,
+                                "sha256": r.symbol.body_sha256, "lines": [r.symbol.start_line, r.symbol.end_line]}))
+    else:
+        print(ref)
     return 0
 
 
@@ -1874,9 +1912,18 @@ def main(argv=None) -> int:
         "confirms the proposal on the console. To replace a stale ruling with a new question instead, `ask` it "
         "with \"replaces\": \"<qid>\" in the question file."))
     s.add_argument("qid")
-    s.add_argument("--cite", action="append", required=True, metavar="PATH:FIRST-LAST",
+    s.add_argument("--cite", action="append", metavar="PATH:FIRST-LAST",
                    help="lines the ruling rests on, read by the server; repeat for up to 4")
+    s.add_argument("--symbol", action="append", metavar="PATH::NAME",
+                   help="1.54: the definition the ruling's code moved to (path::Class.method), read by the server; "
+                        "repeat for more, up to 4 with the cites")
     s.add_argument("--basis", required=True, help="why these lines carry the ruling now, shown to the owner")
+    s = sub.add_parser("symbol-at", description=(
+        "1.54 (owner K1): the definition that holds a question's source lines, as the `path::Class.method` "
+        "condition `ask` takes in valid_if. Reads the file in this checkout; prints nothing to the console. "
+        "Exit 1 when no single definition holds them (an excerpt is then the anchor), 2 for a bad source."))
+    s.add_argument("source", metavar="PATH:FIRST-LAST", help="a question's source, e.g. src/pay.py:12-30")
+    s.add_argument("--json", action="store_true", help="print the condition object instead of the short form")
     s = sub.add_parser("advise", description=(
         "Answer a scan for a resolve (CONSOLE-kit/Q40) with a star recommendation for one stale ruling: withdraw "
         "it or keep it, with the evidence. It changes nothing; the owner's own Withdraw or Keep does. Prefer "
@@ -2178,6 +2225,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "notes":   # 1.53.0: a reading of the repository alone; no console, no door, no agent name
         return _notes(a)
+    if a.cmd == "symbol-at":   # 1.54: a reading of this checkout alone, like `notes`
+        return _symbol_at(a.source, a.json)
     if a.state is None:
         ap.error("the following arguments are required: --state")
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
@@ -2820,8 +2869,14 @@ def _run(a, bell: Path) -> int:
     if a.cmd == "visual-export":
         return _visual_export(a.state, a.project, a.visual)
     if a.cmd == "propose-anchor":
-        return _call(a.state, "POST", "/anchor-proposal", {"qid": a.qid, "cites": a.cite, "basis": a.basis,
-                                                           "nonce": secrets.token_urlsafe(12)}, agent=a.agent)
+        if not a.cite and not a.symbol:
+            print("propose-anchor: name the lines (--cite PATH:FIRST-LAST) or the definition (--symbol "
+                  "PATH::NAME) the ruling rests on now", file=sys.stderr)
+            return 2
+        body = {"qid": a.qid, "basis": a.basis, "nonce": secrets.token_urlsafe(12)}
+        body.update({"cites": a.cite} if a.cite else {})
+        body.update({"symbols": a.symbol} if a.symbol else {})   # only when given: an older server's shape stays
+        return _call(a.state, "POST", "/anchor-proposal", body, agent=a.agent)
     if a.cmd == "advise":
         return _call(a.state, "POST", "/refactor-advice", {"qid": a.qid, "star": a.star, "evidence": a.evidence,
                                                            "nonce": secrets.token_urlsafe(12)}, agent=a.agent)

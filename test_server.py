@@ -12460,6 +12460,39 @@ class SymbolAnchorServerTests(_Live, unittest.TestCase):
         self.assertEqual(code, 409, out)
         self.assertIn("src/pay.py::charge_cents is not at that name with that body now (changed)", out["error"])
 
+    def test_symbol_at_turns_a_source_range_into_the_definition_that_holds_it(self):
+        # Catches (P7): an agent left to guess the qualified name (a nested def named flat, a method without
+        # its class), and a range no single definition holds turned into some definition anyway.
+        (self.cfg.root / ".git").mkdir()
+        here = os.getcwd()
+        os.chdir(self.cfg.root)
+        try:
+            self.assertEqual(self.agent_cli("symbol-at", "src/pay.py:8"), (0, "src/pay.py::Ledger.total\n", ""))
+            rc, out, _ = self.agent_cli("symbol-at", "src/pay.py:2-3", "--json")
+            got = json.loads(out)
+            self.assertEqual((rc, got["symbol"], got["lines"]), (0, "charge", [1, 3]))
+            rc, out, err = self.agent_cli("symbol-at", "src/pay.py:3-7")
+            self.assertEqual((rc, out), (1, ""))
+            self.assertIn("no definition in src/pay.py holds lines 3-7; anchor on the lines with an excerpt", err)
+            self.assertEqual(self.agent_cli("symbol-at", "../x.py:1")[0], 2)
+            self.assertEqual(self.agent_cli("symbol-at", "src/pay.py")[0], 2)
+        finally:
+            os.chdir(here)
+
+    def test_propose_anchor_takes_a_symbol_from_the_command_line(self):
+        # Catches: `--cite` still required (no way to propose a followed symbol from the CLI), a body naming
+        # `symbols` when none was given (an older server refuses the whole proposal), and neither accepted.
+        self.ask(["src/pay.py::charge"])
+        self.lock_it()
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("def charge(", "def charge_cents("))
+        rc, _, err = self.agent_cli("propose-anchor", self.QID, "--basis", "x")
+        self.assertEqual(rc, 2)
+        self.assertIn("--symbol PATH::NAME", err)
+        rc, out, err = self.agent_cli("propose-anchor", self.QID, "--symbol", "src/pay.py::charge_cents",
+                                      "--basis", "renamed, same body")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["record"]["anchors"][0]["symbol"], "charge_cents")
+
     def test_rulings_follow_a_renamed_symbol_and_flag_an_unreadable_one_unchecked_not_stale(self):
         # Catches: the lookup calling a renamed symbol's ruling stale (K3: it holds, followed), and a file
         # it cannot read for definitions making a ruling stale (K1: unchecked, never a guess).
