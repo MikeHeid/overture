@@ -10066,5 +10066,209 @@ class StewardNotesTests(unittest.TestCase):
         self.assertNotIn("notes check", err)
 
 
+# -- 1.54 symbol anchors (owner K1-K3) ----------------------------------------------------------
+
+from overture import symbols as SY  # noqa: E402
+
+PY_SRC = '''import os
+
+@cache
+@other(1)
+def charge(cents):
+    """Round half to even."""
+    # the owner's rule
+    return round_half_even(cents)
+
+
+class Ledger:
+    @property
+    def total(self):
+        def inner(x):
+            return x
+        return inner(1)
+
+    async def sync(self):
+        await self.flush()
+'''
+
+
+def qn(path: str, text: str) -> list[str]:
+    return [s.qualname for s in SY.find(path, text)]
+
+
+def body(path: str, text: str, q: str) -> str:
+    r = SY.resolve(path, text, q)
+    assert r.state == "found", r
+    return r.symbol.body_sha256
+
+
+class SymbolFindTests(unittest.TestCase):
+    """symbols.find: each language's definitions, by the names a ruling would cite."""
+
+    def test_python_definitions_by_ast(self):
+        # Catches: methods, nested defs, async defs or decorators missed, or a nested def named flat
+        # (`inner` instead of `Ledger.total.inner`), so two `inner`s in a file would collide.
+        syms = {s.qualname: s for s in SY.find("pay.py", PY_SRC)}
+        self.assertEqual(list(syms), ["charge", "Ledger", "Ledger.total", "Ledger.total.inner", "Ledger.sync"])
+        self.assertEqual((syms["charge"].start_line, syms["charge"].end_line), (3, 8))   # decorators included
+        self.assertEqual([syms[q].kind for q in ("charge", "Ledger", "Ledger.total", "Ledger.sync")],
+                         ["function", "class", "method", "method"])
+
+    def test_js_and_ts_definitions(self):
+        # Catches: arrow functions, class methods (getters, statics, field arrows) or interfaces missed, and
+        # a brace inside a string, a template literal, a regex or a comment taken for a body's end.
+        src = ("// function fake() {\n"
+               "export async function load(x: {a: number}) {\n"
+               "  const s = \"}{\"; const t = `a ${ {b: 1}.b } }`; const r = /[}/]{/g;\n"
+               "  return s + t;\n}\n"
+               "export class Store<T> {\n"
+               "  private items: T[] = [];\n"
+               "  constructor(x: number) { this.x = x; }\n"
+               "  get size(): number { return 1; }\n"
+               "  static of() { return new Store(); }\n"
+               "  add = (t: T) => { this.items.push(t); };\n"
+               "}\n"
+               "const double = (n: number): number => n * 2;\n"
+               "const named = function (a) { return a; };\n"
+               "const notfn = (1 + 2) * 3;\n"
+               "interface Shape {\n  area(): number;\n}\n"
+               "const page = `\nfunction fake() {\n${double(2)}`;\n")
+        self.assertEqual(qn("a.ts", src), ["load", "Store", "Store.constructor", "Store.size", "Store.of", "Store.add",
+                                           "double", "named", "Shape"])
+        load = SY.resolve("a.ts", src, "load").symbol
+        self.assertEqual((load.start_line, load.end_line), (2, 5))
+        self.assertEqual(SY.resolve("a.tsx", src, "Store").symbol.end_line, 12)
+
+    def test_go_rust_java_csharp_definitions(self):
+        # Catches: receivers, impl blocks, generics, nested types or constructors named wrongly, so a method
+        # moved between two types reads as the same symbol, or a Rust lifetime read as a char literal.
+        go = ("package p\n// func Fake() {\nfunc Top(a int) int { s := \"}\"; r := `}`; c := '}'; return a }\n"
+              "func (s *Stack[T]) Push(v T) {\n\ts.items = append(s.items, v)\n}\n"
+              "type Stack[T any] struct {\n\titems []T\n}\ntype Alias int\n")
+        self.assertEqual(qn("a.go", go), ["Top", "Stack.Push", "Stack"])
+        rs = ("/* /* nested */ fn fake() { */\n#[derive(Debug)]\npub struct Point {\n    x: i32,\n}\n"
+              "impl<'a, T: Clone> fmt::Display for Wrapper<'a, T> where T: Debug {\n"
+              "    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { let c = '}'; let s = r#\"}\"#; Ok(()) }\n}\n"
+              "impl Point {\n    pub fn new(x: i32) -> Self { Point { x } }\n"
+              "    fn life<'a>(&'a self) -> &'a i32 { &self.x }\n}\n"
+              "trait Shape {\n    fn area(&self) -> f64;\n    fn twice(&self) -> f64 { 2.0 * self.area() }\n}\n")
+        self.assertEqual(qn("a.rs", rs), ["Point", "Wrapper.fmt", "Point.new", "Point.life", "Shape", "Shape.twice"])
+        self.assertEqual(SY.resolve("a.rs", rs, "Point").symbol.start_line, 2)   # the attribute counts
+        java = ("package p;\n@Entity\npublic class Account<T extends Comparable<T>> {\n"
+                "    private final Map<String, List<T>> m = new HashMap<>();\n"
+                "    public Account() { super(); }\n    @Override\n"
+                "    public synchronized <R> List<R> balance(int a) throws IOException {\n"
+                "        String s = \"}\"; char c = '}'; String b = \"\"\"\n            }\"\"\";\n        return null;\n"
+                "    }\n    abstract void f();\n"
+                "    static class Inner {\n        void g() { Runnable r = new Runnable() { public void run() {} }; }\n"
+                "    }\n}\n")
+        self.assertEqual(qn("A.java", java), ["Account", "Account.Account", "Account.balance", "Account.Inner",
+                                              "Account.Inner.g"])
+        cs = ("namespace Bank.Core {\n    [Serializable]\n    public sealed class Ledger {\n"
+              "        public int Count { get; set; }\n        public Ledger(int x) : base() { }\n"
+              "        public async Task<int> Total(int a) { var s = @\"}\"\"{\"; var t = $\"{a}}}\"; return 1; }\n"
+              "        public int Twice(int a) => a * 2;\n    }\n}\n")
+        self.assertEqual(qn("A.cs", cs), ["Ledger", "Ledger.Ledger", "Ledger.Total", "Ledger.Twice"])
+        self.assertEqual(SY.resolve("A.cs", cs, "Ledger").symbol.start_line, 2)
+
+    def test_what_cannot_be_read_is_unchecked_never_a_guess(self):
+        # Catches: an unknown extension, a syntax error, unbalanced braces, an unclosed literal or a name
+        # defined twice resolving to SOME symbol (or to "missing", which reads as a rename).
+        for path, text in (("x.c", "int f() { return 1; }\n"), ("x.py", "def f(:\n"), ("x.js", "function f() {\n"),
+                           ("x.js", "function f() { } }\n"), ("x.go", 'func f() { s := "a\n}\n'),
+                           ("x.py", "def f():\n    pass\ndef f():\n    pass\n"), ("x.rs", "fn f() { /* }\n")):
+            with self.subTest(path=path, text=text):
+                r = SY.resolve(path, text, "f")
+                self.assertEqual((r.state, r.symbol), ("unchecked", None))
+                self.assertTrue(r.reason)
+        self.assertEqual(SY.resolve("x.py", "def g():\n    pass\n", "f").state, "missing")
+
+    def test_hostile_input_stays_bounded(self):
+        # Catches: a lexer or ast walk that recurses on the input or scans quadratically, so a hostile file
+        # in a checkout hangs the PreToolUse hook past its 5 s timeout (the brief's bound is 200 ms per 5k lines).
+        import time
+        cases = [("h.js", "{" * 200_000), ("h.py", "x = " + "(" * 100_000 + ")" * 100_000),
+                 ("h.py", "def f():\n" + "".join("    " * (i + 1) + "if x:\n" for i in range(90)) + "    " * 91 + "pass\n"),
+                 ("h.ts", "/" * 300_000), ("h.java", '"' * 300_001), ("h.rs", "/*" * 100_000),
+                 ("big.py", "\n".join(f"class C{i}:\n    def m(self, x):\n        return x + {i}\n" for i in range(1700))),
+                 ("big.ts", "\n".join(f"export class C{i} {{\n  m(x) {{ return `${{x}}` + '{i}'; }}\n}}"
+                                      for i in range(1700))),
+                 ("huge.py", "#" * (SY.MAX_CHARS + 1))]
+        for path, text in cases:
+            with self.subTest(path=path):
+                t = time.monotonic()
+                try:
+                    SY.find(path, text)
+                except SY.Unresolvable:
+                    pass
+                self.assertLess(time.monotonic() - t, 1.0)
+        self.assertEqual(SY.resolve("huge.py", "def f():\n    pass\n" + "#" * SY.MAX_CHARS, "f").state, "unchecked")
+        many = "\n".join(f"def f{i}():\n    pass" for i in range(SY.MAX_SYMBOLS + 1))
+        self.assertEqual(SY.resolve("m.py", many, "f1").state, "unchecked")
+
+    def test_enclosing_names_the_innermost_definition(self):
+        # Catches: the outermost definition (a whole class) offered as a question's anchor when its
+        # source cites lines inside one method.
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 15, 15).symbol.qualname, "Ledger.total.inner")
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 14, 16).symbol.qualname, "Ledger.total")
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 1, 1).state, "missing")
+
+
+class SymbolBodyHashTests(unittest.TestCase):
+    """K2: the body hash ignores comments, whitespace, line endings and the symbol's own name, and nothing else."""
+
+    def test_comment_and_whitespace_edits_keep_the_hash(self):
+        # Catches: a hash of the raw text, so re-indenting, re-wrapping or adding a comment breaks a ruling (K2).
+        a = body("pay.py", PY_SRC, "charge")
+        edited = PY_SRC.replace("    # the owner's rule\n", "").replace("return round_half_even(cents)",
+                                                                          "return  round_half_even( cents )  # note")
+        self.assertEqual(body("pay.py", edited, "charge"), a)
+        js = "function f(a) {\n  return a + 1; // one\n}\n"
+        self.assertEqual(body("x.js", js, "f"), body("x.js", "function f (a){ /* two */ return a+1;\n\n}\n", "f"))
+
+    def test_crlf_and_lf_hash_alike(self):
+        # Catches: a Windows checkout (core.autocrlf) reading every symbol ruling as broken.
+        for path, text, q in (("pay.py", PY_SRC, "Ledger.total"), ("x.go", "func F() {\n\treturn\n}\n", "F"),
+                              ("x.py", 'def f():\n    """Two\n    lines."""\n', "f"),
+                              ("x.rs", 'fn f() -> &str {\n    "two\n     lines"\n}\n', "f")):
+            self.assertEqual(body(path, text.replace("\n", "\r\n"), q), body(path, text, q))
+
+    def test_body_edits_break_the_hash_and_docstrings_count(self):
+        # Catches: a normalisation that drops too much (docstrings, strings, operators), so a real change of
+        # the code the owner ruled on keeps the ruling.
+        a = body("pay.py", PY_SRC, "charge")
+        for old, new in (("round_half_even(cents)", "int(cents)"), ('"""Round half to even."""', '"""Truncate."""'),
+                         ("@other(1)", "@other(2)"), ("def charge(cents)", "def charge(cents, mode)")):
+            with self.subTest(change=new):
+                self.assertNotEqual(body("pay.py", PY_SRC.replace(old, new), "charge"), a)
+        self.assertNotEqual(body("x.js", "function f() { return 'a b'; }", "f"),
+                            body("x.js", "function f() { return 'a  c'; }", "f"))
+
+    def test_a_python_indent_change_is_a_change(self):
+        # Catches: whitespace normalisation that also flattens Python's indentation, where it is meaning.
+        a = "def f(x):\n    if x:\n        g()\n    h()\n"
+        b = "def f(x):\n    if x:\n        g()\n        h()\n"
+        self.assertNotEqual(body("x.py", a, "f"), body("x.py", b, "f"))
+
+    def test_a_rename_or_a_move_keeps_the_body_hash(self):
+        # Catches: the name inside the hash, so K3 can never find a renamed symbol by its body; and an
+        # indentation-sensitive hash, so a method moved out of its class to module level is never found.
+        a = body("pay.py", PY_SRC, "charge")
+        renamed = PY_SRC.replace("def charge(", "def charge_cents(")
+        self.assertEqual(body("pay.py", renamed, "charge_cents"), a)
+        moved = "class Billing:\n" + "".join("    " + ln + "\n" if ln else "\n"
+                                             for ln in PY_SRC.split("\n\n\nclass")[0].split("\n")[2:])
+        self.assertEqual([s.qualname for s in SY.by_body("bill.py", moved, a)], ["Billing.charge"])
+        self.assertEqual(body("x.ts", "function f(a) { return a; }\n", "f"),
+                         body("y.ts", "function g(a) { return a; }\n", "g"))
+
+    def test_non_utf8_text_is_read_as_replaced_text(self):
+        # Catches: a crash (an uncaught UnicodeError) on a file with stray bytes, which anchors.Tree decodes
+        # with errors="replace": the hook must fail open, and the same bytes must hash alike every time.
+        text = b"def f():\n    return '\xff\xfe'\n".decode("utf-8", errors="replace")
+        self.assertEqual(body("x.py", text, "f"), body("x.py", text, "f"))
+        self.assertEqual(SY.resolve("x.js", "function f() { return '\ud800'; }", "f").state, "found")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
