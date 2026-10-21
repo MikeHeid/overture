@@ -811,6 +811,7 @@ class _JsFunctions:
         self.events, self.offs = events, [e[0] for e in events]
         self.memo: dict[tuple[int, str], bool] = {}
         self.spent = 0
+        self.fn_params: dict[int, str | None] = {}
 
     def _paren(self, off: int) -> int:
         k = bisect.bisect_right(self.offs, off) - 1
@@ -819,6 +820,9 @@ class _JsFunctions:
     def _word_before(self, off: int) -> str:
         w = re.search(r"([A-Za-z_$][\w$]*)\s*\Z", self.mask[max(0, off - 64):off])
         return w.group(1) if w else ""
+
+    _RETURN_TYPE = re.compile(r"\s*:[^;{}()=,\n]*(?:=>|\{)")   # `): number {` or `): number =>`
+    _TYPED_CLOSE = re.compile(r"\)\s*:[^;{}()=,\n]*\Z")
 
     def _is_parameters(self, o: int) -> bool:
         c = self.close.get(o)
@@ -830,7 +834,9 @@ class _JsFunctions:
             return True
         if word in self._COND:
             return False
-        return after.startswith(("{", "=>", ":"))
+        if after.startswith(":"):   # a TS return type only when `{` or `=>` follows it; else a ternary's `:`
+            return self._RETURN_TYPE.match(after) is not None
+        return after.startswith(("{", "=>"))
 
     def in_parameters(self, at: int, brace: int) -> bool:
         """Whether offset `at` sits in a parameter list that opens inside the brace `brace` it is in."""
@@ -841,27 +847,58 @@ class _JsFunctions:
             o = self._paren(o)
         return False
 
+    def _close_before(self, k: int) -> int:
+        """The `)` that ends a parameter list right before offset `k` (past a TS return type), or -1."""
+        while k >= 0 and self.mask[k] in " \t\n":
+            k -= 1
+        if k >= 0 and self.mask[k] == ")":
+            return k
+        m = self._TYPED_CLOSE.search(self.mask, max(0, k - MAX_SIGNATURE), k + 1)
+        return m.start() if m else -1
+
     def _parameters_of(self, b: int) -> str | None:
         """The parameter text of the function whose body `{` is at `b`, or None when it is no function's."""
+        if b in self.fn_params:
+            return self.fn_params[b]
+        out = None
         k = b - 1
         while k >= 0 and self.mask[k] in " \t\n":
             k -= 1
-        if k >= 1 and self.mask[k - 1:k + 1] == "=>":   # an arrow: `(a, b) => {` or `a => {`
-            k -= 2
-            while k >= 0 and self.mask[k] in " \t\n":
-                k -= 1
-            if k >= 0 and self.mask[k] == ")":
-                o = self.open.get(k)
-                return None if o is None else self.mask[o + 1:k]
-            return self._word_before(k + 1) or None
-        if k >= 0 and self.mask[k] == ")":
-            o = self.open.get(k)
+        if k >= 1 and self.mask[k - 1:k + 1] == "=>":   # an arrow: `(a, b) => {`, `(a): T => {` or `a => {`
+            c = self._close_before(k - 2)
+            if c >= 0:
+                o = self.open.get(c)
+                out = None if o is None else self.mask[o + 1:c]
+            else:
+                out = self._word_before(k - 1) or None
+        else:
+            c = self._close_before(k)
+            o = self.open.get(c) if c >= 0 else None
             if o is not None and self._is_parameters(o):
-                return self.mask[o + 1:k]
-        return None
+                out = self.mask[o + 1:c]
+        self.fn_params[b] = out
+        return out
+
+    def _in_own_function(self, at: int, fn: int) -> bool:
+        """Whether offset `at`, inside the function body `{` at `fn`, is in no function nested in it."""
+        b = self.scope(at)
+        while b != -1 and b != fn:
+            if self._parameters_of(b) is not None:
+                return False
+            b = self.scope(b)
+        return b == fn
 
     def shadowed(self, name: str, where: int, stop: int) -> bool:
-        """Whether a function between brace `where` and brace `stop` (the ruled def's scope) declares `name`."""
+        """Whether a scope on the chain from brace `where` up to brace `stop` (the ruled def's) declares `name`.
+
+        1.54 review, round 5: only the assignment's own chain counts. A `let` or
+        `const` shadows in the brace it is declared directly in; a function's
+        parameters, and a `var` anywhere in its body but in a nested function,
+        shadow in that function. Past BUDGET searches nothing more is taken as
+        shadowed (the safe way: the doubt stays unchecked).
+        """
+        decl = re.compile(rf"(?<![\w$.])(?P<kind>var|let|const)\s+{re.escape(name)}(?![\w$])")
+        word = re.compile(rf"(?<![\w$.]){re.escape(name)}(?![\w$])")
         b = where
         while b != -1 and b != stop:
             key = (b, name)
@@ -869,12 +906,17 @@ class _JsFunctions:
                 if self.spent >= self.BUDGET:
                     return False
                 self.spent += 1
+                end = self.lx.pairs.get(b, b) + 1
                 params = self._parameters_of(b)
-                word = rf"(?<![\w$.]){re.escape(name)}(?![\w$])"
-                self.memo[key] = params is not None and (
-                    re.search(word, params) is not None or
-                    re.search(rf"(?<![\w$.])(?:var|let|const)\s+{re.escape(name)}(?![\w$])",
-                              self.mask[b:self.lx.pairs.get(b, b) + 1]) is not None)
+                hit = params is not None and word.search(params) is not None
+                for m in decl.finditer(self.mask, b, end):
+                    if hit:
+                        break
+                    if m.group("kind") == "var":
+                        hit = params is not None and self._in_own_function(m.start(), b)
+                    else:
+                        hit = self.scope(m.start()) == b
+                self.memo[key] = hit
             if self.memo[key]:
                 return True
             b = self.scope(b)

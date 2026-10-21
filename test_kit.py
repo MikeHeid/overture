@@ -10776,6 +10776,52 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
             with self.subTest(form=label):
                 self.assertEqual(SY.resolve("a.js", base + tail, "f").state, "unchecked")
 
+    def test_a_shadow_counts_only_on_the_assignments_own_scope_chain(self):
+        # Catches (1.54 review, round 5): the round-4 narrowing reopening false holds. A `let` in a sibling
+        # block, or a `var` in a nested function, taken as declaring the name for an assignment elsewhere in
+        # the function, and a ternary's `(f = ...) :` taken for a parameter list with a TS return type.
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        for label, tail in (
+                ("sibling block let", "function setup() {\n  if (x) { let total = 1; }\n  total = () => 0;\n}\n"),
+                ("nested function var", "function setup() {\n  function h() { var total = 1; }\n  total = () => 0;\n}\n"),
+                ("ternary", "ok ? (total = () => 0) : null;\n"),
+                ("call argument", "run(total = () => 0);\n"),
+                ("if condition", "if (total = () => 0) {}\n"),
+                ("string mentions var", "function setup() {\n  log('var total');\n  total = () => 0;\n}\n"),
+                ("comment mentions let", "function setup() {\n  // let total\n  total = () => 0;\n}\n"),
+                ("other arrow param", "const s = (a) => { total = () => 0; };\n"),
+                ("top-level block", "{\n  total = () => 0;\n}\n"),
+                ("catch(e) block", "try {} catch (e) { total = () => 0; }\n"),
+                ("for body", "for (const x of y) { total = () => 0; }\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", F + tail, "total").state, "unchecked")
+        for label, tail in (
+                ("default param", "function g(total = 0) {\n  return total;\n}\n"),
+                ("arrow default", "const g = (total = 1) => total;\n"),
+                ("var local", "function g() {\n  var total = 0;\n  total += 1;\n  return total;\n}\n"),
+                ("var in a block of the same fn", "function g() {\n  if (a) { var total = 0; }\n  total = 1;\n}\n"),
+                ("param assigned", "function g(total) {\n  total = total + 1;\n}\n"),
+                ("method param", "class B {\n  m(total) {\n    total = 2;\n  }\n}\n"),
+                ("destructured param", "function g({ total }) {\n  total = 1;\n}\n"),
+                ("let in the same block", "function g() {\n  if (a) {\n    let total = 0;\n    total = 1;\n  }\n}\n"),
+                ("let in an outer block", "function g() {\n  let total = 0;\n  if (a) { total = 1; }\n}\n"),
+                ("single-param arrow", "const g = total => { total = 1; };\n"),
+                ("ts return type", "function g(total: number): number {\n  total = 1;\n  return total;\n}\n"),
+                ("ts arrow return type", "const g = (total: number): number => {\n  total = 1;\n  return total;\n};\n")):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, F + tail, "total").state, "found")
+
+    def test_a_catch_binding_is_a_parameter(self):
+        # Catches (mutant U3): `catch (e)` not read as declaring e, so an assignment to a ruled name inside a
+        # catch block that binds that very name reads as a replacement. (U3 is equivalent today: the `{`
+        # after a catch's parentheses reads them as parameters anyway; this holds the behaviour.)
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        self.assertEqual(SY.resolve("a.js", F + "try {} catch (total) { total = 1; }\n", "total").state, "found")
+        self.assertEqual(SY.resolve("a.ts", F + "try {} catch (total: unknown) { total = 1; }\n", "total").state,
+                         "found")
+        self.assertEqual(SY.resolve("a.js", F + "try {} catch (e) { total = 1; }\n", "total").state, "unchecked")
+
     def test_a_conditional_python_def_with_any_other_binding_is_unchecked(self):
         # Catches (1.54 review, round 3): a def under try/except/if/with/for/while whose scope binds the name
         # elsewhere BEFORE it, read as the one that runs: `try: from fast import f` / `except ImportError: def f`
