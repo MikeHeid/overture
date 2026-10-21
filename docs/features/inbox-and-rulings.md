@@ -216,7 +216,15 @@ hash when the question is asked.
   Rust, Java and C# are read by their definition lines. A definition the kit
   can't read with certainty (two with the same name, an unusual layout, a
   file over 1 MiB) is reported as *unchecked* rather than guessed. With
-  `--strict`, the CI check fails on it.
+  `--strict`, the CI check fails on it. When the file read cleanly at the
+  pull request's base and no longer parses, it is *broken*.
+- **What it doesn't see.** The kit reads definitions by their lines; it
+  doesn't run the code. It misses a JavaScript function or method replaced
+  by destructuring (`[f] = …`), `Object.defineProperty`, `Object.assign` on
+  a prototype, a static `A.m = …` or `window.f = …`, and a Python name
+  rebound from another module. Such a change can leave a ruling holding, so
+  a reviewer should treat any of them near a ruled definition as a change
+  to it.
 
 To turn a question's source lines into the definition that holds them:
 

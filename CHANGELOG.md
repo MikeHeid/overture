@@ -3008,7 +3008,9 @@ is renamed or moved. The architect defaults are in OPEN-DECISIONS.md,
   leaves out the definition's own name so a rename can be found. Anything
   the kit cannot read with certainty is *unchecked*, never guessed: two
   definitions with one name, a later rebinding of the name, a file that is
-  not UTF-8 or is over 1 MiB, or over 5000 definitions.
+  not UTF-8 or is over 1 MiB, or over 5000 definitions. With `--base`, a
+  cited file that read cleanly at the base and cannot be parsed at head is
+  *broken* instead.
 - **The CI check follows a move (K3).** Rename detection is on. When a
   ruled definition is gone, the changed files of the same language are
   searched for the same body. Exactly one match: the ruling holds, and is
@@ -3039,6 +3041,14 @@ is renamed or moved. The architect defaults are in OPEN-DECISIONS.md,
   - a regex that backtracked for 16 s on a hostile 1 MB file is bounded;
   - a redefinition later on a line, or any Python rebinding of the name
     after its definition, makes it unchecked;
+  - a Python definition under `try`, `if`, `with` or a loop, whose scope
+    binds the name anywhere else (the `try: from fast import f` /
+    `except ImportError: def f` fallback), is unchecked;
+  - a JS/TS reassignment of the name (`f = …`, `var f = …`, `this.m = …`,
+    `A.prototype.m = …`) makes it unchecked, while a parameter or local of
+    the same name in another function does not;
+  - a cited file that read at the base and no longer parses is broken, and
+    only when its definition resolved cleanly there;
   - a file name from the change can no longer forge a line in the report;
   - the `propose-anchor` command is printed only when every value is
     plain (`[A-Za-z0-9_./:-]`), so no shell, POSIX or cmd.exe, runs
