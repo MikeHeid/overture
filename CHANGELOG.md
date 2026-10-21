@@ -3049,6 +3049,8 @@ is renamed or moved. The architect defaults are in OPEN-DECISIONS.md,
     the same name in another function does not;
   - a cited file that read at the base and no longer parses is broken, and
     only when its definition resolved cleanly there;
+  - a redefinition never hides a changed body: when no definition of the
+    name still has the ruled hash, the ruling is broken, not unchecked;
   - a file name from the change can no longer forge a line in the report;
   - the `propose-anchor` command is printed only when every value is
     plain (`[A-Za-z0-9_./:-]`), so no shell, POSIX or cmd.exe, runs
