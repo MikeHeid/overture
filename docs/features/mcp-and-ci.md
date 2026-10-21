@@ -62,7 +62,11 @@ and the owner's commands are not offered. Standard library only.
 committed (the files `fold.py export` writes, `.overture/locked` by
 default) against the checkout, with no console server. A ruling whose
 cited text a change edits or deletes fails the check, with the same
-reason and diff **What changed?** shows.
+reason and diff **What changed?** shows. A ruling on a definition (1.54)
+fails when its body changes. When the change only renames or moves the
+definition, the ruling passes and is listed as **moved**, with the new place
+and the `propose-anchor` command that records it ([Rulings on a
+definition](inbox-and-rulings.md#rulings-on-a-definition-154)).
 
 In GitHub Actions:
 

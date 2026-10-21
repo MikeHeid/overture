@@ -56,6 +56,13 @@ into the document that owns it.
   answer stale. Do not hash a whole big living file (`file_sha256` of a
   register, status file or log): every unrelated edit would make the answer
   stale. The full list is in the console-fork skill.
+- When the decision is about **one function, method or class** in code
+  (Python, JS/TS, Go, Rust, Java, C#), anchor on the definition instead:
+  write `"path/to/file.py::Class.method"` as a `valid_if` entry (1.54). It
+  holds while that body is unchanged, follows a rename or move, and ignores
+  edits elsewhere in the file. `A symbol-at path/to/file.py:120-140` prints
+  the definition that holds a question's `source` lines. When it exits 1, no
+  single definition holds them, so use an excerpt.
 - Add **`evidence`** when the decision rests on specific lines, a command or
   a measurement (0.7.0): up to 8 rows of
   `{"cite": "path/to/file:120-134", "command": "...", "result": "..."}`.

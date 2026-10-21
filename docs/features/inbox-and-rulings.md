@@ -122,8 +122,8 @@ Answer what your agents ask, lock it into a ruling, and keep each ruling honest 
 ## Keep rulings honest as the code moves
 
 A question says what must stay true for its answer to stand (`valid_if`):
-cited text (an `excerpt`), a whole file (`file_sha256`), or an item's
-status. When that stops holding, the answer reads **stale** and **What
+cited text (an `excerpt`), a whole file (`file_sha256`), a definition
+(`symbol`, 1.54), or an item's status. When that stops holding, the answer reads **stale** and **What
 changed?** names which check failed, with a diff of the cited text against
 the file as it is now.
 
@@ -193,6 +193,34 @@ Other ways to ask:
 
 and the MCP server's `rulings` tool, `{"paths": ["src/pay.py"]}`, for Cursor,
 Codex and other MCP clients ([MCP and CI](mcp-and-ci.md)).
+
+## Rulings on a definition (1.54)
+
+A ruling can rest on one function, method or class instead of a whole file
+or a line of text (K1–K3 in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md)). An agent writes
+`"src/pay.py::Invoice.total"` in `valid_if`, and the console fills in the
+hash when the question is asked.
+
+- **What counts as a change (K2).** The ruling holds while the
+  definition's body is the same. Comments and spacing don't count, and
+  neither do edits elsewhere in the file. A real change to that body makes
+  the ruling stale.
+- **Renames and moves (K3).** When the definition is renamed or moved, the
+  CI check and the lookup before an agent edits search the changed files for
+  the same body. If they find exactly one, the ruling holds, and they name
+  the new place: `src/pay.py::Invoice.total -> src/billing.py::Bill.total`.
+  The console shows the ruling as stale until you confirm the new anchor,
+  which the steward proposes. Nothing is rewritten without you.
+- **Languages (K1).** Python is read exactly. JavaScript, TypeScript, Go,
+  Rust, Java and C# are read by their definition lines. A definition the kit
+  can't read with certainty (two with the same name, an unusual layout, a
+  file over 1 MiB) is reported as *unchecked* rather than guessed. With
+  `--strict`, the CI check fails on it.
+
+To turn a question's source lines into the definition that holds them:
+
+    agent.py symbol-at src/pay.py:12-30    # prints src/pay.py::Invoice.total
 
 ## Lessons: what you settled stays settled (1.33–1.34)
 

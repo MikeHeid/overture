@@ -87,7 +87,7 @@ Each area links to its own page, with the full reference and screenshots.
 | Area | What ships today | Read more |
 |---|---|---|
 | **The loop** | Inbox of agent questions · one-tap answer and lock · round forms with keyboard shortcuts · lock-all · live redraw · snooze · filter chips · deep links · drafts that follow you | [Inbox and rulings](docs/features/inbox-and-rulings.md) |
-| **Rulings** | Locked answers stored in git · `valid_if` conditions · stale detection · **What changed?** diff · re-anchor / withdraw / keep / replace · scan for a resolve · export today's rulings | [Inbox and rulings](docs/features/inbox-and-rulings.md#keep-rulings-honest-as-the-code-moves) |
+| **Rulings** | Locked answers stored in git · `valid_if` conditions · rulings on a function or class that follow a rename · stale detection · **What changed?** diff · re-anchor / withdraw / keep / replace · scan for a resolve · export today's rulings | [Inbox and rulings](docs/features/inbox-and-rulings.md#keep-rulings-honest-as-the-code-moves) |
 | **Lessons** (1.33–1.34) | Your reason for withdrawing a ruling is kept · new sessions are told · **📎 related past rulings** on a look-alike question · `agent.py lessons` / `lesson-match` | [Lessons](docs/features/inbox-and-rulings.md#lessons-what-you-settled-stays-settled-133134) |
 | **Teams and roles** (1.38–1.42) | Who decided, on every lock · owner / member (by area) / viewer roles · **People** tab · routing ("For you") · directors · role log | [Roles and people](docs/features/roles-and-people.md) |
 | **Two-key locks** (1.43) | Areas where a lock counts only once a second person confirms it · "Locked by A, confirmed by B" | [Two-key locks](docs/features/two-key-locks.md) |
@@ -312,7 +312,7 @@ CLI inside WSL).
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~60%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52) |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~70%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52), symbol anchors (1.54) |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
