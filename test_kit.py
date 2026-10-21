@@ -10762,7 +10762,11 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
                             ("method param", "class B {\n  m(f) {\n    f = 2;\n  }\n}\n"),
                             ("for var", "function g(xs) {\n  for (var f of xs) {}\n}\n"),
                             ("nested in a block", "function g() {\n  let f = 1;\n  if (f) {\n    f = 2;\n  }\n}\n"),
-                            ("ts typed param", "function g(f: number = 0): number {\n  return f;\n}\n")):
+                            ("ts typed param", "function g(f: number = 0): number {\n  return f;\n}\n"),
+                            # Catches (mutant T4): a let/const read as reaching out like a var, so one in a
+                            # plain block (no function declares it) replaces the ruled `f`.
+                            ("let in a block", "if (x) {\n  let f = 2;\n}\n"),
+                            ("const in a loop", "for (const x of xs) {\n  const f = x;\n}\n")):
             with self.subTest(form=label):
                 path = "a.ts" if label.startswith("ts") else "a.js"
                 self.assertEqual(SY.resolve(path, base + tail, "f").state, "found")
