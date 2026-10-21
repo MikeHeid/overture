@@ -778,6 +778,29 @@ class SymbolReviewCheck(Repo):
         rc, rep = self.report("--base", self.base)
         self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q3"]))
 
+    def test_a_redefinition_never_downgrades_a_changed_body(self):
+        # Catches (1.54 review, round 5): change the ruled body and add `charge = charge;`, and the break
+        # (exit 1) reads "defined 2 times" unchecked (exit 0). When the base resolved cleanly and no
+        # definition of that name at head has the ruled body, it is broken; when one still has it, the
+        # doubt is real and it stays unchecked. The lookup warns the same way.
+        changed = PAY_JS.replace('", "', '" | "')
+        c = sym(PAY_JS, "charge", "src/pay.js")
+        for label, text, want in (("changed body", changed + "charge = charge;\n", "broken"),
+                                  ("same body", PAY_JS + "charge = charge;\n", "unchecked")):
+            with self.subTest(form=label):
+                git(self.root, "reset", "-q", "--hard", self.base)
+                (self.root / "src/pay.js").write_text(text)
+                self.commit("pr")
+                rc, rep = self.report("--base", self.base)
+                self.assertEqual((rc, [j["qid"] for j in rep[want]]), (1 if want == "broken" else 0, ["LANE.1/Q3"]))
+                warned = L.would_break([c], "src/pay.js", text, PAY_JS)
+                if want == "broken":
+                    self.assertIn("none of them has the body", rep["broken"][0]["conditions"][0]["words"])
+                    self.assertEqual(len(warned), 1)
+                    self.assertIn("changes the body of charge", warned[0]["words"])
+                else:
+                    self.assertEqual(warned, [])
+
     def test_ordinary_edits_elsewhere_still_hold_and_warn_of_nothing(self):
         # Catches (1.54 review, round 4, HIGH): a parameter or a local of another function named like the
         # ruled one (`function g(charge = 0)`, `var charge = 0` in another body, `(charge = 1) => ...`) read

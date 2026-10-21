@@ -188,14 +188,23 @@ def _unread_now(c: dict, row: dict, tree: A.Tree, before) -> dict:
     if c["kind"] != "symbol" or row["holds"] is not None or before is None:
         return row
     status, syms, why = tree.symbols(c["path"])
-    # Round 4: only a real read failure (a lexer miss, a syntax error) is promoted. A name found twice, or
-    # redefined, is a doubt about which definition runs, and an ordinary edit can cause one: unchecked.
-    if status != "ok" or syms is not None:
+    if status != "ok":
         return row
+    # Round 4: a read failure (a lexer miss, a syntax error) is promoted. A name found twice, or redefined,
+    # is a doubt about which definition runs, and an ordinary edit can cause one: unchecked, unless (round 5)
+    # none of its definitions has the ruled body, when the doubt cannot save it: the body changed.
+    if syms is not None:
+        same = [s for s in syms if s.qualname == c["symbol"]]
+        if len(same) < 2 or any(s.body_sha256 == c["sha256"] for s in same):
+            return row
     old = before(c["path"])
     if old is None or SY.resolve(c["path"], old, c["symbol"]).state != "found":
         return row
     ref = A.symbol_ref(c["path"], c["symbol"])
+    if syms is not None:
+        return {**row, "holds": False, "reason": "symbol_changed",
+                "words": A.plain(f"{ref}: {c['symbol']} is defined {len(same)} times in {c['path']} now (or "
+                                 f"redefined), and none of them has the body the ruling rests on: the body changed.")}
     return {**row, "holds": False, "reason": "symbol_unreadable",
             "words": A.plain(f"{ref}: read at the base, but not as this change leaves it: {why}. A change the check "
                              f"cannot read fails it, never passes it: fix the code, or ask the owner to re-anchor.")}
