@@ -334,6 +334,11 @@ def _symbol_change(c: dict, path: str, new_text: str, old_text: str) -> tuple[st
         return None if after.symbol.body_sha256 == sha else ("break", f"it changes the body of {name}, which the "
                                                                       f"ruling rests on")
     if after.state == "unchecked":   # 1.54 review, round 3: the CI check fails what it read before and cannot now
+        try:   # round 4: only when the file cannot be read; a name found twice is a doubt, never a warning
+            SY.find(path, new_text)
+            return None
+        except SY.Unresolvable:
+            pass
         return "break", A.plain(f"after it, {name} cannot be read for definitions ({after.reason}), so the CI "
                                 f"check fails the ruling it rests on")
     try:

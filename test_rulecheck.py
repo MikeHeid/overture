@@ -760,19 +760,65 @@ class SymbolReviewCheck(Repo):
         # Catches (1.54 review, round 3): a change the lexer cannot follow (`if (0) /'/.test("")`, valid JS
         # read as an unclosed character literal), or a second definition of the ruled name, turning a ruling
         # from checked into "unchecked" (exit 0): any PR could pass by making the code unreadable to the check.
-        for label, tail in (("lexer miss", 'if (0) /\'/.test("");\n'), ("redefinition", "charge = () => 2;\n")):
+        # Round 4 (1b): only a real lexer or parse failure is promoted; a redefinition found at head is a
+        # doubt about which definition runs, and stays unchecked (an ordinary edit must never read broken).
+        (self.root / "src/pay.js").write_text(PAY_JS + 'if (0) /\'/.test("");\n')
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
+        [row] = rep["broken"][0]["conditions"]
+        self.assertEqual(row["reason"], "symbol_unreadable")
+        self.assertIn("read at the base, but not as this change leaves it", row["words"])
+        self.assertIn("character literal", row["words"])
+        rc, rep = self.report()   # no base to compare with: unchecked, as before
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q3"]))
+        git(self.root, "reset", "-q", "--hard", self.base)
+        (self.root / "src/pay.js").write_text(PAY_JS + "charge = () => 2;\n")
+        self.commit("pr: a redefinition")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q3"]))
+
+    def test_ordinary_edits_elsewhere_still_hold_and_warn_of_nothing(self):
+        # Catches (1.54 review, round 4, HIGH): a parameter or a local of another function named like the
+        # ruled one (`function g(charge = 0)`, `var charge = 0` in another body, `(charge = 1) => ...`) read
+        # as a reassignment, and so as a redefinition the CI check promoted to broken (exit 1) and the lookup
+        # warned on: an ordinary edit failed CI.
+        for label, tail in (("default param", "function g(charge = 0) {\n  return charge;\n}\n"),
+                            ("local var", "function g(xs) {\n  var charge = 0;\n  return charge;\n}\n"),
+                            ("param assigned", "function g(charge) {\n  charge = charge + 1;\n  return charge;\n}\n"),
+                            ("arrow default", "const g = (charge = 1) => charge;\n"),
+                            ("catch param", "function g() {\n  try {} catch (charge) { charge = 1; }\n}\n"),
+                            ("method param", "class B {\n  m(charge) {\n    charge = 2;\n  }\n}\n"),
+                            ("for var", "function g(xs) {\n  for (var charge of xs) {}\n}\n")):
             with self.subTest(form=label):
                 git(self.root, "reset", "-q", "--hard", self.base)
                 (self.root / "src/pay.js").write_text(PAY_JS + tail)
                 self.commit("pr")
                 rc, rep = self.report("--base", self.base)
-                self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
-                [row] = rep["broken"][0]["conditions"]
-                self.assertEqual(row["reason"], "symbol_unreadable")
-                self.assertIn("read at the base, but not as this change leaves it", row["words"])
-                self.assertIn("character literal" if label == "lexer miss" else "defined 2 times", row["words"])
-                rc, rep = self.report()   # no base to compare with: unchecked, as before
-                self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q3"]))
+                self.assertEqual((rc, [j["qid"] for j in rep["touched"]], rep["unchecked"], rep["broken"]),
+                                 (0, ["LANE.1/Q3"], [], []))
+                c = sym(PAY_JS, "charge", "src/pay.js")
+                self.assertEqual(L.would_break([c], "src/pay.js", PAY_JS + tail, PAY_JS), [])
+
+    def test_a_ruling_unchecked_at_the_base_is_never_promoted(self):
+        # Catches (mutant T10): the promotion when the symbol did not resolve cleanly at the base (already
+        # unreadable there, or not there), so a PR that touches an already-unchecked ruling's file goes red.
+        (self.root / "src/pay.js").write_text(PAY_JS + 'if (0) /\'/.test("");\n')
+        base = self.commit("base: already unreadable")
+        (self.root / "src/pay.js").write_text(PAY_JS + 'if (0) /\'/.test("");\n// more\n')
+        self.commit("pr")
+        rc, rep = self.report("--base", base)
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]], rep["broken"]), (0, ["LANE.1/Q3"], []))
+
+    def test_a_base_that_is_not_utf8_is_never_promoted(self):
+        # Catches (mutant T12): the base text decoded with errors="replace", so a Latin-1 base reads as a
+        # clean resolution and a ruling the check never really read there is promoted to broken.
+        (self.root / "src/pay.js").write_bytes(PAY_JS.replace('", "', '", caf\xe9 "').encode("latin-1"))
+        base = self.commit("base: Latin-1")
+        (self.root / "src/pay.js").write_text(PAY_JS + 'if (0) /\'/.test("");\n')
+        self.commit("pr")
+        rc, rep = self.report("--base", base)
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]], rep["broken"]), (0, ["LANE.1/Q3"], []))
 
     def assert_no_forged_line(self, *args: str) -> str:
         _, out, _ = self.check("--base", self.base, *args)
@@ -1226,8 +1272,8 @@ class SymbolWouldBreak(unittest.TestCase):
         [b] = L.would_break([self.c], "src/bill.py", BILL + "def broken(:\n", BILL)
         self.assertIn("after it, charge cannot be read for definitions", b["words"])
         self.assertIn("does not parse as Python", b["words"])
-        [b] = L.would_break([self.c], "src/bill.py", BILL + "charge = None\n", BILL)
-        self.assertIn("charge is defined 2 times", b["words"])
+        # Round 4 (1b): a redefinition is a doubt, not a read failure: no warning (the CI check says unchecked).
+        self.assertEqual(L.would_break([self.c], "src/bill.py", BILL + "charge = None\n", BILL), [])
         self.assertEqual(L.follows([self.c], "src/bill.py", BILL + "def broken(:\n", BILL), [])
 
     def test_the_note_names_the_definitions_and_a_rename_with_its_proposal(self):

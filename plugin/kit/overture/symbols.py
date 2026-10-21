@@ -781,6 +781,106 @@ _JS_THIS = re.compile(r"(?<![\w$.])this\s*\.\s*(?P<name>#?[A-Za-z_$][\w$]*)" + _
 _JS_PROTO = re.compile(r"(?<![\w$.])(?P<type>[A-Za-z_$][\w$]*)\.prototype\.(?P<name>[A-Za-z_$][\w$]*)" + _JS_OP)
 
 
+class _JsFunctions:
+    """Which `(...)` are a function's parameters, and which `{` open a function's body, in a JS mask (round 4).
+
+    Read from the mask's own brackets: `(...)` followed by `{`, `=>` or a TS
+    return type (`:`), unless after if/while/for/switch/with, is a parameter
+    list (a `catch (e)` too); a `{` after one, or after `x =>`, is a function's
+    body. Each answer is bounded: past BUDGET name searches, nothing more is
+    taken as shadowed (the safe way: a doubt stays unchecked).
+    """
+    BUDGET = 4000
+    _COND = frozenset({"if", "while", "for", "switch", "with", "return", "typeof", "await", "yield", "in", "of",
+                       "void", "delete", "new", "case", "else", "do"})
+
+    def __init__(self, mask: str, lx: _Lexed, scope) -> None:
+        self.mask, self.lx, self.scope = mask, lx, scope
+        self.close: dict[int, int] = {}
+        self.open: dict[int, int] = {}
+        events, stack = [], []
+        for m in re.finditer(r"[()]", mask):
+            o = m.start()
+            if m.group() == "(":
+                stack.append(o)
+                events.append((o + 1, o))
+            elif stack:
+                a = stack.pop()
+                self.close[a], self.open[o] = o, a
+                events.append((o + 1, stack[-1] if stack else -1))
+        self.events, self.offs = events, [e[0] for e in events]
+        self.memo: dict[tuple[int, str], bool] = {}
+        self.spent = 0
+
+    def _paren(self, off: int) -> int:
+        k = bisect.bisect_right(self.offs, off) - 1
+        return self.events[k][1] if k >= 0 else -1
+
+    def _word_before(self, off: int) -> str:
+        w = re.search(r"([A-Za-z_$][\w$]*)\s*\Z", self.mask[max(0, off - 64):off])
+        return w.group(1) if w else ""
+
+    def _is_parameters(self, o: int) -> bool:
+        c = self.close.get(o)
+        if c is None:
+            return False
+        after = self.mask[c + 1:c + 1 + MAX_SIGNATURE].lstrip()
+        word = self._word_before(o)
+        if word == "catch":
+            return True
+        if word in self._COND:
+            return False
+        return after.startswith(("{", "=>", ":"))
+
+    def in_parameters(self, at: int, brace: int) -> bool:
+        """Whether offset `at` sits in a parameter list that opens inside the brace `brace` it is in."""
+        o = self._paren(at)
+        while o > brace:
+            if self._is_parameters(o):
+                return True
+            o = self._paren(o)
+        return False
+
+    def _parameters_of(self, b: int) -> str | None:
+        """The parameter text of the function whose body `{` is at `b`, or None when it is no function's."""
+        k = b - 1
+        while k >= 0 and self.mask[k] in " \t\n":
+            k -= 1
+        if k >= 1 and self.mask[k - 1:k + 1] == "=>":   # an arrow: `(a, b) => {` or `a => {`
+            k -= 2
+            while k >= 0 and self.mask[k] in " \t\n":
+                k -= 1
+            if k >= 0 and self.mask[k] == ")":
+                o = self.open.get(k)
+                return None if o is None else self.mask[o + 1:k]
+            return self._word_before(k + 1) or None
+        if k >= 0 and self.mask[k] == ")":
+            o = self.open.get(k)
+            if o is not None and self._is_parameters(o):
+                return self.mask[o + 1:k]
+        return None
+
+    def shadowed(self, name: str, where: int, stop: int) -> bool:
+        """Whether a function between brace `where` and brace `stop` (the ruled def's scope) declares `name`."""
+        b = where
+        while b != -1 and b != stop:
+            key = (b, name)
+            if key not in self.memo:
+                if self.spent >= self.BUDGET:
+                    return False
+                self.spent += 1
+                params = self._parameters_of(b)
+                word = rf"(?<![\w$.]){re.escape(name)}(?![\w$])"
+                self.memo[key] = params is not None and (
+                    re.search(word, params) is not None or
+                    re.search(rf"(?<![\w$.])(?:var|let|const)\s+{re.escape(name)}(?![\w$])",
+                              self.mask[b:self.lx.pairs.get(b, b) + 1]) is not None)
+            if self.memo[key]:
+                return True
+            b = self.scope(b)
+        return False
+
+
 def _hidden(mask: str, lx: _Lexed, lang: str, defs: list[_Def], type_bodies: set[int]) -> dict[int, int]:
     """Each indexed definition (by index in `defs`) that an unindexed one of the same name, in the same scope,
     redefines: index -> that redefinition's offset. Such a name resolves to unchecked, never to the first."""
@@ -826,6 +926,7 @@ def _js_reassigned(mask: str, lx: _Lexed, defs: list[_Def], type_bodies: set[int
             methods.setdefault((where, d.name), []).append(i)
         else:
             plain.setdefault(d.name, []).append(i)
+    fx = _JsFunctions(mask, lx, scope)
     for m in _JS_ASSIGN.finditer(mask):
         at, name = m.start("name"), m.group("name")
         if at in indexed or name in ("var", "let", "const"):
@@ -836,6 +937,8 @@ def _js_reassigned(mask: str, lx: _Lexed, defs: list[_Def], type_bodies: set[int
         if k >= 0 and mask[k] == ":":   # a TS annotation (`const u: User = ...`) names a type, not a binding
             continue
         where = scope(at)
+        if fx.in_parameters(at, where):   # round 4: `function g(f = 0)`, `(f = 1) =>`: a parameter's default
+            continue
         if m.group("decl") in ("let", "const"):   # block-scoped: it shadows only where it is declared
             hit = by_name.get((name, where), [])
         elif where in type_bodies:                 # a class field `f = 1` is the class's own
@@ -843,7 +946,10 @@ def _js_reassigned(mask: str, lx: _Lexed, defs: list[_Def], type_bodies: set[int
         else:                                      # a bare assignment, or a hoisted `var`: it may reach out
             hit = plain.get(name, [])
         for i in hit:
-            found.setdefault(i, at)
+            # Round 4: inside another function that declares the name (a parameter, a var/let/const), it is
+            # that function's own name, whatever the ruled one is called.
+            if not fx.shadowed(name, where, scope(defs[i].name_span[0])):
+                found.setdefault(i, at)
     for m in _JS_THIS.finditer(mask):
         at = m.start("name")
         for (body, name), hit in methods.items():

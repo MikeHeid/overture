@@ -10747,6 +10747,31 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
         self.assertEqual(SY.resolve("a.js", cls + "class B {\n  constructor() { this.m = 2; }\n}\n", "A.m").state,
                          "found")
 
+    def test_a_parameter_or_a_local_of_another_function_is_no_reassignment(self):
+        # Catches (1.54 review, round 4, HIGH): `function g(f = 0)`, `var f = 0` in another body, `(f = 1) =>`,
+        # a parameter assigned, a catch parameter, read as replacing the ruled `f`, so an ordinary edit reads
+        # unchecked (and was promoted to broken). A bare assignment in a function that declares nothing still is.
+        base = "function f() { return 1; }\n"
+        for label, tail in (("default param", "function g(f = 0) {\n  return f;\n}\n"),
+                            ("local var", "function g(xs) {\n  var f = 0;\n  return f;\n}\n"),
+                            ("param assigned", "function g(f) {\n  f = f + 1;\n  return f;\n}\n"),
+                            ("arrow default", "const g = (f = 1) => f;\n"),
+                            ("arrow param, block body", "const g = (f) => {\n  f = 2;\n};\n"),
+                            ("single arrow param", "const g = f => {\n  f = 2;\n};\n"),
+                            ("catch param", "function g() {\n  try {} catch (f) { f = 1; }\n}\n"),
+                            ("method param", "class B {\n  m(f) {\n    f = 2;\n  }\n}\n"),
+                            ("for var", "function g(xs) {\n  for (var f of xs) {}\n}\n"),
+                            ("nested in a block", "function g() {\n  let f = 1;\n  if (f) {\n    f = 2;\n  }\n}\n"),
+                            ("ts typed param", "function g(f: number = 0): number {\n  return f;\n}\n")):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, base + tail, "f").state, "found")
+        for label, tail in (("undeclared in a function", "function g() {\n  f = () => 2;\n}\n"),
+                            ("in an if condition", "if (f = 2) {}\n"),
+                            ("another function's param named else", "function g(h) {\n  f = h;\n}\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", base + tail, "f").state, "unchecked")
+
     def test_a_conditional_python_def_with_any_other_binding_is_unchecked(self):
         # Catches (1.54 review, round 3): a def under try/except/if/with/for/while whose scope binds the name
         # elsewhere BEFORE it, read as the one that runs: `try: from fast import f` / `except ImportError: def f`

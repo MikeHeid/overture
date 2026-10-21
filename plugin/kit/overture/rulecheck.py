@@ -180,20 +180,18 @@ def _unread_now(c: dict, row: dict, tree: A.Tree, before) -> dict:
 
     1.54 review, round 3: "unchecked" is the honest word when there is nothing
     to compare with, but a change that turns a ruling the check could read into
-    one it cannot (a lexer miss such as `if (0) /'/.test("")`, a syntax error,
-    a second definition of the name) would otherwise pass any PR. It fails,
-    and says why, so the author fixes the code or asks for a re-anchor.
+    one it cannot read (a lexer miss such as `if (0) /'/.test("")`, a syntax
+    error) would otherwise pass any PR. It fails, and says why, so the author
+    fixes the code or asks for a re-anchor. Only when the symbol resolved
+    cleanly at the base, from text that decodes as UTF-8 (round 4).
     """
     if c["kind"] != "symbol" or row["holds"] is not None or before is None:
         return row
     status, syms, why = tree.symbols(c["path"])
-    if status != "ok":
+    # Round 4: only a real read failure (a lexer miss, a syntax error) is promoted. A name found twice, or
+    # redefined, is a doubt about which definition runs, and an ordinary edit can cause one: unchecked.
+    if status != "ok" or syms is not None:
         return row
-    if syms is not None:
-        n = sum(s.qualname == c["symbol"] for s in syms)
-        if n < 2:   # the cited file reads, and the name is in it once: the doubt is elsewhere (two copies moved)
-            return row
-        why = f"{c['symbol']} is defined {n} times in {c['path']}, or redefined where no definition line reads it"
     old = before(c["path"])
     if old is None or SY.resolve(c["path"], old, c["symbol"]).state != "found":
         return row
