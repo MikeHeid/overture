@@ -641,16 +641,17 @@ class SymbolCheck(Repo):
         self.assertIn("its body is in 2 places", rep["unchecked"][0]["conditions"][0]["words"])
         self.assertEqual(self.report("--base", self.base, "--strict")[0], 1)
 
-    def test_a_file_that_cannot_be_read_for_definitions_is_unchecked_not_broken_or_held(self):
-        # Catches: a syntax error mid-PR read as a break (red CI for a guess) or as holding (a quiet pass).
+    def test_a_file_that_cannot_be_read_for_definitions_is_unchecked_without_a_base(self):
+        # Catches: a syntax error read as holding (a quiet pass), or, with nothing to compare it to (no
+        # --base), as a break (red CI for a guess). With a base it is a break: see SymbolReviewCheck.
         (self.root / "src/bill.py").write_text(BILL + "def broken(:\n")
         self.commit("pr")
-        rc, rep = self.report("--base", self.base)
+        rc, rep = self.report()
         self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q2"]))
-        rc, out, _ = self.check("--base", self.base)
+        rc, out, _ = self.check()
         self.assertIn("unchecked LANE.1/Q2: src/bill.py::charge: not checked here, as src/bill.py cannot be read "
                       "for definitions", out)
-        self.assertEqual(self.check("--base", self.base, "--strict")[0], 1)
+        self.assertEqual(self.check("--strict")[0], 1)
 
     def test_crlf_checkout_still_holds(self):
         # Catches: a Windows checkout (autocrlf) failing every symbol ruling in CI.
@@ -754,6 +755,24 @@ class SymbolReviewCheck(Repo):
         self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
         [row] = rep["broken"][0]["conditions"]
         self.assertIn("src/other.jsx cannot be read for definitions", row["words"])
+
+    def test_a_cited_file_readable_at_the_base_and_not_now_is_broken(self):
+        # Catches (1.54 review, round 3): a change the lexer cannot follow (`if (0) /'/.test("")`, valid JS
+        # read as an unclosed character literal), or a second definition of the ruled name, turning a ruling
+        # from checked into "unchecked" (exit 0): any PR could pass by making the code unreadable to the check.
+        for label, tail in (("lexer miss", 'if (0) /\'/.test("");\n'), ("redefinition", "charge = () => 2;\n")):
+            with self.subTest(form=label):
+                git(self.root, "reset", "-q", "--hard", self.base)
+                (self.root / "src/pay.js").write_text(PAY_JS + tail)
+                self.commit("pr")
+                rc, rep = self.report("--base", self.base)
+                self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
+                [row] = rep["broken"][0]["conditions"]
+                self.assertEqual(row["reason"], "symbol_unreadable")
+                self.assertIn("read at the base, but not as this change leaves it", row["words"])
+                self.assertIn("character literal" if label == "lexer miss" else "defined 2 times", row["words"])
+                rc, rep = self.report()   # no base to compare with: unchecked, as before
+                self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q3"]))
 
     def assert_no_forged_line(self, *args: str) -> str:
         _, out, _ = self.check("--base", self.base, *args)
@@ -1194,13 +1213,22 @@ class SymbolWouldBreak(unittest.TestCase):
         self.assertEqual(L.follows([self.c], "src/bill.py", new, BILL), [{"condition": self.c, "to": "charge_cents"}])
 
     def test_nothing_is_said_on_what_cannot_be_known(self):
-        # Catches (C5, K1): a warning for a symbol that already fails, for an unknown current text, or for a
-        # result the kit cannot read for definitions (a half-typed edit is never called a break).
+        # Catches (C5, K1): a warning for a symbol that already fails, or for an unknown current text.
         changed = BILL.replace("round_half_even", "int")
         self.assertEqual(L.would_break([self.c], "src/bill.py", "x = 1\n", changed), [])
         self.assertEqual(L.would_break([self.c], "src/bill.py", "x = 1\n", None), [])
-        self.assertEqual(L.would_break([self.c], "src/bill.py", BILL + "def broken(:\n", BILL), [])
+        self.assertEqual(L.would_break([self.c], "src/bill.py", BILL + "def broken(:\n", "def broken(:\n"), [])
         self.assertEqual(L.follows([self.c], "src/bill.py", BILL, None), [])
+
+    def test_an_edit_that_leaves_the_file_unreadable_warns(self):
+        # Catches (1.54 review, round 3): an edit after which the kit cannot read the file for definitions
+        # (a syntax error, a lexer miss, a second definition) said nothing, though the CI check now fails it.
+        [b] = L.would_break([self.c], "src/bill.py", BILL + "def broken(:\n", BILL)
+        self.assertIn("after it, charge cannot be read for definitions", b["words"])
+        self.assertIn("does not parse as Python", b["words"])
+        [b] = L.would_break([self.c], "src/bill.py", BILL + "charge = None\n", BILL)
+        self.assertIn("charge is defined 2 times", b["words"])
+        self.assertEqual(L.follows([self.c], "src/bill.py", BILL + "def broken(:\n", BILL), [])
 
     def test_the_note_names_the_definitions_and_a_rename_with_its_proposal(self):
         # Catches: a note that never says which definition a ruling rests on, a hostile name reaching the

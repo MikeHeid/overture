@@ -28,7 +28,8 @@ once, the ruling holds and is reported as moved, "old path::old.name -> new
 path::new.name", with the `propose-anchor` command that re-anchors it for the
 owner to confirm; found nowhere, it is broken (a changed file that cannot be
 read is named beside it, never a reason to pass); found twice, or when the cited
-file's definitions cannot be read, it is unchecked. This only reads: nothing is
+file's definitions cannot be read, it is unchecked, unless they could be read at
+the base: then it is broken, with why (round 3). This only reads: nothing is
 proposed or rewritten from CI.
 
 Exit codes: 0 every checked ruling holds; 1 at least one is broken (or, with
@@ -48,6 +49,7 @@ from . import anchors as A
 from . import fold as F
 from . import gitseam as G
 from . import lookup as L
+from . import symbols as SY
 
 DEFAULT_LOCKED = ".overture/locked"   # what onboard writes into `.overture.json` (`fold.locked`)
 MARKER = "<!-- overture-rulecheck -->"   # the Action finds its own comment by this first line
@@ -146,8 +148,13 @@ conditions = L.conditions   # 1.52.0: one reading of what decides an exported lo
 
 
 def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
-          candidates: list[str] | tuple[str, ...] = ()) -> dict:
-    """One ruling's verdict; `candidates` are the files a moved symbol's body is looked for in (K3)."""
+          candidates: list[str] | tuple[str, ...] = (), before=None) -> dict:
+    """One ruling's verdict; `candidates` are the files a moved symbol's body is looked for in (K3).
+
+    `before(path)` is a file's text at the base (None when it was not there or
+    is not UTF-8): a symbol whose cited file read at the base and cannot be
+    read now is broken, not unchecked (1.54 review, round 3).
+    """
     conds, origin = conditions(e)
     rows = []
     for c in conds:
@@ -156,7 +163,7 @@ def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
                          "words": f"Item {c['item']} must be {c['status']}: not checked here, as there is no "
                                   f"register (pass --adapter)."})
         else:
-            rows.append(A.explain(c, tree, history, e["source"], candidates))
+            rows.append(_unread_now(c, A.explain(c, tree, history, e["source"], candidates), tree, before))
     state = "broken" if any(r["holds"] is False for r in rows) else \
         "unchecked" if any(r["holds"] is None for r in rows) else "holds"
     out = {"qid": e["qid"], "question": e["question"], "source": e["source"], "anchored_by": origin,
@@ -166,6 +173,50 @@ def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
     if moved:   # K3: it holds where its code went; the owner confirms the new place (`propose-anchor`)
         out["moved"] = moved
     return out
+
+
+def _unread_now(c: dict, row: dict, tree: A.Tree, before) -> dict:
+    """`row`, or a break when `c` is a symbol whose cited file read for it at the base and cannot now.
+
+    1.54 review, round 3: "unchecked" is the honest word when there is nothing
+    to compare with, but a change that turns a ruling the check could read into
+    one it cannot (a lexer miss such as `if (0) /'/.test("")`, a syntax error,
+    a second definition of the name) would otherwise pass any PR. It fails,
+    and says why, so the author fixes the code or asks for a re-anchor.
+    """
+    if c["kind"] != "symbol" or row["holds"] is not None or before is None:
+        return row
+    status, syms, why = tree.symbols(c["path"])
+    if status != "ok":
+        return row
+    if syms is not None:
+        n = sum(s.qualname == c["symbol"] for s in syms)
+        if n < 2:   # the cited file reads, and the name is in it once: the doubt is elsewhere (two copies moved)
+            return row
+        why = f"{c['symbol']} is defined {n} times in {c['path']}, or redefined where no definition line reads it"
+    old = before(c["path"])
+    if old is None or SY.resolve(c["path"], old, c["symbol"]).state != "found":
+        return row
+    ref = A.symbol_ref(c["path"], c["symbol"])
+    return {**row, "holds": False, "reason": "symbol_unreadable",
+            "words": A.plain(f"{ref}: read at the base, but not as this change leaves it: {why}. A change the check "
+                             f"cannot read fails it, never passes it: fix the code, or ask the owner to re-anchor.")}
+
+
+def _at_base(root: Path, base: str):
+    """`path` -> its text at `base` (None when absent, too big or not UTF-8), each path read once."""
+    seen: dict[str, str | None] = {}
+
+    def read(path: str) -> str | None:
+        if path not in seen:
+            spec = f"{base}:{path}"
+            raw = _git(root, ["cat-file", "blob", spec]) if _git(root, ["cat-file", "-e", spec]) is not None else None
+            try:
+                seen[path] = None if raw is None or len(raw) > A.MAX_READ else raw.decode("utf-8")
+            except UnicodeDecodeError:
+                seen[path] = None
+        return seen[path]
+    return read
 
 
 def _cited(e: dict) -> set[str]:
@@ -202,6 +253,7 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
     old = parse(from_ref(root, base, locked), items, f" (at {base})") if base else head
     tree, history = A.Tree(root, item_status or {}), A.History(root)
     touched_files, candidates = changed_paths(root, base) if base else (set(), [])
+    before = _at_base(root, base) if base else None
     rep = {"base": base, "locked": locked, "broken": [], "reruled": [], "unchecked": [], "touched": [], "holds": [],
            "settled": [], "files": {"added": sorted(set(head) - set(old)), "removed": sorted(set(old) - set(head)),
                                     "edited": sorted(n for n in set(head) & set(old) if head[n] != old[n])}}
@@ -210,11 +262,11 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
         if "outcome" in e:
             rep["settled"].append({"qid": e["qid"], "outcome": e["outcome"]["kind"]})
             continue
-        j = judge(e, tree, history, item_status, candidates)
+        j = judge(e, tree, history, item_status, candidates, before)
         now = head.get(name)
         if j["state"] == "broken" and base and now is not None and now is not e and (
                 "outcome" in now or (now["locked"]["lock_id"] != e["locked"]["lock_id"]
-                                     and judge(now, tree, history, item_status, candidates)["state"] == "holds")):
+                                     and judge(now, tree, history, item_status, candidates, before)["state"] == "holds")):
             j = {**j, "state": "reruled", "by": "outcome" if "outcome" in now else "lock",
                  "new_lock": now["locked"]["lock_id"]}
         elif j["state"] == "holds" and _cited(e) & touched_files:

@@ -333,8 +333,9 @@ def _symbol_change(c: dict, path: str, new_text: str, old_text: str) -> tuple[st
     if after.state == "found":
         return None if after.symbol.body_sha256 == sha else ("break", f"it changes the body of {name}, which the "
                                                                       f"ruling rests on")
-    if after.state == "unchecked":
-        return None
+    if after.state == "unchecked":   # 1.54 review, round 3: the CI check fails what it read before and cannot now
+        return "break", A.plain(f"after it, {name} cannot be read for definitions ({after.reason}), so the CI "
+                                f"check fails the ruling it rests on")
     try:
         hits = SY.by_body(path, new_text, sha)
     except SY.Unresolvable:
