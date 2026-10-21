@@ -551,6 +551,122 @@ def exported(**over) -> dict:
     return e
 
 
+BILL = ("import math\n\n\ndef charge(cents):\n    \"\"\"Round half to even.\"\"\"\n    return round_half_even(cents)\n\n\n"
+        "class Ledger:\n    def total(self):\n        return 1\n")
+SYM_RULING = "LANE.1__Q2.json"
+
+
+def sym(text: str, q: str, path: str = "src/bill.py") -> dict:
+    from overture import symbols as SYM
+    return {"kind": "symbol", "path": path, "symbol": q, "sha256": SYM.resolve(path, text, q).symbol.body_sha256}
+
+
+class SymbolCheck(Repo):
+    """K2 and K3 in CI: a symbol ruling holds through edits elsewhere, follows a rename or a move, and never guesses."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "src/bill.py").write_text(BILL)
+        self.store.append(question(qid="LANE.1/Q2", valid_if=[sym(BILL, "charge")], source="src/bill.py:6"))
+        self.store.append(lock(self.store.append(answer(qid="LANE.1/Q2"))))
+        self.export()
+        self.base = self.commit("base: a ruling on charge()")
+
+    def q2(self, rep: dict, key: str) -> list[dict]:
+        return [j for j in rep[key] if j["qid"] == "LANE.1/Q2"]
+
+    def test_an_edit_elsewhere_in_the_file_still_holds(self):
+        # Catches: a symbol checked as a whole-file hash in CI, failing every PR that touches the file (K2).
+        (self.root / "src/bill.py").write_text(BILL.replace("return 1", "return 2") + "\n# more\n")
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual(rc, 0)
+        self.assertEqual([j["files"] for j in self.q2(rep, "touched")], [["src/bill.py"]])
+
+    def test_a_body_change_breaks_it_naming_the_symbol(self):
+        # Catches: a change of the very definition the owner ruled on passing CI.
+        (self.root / "src/bill.py").write_text(BILL.replace("round_half_even(cents)", "int(cents)"))
+        self.commit("pr")
+        rc, out, _ = self.check("--base", self.base)
+        self.assertEqual(rc, 1)
+        self.assertIn("BROKEN LANE.1/Q2", out)
+        self.assertIn("The body of charge in src/bill.py changed", out)
+
+    def test_a_rename_in_the_file_holds_and_is_reported_moved(self):
+        # Catches: a rename read as a break (K3's gap), or followed without a word to the reviewer.
+        (self.root / "src/bill.py").write_text(BILL.replace("def charge(", "def charge_cents("))
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual(rc, 0)
+        self.assertEqual(rep["moved"], [{"qid": "LANE.1/Q2", "from": "src/bill.py::charge",
+                                         "to": "src/bill.py::charge_cents"}])
+        self.assertTrue(rep["notable"])
+        rc, out, _ = self.check("--base", self.base)
+        self.assertIn("moved LANE.1/Q2: src/bill.py::charge -> src/bill.py::charge_cents; it still holds", out)
+        self.assertIn("agent.py propose-anchor LANE.1/Q2 --symbol src/bill.py::charge_cents", out)
+        _, md, _ = self.check("--base", self.base, "--format", "markdown")
+        self.assertIn("**Followed to a new place**", md)
+        self.assertIn("src/bill.py::charge → src/bill.py::charge\\_cents", md)
+
+    def test_a_move_to_another_file_and_a_git_rename_are_followed(self):
+        # Catches: a search only of the cited file (a move to another module reads as deleted), and a diff
+        # with renames off, where a renamed file's new name is never searched.
+        head, tail = BILL.split("\n\n\nclass")
+        (self.root / "src/bill.py").write_text("class" + tail)
+        (self.root / "src/rounding.py").write_text(head.replace("def charge(", "def charge_rounded("))
+        self.commit("pr: move charge to rounding.py")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, rep["moved"][0]["to"]), (0, "src/rounding.py::charge_rounded"))
+        git(self.root, "reset", "-q", "--hard", self.base)
+        git(self.root, "mv", "src/bill.py", "src/billing.py")
+        self.commit("pr: rename the module")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, rep["moved"][0]["to"]), (0, "src/billing.py::charge"))
+
+    def test_a_symbol_gone_everywhere_breaks_and_two_copies_are_unchecked(self):
+        # Catches: "gone" passing; and the first of two identical bodies picked as where it went, which a
+        # PR could use to keep a ruling alive with a decoy copy (under --strict it fails, by name).
+        (self.root / "src/bill.py").write_text(BILL.replace("def charge(", "def gone(").replace("round_half_even", "x"))
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, [j["qid"] for j in rep["broken"]]), (1, ["LANE.1/Q2"]))
+        git(self.root, "reset", "-q", "--hard", self.base)
+        head = BILL.split("\n\n\nclass")[0]
+        (self.root / "src/bill.py").write_text("x = 1\n")
+        (self.root / "src/a.py").write_text(head.replace("def charge(", "def a("))
+        (self.root / "src/b.py").write_text(head.replace("def charge(", "def b("))
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q2"]))
+        self.assertIn("its body is in 2 places", rep["unchecked"][0]["conditions"][0]["words"])
+        self.assertEqual(self.report("--base", self.base, "--strict")[0], 1)
+
+    def test_a_file_that_cannot_be_read_for_definitions_is_unchecked_not_broken_or_held(self):
+        # Catches: a syntax error mid-PR read as a break (red CI for a guess) or as holding (a quiet pass).
+        (self.root / "src/bill.py").write_text(BILL + "def broken(:\n")
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, [j["qid"] for j in rep["unchecked"]]), (0, ["LANE.1/Q2"]))
+        rc, out, _ = self.check("--base", self.base)
+        self.assertIn("unchecked LANE.1/Q2: src/bill.py::charge: not checked here, as src/bill.py cannot be read "
+                      "for definitions", out)
+        self.assertEqual(self.check("--base", self.base, "--strict")[0], 1)
+
+    def test_crlf_checkout_still_holds(self):
+        # Catches: a Windows checkout (autocrlf) failing every symbol ruling in CI.
+        (self.root / "src/bill.py").write_bytes(BILL.replace("\n", "\r\n").encode())
+        self.assertEqual(self.report()[0], 0)
+
+    def test_ci_never_writes(self):
+        # Catches: the check "helpfully" re-anchoring a moved symbol in the committed ruling (K3: only the
+        # owner's confirm re-anchors; CI reads).
+        (self.root / "src/bill.py").write_text(BILL.replace("def charge(", "def charge_cents("))
+        self.commit("pr")
+        before = git(self.root, "status", "--porcelain")
+        self.check("--base", self.base)
+        self.assertEqual(git(self.root, "status", "--porcelain"), before)
+
+
 class Lookup(Repo):
     """Which rulings bear on a path, how they are labelled, and what an edit would break."""
 

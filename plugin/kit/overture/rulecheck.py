@@ -21,6 +21,15 @@ An `item_status` condition needs the project's register, which only its adapter
 can read; it is checked with `--adapter` and otherwise reported as unchecked,
 never as holding.
 
+A `symbol` condition (1.54, owner K1-K3) holds while that definition keeps its
+body. When the name is gone, its body is looked for in the same file and in the
+files the change adds, edits or renames (git's rename detection on): found
+once, the ruling holds and is reported as moved, "old path::old.name -> new
+path::new.name", with the `propose-anchor` command that re-anchors it for the
+owner to confirm; found nowhere, it is broken; found twice, or in a file whose
+definitions cannot be read, it is unchecked. This only reads: nothing is
+proposed or rewritten from CI.
+
 Exit codes: 0 every checked ruling holds; 1 at least one is broken (or, with
 `--strict`, could not be checked); 2 it could not run (bad arguments, a ruling
 file that is not valid, a REF git does not know).
@@ -135,7 +144,9 @@ def parse(raw: dict[str, bytes], items: dict | None, where: str) -> dict[str, di
 conditions = L.conditions   # 1.52.0: one reading of what decides an exported lock, shared with the ruling lookup
 
 
-def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None) -> dict:
+def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
+          candidates: list[str] | tuple[str, ...] = ()) -> dict:
+    """One ruling's verdict; `candidates` are the files a moved symbol's body is looked for in (K3)."""
     conds, origin = conditions(e)
     rows = []
     for c in conds:
@@ -144,22 +155,42 @@ def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None) -
                          "words": f"Item {c['item']} must be {c['status']}: not checked here, as there is no "
                                   f"register (pass --adapter)."})
         else:
-            rows.append(A.explain(c, tree, history, e["source"]))
+            rows.append(A.explain(c, tree, history, e["source"], candidates))
     state = "broken" if any(r["holds"] is False for r in rows) else \
         "unchecked" if any(r["holds"] is None for r in rows) else "holds"
-    return {"qid": e["qid"], "question": e["question"], "source": e["source"], "anchored_by": origin,
-            "lock_id": e["locked"]["lock_id"], "state": state, "conditions": rows}
+    out = {"qid": e["qid"], "question": e["question"], "source": e["source"], "anchored_by": origin,
+           "lock_id": e["locked"]["lock_id"], "state": state, "conditions": rows}
+    moved = [{"from": A.symbol_ref(r["condition"]["path"], r["condition"]["symbol"]),
+              "to": A.symbol_ref(r["moved_to"]["path"], r["moved_to"]["symbol"])} for r in rows if "moved_to" in r]
+    if moved:   # K3: it holds where its code went; the owner confirms the new place (`propose-anchor`)
+        out["moved"] = moved
+    return out
 
 
 def _cited(e: dict) -> set[str]:
     return {c["path"] for c in conditions(e)[0] if "path" in c}
 
 
-def changed_paths(root: Path, base: str) -> set[str]:
-    out = _git(root, ["diff", "--name-only", "-z", "--no-renames", base, "--"])
+def changed_paths(root: Path, base: str) -> tuple[set[str], list[str]]:
+    """(every path the change touched, a rename's old and new name both; the paths it adds, edits or renames to).
+
+    Rename detection is on (1.54, K3): a moved symbol's body is looked for in
+    the second set, the files as the change leaves them.
+    """
+    out = _git(root, ["diff", "--name-status", "-z", "--find-renames", base, "--"])
     if out is None:
         raise CheckError(f"--base {base!r}: git could not diff the checkout against it")
-    return {p.decode("utf-8", errors="replace") for p in out.split(b"\0") if p}
+    parts = [p.decode("utf-8", errors="replace") for p in out.split(b"\0")]
+    touched, now, i = set(), [], 0
+    while i < len(parts) and parts[i]:
+        status = parts[i]
+        n = 2 if status[:1] in ("R", "C") else 1
+        names = parts[i + 1:i + 1 + n]
+        i += 1 + n
+        touched.update(names)
+        if status[:1] != "D" and names:
+            now.append(names[-1])
+    return touched, sorted(set(now))
 
 
 def run(root: Path, locked: str, base: str | None, items: dict | None, strict: bool = False) -> dict:
@@ -169,7 +200,7 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
     head = parse(from_dir(root / locked), items, "")
     old = parse(from_ref(root, base, locked), items, f" (at {base})") if base else head
     tree, history = A.Tree(root, item_status or {}), A.History(root)
-    touched_files = changed_paths(root, base) if base else set()
+    touched_files, candidates = changed_paths(root, base) if base else (set(), [])
     rep = {"base": base, "locked": locked, "broken": [], "reruled": [], "unchecked": [], "touched": [], "holds": [],
            "settled": [], "files": {"added": sorted(set(head) - set(old)), "removed": sorted(set(old) - set(head)),
                                     "edited": sorted(n for n in set(head) & set(old) if head[n] != old[n])}}
@@ -178,11 +209,11 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
         if "outcome" in e:
             rep["settled"].append({"qid": e["qid"], "outcome": e["outcome"]["kind"]})
             continue
-        j = judge(e, tree, history, item_status)
+        j = judge(e, tree, history, item_status, candidates)
         now = head.get(name)
         if j["state"] == "broken" and base and now is not None and now is not e and (
                 "outcome" in now or (now["locked"]["lock_id"] != e["locked"]["lock_id"]
-                                     and judge(now, tree, history, item_status)["state"] == "holds")):
+                                     and judge(now, tree, history, item_status, candidates)["state"] == "holds")):
             j = {**j, "state": "reruled", "by": "outcome" if "outcome" in now else "lock",
                  "new_lock": now["locked"]["lock_id"]}
         elif j["state"] == "holds" and _cited(e) & touched_files:
@@ -193,7 +224,9 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
     # the folder comes from the base, so a pull request cannot empty it.
     rep["empty"] = not old and not head
     # What a reviewer must see on the pull request itself, not only in the job summary.
-    rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or any(rep["files"].values()))
+    rep["moved"] = [{"qid": j["qid"], **m} for k in ("touched", "holds") for j in rep[k] for m in j.get("moved", [])]
+    rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or rep["moved"]
+                          or any(rep["files"].values()))
     rep["strict"] = strict
     rep["notable"] = rep["notable"] or (strict and rep["empty"])   # a strict failure shows on the pull request
     # Under --strict, "nothing could be checked" fails as well as "this one could not": a re-ruling does
@@ -219,6 +252,11 @@ def _md(s: str) -> str:
 def _fence(diff: str) -> str:
     ticks = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", diff)), default=0))
     return f"{ticks}diff\n{diff}\n{ticks}"
+
+
+def _unchecked_words(j: dict) -> str:
+    """Why a ruling was not checked: its unchecked conditions' own words (an item status, a symbol)."""
+    return " ".join(c["words"] for c in j["conditions"] if c["holds"] is None)
 
 
 def _count(rep: dict) -> int:
@@ -257,8 +295,14 @@ def markdown(rep: dict) -> str:
                 for j in rep["reruled"]]
         out.append("")
     if rep["unchecked"]:
-        out.append("**Not checked here** (an item status needs the register; pass `adapter`):")
-        out += [f"- {_md(j['qid'])}" for j in rep["unchecked"]]
+        out.append("**Not checked here** (an item status needs the register, pass `adapter`; a symbol is never "
+                   "guessed):")
+        out += [f"- {_md(j['qid'])}: {_md(_unchecked_words(j))}" for j in rep["unchecked"]]
+        out.append("")
+    if rep["moved"]:
+        out.append("**Followed to a new place** (the code a ruling rests on moved with its body unchanged; the "
+                   "owner confirms the new place):")
+        out += [f"- {_md(m['qid'])}: {_md(m['from'])} → {_md(m['to'])}" for m in rep["moved"]]
         out.append("")
     if rep["touched"]:
         out.append("**Touched, still holds:**")
@@ -285,7 +329,9 @@ def text(rep: dict) -> str:
                 out += ["      " + ln for ln in c["diff"].splitlines()]
     out += [f"re-ruled {j['qid']}: {'settled' if j['by'] == 'outcome' else 'new lock ' + j['new_lock']}; "
             f"confirm the owner did this" for j in rep["reruled"]]
-    out += [f"unchecked {j['qid']}: an item status needs the register (--adapter)" for j in rep["unchecked"]]
+    out += [f"unchecked {j['qid']}: {_unchecked_words(j)}" for j in rep["unchecked"]]
+    out += [f"moved {m['qid']}: {m['from']} -> {m['to']}; it still holds. Re-anchor it for the owner to confirm: "
+            f"agent.py propose-anchor {m['qid']} --symbol {m['to']} --basis \"moved, same body\"" for m in rep["moved"]]
     out += [f"touched {j['qid']}: {', '.join(j['files'])} changed; it still holds" for j in rep["touched"]]
     out += [f"ruling files {k}: {', '.join(v)}" for k, v in rep["files"].items() if v]
     if rep["empty"]:
