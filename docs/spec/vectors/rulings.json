@@ -1,0 +1,2235 @@
+{
+ "protocol": "1.0",
+ "about": "Overture protocol 1.0 conformance vectors, built by spec_vectors.py from hand-written verdicts, each checked against the reference kit. See docs/spec/PROTOCOL.md section 10.",
+ "rulings": [
+  {
+   "name": "one answer, locked",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "superseded, then locked again",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "c204d4414e7aa4dd6216a30f",
+     "picks": [
+      "no_retry"
+     ],
+     "picked_labels": [
+      "Never retry"
+     ],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "5d30fddeed63284cda46931a",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "supersedes": "12da034d7c4f1a148126442c",
+     "reason": "The provider now retries for us."
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f"
+    ]
+   }
+  },
+  {
+   "name": "superseded, changed once before the new lock, then re-anchored",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "d6ea6ce6e8d0ef3edcfb4894",
+     "picks": [],
+     "picked_labels": [],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once",
+      "Never retry"
+     ],
+     "own_text": "Never retry, and log it.",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "ca6b8daa55e770aa93a5a581",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "reanchor",
+     "anchors": [
+      {
+       "kind": "symbol",
+       "path": "src/pay.py",
+       "symbol": "Ledger.charge",
+       "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+      }
+     ],
+     "anchor_id": "42a58005e744782e52a79721",
+     "anchor_basis": "Ledger.charge moved from billing.py with the same body.",
+     "anchored_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [
+     {
+      "answer_id": "c204d4414e7aa4dd6216a30f",
+      "picks": [
+       "no_retry"
+      ],
+      "picked_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "supersedes": "12da034d7c4f1a148126442c",
+      "reason": "The provider now retries for us."
+     }
+    ],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f",
+     "d6ea6ce6e8d0ef3edcfb4894"
+    ]
+   }
+  },
+  {
+   "name": "locked with its own anchors, asked and locked by named sessions",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "a434d90855c9be7040b654d4",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "lock",
+     "anchors": [
+      {
+       "kind": "file_sha256",
+       "path": "config/limits.toml",
+       "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+      }
+     ],
+     "locked_by_name": "alex"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "asked_by_agent": "agent-6"
+   }
+  },
+  {
+   "name": "forked from an owner's request",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "forked_from": "4d7c35ee3f7320b386b32c20",
+    "star_by": "panel",
+    "evidence": [
+     {
+      "cite": "src/pay.py:40-52",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ],
+    "fork": {
+     "type": "message",
+     "schemaVersion": 1,
+     "item": "PAY-2",
+     "text": "Deliberate on retries before we ship.",
+     "by": "owner",
+     "nonce": "f1-nonce-0001",
+     "intent": "fork",
+     "mode": "explore",
+     "id": "4d7c35ee3f7320b386b32c20",
+     "seq": 1,
+     "ts": "2026-10-21T20:00:00Z"
+    }
+   }
+  },
+  {
+   "name": "settled: kept, but no longer checked",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "outcome": {
+     "kind": "untracked",
+     "by": "owner",
+     "at": "2026-10-22T09:00:00Z",
+     "record": "0123456789abcdef01234567"
+    }
+   }
+  },
+  {
+   "name": "replaces an older question",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "replaces": "PAY-1/Q4"
+   }
+  },
+  {
+   "name": "settled: superseded by a newer question",
+   "file": "PAY-2__Q1.json",
+   "valid": true,
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "outcome": {
+     "kind": "superseded",
+     "by": "owner",
+     "at": "2026-10-22T09:00:00Z",
+     "record": "0123456789abcdef01234567",
+     "replaced_by": "PAY-2/Q2"
+    }
+   }
+  },
+  {
+   "name": "file name is not the qid's",
+   "file": "PAY-2__Q2.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "file name does not match qid",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "schemaVersion 2",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "schemaVersion 2 is not 1",
+   "ruling": {
+    "schemaVersion": 2,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "asked by the owner",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "only ['agent'] may write one",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "owner",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "asked_at is not a store time",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "is not a store timestamp",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "21 Oct 2026",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "picked_labels edited",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "picked_labels does not match",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Never retry"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "picked_star edited",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "picked_star does not match",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": false,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "locked by an agent",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "is not locked by the owner",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "agent",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "a pick that is not an option",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "which are not options",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "sometimes"
+     ],
+     "picked_labels": [],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "anchors without anchored_by",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "anchored_by is 'lock'",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchors": [
+      {
+       "kind": "file_sha256",
+       "path": "config/limits.toml",
+       "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+      }
+     ]
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "re-anchored without its anchor record",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "anchored_by is 'lock'",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "reanchor",
+     "anchors": [
+      {
+       "kind": "file_sha256",
+       "path": "config/limits.toml",
+       "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+      }
+     ]
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "asked_by_agent is a reserved name",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "is reserved",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "asked_by_agent": "owner"
+   }
+  },
+  {
+   "name": "locked_by_name is not a short name",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "locked_by_name",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "locked_by_name": "Alex Doe"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "an earlier answer with an extra field",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "an earlier answer carries exactly",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "d6ea6ce6e8d0ef3edcfb4894",
+     "picks": [],
+     "picked_labels": [],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once",
+      "Never retry"
+     ],
+     "own_text": "Never retry, and log it.",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "ca6b8daa55e770aa93a5a581",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "reanchor",
+     "anchors": [
+      {
+       "kind": "symbol",
+       "path": "src/pay.py",
+       "symbol": "Ledger.charge",
+       "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+      }
+     ],
+     "anchor_id": "42a58005e744782e52a79721",
+     "anchor_basis": "Ledger.charge moved from billing.py with the same body.",
+     "anchored_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [
+     {
+      "answer_id": "c204d4414e7aa4dd6216a30f",
+      "picks": [
+       "no_retry"
+      ],
+      "picked_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "supersedes": "12da034d7c4f1a148126442c",
+      "reason": "The provider now retries for us.",
+      "note": "x"
+     }
+    ],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f",
+     "d6ea6ce6e8d0ef3edcfb4894"
+    ]
+   }
+  },
+  {
+   "name": "order leaves an answer out",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "order must list every answer exactly once",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "d6ea6ce6e8d0ef3edcfb4894",
+     "picks": [],
+     "picked_labels": [],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once",
+      "Never retry"
+     ],
+     "own_text": "Never retry, and log it.",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "ca6b8daa55e770aa93a5a581",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "reanchor",
+     "anchors": [
+      {
+       "kind": "symbol",
+       "path": "src/pay.py",
+       "symbol": "Ledger.charge",
+       "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+      }
+     ],
+     "anchor_id": "42a58005e744782e52a79721",
+     "anchor_basis": "Ledger.charge moved from billing.py with the same body.",
+     "anchored_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [
+     {
+      "answer_id": "c204d4414e7aa4dd6216a30f",
+      "picks": [
+       "no_retry"
+      ],
+      "picked_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "supersedes": "12da034d7c4f1a148126442c",
+      "reason": "The provider now retries for us."
+     }
+    ],
+    "order": [
+     "c204d4414e7aa4dd6216a30f",
+     "d6ea6ce6e8d0ef3edcfb4894"
+    ]
+   }
+  },
+  {
+   "name": "a lock followed without superseding it",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "without superseding it",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "d6ea6ce6e8d0ef3edcfb4894",
+     "picks": [],
+     "picked_labels": [],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once",
+      "Never retry"
+     ],
+     "own_text": "Never retry, and log it.",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "ca6b8daa55e770aa93a5a581",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "anchored_by": "reanchor",
+     "anchors": [
+      {
+       "kind": "symbol",
+       "path": "src/pay.py",
+       "symbol": "Ledger.charge",
+       "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+      }
+     ],
+     "anchor_id": "42a58005e744782e52a79721",
+     "anchor_basis": "Ledger.charge moved from billing.py with the same body.",
+     "anchored_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [
+     {
+      "answer_id": "c204d4414e7aa4dd6216a30f",
+      "picks": [
+       "no_retry"
+      ],
+      "picked_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f",
+     "d6ea6ce6e8d0ef3edcfb4894"
+    ]
+   }
+  },
+  {
+   "name": "withdrawn without a reason",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "outcome is withdrawn (with reason)",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "outcome": {
+     "kind": "withdrawn",
+     "by": "owner",
+     "at": "2026-10-22T09:00:00Z",
+     "record": "0123456789abcdef01234567"
+    }
+   }
+  },
+  {
+   "name": "replaces itself",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "is not another question's qid",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "replaces": "PAY-2/Q1"
+   }
+  },
+  {
+   "name": "a fork message without forked_from",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "without forked_from",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "fork": {
+     "type": "message",
+     "schemaVersion": 1,
+     "item": "PAY-2",
+     "text": "Deliberate on retries before we ship.",
+     "by": "owner",
+     "nonce": "f1-nonce-0001",
+     "intent": "fork",
+     "mode": "explore"
+    }
+   }
+  },
+  {
+   "name": "forked_from with no fork message",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "does not carry the fork message",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "forked_from": "0123456789abcdef01234567",
+    "star_by": "panel"
+   }
+  },
+  {
+   "name": "forked and starred, without star_by",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "add star_by",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ],
+    "forked_from": "4d7c35ee3f7320b386b32c20",
+    "evidence": [
+     {
+      "cite": "src/pay.py:40-52",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ],
+    "fork": {
+     "type": "message",
+     "schemaVersion": 1,
+     "item": "PAY-2",
+     "text": "Deliberate on retries before we ship.",
+     "by": "owner",
+     "nonce": "f1-nonce-0001",
+     "intent": "fork",
+     "mode": "explore",
+     "id": "4d7c35ee3f7320b386b32c20",
+     "seq": 1,
+     "ts": "2026-10-21T20:00:00Z"
+    }
+   }
+  },
+  {
+   "name": "picked_star as 0, not false",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "picked_star does not match",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "c204d4414e7aa4dd6216a30f",
+     "picks": [
+      "no_retry"
+     ],
+     "picked_labels": [
+      "Never retry"
+     ],
+     "picked_star": 0,
+     "rejected_labels": [
+      "Retry once"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "5d30fddeed63284cda46931a",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "supersedes": "12da034d7c4f1a148126442c",
+     "reason": "The provider now retries for us."
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f"
+    ]
+   }
+  },
+  {
+   "name": "asked_at in other digits",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "is not a store timestamp",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "\u0662\u0660\u0662\u0666-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "12da034d7c4f1a148126442c",
+     "picks": [
+      "retry_once"
+     ],
+     "picked_labels": [
+      "Retry once"
+     ],
+     "picked_star": true,
+     "rejected_labels": [
+      "Never retry"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "29a56dd6f2c494c67019599d",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z"
+    },
+    "history": [],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c"
+    ]
+   }
+  },
+  {
+   "name": "a locked answer's blank reason",
+   "file": "PAY-2__Q1.json",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "reason must be non-empty text",
+   "ruling": {
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "question": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "source": "docs/payments.md:12-14",
+    "asked_by": "agent",
+    "asked_at": "2026-10-21T20:00:00Z",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "locked": {
+     "answer_id": "c204d4414e7aa4dd6216a30f",
+     "picks": [
+      "no_retry"
+     ],
+     "picked_labels": [
+      "Never retry"
+     ],
+     "picked_star": false,
+     "rejected_labels": [
+      "Retry once"
+     ],
+     "own_text": "",
+     "by": "owner",
+     "answered_at": "2026-10-21T20:00:00Z",
+     "lock_id": "5d30fddeed63284cda46931a",
+     "locked_by": "owner",
+     "locked_at": "2026-10-21T20:00:00Z",
+     "supersedes": "12da034d7c4f1a148126442c",
+     "reason": "  "
+    },
+    "history": [
+     {
+      "answer_id": "12da034d7c4f1a148126442c",
+      "picks": [
+       "retry_once"
+      ],
+      "picked_labels": [
+       "Retry once"
+      ],
+      "picked_star": true,
+      "rejected_labels": [
+       "Never retry"
+      ],
+      "own_text": "",
+      "by": "owner",
+      "answered_at": "2026-10-21T20:00:00Z",
+      "lock_id": "29a56dd6f2c494c67019599d",
+      "locked_by": "owner",
+      "locked_at": "2026-10-21T20:00:00Z"
+     }
+    ],
+    "earlier": [],
+    "order": [
+     "12da034d7c4f1a148126442c",
+     "c204d4414e7aa4dd6216a30f"
+    ]
+   }
+  }
+ ]
+}

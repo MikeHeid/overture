@@ -211,6 +211,10 @@ jobs:
       - uses: MikeHeid/overture@v1.53.2
 ```
 
+The question, ruling and `valid_if` format is a published spec, with a JSON
+Schema and conformance vectors, so another tool can write or check rulings
+without Overture (1.55): [docs/spec/PROTOCOL.md](docs/spec/PROTOCOL.md).
+
 → [docs/features/mcp-and-ci.md](docs/features/mcp-and-ci.md)
 
 ### UX View
@@ -314,7 +318,7 @@ CLI inside WSL).
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
 | **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~90%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52), symbol anchors (1.54), attested release zips; Docker to come |
 | **Wave 3: teams** | Several people with roles; every decision records who made it | 🟡 ~85%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45); Linear to come |
-| **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
+| **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~50%: MCP server (1.35), the protocol published as a spec (1.55); adapters for other agent tools to come |
 
 The detailed roadmap, with five development lanes and the reasoning behind
 them, is in [docs/STRATEGY.md](docs/STRATEGY.md). That document also covers
@@ -499,7 +503,7 @@ Every HIGH finding is closed; the current state:
 
     python3 -m venv .venv && .venv/bin/pip install -r plugin/kit/requirements.txt
     .venv/bin/python test_kit.py && .venv/bin/python test_server.py && .venv/bin/python test_onboard.py
-    .venv/bin/python test_mcp.py && .venv/bin/python test_rulecheck.py
+    .venv/bin/python test_mcp.py && .venv/bin/python test_rulecheck.py && .venv/bin/python test_spec.py
     .venv/bin/python test_build.py && .venv/bin/python test_vendor.py
     .venv/bin/pip install playwright && .venv/bin/playwright install chromium
     OVERTURE_BROWSER=1 .venv/bin/python test_browser.py

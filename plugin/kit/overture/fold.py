@@ -65,7 +65,7 @@ RECORD_ID = S.RECORD_ID
 # file is refused rather than bloating the record. Generous on purpose.
 MAX_EARLIER = 100
 MAX_FORK_QUESTIONS = 5  # the store's cap, re-checked across committed files (§6.6)
-TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z")
+TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")   # [0-9]: `\d` takes any script's digits (1.55 L2)
 
 
 def locked_filename(qid: str) -> str:
@@ -225,7 +225,7 @@ def check_entry(name: str, e: object, items: dict[str, dict]) -> list[str]:
     """Return every reason `fold` must refuse this file; an empty list means it may be folded."""
     if not isinstance(e, dict):
         return [f"{name}: not a JSON object"]
-    if e.get("schemaVersion") != S.SCHEMA_VERSION:
+    if not S.is_schema_version(e.get("schemaVersion")):
         return [f"{name}: schemaVersion {e.get('schemaVersion')!r} is not {S.SCHEMA_VERSION}"]
     errs = []
     qid = e.get("qid")
@@ -420,9 +420,11 @@ def _check_locked_answer(name: str, a: object, option_ids: list, labels: dict, s
     for k in ("answered_at", "locked_at"):
         if not isinstance(a.get(k), str) or not TS.match(a[k]):
             errs.append(f"{name}: {k} {a.get(k)!r} is not a store timestamp")
-    for k in ("own_text",) + (("reason",) if "reason" in a else ()):
-        if not isinstance(a.get(k), str) or len(a[k]) > S.MAX_TEXT:
-            errs.append(f"{name}: {k} must be a string of at most {S.MAX_TEXT} characters")
+    if not isinstance(a.get("own_text"), str) or len(a["own_text"]) > S.MAX_TEXT:
+        errs.append(f"{name}: own_text must be a string of at most {S.MAX_TEXT} characters")
+    if "reason" in a and (not isinstance(a["reason"], str) or not a["reason"].strip()
+                          or len(a["reason"]) > S.MAX_TEXT):   # the store never took a blank one (1.55 review L2)
+        errs.append(f"{name}: reason must be non-empty text of at most {S.MAX_TEXT} characters")
     picks_ok = isinstance(a.get("picks"), list) and all(p in option_ids for p in a["picks"])
     if picks_ok:
         # Derived fields are recomputed, never trusted: they are what the record prints.
@@ -430,7 +432,7 @@ def _check_locked_answer(name: str, a: object, option_ids: list, labels: dict, s
                 "rejected_labels": [labels[i] for i in option_ids if i not in a["picks"]],
                 "picked_star": star is not None and star in a["picks"]}
         for k, v in want.items():
-            if a.get(k) != v:
+            if a.get(k) != v or type(a.get(k)) is not type(v):   # 0 is not false (1.55 review L2)
                 errs.append(f"{name}: {k} does not match the options and picks")
     if not a.get("lock_id") or a.get("locked_by") != "owner":
         errs.append(f"{name}: answer {a.get('answer_id')} is not locked by the owner")

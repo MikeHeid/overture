@@ -59,6 +59,15 @@ class LayoutTests(Base):
                 self.assertNotIn("/.git/", n)
                 self.assertNotIn("/dist/", n)
 
+    def test_the_protocol_ships_beside_the_plugin(self):
+        # Catches (1.55): a zip without docs/spec, so a release's attestation would not cover the protocol it
+        # implements, or one that ships it inside the plugin, where Claude Code would load it as plugin files.
+        names = set(zipfile.ZipFile(self.built()[0]).namelist())
+        for must in ("overture/spec/PROTOCOL.md", "overture/spec/overture-protocol-1.schema.json",
+                     "overture/spec/vectors/records.json", "overture/spec/vectors/store.json"):
+            self.assertIn(must, names)
+        self.assertEqual([n for n in names if n.startswith("overture/plugins/") and "/spec/" in n], [])
+
     def test_no_area_note_ships_in_the_zip(self):
         # Catches (1.53.0): Overture's own area notes (CLAUDE.md, facts about this repository's code) shipped in
         # the plugin, where they would describe the kit's source to a user's sessions; the skip must hold for a

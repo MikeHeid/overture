@@ -97,7 +97,7 @@ class Store:
                 rec = json.loads(line)
             except json.JSONDecodeError as e:
                 raise StoreError(f"{self.path}:{n}: not JSON ({e.msg})") from None
-            if isinstance(rec, dict) and rec.get("schemaVersion") != S.SCHEMA_VERSION:
+            if isinstance(rec, dict) and not S.is_schema_version(rec.get("schemaVersion")):
                 raise StoreError(f"{self.path}:{n}: schemaVersion {rec.get('schemaVersion')!r}; "
                                  f"this kit reads only {S.SCHEMA_VERSION}")
             errs = S.validate(rec)

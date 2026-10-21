@@ -373,10 +373,10 @@ by three things:
 Releases 1.26–1.30 mostly added features. The next releases should go to
 **identity, enforcement and distribution**.
 
-## Since the review (as of 1.54)
+## Since the review (as of 1.55)
 
-The releases after 1.31 went where the board pointed. Of its three limits,
-two are answered and one is open:
+The releases after 1.31 went where the board pointed. All three of its
+limits are now answered:
 
 - **One operator per console:** answered. Every lock records who decided
   (1.38); roles, routing, two-key locks and the role log followed (1.39–1.43).
@@ -386,9 +386,13 @@ two are answered and one is open:
   ZeroTier/Tailscale listener need no Cloudflare (1.46, 1.47), and the server
   runs under launchd on macOS (1.51). This is most of risk 3. Native Windows is
   refused by name and pointed to WSL (A1). Docker is not offered.
-- **No published protocol:** open. The MCP server (1.35) lets other agent
-  tools ask and read, but the question, ruling and `valid_if` format is not
-  yet published as a spec. This is Wave 4.
+- **No published protocol:** answered (1.55, P1–P5). The question, ruling
+  and `valid_if` format is a versioned spec, `docs/spec/PROTOCOL.md` 1.0, with
+  a JSON Schema and conformance vectors that the kit is tested against. The
+  MCP server (1.35) is how Overture carries it. What is left of Wave 4 is
+  adapters for other agent vendors. The symbol hash is specified by its
+  reference code, not in prose, and another reader that cannot compute it
+  reports such a ruling unchecked.
 
 The rest:
 

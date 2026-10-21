@@ -56,6 +56,20 @@ checks apply: the project picks its console and token, `--as` (or
 each one. A bad request fails alone; the server stays up. The steward's
 and the owner's commands are not offered. Standard library only.
 
+## The protocol, published (1.55)
+
+The format underneath both is a published spec: [docs/spec/PROTOCOL.md](../spec/PROTOCOL.md),
+version 1.0. It covers the four decision records (question, answer, lock,
+anchor), the `valid_if` conditions and what makes a ruling stale, and the
+ruling files this check reads. A JSON Schema and conformance vectors sit
+beside it, and `test_spec.py` holds Overture to all three. A tool that writes
+rulings, or checks them in its own CI, can follow the spec without running
+Overture. The spec has its own version, separate from Overture's: a minor
+version adds only optional things, so a valid record never changes meaning.
+It ships in each release zip (`overture/spec/`), so the release's attestation
+covers it. The owner's choices are P1–P5 in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#wave-4-the-protocol-decided-2026-10-21).
+
 ## Block a merge that breaks a ruling (CI, 1.36)
 
 `plugin/kit/rulecheck.py` checks the rulings your project has
