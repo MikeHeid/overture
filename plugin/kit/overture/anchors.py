@@ -41,7 +41,6 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
-import shlex
 import unicodedata
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
@@ -237,8 +236,8 @@ class Tree:
                 blind.append(w)
             elif ss:
                 hits += [(rel, s) for s in ss if s.body_sha256 == sha]
-        if len(hits) > 1:
-            where = ", ".join(f"{r}::{s.qualname}" for r, s in hits[:3])
+        if len(hits) > 1:   # the paths come from the change: one line each, never one of their own (1.54 review M3)
+            where = ", ".join(plain(f"{r}::{s.qualname}") for r, s in hits[:3])
             return SymbolState("unchecked", path, None, f"its body is in {len(hits)} places now ({where}), so "
                                                          f"which one the ruling meant cannot be told", status)
         if hits:
@@ -247,7 +246,7 @@ class Tree:
             return SymbolState("moved", hits[0][0], hits[0][1], "", status)
         # 1.54 review H2: a changed file the kit cannot read never turns "gone" into "unchecked", or any PR
         # could keep a broken ruling green by adding one; it is named beside the break instead.
-        return SymbolState("gone", path, None, f"not searched: {blind[0]}" if blind else "", status)
+        return SymbolState("gone", path, None, f"not searched: {plain(blind[0])}" if blind else "", status)
 
 
 def conditions_for(store, q: dict) -> tuple[list[dict], str]:
@@ -325,18 +324,32 @@ def symbol_ref(path: str, qualname: str) -> str:
     return f"{path}::{qualname}"
 
 
+PLAIN_ARG = re.compile(r"[A-Za-z0-9_./:-]+\Z")   # a value no shell reads as more than itself, POSIX or cmd.exe
+PLAIN_BASIS = re.compile(r"[A-Za-z0-9 ,]+\Z")    # the same inside double quotes
+
+
 def propose_command(qid: str, ref: str, basis: str = "moved, same body") -> str | None:
-    """The `agent.py propose-anchor` command re-anchoring `qid` on `ref`, every value shell-quoted; None when unsafe.
+    """The `agent.py propose-anchor` command re-anchoring `qid` on `ref`, or None when a value is not plain.
 
     1.54 review (security): in CI the qid and the moved symbol's path and name
     come from the pull request's head, so a file named `a;touch x.py` or a name
-    with `$HOME` must reach an operator's copy-paste as data. A value holding a
-    control character or a line break is not printed at all (it could forge a
-    line of the report); the caller says so, and the JSON keeps the raw fields.
+    with `$HOME` must reach an operator's copy-paste as data. POSIX quoting is
+    no answer on Windows, where cmd.exe reads `'a;b'` as words and `%X%` in
+    any quotes (1.54 review, LOW), so the command is printed only when the qid
+    and the reference are [A-Za-z0-9_./:-] and the basis is words and commas
+    (double-quoted, which both read alike). Otherwise the caller says so and
+    shows the fields; the JSON keeps them raw.
     """
-    if any(_control(v) for v in (qid, ref, basis)):
+    if not all(isinstance(v, str) for v in (qid, ref, basis)):
         return None
-    return shlex.join(["agent.py", "propose-anchor", qid, "--symbol", ref, "--basis", basis])
+    if not (PLAIN_ARG.match(qid) and PLAIN_ARG.match(ref) and PLAIN_BASIS.match(basis)):
+        return None
+    return f'agent.py propose-anchor {qid} --symbol {ref} --basis "{basis}"'
+
+
+def plain(s: str) -> str:
+    """`s` with each control character and line or paragraph separator as `?`: one line, as printed."""
+    return "".join("?" if _control(ch) else ch for ch in s)
 
 
 def _control(v: object) -> bool:

@@ -609,7 +609,9 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
     warned, out, notes = [], [], []
     for h, ms in moves:
         for m in ms:
-            cmd = A.propose_command(str(h.get("qid")), f"{path}::{symbol_name(m['to'])}", "renamed, same body")
+            # A name the note can only show as `?` (non-ASCII, say) is never proposed as `?` (1.54 review, LOW).
+            cmd = (A.propose_command(str(h.get("qid")), f"{path}::{m['to']}", "renamed, same body")
+                   if symbol_name(m["to"]) == m["to"] else None)
             notes.append("\n".join([
                 _cut(f"NOTE: this edit renames {symbol_name(m['condition'].get('symbol'))} to "
                      f"{symbol_name(m['to'])}, which ruling {_short(h.get('qid'), 80)} rests on; its body is "

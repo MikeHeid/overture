@@ -260,7 +260,8 @@ def _moved_line(m: dict) -> str:
     cmd = A.propose_command(m["qid"], m["to"])
     if cmd is None:
         return (f"moved {_plain(m['qid'])}: {_plain(m['from'])} -> {_plain(m['to'])}; it still holds. No re-anchor "
-                f"command is printed: a name holds a control character or a line break (see --format json)")
+                f"command is printed: a value holds a character a shell could read as more than itself (see "
+                f"--format json for the fields)")
     return f"moved {m['qid']}: {m['from']} -> {m['to']}; it still holds. Re-anchor it for the owner to confirm: {cmd}"
 
 
@@ -334,21 +335,26 @@ def markdown(rep: dict) -> str:
 
 
 def text(rep: dict) -> str:
+    """The plain-text report. 1.54 review M3: every value is printed through `_plain`, since a reason can name a
+    path from the change, and a path can hold a line break that would forge a report line of its own."""
+    P = _plain
     out = []
     for j in rep["broken"]:
-        out.append(f"BROKEN {j['qid']} (cited at {j['source']}, anchored by {j['anchored_by']}):")
+        out.append(f"BROKEN {P(j['qid'])} (cited at {P(j['source'])}, anchored by {P(j['anchored_by'])}):")
         for c in j["conditions"]:
-            out.append(f"  {'holds' if c['holds'] else 'unchecked' if c['holds'] is None else 'FAILS'}: {c['words']}")
+            out.append(f"  {'holds' if c['holds'] else 'unchecked' if c['holds'] is None else 'FAILS'}: "
+                       f"{P(c['words'])}")
             if c.get("diff") and c["holds"] is False:
-                out += ["      " + ln for ln in c["diff"].splitlines()]
-    out += [f"re-ruled {j['qid']}: {'settled' if j['by'] == 'outcome' else 'new lock ' + j['new_lock']}; "
+                out += ["      " + P(ln) for ln in c["diff"].split("\n")]
+    out += [f"re-ruled {P(j['qid'])}: {'settled' if j['by'] == 'outcome' else 'new lock ' + P(j['new_lock'])}; "
             f"confirm the owner did this" for j in rep["reruled"]]
-    out += [f"unchecked {j['qid']}: {_unchecked_words(j)}" for j in rep["unchecked"]]
+    out += [f"unchecked {P(j['qid'])}: {P(_unchecked_words(j))}" for j in rep["unchecked"]]
     out += [_moved_line(m) for m in rep["moved"]]
-    out += [f"touched {j['qid']}: {', '.join(j['files'])} changed; it still holds" for j in rep["touched"]]
-    out += [f"ruling files {k}: {', '.join(v)}" for k, v in rep["files"].items() if v]
+    out += [f"touched {P(j['qid'])}: {', '.join(P(f) for f in j['files'])} changed; it still holds"
+            for j in rep["touched"]]
+    out += [f"ruling files {k}: {', '.join(P(x) for x in v)}" for k, v in rep["files"].items() if v]
     if rep["empty"]:
-        out.append(f"no ruling files in {rep['locked']}: if this project has rulings, the folder is wrong")
+        out.append(f"no ruling files in {P(rep['locked'])}: if this project has rulings, the folder is wrong")
     out.append(_verdict(rep))
     return "\n".join(out) + "\n"
 

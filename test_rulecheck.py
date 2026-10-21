@@ -657,12 +657,12 @@ class SymbolCheck(Repo):
         (self.root / "src/bill.py").write_bytes(BILL.replace("\n", "\r\n").encode())
         self.assertEqual(self.report()[0], 0)
 
-    def test_the_propose_anchor_hint_is_shell_quoted_and_withheld_for_a_control_character(self):
-        # Catches (1.54 review, security): the printed `agent.py propose-anchor` hint built from the PR head's
-        # file and symbol names unquoted, so an operator who copies it runs `touch x` or a `$(...)`; and a name
-        # with a newline forging a line of its own. The JSON keeps the raw fields, never a shell string.
-        # (A qualified name never holds "(" or a space, so `$NAME`, which a shell expands, is the worst it can be.)
-        import shlex
+    def test_the_propose_anchor_hint_is_printed_only_for_plain_values(self):
+        # Catches (1.54 review, security; then its LOW): the printed `agent.py propose-anchor` hint built from
+        # the PR head's file and symbol names, so an operator who copies it runs `touch x` or a `$(...)`. POSIX
+        # quoting (shlex) is no answer on Windows, where cmd.exe reads `'a;b'` as words: so the command is
+        # printed only when every value is [A-Za-z0-9_./:-], and otherwise withheld with the fields shown.
+        # The JSON keeps the raw fields, never a shell string.
         js = "function charge(c) {\n  return roundHalfEven(c);\n}\n"
         (self.root / "src/pay.js").write_text(js)
         self.store.append(question(qid="LANE.1/Q3", valid_if=[sym(js, "charge", "src/pay.js")], source="src/pay.js:2"))
@@ -677,13 +677,20 @@ class SymbolCheck(Repo):
         self.assertNotIn("propose-anchor", json.dumps(rep["moved"]))
         _, out, _ = self.check("--base", self.base)
         [line] = [ln for ln in out.splitlines() if ln.startswith("moved LANE.1/Q3")]
-        cmd = line.split("Re-anchor it for the owner to confirm: ", 1)[1]
-        self.assertEqual(shlex.split(cmd), ["agent.py", "propose-anchor", "LANE.1/Q3", "--symbol",
-                                            "a;touch x.js::$HOME_x", "--basis", "moved, same body"])
-        self.assertIn("'a;touch x.js::$HOME_x'", cmd)
+        self.assertNotIn("propose-anchor LANE.1/Q3 --symbol", line)
+        self.assertIn("moved LANE.1/Q3: src/pay.js::charge -> a;touch x.js::$HOME_x; it still holds. No re-anchor "
+                      "command is printed", line)
         from overture import rulecheck as RCm
-        self.assertIsNone(RCm.A.propose_command("LANE.1/Q2", "a\nrm -rf x.py::f"))
-        self.assertIsNone(RCm.A.propose_command("LANE.1/Q2", "a\x1b[2J.py::f"))
+        self.assertEqual(RCm.A.propose_command("CONSOLE-kit/Q31", "src/a.b/pay_v2.js::Ledger.total"),
+                         'agent.py propose-anchor CONSOLE-kit/Q31 --symbol src/a.b/pay_v2.js::Ledger.total '
+                         '--basis "moved, same body"')
+        for qid, ref in (("LANE.1/Q2", "a\nrm -rf x.py::f"), ("LANE.1/Q2", "a\x1b[2J.py::f"),
+                         ("LANE.1/Q2", "a&calc.js::f"), ("LANE.1/Q2", "a%PATH%.js::f"), ("LANE.1/Q2", "a b.js::f"),
+                         ("LANE.1/Q2", "a.js::$HOME"), ("LANE.1/Q2", "a b.js::f"), ("Q;x", "a.js::f"),
+                         ("LANE.1/Q2", "a.js::pаy")):
+            with self.subTest(ref=ref):
+                self.assertIsNone(RCm.A.propose_command(qid, ref))
+        self.assertIsNone(RCm.A.propose_command("LANE.1/Q2", "a.js::f", 'x" & calc & "'))
 
     def test_ci_never_writes(self):
         # Catches: the check "helpfully" re-anchoring a moved symbol in the committed ruling (K3: only the
@@ -747,6 +754,46 @@ class SymbolReviewCheck(Repo):
         self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
         [row] = rep["broken"][0]["conditions"]
         self.assertIn("src/other.jsx cannot be read for definitions", row["words"])
+
+    def assert_no_forged_line(self, *args: str) -> str:
+        _, out, _ = self.check("--base", self.base, *args)
+        self.assertFalse([ln for ln in out.splitlines() if ln.lstrip("- ").startswith("forged")], out)
+        self.assertNotIn(" ", out)
+        return out
+
+    def test_a_path_from_the_change_never_forges_a_report_line(self):
+        # Catches (1.54 review M3): a changed file named `x\n- forged: all rulings hold.js` reaching the text
+        # report raw (an unchecked or broken reason names it), so the log or job summary shows a line the
+        # report never wrote. Every value is printed through _plain; the JSON keeps it as JSON escapes it.
+        evil = "x\n- forged: all rulings hold.js"
+        (self.root / "src/pay.js").write_text(PAY_JS.replace("charge", "bill").replace('", "', '" | "'))
+        (self.root / evil).write_text("function z() {\n")
+        self.commit("pr: broken, beside an unreadable file")
+        out = self.assert_no_forged_line()
+        self.assertIn("not searched: x?- forged: all rulings hold.js cannot be read", out)
+        self.assert_no_forged_line("--format", "markdown")
+        git(self.root, "reset", "-q", "--hard", self.base)
+        (self.root / "src/pay.js").write_text("export const x = 1;\n")
+        (self.root / evil).write_text(PAY_JS.replace("charge", "a"))
+        (self.root / "b.js").write_text(PAY_JS.replace("charge", "b"))
+        self.commit("pr: unchecked, two copies")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual([j["qid"] for j in rep["unchecked"]], ["LANE.1/Q3"])
+        self.assertIn("x?- forged", self.assert_no_forged_line())
+
+    def test_a_moved_symbol_named_with_a_line_break_prints_no_line_of_its_own(self):
+        # Catches (mutants Q4 and Q3): the moved line's fields printed raw when the command is withheld (a
+        # `_plain` that passes text through), and U+2028 (category Zl, not C) let through as if printable.
+        for evil in ("x\n- forged: all rulings hold.js", "x - forged: all rulings hold.js"):
+            with self.subTest(evil=evil):
+                git(self.root, "reset", "-q", "--hard", self.base)
+                (self.root / "src/pay.js").write_text("export const x = 1;\n")
+                (self.root / evil).write_text(PAY_JS.replace("charge", "bill"))
+                self.commit("pr")
+                rc, rep = self.report("--base", self.base)
+                self.assertEqual((rc, rep["moved"][0]["to"]), (0, evil + "::bill"))
+                out = self.assert_no_forged_line()
+                self.assertIn("-> x?- forged: all rulings hold.js::bill; it still holds. No re-anchor command", out)
 
 
 class Lookup(Repo):
@@ -1150,11 +1197,28 @@ class SymbolWouldBreak(unittest.TestCase):
         self.assertEqual(lines[3:5], [
             "NOTE: this edit renames charge to charge_cents, which ruling LANE.1/Q2 rests on; its body is unchanged, "
             "so the ruling follows it. After the edit, propose the new name for the owner to confirm:",
-            "  `agent.py propose-anchor LANE.1/Q2 --symbol src/bill.py::charge_cents --basis 'renamed, same body'`"])
-        # Catches (1.54 review, security): the hook's command built unquoted from a checkout's own file name.
+            "  `agent.py propose-anchor LANE.1/Q2 --symbol src/bill.py::charge_cents --basis \"renamed, same body\"`"])
+        # Catches (1.54 review, security): the hook's command built from a checkout's own file name, which no
+        # quoting makes safe in both a POSIX shell and cmd.exe: it is withheld.
         text = L.say("src/a;touch x.py", [h], [], None, "cmd", info=False,
                      moves=[(h, [{"condition": self.c, "to": "charge_cents"}])])
-        self.assertIn("--symbol 'src/a;touch x.py::charge_cents'", text)
+        self.assertNotIn("--symbol", text)
+        self.assertIn("a name here is not printable", text)
+        # Catches (1.54 review, LOW): a name the note shows as `?` (Cyrillic `а` in `pаy`) printed as the
+        # command's `--symbol src/bill.py::?`, which proposes a symbol nobody defined.
+        text = L.say("src/bill.py", [h], [], None, "cmd", info=False,
+                     moves=[(h, [{"condition": self.c, "to": "pаy"}])])
+        self.assertNotIn("::?", text)
+        self.assertNotIn("--symbol", text)
+
+    def test_two_copies_of_the_body_are_no_rename(self):
+        # Catches (mutant L4): a rename into two identical bodies read as "moved" to the first, so the note
+        # tells the agent to propose one of two definitions the owner cannot tell apart; it is a break.
+        head = BILL.split("\n\n\nclass")[0]
+        new = head.replace("def charge(", "def a(") + "\n\n" + head.replace("def charge(", "def b(") + "\n"
+        self.assertEqual(L.follows([self.c], "src/bill.py", new, BILL), [])
+        [b] = L.would_break([self.c], "src/bill.py", new, BILL)
+        self.assertEqual(b["words"], "it removes charge, or renames it and changes its body")
 
 
 class _Registered(Repo):
