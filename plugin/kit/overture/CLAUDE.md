@@ -1,4 +1,4 @@
-<!-- area: plugin/kit/overture · checked: f87aaaa -->
+<!-- area: plugin/kit/overture · checked: 9aa3736 -->
 - server.py is one process and the store's only writer (store.py: one writer per file); agents write through its socket, never a second Store.
 - Two doors: the owner's (HTTP on 127.0.0.1, an Access token or a 1.46 device cookie, D5 even on loopback) stamps `by: owner`; the agent's (a 0600 Unix socket) stamps `by: agent`. The page never picks its author.
 - `serve` calls `gitseam.close()` first: the server starts no git (CONSOLE-kit/Q23); git facts arrive pushed by the steward (stewardgit.py). It never imports or runs a project's adapter (Q24, items.py).
