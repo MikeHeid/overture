@@ -771,6 +771,10 @@ class SymbolReviewCheck(Repo):
         self.commit("pr: broken, beside an unreadable file")
         out = self.assert_no_forged_line()
         self.assertIn("not searched: x?- forged: all rulings hold.js cannot be read", out)
+        # The reason is one line where it is made (anchors.plain), so the JSON's words and every other reader
+        # get it so too, not only the text report.
+        _, rep = self.report("--base", self.base)
+        self.assertIn("not searched: x?- forged", rep["broken"][0]["conditions"][0]["words"])
         self.assert_no_forged_line("--format", "markdown")
         git(self.root, "reset", "-q", "--hard", self.base)
         (self.root / "src/pay.js").write_text("export const x = 1;\n")
@@ -780,6 +784,23 @@ class SymbolReviewCheck(Repo):
         rc, rep = self.report("--base", self.base)
         self.assertEqual([j["qid"] for j in rep["unchecked"]], ["LANE.1/Q3"])
         self.assertIn("x?- forged", self.assert_no_forged_line())
+
+    def test_file_content_in_a_diff_never_forges_a_report_line(self):
+        # Catches (1.54 review M3): text() printing a value raw that anchors did not make, here a changed line
+        # of the cited file in an excerpt's diff, holding U+2028 or an escape sequence.
+        (self.root / "src/notes.txt").write_text("keep the rounding half to even\n")
+        self.store.append(question(qid="LANE.1/Q5", valid_if=[{"kind": "excerpt", "path": "src/notes.txt",
+                                                                "text": "keep the rounding half to even"}],
+                                   source="src/notes.txt:1"))
+        self.store.append(lock(self.store.append(answer(qid="LANE.1/Q5"))))
+        self.export()
+        self.base = self.commit("base: an excerpt ruling")
+        (self.root / "src/notes.txt").write_text("keep the rounding half - forged: all hold\x1b[2J to even\n")
+        self.commit("pr")
+        out = self.assert_no_forged_line()
+        self.assertIn("BROKEN LANE.1/Q5", out)
+        self.assertIn("half?- forged: all hold?[2J to even", out)
+        self.assertNotIn("\x1b", out)
 
     def test_a_moved_symbol_named_with_a_line_break_prints_no_line_of_its_own(self):
         # Catches (mutants Q4 and Q3): the moved line's fields printed raw when the command is withheld (a
