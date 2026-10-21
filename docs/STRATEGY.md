@@ -21,6 +21,10 @@ Two caveats apply to everything below:
 The README's [Where it's going](../README.md#where-its-going) section
 summarises this document.
 
+Parts 0–2 are the 1.31 review as written. Part 3's lanes and waves are kept
+current, and [Since the review](#since-the-review-as-of-154) says which of
+the review's risks and findings later releases answered.
+
 ---
 
 ## Part 0: The thesis
@@ -316,14 +320,17 @@ friction aimed at decision quality rather than speed.
 
 ## Part 3: Lanes and waves
 
-| Lane | Progress | Next items |
-|---|---|---|
-| Core decision engine | 75% | Symbol/AST anchors; an open spec for the schema; ruling search and dependencies. Shipped: rulings as a CI check (1.36), the "rulings touching this path" lookup before an agent edits (1.52) |
-| Trust & security | 65% | sigstore/minisign signing; operator identity on locks; same-UID isolation recipe; built-in webhook HMAC; collaborator-only backlinks |
-| Ecosystem & integrations | 40% | MCP server for non-Claude agents; Linear/Jira adapters; Slack/email doorbell; ruling-aware PR comments; MADR/ADR templates |
-| Onboarding & distribution | 35% | Identity backend other than Cloudflare (Tailscale/OIDC/solo loopback); launchd and Docker; hosted demo; 5-minute path with no adapter; fix the USER-GUIDE drift |
-| Team & multi-operator | 15% | Named operators; roles; two-key locks; routing; per-operator handoff |
-| **Overall**, weighted toward the category 1.0 | **≈45%** | |
+Updated 2026-10-21, after 1.54 and release attestation. The percentages
+are still judgement calls.
+
+| Lane | Progress | Shipped | Next items |
+|---|---|---|---|
+| Core decision engine | 85% | Rulings as a CI check (1.36); the "rulings touching this path" lookup before an agent edits (1.52); symbol anchors (1.54) | An open spec for the schema; ruling search and dependencies |
+| Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1) | Same-UID isolation recipe; built-in webhook HMAC; collaborator-only backlinks |
+| Ecosystem & integrations | 55% | MCP server for other agent tools (1.35); a Slack-style webhook digest (1.45) | Linear/Jira adapters; ruling-aware PR comments; MADR/ADR templates |
+| Onboarding & distribution | 65% | Sign-in links without Cloudflare (1.46); ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47); launchd (1.51); the prerequisite scan (1.53.2); the USER-GUIDE drift fixed | Docker; a hosted demo; a 5-minute path with no adapter; native Windows (A1: not now) |
+| Team & multi-operator | 80% | Named operators (1.38); roles and People (1.39, 1.40); routing (1.41); the role log (1.42); two-key locks (1.43); settings (1.44) | Per-operator handoff |
+| **Overall**, weighted toward the category 1.0 | **≈70%** | | |
 
 Each wave below builds on the one before it.
 
@@ -333,6 +340,9 @@ Each wave below builds on the one before it.
     merge.
   - *Scope:* symbol anchors, a CI Action, ruling lookup before an agent acts,
     real signing, Docker/launchd, and a solo mode without Cloudflare.
+  - *Status (2026-10-21):* all built except Docker: the CI Action (1.36),
+    the solo mode (1.46, 1.47), launchd (1.51), the lookup (1.52), symbol
+    anchors (1.54) and release attestation (C1).
 - **Wave 3, Teams.**
   - *Goal:* an audit trail that holds up in a team review or a compliance
     setting.
@@ -342,6 +352,8 @@ Each wave below builds on the one before it.
     roles (1.39), People (1.40), then routing with a director flag and
     per-login drafts, then the role-change log, then two-key locks by area,
     then notifications.
+  - *Status (2026-10-21):* that order is built, 1.38 through 1.45, with
+    Slack through the webhook digest. Linear is still to come.
 - **Wave 4, Protocol.**
   - *Goal:* Overture becomes the reference implementation of a format that
     other tools emit.
@@ -360,3 +372,32 @@ by three things:
 
 Releases 1.26–1.30 mostly added features. The next releases should go to
 **identity, enforcement and distribution**.
+
+## Since the review (as of 1.54)
+
+The releases after 1.31 went where the board pointed. Of its three limits,
+two are answered and one is open:
+
+- **One operator per console:** answered. Every lock records who decided
+  (1.38); roles, routing, two-key locks and the role log followed (1.39–1.43).
+  This also answers risk 2 and the finding that locks were single-operator in
+  the data model.
+- **Cloudflare and systemd only:** answered. Sign-in links and a
+  ZeroTier/Tailscale listener need no Cloudflare (1.46, 1.47), and the server
+  runs under launchd on macOS (1.51). This is most of risk 3. Native Windows is
+  refused by name and pointed to WSL (A1). Docker is not offered.
+- **No published protocol:** open. The MCP server (1.35) lets other agent
+  tools ask and read, but the question, ruling and `valid_if` format is not
+  yet published as a spec. This is Wave 4.
+
+The rest:
+
+- **Risk 4, lexical anchors:** narrowed. A symbol anchor (1.54) follows a
+  function or class through a rename or a move and breaks when its body
+  changes. A behaviour change outside the cited body still goes unnoticed.
+- **Release signing:** answered by attestation (C1). The README's
+  "signed zip" wording, which had survived on the changelog line, now says
+  "attested".
+- **The out-of-date user guide:** fixed; it describes the one server for all
+  projects as shipped.
+- **Risk 5, backlinks without trust:** open (collaborator-only backlinks).

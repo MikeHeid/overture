@@ -52,11 +52,10 @@ ruling, CONSOLE-kit/Q13.)
 Either way, an upgrade is something you do on purpose. Moving a project's
 branch never changes the kit.
 
-**Still to come (spec'd, not built):** one console **server** for all your
-projects. Each project's install will link into it through an API with a
-per-project token, and keep its own store. The design is in
-`overture-multiproject.md`. Until it ships, each project runs its own
-server process from the shared install.
+**One console server for all your projects.** `server.py --all` hosts every
+registered project on the machine; each keeps its own store and its own
+project token. Run it in the foreground, as a daemon, or as a systemd or
+launchd service: see [Hosting](features/hosting.md#hosting).
 
 ## Register a project
 
