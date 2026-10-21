@@ -367,6 +367,8 @@ def rulings() -> list[dict]:
          "unknown field(s) reviewed_by"),
         ("a locked answer with an unknown field", relock_name,
          w(relock, history=[dict(relock["history"][0], note="x")]), False, True, "unknown field(s) note"),
+        ("the current locked answer with an unknown field", fname, bad(locked=dict(lk, note="x")), False, True,
+         "unknown field(s) note"),
     ]
     out = []
     for case in cases:

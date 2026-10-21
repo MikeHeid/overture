@@ -3003,10 +3003,11 @@ on its own.
   repository's history). A ruling file someone edited by hand to add a
   field is now refused at fold, naming the field, instead of folded with
   it ignored.
-- Two ruling vectors (one per place) and a drift test that holds fold's
-  two key sets equal to the schema's. Each new check was shown red by
-  re-applying three mutants (either check removed, `fork` dropped from the
-  top-level set); this is the author's run, not yet a clearer's.
+- Three ruling vectors (the top level, a superseded lock in `history`, the
+  current `locked` answer) and a drift test that holds fold's two key sets
+  equal to the schema's. An independent clearer re-applied ten mutants with
+  its own runner (either check removed, `history` or `locked` left
+  unchecked, a key dropped from or added to either set); each was killed.
 
 ## The protocol, published (1.55.0)
 
