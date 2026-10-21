@@ -236,6 +236,99 @@ class ReleaseNotesGateTests(unittest.TestCase):
         bump.assert_called_once_with("9.9.9")
 
 
+class AttestWorkflowTests(unittest.TestCase):
+    """2026-10-21 (owner, "Actions build + attestation"): attest-release.yml rebuilds a release's zip from its tag,
+    refuses a zip that differs from the uploaded one, and attests it with the workflow's identity."""
+
+    PATH = B.ROOT / ".github" / "workflows" / "attest-release.yml"
+
+    def setUp(self):
+        if not self.PATH.exists():
+            self.skipTest("no .github/workflows (not a checkout)")
+        self.text = self.PATH.read_text(encoding="utf-8")
+
+    def run_blocks(self) -> list[str]:
+        blocks, current, indent = [], None, 0
+        for line in self.text.splitlines():
+            stripped = line.lstrip()
+            if current is not None:
+                if stripped and len(line) - len(stripped) <= indent:
+                    blocks.append("\n".join(current))
+                    current = None
+                else:
+                    current.append(line)
+                    continue
+            if stripped.startswith("run:"):
+                indent = len(line) - len(stripped)
+                current = [stripped[4:]]
+        if current is not None:
+            blocks.append("\n".join(current))
+        return blocks
+
+    def test_every_action_is_pinned_to_a_full_commit_sha(self):
+        # Catches: `uses: actions/checkout@v7` or a short sha, where whoever controls the tag controls what signs.
+        uses = re.findall(r"^\s*-?\s*uses:\s*(\S+)", self.text, re.M)
+        self.assertGreaterEqual(len(uses), 2, uses)
+        for u in uses:
+            self.assertRegex(u, r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$", u)
+
+    def test_no_expression_is_expanded_inside_a_shell_step(self):
+        # Catches: `${{ ... }}` pasted into a `run:` script, where a crafted tag or input becomes shell code;
+        # values reach the shell only through `env:`.
+        blocks = self.run_blocks()
+        self.assertGreaterEqual(len(blocks), 3, blocks)
+        for block in blocks:
+            self.assertNotIn("${{", block)
+
+    def test_it_starts_from_nothing_and_asks_only_what_attesting_needs(self):
+        # Catches: a workflow that inherits the repository's default token scopes, or loses the scopes Sigstore
+        # signing needs.
+        self.assertRegex(self.text, r"(?m)^permissions:\s*\{\}\s*$")
+        for scope in ("contents: write", "id-token: write", "attestations: write"):
+            self.assertIn(scope, self.text)
+
+    def test_it_rebuilds_from_the_tag_and_refuses_a_different_zip(self):
+        # Catches: attesting whatever was uploaded without rebuilding it, building something other than the tag,
+        # or building on a runner whose zlib can give other bytes.
+        self.assertIn("types: [published]", self.text)
+        self.assertIn("ref: refs/tags/${{ env.TAG }}", self.text)
+        self.assertIn("python3 build_zip.py", self.text)
+        self.assertIn("runs-on: ubuntu-24.04", self.job("build"))
+        self.assertLess(self.text.index("Check the tag"), self.text.index("actions/checkout@"))
+        # The mismatch branch must stop the job, and the attest step must come after the match.
+        match = next(b for b in self.run_blocks() if 'cmp -s "$BUILT"' in b)
+        start = match.index('cmp -s "$BUILT"')
+        mismatch = match[start:start + re.search(r"\n\s*fi\b", match[start:]).start()]
+        self.assertIn("exit 1", mismatch)
+        self.assertLess(self.text.index('cmp -s "$BUILT"'), self.text.index("actions/attest-build-provenance@"))
+
+    def job(self, name: str) -> str:
+        start = self.text.index(f"\n  {name}:\n")
+        nxt = re.search(r"\n  [a-z][\w-]*:\n", self.text[start + 1:])
+        return self.text[start:start + 1 + nxt.start()] if nxt else self.text[start:]
+
+    def test_the_tag_s_code_runs_without_write_scopes_or_a_signing_identity(self):
+        # Catches: build_zip.py from the tag running in a job that could mint the OIDC token or write the release
+        # (id-token is job-wide, so a step-level token move is not enough); the token left in .git/config; the
+        # attesting job checking out and running the tag's code; a trigger that runs on others' code.
+        build, attest = self.job("build"), self.job("attest")
+        self.assertIn("python3 build_zip.py", build)
+        self.assertRegex(build, r"permissions:\n\s+contents: read\n")
+        for scope in ("write", "id-token"):
+            self.assertNotIn(scope, build)
+        self.assertIn("persist-credentials: false", build)
+        self.assertNotIn("actions/checkout@", attest)
+        self.assertNotIn("build_zip", attest)
+        self.assertIn("needs: build", attest)
+        self.assertEqual(self.text.count("GH_TOKEN:"), 1)
+        self.assertIn("GH_TOKEN:", attest)
+        self.assertNotRegex(self.text, r"pull_request|workflow_run|issue_comment|repository_dispatch")
+
+    def test_a_manual_run_is_accepted_only_from_main(self):
+        # Catches: a workflow_dispatch from any branch, whose attestation would carry that branch's identity.
+        self.assertIn("if: github.event_name == 'release' || github.ref == 'refs/heads/main'", self.job("build"))
+
+
 class UnitTemplateTests(unittest.TestCase):
     """The rendered unit passes the server only flags it defines, and not `--page` (Q28) or `--adapter` (Q24): never read."""
 

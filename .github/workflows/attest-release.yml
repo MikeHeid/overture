@@ -1,0 +1,114 @@
+# Rebuild a release's zip from its tag and attest it (owner, 2026-10-21: "Actions build + attestation").
+#
+# build_zip.py is deterministic, so the zip built here from the tag must be
+# byte-identical to the one the owner uploaded. A different zip fails the run
+# and nothing is attested; a release with no zip gets this build uploaded.
+# The attestation is signed through Sigstore with this workflow's identity,
+# so no key is kept anywhere and no personal address enters the public log.
+#
+# Two jobs: `build` runs the tag's code with read-only access and no signing
+# identity; `attest` holds the write scopes and runs no code from the tag.
+#
+# A release-triggered run is the tag's own, so the attestation names the tag.
+# A manual run (workflow_dispatch, for a tag made before this file existed)
+# is accepted only from main and names main; the tag is only what it built.
+#
+# Check a download:
+#   gh attestation verify overture-X.Y.Z.zip --repo MikeHeid/overture \
+#     --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \
+#     --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+name: Attest release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attest, e.g. v1.54.0"
+        required: true
+
+permissions: {}
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+    # The same Ubuntu (and zlib) the owner builds on, so deflate gives the same bytes.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.build.outputs.name }}
+    steps:
+      - name: Check the tag
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a release tag (vX.Y.Z)"; exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Build the zip from the tag
+        id: build
+        run: |
+          version="${TAG#v}"
+          if [ "$(cat VERSION)" != "$version" ]; then
+            echo "::error::VERSION at $TAG says $(cat VERSION), not $version"; exit 1
+          fi
+          python3 build_zip.py --no-validate --out-dir "$RUNNER_TEMP/dist"
+          echo "name=overture-$version.zip" >> "$GITHUB_OUTPUT"
+          sha256sum "$RUNNER_TEMP/dist/overture-$version.zip"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: zip
+          path: ${{ runner.temp }}/dist/${{ steps.build.outputs.name }}
+          if-no-files-found: error
+          retention-days: 1
+
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # upload the zip to a release that has none
+      id-token: write      # the Sigstore signing identity
+      attestations: write  # store the attestation on the repository
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: zip
+          path: ${{ runner.temp }}/built
+
+      - name: Match the published zip, or publish this one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.build.outputs.name }}
+        run: |
+          if [[ ! "$NAME" =~ ^overture-[0-9]+\.[0-9]+\.[0-9]+\.zip$ ]]; then
+            echo "::error::unexpected zip name '$NAME'"; exit 1
+          fi
+          BUILT="$RUNNER_TEMP/built/$NAME"
+          assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          if grep -qxF "$NAME" <<< "$assets"; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME" --dir "$RUNNER_TEMP/published"
+            if ! cmp -s "$BUILT" "$RUNNER_TEMP/published/$NAME"; then
+              echo "::error::$NAME on the release is not the zip $TAG builds to; nothing attested"
+              sha256sum "$BUILT" "$RUNNER_TEMP/published/$NAME"
+              exit 1
+            fi
+            echo "$NAME on the release matches the build from $TAG"
+          else
+            gh release upload "$TAG" "$BUILT" --repo "$GITHUB_REPOSITORY"
+            echo "$TAG had no $NAME; uploaded this build"
+          fi
+          sha256sum "$BUILT"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/built/${{ needs.build.outputs.name }}
