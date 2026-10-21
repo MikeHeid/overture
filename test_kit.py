@@ -10546,6 +10546,22 @@ class SymbolReviewHashTests(unittest.TestCase):
         self.assertEqual(body("a.js", "function f(s) {\n  if  ( s ) /a  b/.test(s);\n  return  x  +  1;\n}\n", "f"),
                          body("a.js", "function f(s) {\n  if (s) /a  b/.test(s);\n  return x + 1;\n}\n", "f"))
 
+    def test_whitespace_between_two_words_counts(self):
+        # Catches (mutant S1): whitespace in code dropped instead of kept as one space between two word
+        # characters, so `return typeof x` and `returntypeofx` (or `a in b` and `ainb`) hash alike.
+        self.assertNotEqual(body("a.js", "function f(x) { return typeof x; }\n", "f"),
+                            body("a.js", "function f(x) { returntypeofx; }\n", "f"))
+        self.assertNotEqual(body("a.go", "package p\nfunc f() int { var a int; return a }\n", "f"),
+                            body("a.go", "package p\nfunc f() int { vara int; returna }\n", "f"))
+
+    def test_a_hole_marker_in_code_is_unchecked(self):
+        # Catches (mutant N19): the \x05 marker that stands for a literal accepted in code, so a body can be
+        # made to hash like one with a literal in that place (the encoding is no longer one-to-one).
+        r = SY.resolve("a.js", "function f() { return 1\x05; }\n", "f")
+        self.assertEqual(r.state, "unchecked")
+        self.assertIn("\\x05", r.reason)
+        self.assertEqual(SY.resolve("a.js", 'function f() { return "\x05"; }\n', "f").state, "found")   # in a literal
+
     def test_jsx_text_that_looks_like_a_comment_counts(self):
         # Catches (1.54 review C2): `//` in JSX text (`<a>http://x/{u.id}</a>`) read as a line comment, so
         # the rest of the line, braces and all, drops out of the hash and `{u.id}` -> `{u.password}` holds.
@@ -10628,6 +10644,19 @@ class SymbolReviewBoundsTests(unittest.TestCase):
         syms = SY.find("a.js", old)
         syms.clear()   # a caller's list is its own: the memo is never changed through it
         self.assertEqual(len(SY.find("a.js", old)), 50)
+
+    def test_the_memo_is_keyed_by_path_and_bounded(self):
+        # Catches (mutants N8, N9): a memo keyed by the text alone, so the same text read as `a.js` answers
+        # for `a.py` (another language, another reading), and a memo that never forgets, so a long-running
+        # console server holds every file it ever read (up to MAX_CHARS each).
+        SY.clear_cache()
+        text = "function f() { return 1; }\n"
+        self.assertEqual(SY.resolve("a.js", text, "f").state, "found")
+        self.assertEqual(SY.resolve("a.py", text, "f").state, "unchecked")   # not Python
+        self.assertEqual(SY.resolve("a.go", text, "f").state, "missing")    # Go reads `func`, not `function`
+        for i in range(3 * SY.MEMO_SIZE):
+            SY.find("a.js", f"function f{i}() {{ return {i}; }}\n")
+        self.assertLessEqual(len(SY._MEMO), SY.MEMO_SIZE)
 
 
 class SymbolReviewRedefinitionTests(unittest.TestCase):

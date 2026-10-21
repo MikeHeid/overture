@@ -332,6 +332,7 @@ _REGEX_WORDS = frozenset({"return", "typeof", "instanceof", "in", "of", "new", "
 _TPL_STOP = re.compile(r"[\\`]|\$\{")
 # A tag, a closing tag or a fragment in code: JSX, whose text (`<a>http://x</a>`) a lexer this small would read as
 # a comment. In a file with one every comment counts in the hash (1.54 review C2): a false "stale", never a hold.
+# It also matches a comparison written `i <n ` in plain JS, so there a comment edit reads stale: the safe way.
 _JSX = re.compile(r"<(?:[A-Za-z][\w.:-]*[\s/>]|/|>)")
 
 
