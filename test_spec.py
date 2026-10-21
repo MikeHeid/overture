@@ -378,6 +378,10 @@ class DriftTests(unittest.TestCase):
         out = defs("outcome")
         self.assertEqual(set(out["properties"]["kind"]["enum"]), set(F.OUTCOME_KEYS))
         self.assertEqual(set(out["properties"]), {k for need, may in F.OUTCOME_KEYS.values() for k in need | may})
+        # Catches: a field added to a ruling file or a locked answer on one side only; fold then refuses by name a
+        # file the spec allows, or lets through one the schema refuses (1.55.1).
+        self.assertEqual(set(defs("rulingFile")["properties"]), F.RULING_KEYS)
+        self.assertEqual(set(defs("lockedAnswer")["properties"]), F.LOCKED_KEYS)
 
     def test_each_condition_kinds_keys_are_the_kits(self):
         # Catches: a key added to a condition kind on one side only; the kit refuses a condition whose keys are not

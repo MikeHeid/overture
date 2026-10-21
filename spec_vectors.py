@@ -362,6 +362,11 @@ def rulings() -> list[dict]:
          "is not a store timestamp"),
         ("a locked answer's blank reason", relock_name, w(relock, locked=dict(relock["locked"], reason="  ")),
          False, True, "reason must be non-empty text"),
+        # 1.55.1: fold refuses an unknown field as the schema does (PROTOCOL.md section 13, a reader SHOULD).
+        ("a ruling file with an unknown field", fname, bad(reviewed_by="alex"), False, True,
+         "unknown field(s) reviewed_by"),
+        ("a locked answer with an unknown field", relock_name,
+         w(relock, history=[dict(relock["history"][0], note="x")]), False, True, "unknown field(s) note"),
     ]
     out = []
     for case in cases:

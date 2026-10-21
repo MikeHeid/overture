@@ -2990,6 +2990,24 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Unknown fields refused at fold (1.55.1)
+
+- **`fold.check_entry` refuses a field the protocol does not define**, at a
+  ruling file's top level and on a locked answer, by name ("unknown
+  field(s) …"). This closes the known limit 1.55.0 disclosed: PROTOCOL.md
+  section 13 says a reader SHOULD refuse one, and the schema's `rulingFile`
+  and `lockedAnswer` already did. An earlier answer was refused this way
+  already.
+- No file `fold.py export` wrote is affected: every version wrote only
+  fields the protocol defines (checked against the export code and the
+  repository's history). A ruling file someone edited by hand to add a
+  field is now refused at fold, naming the field, instead of folded with
+  it ignored.
+- Two ruling vectors (one per place) and a drift test that holds fold's
+  two key sets equal to the schema's. Each new check was shown red by
+  re-applying three mutants (either check removed, `fork` dropped from the
+  top-level set); this is the author's run, not yet a clearer's.
+
 ## The protocol, published (1.55.0)
 
 Wave 4, the owner's P1 to P5 (2026-10-21, every ★): the question, ruling and
