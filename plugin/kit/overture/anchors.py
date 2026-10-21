@@ -26,9 +26,10 @@ at that name, whatever else in the file changes (K2). When the name is not
 there, the body is looked for (K3): in the same file, and in the files a caller
 names as changed (the CI check passes the pull request's changed and renamed
 files). Found once, the condition holds and says where its code went
-(`moved`); found twice, or in a file that cannot be read, it is unchecked;
-found nowhere, it fails. A file whose definitions cannot be read (an unknown
-language, a syntax error) is unchecked too, never guessed: `Tree.check`, which
+(`moved`); found twice, it is unchecked; found nowhere, it fails, even when a
+changed file could not be searched (that file is named beside the break, 1.54
+review H2). A cited file whose definitions cannot be read (an unknown language,
+a syntax error, not UTF-8) is unchecked, never guessed: `Tree.check`, which
 the CI check and the lookup read, says None for it and True for a moved one.
 `Tree.holds`, which the console reads as "fresh", holds a symbol only at its
 own name: a followed one shows stale there until the owner confirms its
@@ -241,10 +242,12 @@ class Tree:
             return SymbolState("unchecked", path, None, f"its body is in {len(hits)} places now ({where}), so "
                                                          f"which one the ruling meant cannot be told", status)
         if hits:
+            # A body that calls itself by its old name still counts as moved: the name is blanked only where it
+            # is defined, so `f` -> `g` calling `f` hashes alike. The owner confirms the new place (K3).
             return SymbolState("moved", hits[0][0], hits[0][1], "", status)
-        if blind:
-            return SymbolState("unchecked", path, None, blind[0], status)
-        return SymbolState("gone", path, None, "", status)
+        # 1.54 review H2: a changed file the kit cannot read never turns "gone" into "unchecked", or any PR
+        # could keep a broken ruling green by adding one; it is named beside the break instead.
+        return SymbolState("gone", path, None, f"not searched: {blind[0]}" if blind else "", status)
 
 
 def conditions_for(store, q: dict) -> tuple[list[dict], str]:
@@ -554,12 +557,13 @@ def explain_symbol(c: dict, tree: Tree, candidates: tuple[str, ...] | list[str] 
     if st.state == "unreadable":
         return {**out, "holds": False, "reason": "file_unreadable", "words": f"{c['path']} {st.reason}."}
     where = " or in the files this change touched" if candidates else ""
+    beside = f" ({st.reason}.)" if st.reason else ""   # a changed file it could not search, named (1.54 review H2)
     if st.status == "missing":
         return {**out, "holds": False, "reason": "file_missing",
                 "words": f"{c['path']} is gone, and no symbol{where} has the body of {c['symbol']}: it was "
-                         f"deleted, or moved and changed."}
+                         f"deleted, or moved and changed.{beside}"}
     words = (f"{c['symbol']} is no longer in {c['path']}, and no symbol there{where} has its body: it was "
-             f"deleted, or renamed and changed.")
+             f"deleted, or renamed and changed.{beside}")
     _, syms, _ = tree.symbols(c["path"])
     near = difflib.get_close_matches(c["symbol"], [s.qualname for s in syms or []], n=1, cutoff=0.6)
     if near:

@@ -10431,15 +10431,23 @@ class SymbolAnchorTests(Tmp):
         self.assertIn("2 places", st.reason)
         self.assertIsNone(self.tree().check(self.c, ["src/a.py", "src/b.py"]))
 
-    def test_a_candidate_that_cannot_be_read_makes_a_missing_symbol_unchecked_not_gone(self):
-        # Catches: "gone" (a CI failure) said when the body may sit in a changed file the kit could not read
-        # for definitions; that is a guess, and K1 says unchecked.
+    def test_a_candidate_that_cannot_be_read_never_makes_a_gone_symbol_unchecked(self):
+        # Catches (1.54 review H2): one unparsable file anywhere in the change turning "gone" (a CI failure)
+        # into "unchecked" (a pass), so a PR that renames and changes the ruled function adds a .jsx with
+        # `<p>Don't</p>` and goes green. The cited file reads cleanly: gone, with the unread file named beside.
+        from overture import anchors as A
         self.write("src/pay.py", "x = 1\n")
         self.write("src/half.py", "def charge(:\n")
         st = self.state(["src/half.py"])
-        self.assertEqual(st.state, "unchecked")
+        self.assertEqual(st.state, "gone")
         self.assertIn("src/half.py cannot be read for definitions", st.reason)
+        self.assertIs(self.tree().check(self.c, ["src/half.py"]), False)
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5", ["src/half.py"])
+        self.assertEqual((e["holds"], e["reason"]), (False, "symbol_gone"))
+        self.assertIn("src/half.py cannot be read for definitions", e["words"])
         self.assertEqual(self.state().state, "gone")
+        (self.dir / "src/pay.py").unlink()   # the cited file gone as well: still gone, never a pass
+        self.assertEqual(self.state(["src/half.py"]).state, "gone")
 
     def test_an_unreadable_file_is_unchecked_and_a_secret_is_never_read(self):
         # Catches: a syntax error read as "the symbol is gone" (a false break) or as holding (a false pass),
@@ -10596,6 +10604,36 @@ class SymbolReviewAnchorTests(Tmp):
         self.assertIsNone(self.tree().check(c2))
         # An excerpt still reads such a file as it did (replaced), so nothing else changes for it.
         self.assertTrue(self.tree().holds({"kind": "excerpt", "path": "A.java", "text": "String m()"}))
+
+    def test_a_renamed_and_changed_symbol_stays_broken_beside_an_unparsable_file(self):
+        # Catches (1.54 review H2), the clearer's case: rename the ruled function and change its body, then
+        # touch any same-language file the kit cannot read (a .jsx with an apostrophe in its text).
+        from overture import anchors as A
+        src = "function pay(a) {\n  return a * 2;\n}\n"
+        self.write("a.js", src)
+        c, _, _ = A.symbol_condition(self.tree(), "a.js", "pay")
+        self.write("a.js", "function charge(a) {\n  return a * 3;\n}\n")
+        self.write("other.jsx", "function X() {\n  return <p>Don't</p>;\n}\n")
+        st = self.tree().symbol_state(c, ["a.js", "other.jsx"])
+        self.assertEqual(st.state, "gone")
+        self.assertIn("other.jsx", st.reason)
+        self.assertIs(self.tree().check(c, ["a.js", "other.jsx"]), False)
+
+    def test_a_body_is_followed_only_into_files_of_its_own_language(self):
+        # Catches (mutant A5): the language filter off, so a Java method deleted from A.java "holds" because
+        # a C# file in the change has the same text (Java and C# bodies hash alike), or a README is searched.
+        from overture import anchors as A
+        src = "class A {\n  int m() { return 1; }\n}\n"
+        self.write("A.java", src)
+        c, _, _ = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.write("A.java", "class A {\n}\n")
+        self.write("B.cs", src)
+        self.assertEqual(SY.resolve("B.cs", src, "A.m").symbol.body_sha256, c["sha256"])   # the premise
+        st = self.tree().symbol_state(c, ["B.cs"])
+        self.assertEqual((st.state, st.path), ("gone", "A.java"))
+        self.write("B.java", src.replace("class A", "class B"))
+        st = self.tree().symbol_state(c, ["B.cs", "B.java"])
+        self.assertEqual((st.state, st.path, st.symbol.qualname), ("moved", "B.java", "B.m"))
 
 
 if __name__ == "__main__":

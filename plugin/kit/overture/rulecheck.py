@@ -26,8 +26,9 @@ body. When the name is gone, its body is looked for in the same file and in the
 files the change adds, edits or renames (git's rename detection on): found
 once, the ruling holds and is reported as moved, "old path::old.name -> new
 path::new.name", with the `propose-anchor` command that re-anchors it for the
-owner to confirm; found nowhere, it is broken; found twice, or in a file whose
-definitions cannot be read, it is unchecked. This only reads: nothing is
+owner to confirm; found nowhere, it is broken (a changed file that cannot be
+read is named beside it, never a reason to pass); found twice, or when the cited
+file's definitions cannot be read, it is unchecked. This only reads: nothing is
 proposed or rewritten from CI.
 
 Exit codes: 0 every checked ruling holds; 1 at least one is broken (or, with

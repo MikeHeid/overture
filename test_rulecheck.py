@@ -695,6 +695,60 @@ class SymbolCheck(Repo):
         self.assertEqual(git(self.root, "status", "--porcelain"), before)
 
 
+PAY_JS = 'function charge(c) {\n  return c.items.join(", ");\n}\n'
+
+
+class SymbolReviewCheck(Repo):
+    """1.54 review, end to end through rulecheck.py: a real change of the ruled code must never pass."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "src/pay.js").write_text(PAY_JS)
+        self.store.append(question(qid="LANE.1/Q3", valid_if=[sym(PAY_JS, "charge", "src/pay.js")],
+                                   source="src/pay.js:2"))
+        self.store.append(lock(self.store.append(answer(qid="LANE.1/Q3"))))
+        self.export()
+        self.base = self.commit("base: a JS ruling")
+
+    def broken(self, rep: dict) -> list[str]:
+        return [j["qid"] for j in rep["broken"]]
+
+    def test_whitespace_in_a_string_is_a_change_ci_fails(self):
+        # Catches (1.54 review C1): `join(", ")` -> `join(",")` reported "touched, still holds" (exit 0).
+        (self.root / "src/pay.js").write_text(PAY_JS.replace('", "', '","'))
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, self.broken(rep)), (1, ["LANE.1/Q3"]))
+
+    def test_a_change_inside_jsx_text_that_looks_like_a_comment_fails(self):
+        # Catches (1.54 review C2): `<a>http://x.example/{u.id}</a>` -> `{u.password}` passing CI, the `//`
+        # read as a comment that hid the rest of the line.
+        jsx = 'function Link(u) {\n  return <a>http://x.example/{u.id}</a>;\n}\n'
+        (self.root / "src/l.jsx").write_text(jsx)
+        self.store.append(question(qid="LANE.1/Q4", valid_if=[sym(jsx, "Link", "src/l.jsx")], source="src/l.jsx:2"))
+        self.store.append(lock(self.store.append(answer(qid="LANE.1/Q4"))))
+        self.export()
+        base = self.commit("base: a JSX ruling")
+        (self.root / "src/l.jsx").write_text(jsx.replace("u.id", "u.password"))
+        self.commit("pr")
+        rc, rep = self.report("--base", base)
+        self.assertEqual((rc, self.broken(rep)), (1, ["LANE.1/Q4"]))
+
+    def test_an_unparsable_file_in_the_change_never_downgrades_a_break(self):
+        # Catches (1.54 review H2): rename and change the ruled function (exit 1), then add any file the kit
+        # cannot read (`<p>Don't</p>` in a .jsx), and the break becomes "unchecked" (exit 0).
+        (self.root / "src/pay.js").write_text(PAY_JS.replace("charge", "bill").replace('", "', '" | "'))
+        self.commit("pr1")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, self.broken(rep)), (1, ["LANE.1/Q3"]))
+        (self.root / "src/other.jsx").write_text("function X() {\n  return <p>Don't</p>;\n}\n")
+        self.commit("pr2")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual((rc, self.broken(rep), rep["unchecked"]), (1, ["LANE.1/Q3"], []))
+        [row] = rep["broken"][0]["conditions"]
+        self.assertIn("src/other.jsx cannot be read for definitions", row["words"])
+
+
 class Lookup(Repo):
     """Which rulings bear on a path, how they are labelled, and what an edit would break."""
 
