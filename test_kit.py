@@ -10812,6 +10812,30 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
                 path = "a.ts" if label.startswith("ts") else "a.js"
                 self.assertEqual(SY.resolve(path, F + tail, "total").state, "found")
 
+    def test_a_for_header_let_and_a_ternary_branch_never_shadow(self):
+        # Catches (1.54 review, round 6): a `let` in a for header credited to the enclosing brace, so a later
+        # `total = ...` in that function read as shadowed; and a ternary branch `(total = ...) : {}` or
+        # `: v => v` read as a parameter list with a TS return type. Each is a real replacement: unchecked.
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        for label, tail in (
+                ("for-let header", "function setup() {\n  for (let total = 0; total < 3; total++) {}\n"
+                                   "  total = () => 0;\n}\n"),
+                ("ternary : {}", "const x = ok ? (total = () => 0) : {};\n"),
+                ("ternary : v =>", "const x = ok ? (total = () => 0) : v => v;\n"),
+                ("ternary then", "const x = ok ? (total = () => 0) => 1 : 2;\n".replace(" => 1", ""))):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", F + tail, "total").state, "unchecked")
+        for label, tail in (
+                ("var in a block of its own fn", "function g() {\n  if (a) { var total = 0; }\n  total = 1;\n}\n"),
+                ("ts arrow param", "const g = (total: number): number => { total = 1; return total; };\n"),
+                ("catch param", "try {} catch (total) { total = 1; }\n"),
+                ("function expression param", "const g = function (total) { total = 1; };\n"),
+                ("arrow in a ternary branch", "const g = ok ? (total) => { total = 1; } : null;\n".replace(
+                    "(total) =>", "x => x;\nconst h = (total) =>"))):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, F + tail, "total").state, "found")
+
     def test_a_catch_binding_is_a_parameter(self):
         # Catches (mutant U3): `catch (e)` not read as declaring e, so an assignment to a ruled name inside a
         # catch block that binds that very name reads as a replacement. (U3 is equivalent today: the `{`

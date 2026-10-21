@@ -829,6 +829,11 @@ class _JsFunctions:
         if c is None:
             return False
         after = self.mask[c + 1:c + 1 + MAX_SIGNATURE].lstrip()
+        k = o - 1
+        while k >= 0 and self.mask[k] in " \t\n":
+            k -= 1
+        if k >= 0 and self.mask[k] in "?:":   # round 6: a ternary's branch `? (f = ...) :` is never parameters
+            return False
         word = self._word_before(o)
         if word == "catch":
             return True
@@ -914,8 +919,8 @@ class _JsFunctions:
                         break
                     if m.group("kind") == "var":
                         hit = params is not None and self._in_own_function(m.start(), b)
-                    else:
-                        hit = self.scope(m.start()) == b
+                    else:   # round 6: one in `(...)` (a for header) is not this brace's
+                        hit = self.scope(m.start()) == b and self._paren(m.start()) < b
                 self.memo[key] = hit
             if self.memo[key]:
                 return True
