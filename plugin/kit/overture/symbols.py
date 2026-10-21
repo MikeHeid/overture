@@ -107,7 +107,7 @@ def find(path: str, text: str) -> list[Symbol]:
         raise Unresolvable(f"{path} is over {MAX_CHARS >> 20} MiB")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     try:
-        syms = _python(text) if lang == "python" else _lexical(text, lang)
+        syms = _python(text) if lang == "python" else _lexical(text, lang, _may_hold_jsx(path, lang))
     except (RecursionError, MemoryError):
         raise Unresolvable(f"{path} nests too deeply to read") from None
     except Unresolvable as e:
@@ -117,6 +117,11 @@ def find(path: str, text: str) -> list[Symbol]:
     if len(syms) > MAX_SYMBOLS:
         raise Unresolvable(f"{path} has over {MAX_SYMBOLS} definitions")
     return syms
+
+
+def _may_hold_jsx(path: str, lang: str) -> bool:
+    """Whether `path` may hold JSX: a JS file, or TSX; plain TypeScript (.ts, .mts, .cts) cannot."""
+    return lang == "js" and not path.lower().endswith((".ts", ".mts", ".cts"))
 
 
 def resolve(path: str, text: str, qualname: str) -> Resolution:
@@ -221,6 +226,9 @@ _REGEX_AFTER = frozenset("(,=:[!&|?{};+-*%<>~^")
 _REGEX_WORDS = frozenset({"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case",
                           "do", "else", "yield", "await"})
 _TPL_STOP = re.compile(r"[\\`]|\$\{")
+# A tag, a closing tag or a fragment in code: JSX, whose text (`<a>http://x</a>`) a lexer this small would read as
+# a comment. In a file with one every comment counts in the hash (1.54 review C2): a false "stale", never a hold.
+_JSX = re.compile(r"<(?:[A-Za-z][\w.:-]*[\s/>]|/|>)")
 
 
 class _Lexed(NamedTuple):
@@ -263,6 +271,52 @@ def _lex(text: str, lang: str) -> _Lexed:
                 break
             j += 1
         raise Unresolvable(f"a {'character' if q == chr(39) else 'string'} literal on line {line_of(i)} is not closed")
+
+    def interpolated_end(i: int, j: int, verbatim: bool) -> int:
+        """From after the opening quote of a C# `$"..."` (or `$@"..."`): the offset after its closing quote.
+
+        1.54 review C2: a hole's code is read as code, its own strings and
+        characters skipped whole, so `$"{(a ? "//" : "y")}"` is one literal and
+        never a string, then a comment. A string interpolated inside a hole is
+        not read (Unresolvable): a nest this small a lexer cannot follow.
+        """
+        depth = 0
+        while j < n:
+            c = text[j]
+            if depth == 0:
+                if c == "\\" and not verbatim:
+                    j += 2
+                    continue
+                if c == '"':
+                    if verbatim and text[j + 1:j + 2] == '"':
+                        j += 2
+                        continue
+                    return j + 1
+                if c == "{" or c == "}":
+                    if text[j + 1:j + 2] == c:    # `{{` and `}}` are a brace in the text
+                        j += 2
+                        continue
+                    depth = 1 if c == "{" else 0
+                elif c == "\n" and not verbatim:
+                    break
+                j += 1
+                continue
+            if c == '"':
+                if text[j - 1:j] in ("$", "@"):
+                    raise Unresolvable(f"an interpolated string on line {line_of(i)} holds another in a {{...}}")
+                j = string_end(j, '"', multiline=False)
+                continue
+            if c == "'":
+                j = string_end(j, "'", multiline=False)
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            elif c == "\n" and not verbatim:
+                break
+            j += 1
+        raise Unresolvable(f"an interpolated string on line {line_of(i)} is not closed")
 
     def template_end(j: int) -> tuple[int, bool]:
         """From inside a template literal: (offset after it, False) or (offset after a `${`, True)."""
@@ -346,7 +400,9 @@ def _lex(text: str, lang: str) -> _Lexed:
             blank(i, j, LIT)
             i = j
         elif tok.endswith('"') and ("@" in tok or tok.startswith(("r", "b"))):
-            if "@" in tok:   # C# verbatim: "" is a quote, any lines
+            if "$" in tok:   # C# interpolated verbatim: $@"..{x}.." or @$"..{x}.."
+                j = interpolated_end(i, i + len(tok), verbatim=True)
+            elif "@" in tok:   # C# verbatim: "" is a quote, any lines
                 j = i + len(tok)
                 while True:
                     k = text.find('"', j)
@@ -363,6 +419,10 @@ def _lex(text: str, lang: str) -> _Lexed:
                 if k < 0:
                     raise Unresolvable(f"a raw string on line {line_of(i)} is not closed")
                 j = k + len(close)
+            blank(i, j, LIT)
+            i = j
+        elif tok == '"' and lang == "csharp" and text[i - 1:i] == "$":
+            j = interpolated_end(i, i + 1, verbatim=False)
             blank(i, j, LIT)
             i = j
         elif tok == '"':
@@ -531,7 +591,7 @@ class _Def(NamedTuple):
     named: bool          # it adds its name to the qualified names inside it (an impl and a C# namespace do not)
 
 
-def _lexical(text: str, lang: str) -> list[Symbol]:
+def _lexical(text: str, lang: str, jsx: bool = False) -> list[Symbol]:
     lx = _lex(text, lang)
     mask = lx.mask
     starts = [0] + [m.end() for m in re.finditer("\n", mask)]
@@ -572,7 +632,7 @@ def _lexical(text: str, lang: str) -> list[Symbol]:
         if d is not None:
             found.append((ln, d))
     defs = [d for _, d in sorted(found, key=lambda x: x[1].start)]
-    return _symbols(text, lx, starts, defs, lang)
+    return _symbols(text, lx, starts, defs, lang, comments_count=jsx and _JSX.search(mask) is not None)
 
 
 def _definition(text: str, mask: str, lx: _Lexed, lang: str, at: int, what: str, m: re.Match,
@@ -698,7 +758,8 @@ def _decorated_start(mask: str, at: int, marks: tuple[str, ...]) -> int:
     return start
 
 
-def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: str) -> list[Symbol]:
+def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: str,
+             comments_count: bool = False) -> list[Symbol]:
     def line(off: int) -> int:
         return bisect.bisect_right(starts, off)
 
@@ -707,7 +768,8 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
 
     chain: list[tuple[_Def, int]] = []      # the definitions around the current one, with where each ends
     out = []
-    cuts = sorted([(s, e, " ") for s, e in lx.comments] + [(s, e, None) for s, e in lx.literals])
+    dropped = [] if comments_count else [(s, e, " ") for s, e in lx.comments]
+    cuts = sorted(dropped + [(s, e, None) for s, e in lx.literals])
     cstarts = [s for s, _, _ in cuts]
     for d in defs:
         a, b = extent(d)

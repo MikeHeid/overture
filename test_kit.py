@@ -10534,6 +10534,37 @@ class SymbolReviewHashTests(unittest.TestCase):
         self.assertEqual(body("a.js", "function f(a) { return a[0] / 2 + a[1] / 3; }\n", "f"),
                          body("a.js", "function f(a) { return a[0]/2 + a[1]/3; }\n", "f"))
 
+    def test_jsx_text_that_looks_like_a_comment_counts(self):
+        # Catches (1.54 review C2): `//` in JSX text (`<a>http://x/{u.id}</a>`) read as a line comment, so
+        # the rest of the line, braces and all, drops out of the hash and `{u.id}` -> `{u.password}` holds.
+        # JSX text cannot be told from a comment by a lexer this small, so in a file with JSX every comment
+        # counts: a comment edit there is a false "stale", the safe way to be wrong.
+        for path in ("a.jsx", "a.tsx", "a.js"):
+            for a in ('function Link(u) {\n  return <a>http://x.example/{u.id}</a>;\n}\n',
+                      'function Link(u) {\n  return (\n    <p>\n      // see {u.id}\n    </p>\n  );\n}\n',
+                      'function Link(u) {\n  return <p>a /* {u.id} */ b</p>;\n}\n'):
+                with self.subTest(path=path, a=a):
+                    b = a.replace("u.id", "u.password")
+                    ra, rb = SY.resolve(path, a, "Link"), SY.resolve(path, b, "Link")
+                    self.assertFalse(ra.state == rb.state == "found" and ra.symbol.body_sha256 == rb.symbol.body_sha256,
+                                     (ra, rb))
+        # Without JSX a comment still does not count (K2), in a .ts file whatever it holds.
+        self.assertEqual(body("a.js", "function f(a) {\n  return a + 1; // one\n}\n", "f"),
+                         body("a.js", "function f(a) {\n  return a + 1; // two\n}\n", "f"))
+        self.assertEqual(body("a.ts", "function f(a: Array<number>) {\n  return a; // <b>one</b>\n}\n", "f"),
+                         body("a.ts", "function f(a: Array<number>) {\n  return a; // <b>two</b>\n}\n", "f"))
+
+    def test_a_quote_inside_a_csharp_interpolation_hole_is_code(self):
+        # Catches (1.54 review C2): `$"{(a ? "//" : "y")}"` lexed as the string `"{(a ? "` then a `//` comment,
+        # so the rest of the line (here "y" -> "z") drops out of the hash.
+        for a in ('class C {\n  string F(bool a) { return $"{(a ? "//" : "y")}"; }\n}\n',
+                  'class C {\n  string F(bool a) {\n    return $@"{(a ? "//" : "y")} ""q""";\n  }\n}\n',
+                  'class C {\n  string F(bool a) { return $"{{{(a ? \'/\' : \'y\')}}}"; }\n}\n'):
+            with self.subTest(a=a):
+                self.assertNotEqual(body("a.cs", a, "C.F"), body("a.cs", a.replace("y", "z"), "C.F"))
+        self.assertEqual(SY.resolve("a.cs", 'class C {\n  string F() { return $"{$"{1}"}"; }\n}\n', "C.F").state,
+                         "unchecked")   # an interpolated string inside a hole: not read, never guessed
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
