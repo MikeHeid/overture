@@ -207,6 +207,23 @@ Q5 was not put to them, so it is an *architect default*.
 | A4 | Checks never run for real | **Split** (owner ★). An agent runs the MCP server against a real client (the `claude` CLI), and checks the lesson chip and the owner-page CSP in a real browser. The owner runs 1.53.1/1.53.2 on real Windows and `service install` on a Mac. **Agent's part done (same day):** `claude -p` with an `--mcp-config` launched `mcp_server.py` against a throwaway console. It listed the 10 tools and posted a question that the console stored under the `--as` name. `answers` and `todo` read it back. Every refusal came back as a tool error naming its fix, and stdout stayed JSON-RPC. The lesson chip and the owner-page CSP already have a real-server test (`test_browser` LiveConsoleTests, 1.34.7); it passes in Chromium and Firefox 155. `agent.py invite` refused inside the session, as designed, so no hand-run sign-in was attempted. |
 | A5 | 1.53.2's skipped LOWs | **Leave them** (architect default). The prerequisite scan links to the vendor's own systemd and launchd steps instead of printing them. Revisit if an operator gets stuck there. |
 
+## After 1.53, round two (decided 2026-10-20)
+
+A second sweep for open questions found 20 candidates. Seventeen were
+already settled, measurable, blocked on the owner, or routine. The owner
+chose the ★ on all three that were left.
+
+| # | Question | Decision |
+|---|---|---|
+| B1 | What to build next | **Symbol anchors** (owner ★). A ruling attaches to a function or class as well as a path, so the CI ruling check (1.36) and the lookup before an agent edits (1.52) still find it after a rename or a move. Wave 2's goal is "a broken ruling blocks a bad merge", and this is its largest piece still to build. Signing comes first if outside users are about to install. |
+| B2 | Merged branches that git can't tell are merged (squash merges) | **Delete them locally and on GitHub** (owner ★). PRs #154, #155, #163 and #169–#176 are all merged, and `main` already has `docs/features-147`'s pages. `backup-handoff-prescrub` and `handoff/2026-10-13` stay. Check: `gh pr list --state all --head <branch>`. |
+| B3 | Handoff data that GitHub still serves by SHA after A3 | **Purge, then delete** (owner ★). The owner asks GitHub Support to purge the old handoff commit. The local `backup-handoff-prescrub` is kept until Support confirms, then deleted. |
+
+Settled without a question: the nested-key `RecursionError` (checked in
+1.34.5), the `_send_raw` `BrokenPipeError` (fixed), the 1.37.0 scratch-PR
+run (#163), F2 (#145), the 1.52 C2 fixes (merged in #179), and the 1.53.2
+LOWs (A5).
+
 ## Memory in its own place: area notes (decided 2026-10-20)
 
 The owner asked whether each lane, wave or phase, and each function, should
