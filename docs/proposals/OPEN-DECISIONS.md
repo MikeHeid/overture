@@ -193,6 +193,20 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## Wave 4: the protocol (decided 2026-10-21)
+
+The owner picked Wave 4 as the next lane, then the ★ on every question. P5 was
+asked mid-build, when the ruling file turned out to be a second format that
+the first four questions had not named.
+
+| # | Question | Decision |
+|---|---|---|
+| P1 | Which records spec 1.0 covers | **The decision core** (owner ★): `question`, `answer`, `lock` and `anchor`, with `valid_if` conditions and evidence. `message`, `transcript` and `visual` stay the console's own, free to change without a protocol version, and a reader of the spec skips them. Weighed and not chosen: all seven kinds, which would freeze console internals into a public contract. |
+| P2 | What form the spec takes | **Prose, JSON Schema and vectors** (owner ★): `docs/spec/PROTOCOL.md` is normative; `overture-protocol-1.schema.json` (2020-12) checks one record's shape; `vectors/` holds valid and invalid records, store sequences with their ids, and ruling files. `test_spec.py` holds the kit to all three with the standard library only: it has its own checker for the schema keywords it uses, which refuses any other keyword. Weighed and not chosen: no JSON Schema; `jsonschema` as the project's first test dependency. |
+| P3 | How the spec is versioned | **Its own version; 1.0 is `schemaVersion` 1** (owner ★). A minor version adds only optional things, and an older reader refuses them by name. A major version raises `schemaVersion`. Weighed and not chosen: the spec as whatever the current release accepts. |
+| P4 | Where it lives, and its license | **`docs/spec/` in this repository, MIT** (owner ★). The release zip carries it under `overture/spec/`, so each release's attestation (C1) covers the spec that release implements. Weighed and not chosen: CC-BY-4.0 for the prose; a repository of its own. |
+| P5 | Whether 1.0 also covers the committed ruling file (`fold.py export`), which CI and other tools read | **Yes, in 1.0** (owner ★): section 13 and `#/$defs/rulingFile`. `outcome`, `replaces` and `fork` are specified as optional, and `fork`'s own shape is the console's. The spec says a reader SHOULD refuse a field it does not define, and the schema does. `fold.check_entry` checks `earlier` answers' fields exactly but not yet the file's top level or a locked answer's. Weighed and not chosen: leaving it to 1.1. |
+
 ## After 1.54 (decided 2026-10-21)
 
 The owner chose the ★ on both.
@@ -688,3 +702,8 @@ shows. Doing it first avoids redoing UX View's screenshots later. D is small
 enough to ride along with whichever PR touches `chart.py` or `server.py`.
 **What would change it:** if new users still get lost after installing, C
 first. If a UX project is waiting, B first.
+
+**Since built (as of 1.55):** all four have shipped: icons and lane colours
+(D8–D10), UX View (D4–D7, D13), both logged bugs, and the service commands (1.51,
+A1–A5 in "After 1.53.2"). Later lanes were chosen in the rounds above this one,
+most recently Wave 4 (P1–P5).

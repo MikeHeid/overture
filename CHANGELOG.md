@@ -2990,6 +2990,45 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## The protocol, published (1.55.0)
+
+Wave 4, the owner's P1 to P5 (2026-10-21, every ★): the question, ruling and
+`valid_if` format is now a versioned spec, so another tool can write or check
+rulings without running Overture. The rulings are in OPEN-DECISIONS.md, "Wave
+4: the protocol".
+
+- **`docs/spec/PROTOCOL.md`, protocol 1.0.** It covers the four decision
+  records (`question`, `answer`, `lock`, `anchor`): the store's rules, how a
+  record's id is derived, with a worked example, and the four conditions with
+  what makes a ruling fresh, stale or unchecked. It also covers the committed
+  ruling file that `fold.py export` writes and the CI check reads (P5), and
+  how the spec is versioned. 1.0 is `schemaVersion` 1, and a minor version
+  adds only optional things. `message`, `transcript` and `visual` records stay
+  the console's own (P1).
+- **`overture-protocol-1.schema.json`** (JSON Schema 2020-12). It checks one
+  record, and a ruling file against `#/$defs/rulingFile`. Section 9 of the
+  spec lists the checks it cannot express.
+- **Conformance vectors** (`docs/spec/vectors/`): 49 records, 12 store
+  sequences with each id and seq, and 27 ruling files. Each one is valid or
+  invalid, says whether the schema alone catches it, and gives the
+  reference's error. `spec_vectors.py` builds them from hand-written verdicts
+  and stops if the kit disagrees with one.
+- **`test_spec.py`** (stdlib only, P2) holds the kit to the spec. Every vector
+  gets `schema.validate`'s, the store's and `fold.check_entry`'s verdict. The
+  JSON Schema gets the verdict each vector claims, through a small checker
+  that refuses any keyword it does not implement. Its limits, shapes and
+  lists equal the kit's constants. The prose states the kit's limits and the
+  symbol hash's name (`overture-symbol-1`). The committed vectors equal what
+  the generator builds. 18 mutants across the schema, vectors, prose,
+  checker and kit were each killed.
+- **The release zip carries the spec** under `overture/spec/` (P4), so a
+  release's attestation covers the spec it implements.
+- Known limit: `fold.check_entry` does not yet refuse unknown fields at a
+  ruling file's top level or on a locked answer. The spec says a reader
+  SHOULD, and the schema does.
+- Docs: mcp-and-ci.md "The protocol, published (1.55)", the README, and
+  STRATEGY.md (all three of the board's limits are now answered).
+
 ## Symbol anchors (1.54.0)
 
 The owner's B1 and K1 to K3 (2026-10-20, every ★): a ruling can rest on

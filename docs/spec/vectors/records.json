@@ -1,0 +1,1577 @@
+{
+ "protocol": "1.0",
+ "about": "Overture protocol 1.0 conformance vectors, built by spec_vectors.py from hand-written verdicts, each checked against the reference kit. See docs/spec/PROTOCOL.md section 10.",
+ "records": [
+  {
+   "name": "question: single, one excerpt",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "question: no conditions",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "question: free, no options, no star",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "free",
+    "options": [],
+    "star": null,
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "question: multi, every condition kind, evidence, forked, star_by",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "multi",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "file_sha256",
+      "path": "config/limits.toml",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+     },
+     {
+      "kind": "item_status",
+      "item": "PAY-1",
+      "status": "done"
+     },
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     },
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "evidence": [
+     {
+      "cite": "src/pay.py:40-52",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ],
+    "forked_from": "0123456789abcdef01234567",
+    "star_by": "architect"
+   }
+  },
+  {
+   "name": "question: star_by a typed other seat",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "star_by": "other:Payments lead"
+   }
+  },
+  {
+   "name": "question: as stored, with id, seq and ts",
+   "valid": true,
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "seq": 1,
+    "ts": "2026-10-21T20:00:00Z"
+   }
+  },
+  {
+   "name": "answer: one pick",
+   "valid": true,
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [
+     "retry_once"
+    ],
+    "own_text": "",
+    "by": "owner",
+    "nonce": "a1-nonce-0001"
+   }
+  },
+  {
+   "name": "answer: own words only",
+   "valid": true,
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [],
+    "own_text": "Retry twice, but only on a timeout.",
+    "by": "owner",
+    "nonce": "a1-nonce-0001"
+   }
+  },
+  {
+   "name": "answer: supersedes a locked answer",
+   "valid": true,
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [
+     "no_retry"
+    ],
+    "own_text": "",
+    "by": "owner",
+    "nonce": "a2-nonce-0002",
+    "supersedes": "0123456789abcdef01234567",
+    "reason": "The provider now retries for us."
+   }
+  },
+  {
+   "name": "lock: plain",
+   "valid": true,
+   "record": {
+    "type": "lock",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "answer": "0123456789abcdef01234567",
+    "by": "owner",
+    "nonce": "l1-nonce-0001"
+   }
+  },
+  {
+   "name": "lock: with its own anchors",
+   "valid": true,
+   "record": {
+    "type": "lock",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "answer": "0123456789abcdef01234567",
+    "by": "owner",
+    "nonce": "l1-nonce-0001",
+    "anchors": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     },
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ]
+   }
+  },
+  {
+   "name": "anchor: re-anchors a lock",
+   "valid": true,
+   "record": {
+    "type": "anchor",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "lock": "0123456789abcdef01234567",
+    "anchors": [
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ],
+    "basis": "Ledger.charge moved from billing.py with the same body.",
+    "by": "agent",
+    "nonce": "n1-nonce-0001"
+   }
+  },
+  {
+   "name": "unknown record type",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "unknown record type",
+   "record": {
+    "type": "verdict",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "schemaVersion 2",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "schemaVersion 2 is not 1",
+   "record": {
+    "type": "question",
+    "schemaVersion": 2,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "an unknown field",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "unknown field(s) agent_name",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "agent_name": "cursor-1"
+   }
+  },
+  {
+   "name": "a missing field",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "missing star",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "question by the owner",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "only ['agent'] may write one",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "owner",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "nonce too short",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "nonce must be 8-64",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "short"
+   }
+  },
+  {
+   "name": "qid numbered Q0",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "is not <itemId>/Q<n>",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q0",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "qid names another item",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "names item 'PAY-3'",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-3/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "free question with options",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "a free question offers no options",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "free",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": null,
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "single question with one option",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "at least two options",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "star that is not an option",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "star 'maybe' is not one of the options",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "maybe",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "option ids repeat",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "option ids repeat",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "retry_once",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": null,
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "option label on two lines",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "label must be one line",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry\nonce",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "option label with U+2028",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "label must be one line",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "text only whitespace",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "text must not be empty",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "  \n ",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "excerpt under 8 characters",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "it needs at least 8",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "excerpt under 8 once whitespace collapses",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "it needs at least 8",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "a   b   c   d"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "condition path absolute",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "must be relative",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "file_sha256",
+      "path": "/etc/limits.toml",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "condition path climbs out",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "must be relative",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "file_sha256",
+      "path": "docs/../../limits.toml",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "condition with an extra key",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "item_status takes exactly",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "item_status",
+      "item": "PAY-1",
+      "status": "done",
+      "since": "2026-10-01"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "condition of an unknown kind",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "needs kind in",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "regex",
+      "path": "a.py",
+      "text": "x+"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "symbol hash not hex",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "sha256 must be 64 lowercase hex",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "abc"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "symbol name not dotted",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "must be a dotted name",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger..charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001"
+   }
+  },
+  {
+   "name": "evidence row without its text",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "text must be the cited lines",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "evidence": [
+     {
+      "cite": "src/pay.py:40"
+     }
+    ]
+   }
+  },
+  {
+   "name": "evidence cite climbs out",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "must be a relative path inside the project",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "evidence": [
+     {
+      "cite": "../pay.py:40",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ]
+   }
+  },
+  {
+   "name": "evidence cite ends before it starts",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "start before end",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "evidence": [
+     {
+      "cite": "src/pay.py:52-40",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ]
+   }
+  },
+  {
+   "name": "evidence cite over 200 lines",
+   "valid": false,
+   "schema_catches": false,
+   "reference_error": "must name 1 to 200 lines",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "evidence": [
+     {
+      "cite": "src/pay.py:1-201",
+      "command": "pytest -q tests/test_pay.py",
+      "result": "3 passed",
+      "text": "def charge(self, amount):\n    ..."
+     }
+    ]
+   }
+  },
+  {
+   "name": "star_by with no star",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "this question has no",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": null,
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "star_by": "architect"
+   }
+  },
+  {
+   "name": "forked, starred, no star_by",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "add star_by",
+   "record": {
+    "type": "question",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "item": "PAY-2",
+    "text": "Should a failed charge retry, and how often?",
+    "kind": "single",
+    "options": [
+     {
+      "id": "retry_once",
+      "label": "Retry once",
+      "description": "One more try after 30 s; cheap"
+     },
+     {
+      "id": "no_retry",
+      "label": "Never retry",
+      "description": "Fail at once; the caller decides"
+     }
+    ],
+    "star": "retry_once",
+    "valid_if": [
+     {
+      "kind": "excerpt",
+      "path": "docs/payments.md",
+      "text": "A charge is attempted at most twice."
+     }
+    ],
+    "source": "docs/payments.md:12-14",
+    "by": "agent",
+    "nonce": "q1-nonce-0001",
+    "forked_from": "0123456789abcdef01234567"
+   }
+  },
+  {
+   "name": "answer with no pick and no words",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "needs at least one pick or its own words",
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [],
+    "own_text": " ",
+    "by": "owner",
+    "nonce": "a1-nonce-0001"
+   }
+  },
+  {
+   "name": "answer supersedes without a reason",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "supersedes and reason go together",
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [
+     "retry_once"
+    ],
+    "own_text": "",
+    "by": "owner",
+    "nonce": "a1-nonce-0001",
+    "supersedes": "0123456789abcdef01234567"
+   }
+  },
+  {
+   "name": "answer picks repeat",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "picks repeat",
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [
+     "retry_once",
+     "retry_once"
+    ],
+    "own_text": "",
+    "by": "owner",
+    "nonce": "a1-nonce-0001"
+   }
+  },
+  {
+   "name": "answer by an agent",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "only ['owner'] may write one",
+   "record": {
+    "type": "answer",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "picks": [
+     "retry_once"
+    ],
+    "own_text": "",
+    "by": "agent",
+    "nonce": "a1-nonce-0001"
+   }
+  },
+  {
+   "name": "lock with empty anchors",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "anchors must name at least one condition",
+   "record": {
+    "type": "lock",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "answer": "0123456789abcdef01234567",
+    "by": "owner",
+    "nonce": "l1-nonce-0001",
+    "anchors": []
+   }
+  },
+  {
+   "name": "lock naming no answer",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "answer must be the id of the answer",
+   "record": {
+    "type": "lock",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "answer": "",
+    "by": "owner",
+    "nonce": "l1-nonce-0001"
+   }
+  },
+  {
+   "name": "anchor with an empty basis",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "basis must not be empty",
+   "record": {
+    "type": "anchor",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "lock": "0123456789abcdef01234567",
+    "anchors": [
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ],
+    "basis": "   ",
+    "by": "agent",
+    "nonce": "n1-nonce-0001"
+   }
+  },
+  {
+   "name": "anchor naming a lock by a bad id",
+   "valid": false,
+   "schema_catches": true,
+   "reference_error": "lock must be the id of the lock",
+   "record": {
+    "type": "anchor",
+    "schemaVersion": 1,
+    "qid": "PAY-2/Q1",
+    "lock": "L1",
+    "anchors": [
+     {
+      "kind": "symbol",
+      "path": "src/pay.py",
+      "symbol": "Ledger.charge",
+      "sha256": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    ],
+    "basis": "Ledger.charge moved from billing.py with the same body.",
+    "by": "agent",
+    "nonce": "n1-nonce-0001"
+   }
+  }
+ ]
+}

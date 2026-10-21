@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/MikeHeid/overture/main/docs/spec/overture-protocol-1.schema.json",
+  "title": "Overture protocol 1.0: one decision record",
+  "description": "One line of an Overture store, of the four decision kinds: question, answer, lock, anchor. PROTOCOL.md is normative; this schema checks a record's shape, and PROTOCOL.md section 9 lists the checks it cannot express. Patterns are ECMA-262 regular expressions; as JSON Schema says, a pattern matches anywhere unless it is anchored.",
+  "type": "object",
+  "required": ["type", "schemaVersion"],
+  "properties": {
+    "type": {"enum": ["question", "answer", "lock", "anchor"]}
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/question"},
+    {"$ref": "#/$defs/answer"},
+    {"$ref": "#/$defs/lock"},
+    {"$ref": "#/$defs/anchor"}
+  ],
+  "$defs": {
+    "schemaVersion": {"const": 1},
+    "id": {"$ref": "#/$defs/recordId"},
+    "seq": {"type": "integer", "minimum": 1},
+    "ts": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_\\-]{8,64}$"},
+    "recordId": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+    "itemId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.\\-]*$"},
+    "qid": {"type": "string", "pattern": "^([A-Za-z0-9][A-Za-z0-9_.\\-]*)/Q([1-9][0-9]*)$"},
+    "optionId": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "qualname": {"type": "string", "maxLength": 200,
+                 "pattern": "^[A-Za-z_$#][A-Za-z0-9_$]*(?:\\.[A-Za-z_$#][A-Za-z0-9_$]*)*$"},
+    "source": {"type": "string", "maxLength": 300, "pattern": "^[A-Za-z0-9_.\\-/]+(:[0-9]+(-[0-9]+)?)?$"},
+    "otherRole": {"type": "string", "pattern": "^other:[A-Za-z0-9][A-Za-z0-9 \\-]{0,39}$"},
+    "text": {"type": "string", "maxLength": 20000, "pattern": "\\S"},
+    "textMayBeEmpty": {"type": "string", "maxLength": 20000},
+    "oneLine": {"type": "string", "maxLength": 300, "pattern": "^[^\\n\\r\\u2028\\u2029]*$",
+                "allOf": [{"pattern": "\\S"}]},
+    "oneLineMayBeEmpty": {"type": "string", "maxLength": 300, "pattern": "^[^\\n\\r\\u2028\\u2029]*$"},
+    "relPath": {"type": "string", "pattern": "^(?!/)(?!(?:.*/)?\\.\\.(?:/|$))[^\\x00-\\x1f]+$"},
+    "shortName": {"type": "string", "maxLength": 32, "pattern": "^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){0,31}$"},
+
+    "option": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": {"$ref": "#/$defs/optionId"},
+        "label": {"$ref": "#/$defs/oneLine"},
+        "description": {"$ref": "#/$defs/oneLineMayBeEmpty"}
+      },
+      "additionalProperties": false
+    },
+
+    "condition": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["file_sha256", "item_status", "excerpt", "symbol"]}},
+      "oneOf": [
+        {"$ref": "#/$defs/condition_file_sha256"},
+        {"$ref": "#/$defs/condition_item_status"},
+        {"$ref": "#/$defs/condition_excerpt"},
+        {"$ref": "#/$defs/condition_symbol"}
+      ]
+    },
+    "condition_file_sha256": {
+      "type": "object",
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {"const": "file_sha256"},
+        "path": {"$ref": "#/$defs/relPath"},
+        "sha256": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "condition_item_status": {
+      "type": "object",
+      "required": ["kind", "item", "status"],
+      "properties": {
+        "kind": {"const": "item_status"},
+        "item": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "condition_excerpt": {
+      "type": "object",
+      "required": ["kind", "path", "text"],
+      "properties": {
+        "kind": {"const": "excerpt"},
+        "path": {"$ref": "#/$defs/relPath"},
+        "text": {"type": "string", "minLength": 8, "maxLength": 4000}
+      },
+      "additionalProperties": false
+    },
+    "condition_symbol": {
+      "type": "object",
+      "required": ["kind", "path", "symbol", "sha256"],
+      "properties": {
+        "kind": {"const": "symbol"},
+        "path": {"$ref": "#/$defs/relPath", "maxLength": 300},
+        "symbol": {"$ref": "#/$defs/qualname"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+
+    "evidenceRow": {
+      "type": "object",
+      "required": ["cite", "text"],
+      "properties": {
+        "cite": {"type": "string", "maxLength": 300,
+                 "pattern": "^(?!(?:[^:]*/)?\\.\\.(?:/|:))[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)*:[1-9][0-9]{0,6}(?:-[1-9][0-9]{0,6})?$"},
+        "command": {"$ref": "#/$defs/oneLine"},
+        "result": {"type": "string", "maxLength": 2000, "pattern": "\\S"},
+        "text": {"type": "string", "maxLength": 4000, "pattern": "\\S"}
+      },
+      "additionalProperties": false
+    },
+
+    "rulingFile": {
+      "description": "One committed ruling file (PROTOCOL.md section 13): `<qid with / as __>.json`. Check a ruling file against this definition, not against the schema's root, which is one store record.",
+      "type": "object",
+      "required": ["schemaVersion", "qid", "item", "question", "kind", "options", "star", "source", "asked_by",
+                   "asked_at", "valid_if", "locked", "history"],
+      "properties": {
+        "schemaVersion": {"$ref": "#/$defs/schemaVersion"},
+        "qid": {"$ref": "#/$defs/qid"},
+        "item": {"$ref": "#/$defs/itemId"},
+        "question": {"$ref": "#/$defs/text"},
+        "kind": {"$ref": "#/$defs/question/properties/kind"},
+        "options": {"$ref": "#/$defs/question/properties/options"},
+        "star": {"$ref": "#/$defs/question/properties/star"},
+        "source": {"$ref": "#/$defs/source"},
+        "asked_by": {"const": "agent"},
+        "asked_at": {"$ref": "#/$defs/ts"},
+        "valid_if": {"$ref": "#/$defs/question/properties/valid_if"},
+        "locked": {"$ref": "#/$defs/lockedAnswer"},
+        "history": {"type": "array", "items": {"$ref": "#/$defs/lockedAnswer"}},
+        "earlier": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/earlierAnswer"}},
+        "order": {"type": "array", "items": {"$ref": "#/$defs/recordId"}},
+        "forked_from": {"$ref": "#/$defs/recordId"},
+        "star_by": {"$ref": "#/$defs/question/properties/star_by"},
+        "evidence": {"$ref": "#/$defs/question/properties/evidence"},
+        "asked_by_agent": {"allOf": [{"$ref": "#/$defs/shortName"}, {"not": {"enum": ["agent", "owner"]}}]},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "replaces": {"$ref": "#/$defs/qid"},
+        "fork": {"type": "object", "description": "the owner's request named by forked_from, as Overture stored it (opaque here)"}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {"forked_from": ["fork"], "fork": ["forked_from"]},
+      "allOf": [
+        {"$ref": "#/$defs/questionRules"},
+        {"if": {"required": ["earlier"], "properties": {"earlier": {"minItems": 1}}},
+         "then": {"required": ["order"]}}
+      ]
+    },
+    "lockedAnswer": {
+      "type": "object",
+      "required": ["answer_id", "picks", "picked_labels", "picked_star", "rejected_labels", "own_text", "by",
+                   "answered_at", "lock_id", "locked_by", "locked_at"],
+      "properties": {
+        "answer_id": {"$ref": "#/$defs/recordId"},
+        "picks": {"type": "array", "items": {"type": "string"}},
+        "picked_labels": {"type": "array", "items": {"type": "string"}},
+        "picked_star": {"type": "boolean"},
+        "rejected_labels": {"type": "array", "items": {"type": "string"}},
+        "own_text": {"$ref": "#/$defs/textMayBeEmpty"},
+        "by": {"const": "owner"},
+        "answered_at": {"$ref": "#/$defs/ts"},
+        "lock_id": {"$ref": "#/$defs/recordId"},
+        "locked_by": {"const": "owner"},
+        "locked_at": {"$ref": "#/$defs/ts"},
+        "locked_by_name": {"$ref": "#/$defs/shortName"},
+        "supersedes": {"$ref": "#/$defs/recordId"},
+        "reason": {"$ref": "#/$defs/text"},
+        "anchored_by": {"enum": ["lock", "reanchor", "confirmed"]},
+        "anchors": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/condition"}},
+        "anchor_id": {"$ref": "#/$defs/recordId"},
+        "anchor_basis": {"$ref": "#/$defs/text"},
+        "anchored_at": {"$ref": "#/$defs/ts"}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {"supersedes": ["reason"], "reason": ["supersedes"], "anchored_by": ["anchors"],
+                            "anchors": ["anchored_by"], "anchor_id": ["anchored_by"],
+                            "anchor_basis": ["anchored_by"], "anchored_at": ["anchored_by"]},
+      "anyOf": [
+        {"properties": {"picks": {"minItems": 1}}},
+        {"properties": {"own_text": {"pattern": "\\S"}}}
+      ],
+      "allOf": [
+        {"if": {"required": ["anchored_by"], "properties": {"anchored_by": {"const": "lock"}}},
+         "then": {"properties": {"anchor_id": false, "anchor_basis": false, "anchored_at": false}},
+         "else": {"if": {"required": ["anchored_by"]},
+                  "then": {"required": ["anchor_id", "anchor_basis", "anchored_at"]}}}
+      ]
+    },
+    "earlierAnswer": {
+      "type": "object",
+      "required": ["answer_id", "picks", "picked_labels", "own_text", "by", "answered_at"],
+      "properties": {
+        "answer_id": {"$ref": "#/$defs/recordId"},
+        "picks": {"type": "array", "items": {"type": "string"}},
+        "picked_labels": {"type": "array", "items": {"type": "string"}},
+        "own_text": {"$ref": "#/$defs/textMayBeEmpty"},
+        "by": {"const": "owner"},
+        "answered_at": {"$ref": "#/$defs/ts"},
+        "supersedes": {"$ref": "#/$defs/recordId"},
+        "reason": {"$ref": "#/$defs/text"}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {"supersedes": ["reason"], "reason": ["supersedes"]}
+    },
+    "outcome": {
+      "type": "object",
+      "required": ["kind", "by", "at", "record"],
+      "properties": {
+        "kind": {"enum": ["withdrawn", "untracked", "superseded"]},
+        "by": {"const": "owner"},
+        "at": {"$ref": "#/$defs/ts"},
+        "record": {"$ref": "#/$defs/recordId"},
+        "reason": {"$ref": "#/$defs/text"},
+        "replaced_by": {"$ref": "#/$defs/qid"}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "withdrawn"}}},
+         "then": {"required": ["reason"], "properties": {"replaced_by": false}}},
+        {"if": {"properties": {"kind": {"const": "untracked"}}},
+         "then": {"properties": {"replaced_by": false}}},
+        {"if": {"properties": {"kind": {"const": "superseded"}}},
+         "then": {"required": ["replaced_by"], "properties": {"reason": false}}}
+      ]
+    },
+
+    "questionRules": {
+      "description": "What a question's kind asks of its options and star: shared by a question record and a ruling file.",
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "free"}}},
+         "then": {"properties": {"options": {"maxItems": 0}}}},
+        {"if": {"properties": {"kind": {"enum": ["single", "multi"]}}},
+         "then": {"properties": {"options": {"minItems": 2}}}},
+        {"if": {"required": ["star_by"]},
+         "then": {"properties": {"star": {"type": "string"}}}}
+      ]
+    },
+
+    "question": {
+      "type": "object",
+      "required": ["type", "schemaVersion", "qid", "item", "text", "kind", "options", "star", "valid_if", "source",
+                   "by", "nonce"],
+      "properties": {
+        "type": {"const": "question"},
+        "schemaVersion": {"$ref": "#/$defs/schemaVersion"},
+        "id": {"$ref": "#/$defs/id"},
+        "seq": {"$ref": "#/$defs/seq"},
+        "ts": {"$ref": "#/$defs/ts"},
+        "qid": {"$ref": "#/$defs/qid"},
+        "item": {"$ref": "#/$defs/itemId"},
+        "text": {"$ref": "#/$defs/text"},
+        "kind": {"enum": ["single", "multi", "free"]},
+        "options": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/option"}},
+        "star": {"oneOf": [{"$ref": "#/$defs/optionId"}, {"type": "null"}]},
+        "valid_if": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/condition"}},
+        "source": {"$ref": "#/$defs/source"},
+        "by": {"const": "agent"},
+        "nonce": {"$ref": "#/$defs/nonce"},
+        "forked_from": {"$ref": "#/$defs/recordId"},
+        "star_by": {"anyOf": [
+          {"enum": ["panel", "architect", "ux", "security", "determinism", "devops", "adversarial", "analyst"]},
+          {"$ref": "#/$defs/otherRole"}
+        ]},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/evidenceRow"}}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/questionRules"},
+        {"if": {"required": ["forked_from", "star"], "properties": {"star": {"type": "string"}}},
+         "then": {"required": ["star_by"]}}
+      ]
+    },
+
+    "answer": {
+      "type": "object",
+      "required": ["type", "schemaVersion", "qid", "picks", "own_text", "by", "nonce"],
+      "properties": {
+        "type": {"const": "answer"},
+        "schemaVersion": {"$ref": "#/$defs/schemaVersion"},
+        "id": {"$ref": "#/$defs/id"},
+        "seq": {"$ref": "#/$defs/seq"},
+        "ts": {"$ref": "#/$defs/ts"},
+        "qid": {"$ref": "#/$defs/qid"},
+        "picks": {"type": "array", "maxItems": 12, "uniqueItems": true, "items": {"type": "string"}},
+        "own_text": {"$ref": "#/$defs/textMayBeEmpty"},
+        "by": {"const": "owner"},
+        "nonce": {"$ref": "#/$defs/nonce"},
+        "supersedes": {"$ref": "#/$defs/recordId"},
+        "reason": {"$ref": "#/$defs/text"}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {"supersedes": ["reason"], "reason": ["supersedes"]},
+      "anyOf": [
+        {"properties": {"picks": {"minItems": 1}}},
+        {"properties": {"own_text": {"pattern": "\\S"}}}
+      ]
+    },
+
+    "lock": {
+      "type": "object",
+      "required": ["type", "schemaVersion", "qid", "answer", "by", "nonce"],
+      "properties": {
+        "type": {"const": "lock"},
+        "schemaVersion": {"$ref": "#/$defs/schemaVersion"},
+        "id": {"$ref": "#/$defs/id"},
+        "seq": {"$ref": "#/$defs/seq"},
+        "ts": {"$ref": "#/$defs/ts"},
+        "qid": {"$ref": "#/$defs/qid"},
+        "answer": {"$ref": "#/$defs/recordId"},
+        "by": {"const": "owner"},
+        "nonce": {"$ref": "#/$defs/nonce"},
+        "anchors": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/condition"}}
+      },
+      "additionalProperties": false
+    },
+
+    "anchor": {
+      "type": "object",
+      "required": ["type", "schemaVersion", "qid", "lock", "anchors", "basis", "by", "nonce"],
+      "properties": {
+        "type": {"const": "anchor"},
+        "schemaVersion": {"$ref": "#/$defs/schemaVersion"},
+        "id": {"$ref": "#/$defs/id"},
+        "seq": {"$ref": "#/$defs/seq"},
+        "ts": {"$ref": "#/$defs/ts"},
+        "qid": {"$ref": "#/$defs/qid"},
+        "lock": {"$ref": "#/$defs/recordId"},
+        "anchors": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/condition"}},
+        "basis": {"$ref": "#/$defs/text"},
+        "by": {"const": "agent"},
+        "nonce": {"$ref": "#/$defs/nonce"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

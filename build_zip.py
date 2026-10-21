@@ -88,6 +88,11 @@ def stage(tmp: Path) -> Path:
                      "description": manifest["description"]}],
     }, indent=2) + "\n", encoding="utf-8")
     shutil.copy2(ROOT / "INSTALL.md", top / "INSTALL.md")
+    # 1.55 (Wave 4, P4): the protocol a release implements ships in its zip, so the attestation covers it too.
+    for f in files(ROOT / "docs", ["spec"]):
+        dst = top / f.relative_to(ROOT / "docs")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dst)
     return top
 
 
