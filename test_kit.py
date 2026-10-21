@@ -10316,11 +10316,11 @@ class SymbolSchemaTests(unittest.TestCase):
     def test_an_export_without_a_symbol_is_byte_for_byte_what_the_last_release_wrote(self):
         # Catches: the new kind changing what every other ruling file looks like (a new key, another order),
         # so every project's committed rulings churn on upgrade and a rollback reads files it did not write.
-        try:
-            kit = old_kit("v1.53.2", Path(tempfile.mkdtemp(prefix="ck-1532-")), ("plugin/kit",))
-        except AssertionError:
-            self.skipTest("the v1.53.2 tag is not in this checkout")
         with tempfile.TemporaryDirectory() as td:
+            try:
+                kit = old_kit("v1.53.2", Path(td) / "kit", ("plugin/kit",))
+            except AssertionError:
+                self.skipTest("the v1.53.2 tag is not in this checkout")
             st_path = Path(td) / "store.jsonl"
             tick = iter(range(1, 60))
             st = Store(st_path, known_items=ITEMS, clock=lambda: f"2026-10-20T00:00:{next(tick):02d}Z")
