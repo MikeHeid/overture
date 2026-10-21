@@ -10066,5 +10066,885 @@ class StewardNotesTests(unittest.TestCase):
         self.assertNotIn("notes check", err)
 
 
+# -- 1.54 symbol anchors (owner K1-K3) ----------------------------------------------------------
+
+from overture import symbols as SY  # noqa: E402
+
+PY_SRC = '''import os
+
+@cache
+@other(1)
+def charge(cents):
+    """Round half to even."""
+    # the owner's rule
+    return round_half_even(cents)
+
+
+class Ledger:
+    @property
+    def total(self):
+        def inner(x):
+            return x
+        return inner(1)
+
+    async def sync(self):
+        await self.flush()
+'''
+
+
+def qn(path: str, text: str) -> list[str]:
+    return [s.qualname for s in SY.find(path, text)]
+
+
+def body(path: str, text: str, q: str) -> str:
+    r = SY.resolve(path, text, q)
+    assert r.state == "found", r
+    return r.symbol.body_sha256
+
+
+class SymbolFindTests(unittest.TestCase):
+    """symbols.find: each language's definitions, by the names a ruling would cite."""
+
+    def test_python_definitions_by_ast(self):
+        # Catches: methods, nested defs, async defs or decorators missed, or a nested def named flat
+        # (`inner` instead of `Ledger.total.inner`), so two `inner`s in a file would collide.
+        syms = {s.qualname: s for s in SY.find("pay.py", PY_SRC)}
+        self.assertEqual(list(syms), ["charge", "Ledger", "Ledger.total", "Ledger.total.inner", "Ledger.sync"])
+        self.assertEqual((syms["charge"].start_line, syms["charge"].end_line), (3, 8))   # decorators included
+        self.assertEqual([syms[q].kind for q in ("charge", "Ledger", "Ledger.total", "Ledger.sync")],
+                         ["function", "class", "method", "method"])
+
+    def test_js_and_ts_definitions(self):
+        # Catches: arrow functions, class methods (getters, statics, field arrows) or interfaces missed, and
+        # a brace inside a string, a template literal, a regex or a comment taken for a body's end.
+        src = ("// function fake() {\n"
+               "export async function load(x: {a: number}) {\n"
+               "  const s = \"}{\"; const t = `a ${ {b: 1}.b } }`; const r = /[}/]{/g;\n"
+               "  return s + t;\n}\n"
+               "export class Store<T> {\n"
+               "  private items: T[] = [];\n"
+               "  constructor(x: number) { this.x = x; }\n"
+               "  get size(): number { return 1; }\n"
+               "  static of() { return new Store(); }\n"
+               "  add = (t: T) => { this.items.push(t); };\n"
+               "}\n"
+               "const double = (n: number): number => n * 2;\n"
+               "const named = function (a) { return a; };\n"
+               "const notfn = (1 + 2) * 3;\n"
+               "interface Shape {\n  area(): number;\n}\n"
+               "const page = `\nfunction fake() {\n${double(2)}`;\n")
+        self.assertEqual(qn("a.ts", src), ["load", "Store", "Store.constructor", "Store.size", "Store.of", "Store.add",
+                                           "double", "named", "Shape"])
+        load = SY.resolve("a.ts", src, "load").symbol
+        self.assertEqual((load.start_line, load.end_line), (2, 5))
+        self.assertEqual(SY.resolve("a.tsx", src, "Store").symbol.end_line, 12)
+
+    def test_go_rust_java_csharp_definitions(self):
+        # Catches: receivers, impl blocks, generics, nested types or constructors named wrongly, so a method
+        # moved between two types reads as the same symbol, or a Rust lifetime read as a char literal.
+        go = ("package p\n// func Fake() {\nfunc Top(a int) int { s := \"}\"; r := `}`; c := '}'; return a }\n"
+              "func (s *Stack[T]) Push(v T) {\n\ts.items = append(s.items, v)\n}\n"
+              "type Stack[T any] struct {\n\titems []T\n}\ntype Alias int\n")
+        self.assertEqual(qn("a.go", go), ["Top", "Stack.Push", "Stack"])
+        rs = ("/* /* nested */ fn fake() { */\n#[derive(Debug)]\npub struct Point {\n    x: i32,\n}\n"
+              "impl<'a, T: Clone> fmt::Display for Wrapper<'a, T> where T: Debug {\n"
+              "    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { let c = '}'; let s = r#\"}\"#; Ok(()) }\n}\n"
+              "impl Point {\n    pub fn new(x: i32) -> Self { Point { x } }\n"
+              "    fn life<'a>(&'a self) -> &'a i32 { &self.x }\n}\n"
+              "trait Shape {\n    fn area(&self) -> f64;\n    fn twice(&self) -> f64 { 2.0 * self.area() }\n}\n")
+        self.assertEqual(qn("a.rs", rs), ["Point", "Wrapper.fmt", "Point.new", "Point.life", "Shape", "Shape.twice"])
+        self.assertEqual(SY.resolve("a.rs", rs, "Point").symbol.start_line, 2)   # the attribute counts
+        java = ("package p;\n@Entity\npublic class Account<T extends Comparable<T>> {\n"
+                "    private final Map<String, List<T>> m = new HashMap<>();\n"
+                "    public Account() { super(); }\n    @Override\n"
+                "    public synchronized <R> List<R> balance(int a) throws IOException {\n"
+                "        String s = \"}\"; char c = '}'; String b = \"\"\"\n            }\"\"\";\n        return null;\n"
+                "    }\n    abstract void f();\n"
+                "    static class Inner {\n        void g() { Runnable r = new Runnable() { public void run() {} }; }\n"
+                "    }\n}\n")
+        self.assertEqual(qn("A.java", java), ["Account", "Account.Account", "Account.balance", "Account.Inner",
+                                              "Account.Inner.g"])
+        cs = ("namespace Bank.Core {\n    [Serializable]\n    public sealed class Ledger {\n"
+              "        public int Count { get; set; }\n        public Ledger(int x) : base() { }\n"
+              "        public async Task<int> Total(int a) { var s = @\"}\"\"{\"; var t = $\"{a}}}\"; return 1; }\n"
+              "        public int Twice(int a) => a * 2;\n    }\n}\n")
+        self.assertEqual(qn("A.cs", cs), ["Ledger", "Ledger.Ledger", "Ledger.Total", "Ledger.Twice"])
+        self.assertEqual(SY.resolve("A.cs", cs, "Ledger").symbol.start_line, 2)
+
+    def test_what_cannot_be_read_is_unchecked_never_a_guess(self):
+        # Catches: an unknown extension, a syntax error, unbalanced braces, an unclosed literal or a name
+        # defined twice resolving to SOME symbol (or to "missing", which reads as a rename).
+        for path, text in (("x.c", "int f() { return 1; }\n"), ("x.py", "def f(:\n"), ("x.js", "function f() {\n"),
+                           ("x.js", "function f() { } }\n"), ("x.go", 'func f() { s := "a\n}\n'),
+                           ("x.py", "def f():\n    pass\ndef f():\n    pass\n"), ("x.rs", "fn f() { /* }\n")):
+            with self.subTest(path=path, text=text):
+                r = SY.resolve(path, text, "f")
+                self.assertEqual((r.state, r.symbol), ("unchecked", None))
+                self.assertTrue(r.reason)
+        self.assertEqual(SY.resolve("x.py", "def g():\n    pass\n", "f").state, "missing")
+
+    def test_hostile_input_stays_bounded(self):
+        # Catches: a lexer or ast walk that recurses on the input or scans quadratically, so a hostile file
+        # in a checkout hangs the PreToolUse hook past its 5 s timeout (the brief's bound is 200 ms per 5k lines).
+        import time
+        cases = [("h.js", "{" * 200_000), ("h.py", "x = " + "(" * 100_000 + ")" * 100_000),
+                 ("h.py", "def f():\n" + "".join("    " * (i + 1) + "if x:\n" for i in range(90)) + "    " * 91 + "pass\n"),
+                 ("h.ts", "/" * 300_000), ("h.java", '"' * 300_001), ("h.rs", "/*" * 100_000),
+                 ("big.py", "\n".join(f"class C{i}:\n    def m(self, x):\n        return x + {i}\n" for i in range(1700))),
+                 ("big.ts", "\n".join(f"export class C{i} {{\n  m(x) {{ return `${{x}}` + '{i}'; }}\n}}"
+                                      for i in range(1700))),
+                 ("huge.py", "#" * (SY.MAX_CHARS + 1))]
+        for path, text in cases:
+            with self.subTest(path=path):
+                t = time.monotonic()
+                try:
+                    SY.find(path, text)
+                except SY.Unresolvable:
+                    pass
+                self.assertLess(time.monotonic() - t, 1.0)
+        self.assertEqual(SY.resolve("huge.py", "def f():\n    pass\n" + "#" * SY.MAX_CHARS, "f").state, "unchecked")
+        many = "\n".join(f"def f{i}():\n    pass" for i in range(SY.MAX_SYMBOLS + 1))
+        self.assertEqual(SY.resolve("m.py", many, "f1").state, "unchecked")
+
+    def test_enclosing_names_the_innermost_definition(self):
+        # Catches: the outermost definition (a whole class) offered as a question's anchor when its
+        # source cites lines inside one method.
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 15, 15).symbol.qualname, "Ledger.total.inner")
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 14, 16).symbol.qualname, "Ledger.total")
+        self.assertEqual(SY.enclosing("pay.py", PY_SRC, 1, 1).state, "missing")
+
+
+class SymbolBodyHashTests(unittest.TestCase):
+    """K2: the body hash ignores comments, whitespace, line endings and the symbol's own name, and nothing else."""
+
+    def test_comment_and_whitespace_edits_keep_the_hash(self):
+        # Catches: a hash of the raw text, so re-indenting, re-wrapping or adding a comment breaks a ruling (K2).
+        a = body("pay.py", PY_SRC, "charge")
+        edited = PY_SRC.replace("    # the owner's rule\n", "").replace("return round_half_even(cents)",
+                                                                          "return  round_half_even( cents )  # note")
+        self.assertEqual(body("pay.py", edited, "charge"), a)
+        js = "function f(a) {\n  return a + 1; // one\n}\n"
+        self.assertEqual(body("x.js", js, "f"), body("x.js", "function f (a){ /* two */ return a+1;\n\n}\n", "f"))
+
+    def test_crlf_and_lf_hash_alike(self):
+        # Catches: a Windows checkout (core.autocrlf) reading every symbol ruling as broken.
+        for path, text, q in (("pay.py", PY_SRC, "Ledger.total"), ("x.go", "func F() {\n\treturn\n}\n", "F"),
+                              ("x.py", 'def f():\n    """Two\n    lines."""\n', "f"),
+                              ("x.rs", 'fn f() -> &str {\n    "two\n     lines"\n}\n', "f")):
+            self.assertEqual(body(path, text.replace("\n", "\r\n"), q), body(path, text, q))
+
+    def test_body_edits_break_the_hash_and_docstrings_count(self):
+        # Catches: a normalisation that drops too much (docstrings, strings, operators), so a real change of
+        # the code the owner ruled on keeps the ruling.
+        a = body("pay.py", PY_SRC, "charge")
+        for old, new in (("round_half_even(cents)", "int(cents)"), ('"""Round half to even."""', '"""Truncate."""'),
+                         ("@other(1)", "@other(2)"), ("def charge(cents)", "def charge(cents, mode)")):
+            with self.subTest(change=new):
+                self.assertNotEqual(body("pay.py", PY_SRC.replace(old, new), "charge"), a)
+        self.assertNotEqual(body("x.js", "function f() { return 'a b'; }", "f"),
+                            body("x.js", "function f() { return 'a  c'; }", "f"))
+
+    def test_a_python_indent_change_is_a_change(self):
+        # Catches: whitespace normalisation that also flattens Python's indentation, where it is meaning.
+        a = "def f(x):\n    if x:\n        g()\n    h()\n"
+        b = "def f(x):\n    if x:\n        g()\n        h()\n"
+        self.assertNotEqual(body("x.py", a, "f"), body("x.py", b, "f"))
+
+    def test_a_rename_or_a_move_keeps_the_body_hash(self):
+        # Catches: the name inside the hash, so K3 can never find a renamed symbol by its body; and an
+        # indentation-sensitive hash, so a method moved out of its class to module level is never found.
+        a = body("pay.py", PY_SRC, "charge")
+        renamed = PY_SRC.replace("def charge(", "def charge_cents(")
+        self.assertEqual(body("pay.py", renamed, "charge_cents"), a)
+        moved = "class Billing:\n" + "".join("    " + ln + "\n" if ln else "\n"
+                                             for ln in PY_SRC.split("\n\n\nclass")[0].split("\n")[2:])
+        self.assertEqual([s.qualname for s in SY.by_body("bill.py", moved, a)], ["Billing.charge"])
+        self.assertEqual(body("x.ts", "function f(a) { return a; }\n", "f"),
+                         body("y.ts", "function g(a) { return a; }\n", "g"))
+
+    def test_non_utf8_text_is_read_as_replaced_text(self):
+        # Catches: a crash (an uncaught UnicodeError) on a file with stray bytes, which anchors.Tree decodes
+        # with errors="replace": the hook must fail open, and the same bytes must hash alike every time.
+        text = b"def f():\n    return '\xff\xfe'\n".decode("utf-8", errors="replace")
+        self.assertEqual(body("x.py", text, "f"), body("x.py", text, "f"))
+        self.assertEqual(SY.resolve("x.js", "function f() { return '\ud800'; }", "f").state, "found")
+
+
+def sym_cond(path: str, text: str, q: str) -> dict:
+    return {"kind": "symbol", "path": path, "symbol": q, "sha256": body(path, text, q)}
+
+
+class SymbolSchemaTests(unittest.TestCase):
+    """The `symbol` condition's shape (1.54): exact keys, a dotted name, a body hash, the same path rules."""
+
+    def test_a_symbol_condition_is_valid_and_its_shape_is_exact(self):
+        # Catches: a kind the schema still refuses (no ruling could carry one), or one that takes any keys,
+        # a name with markup or a newline (it is printed inline), or a "hash" that is not one.
+        good = sym_cond("src/pay.py", PY_SRC, "Ledger.total")
+        self.assertEqual(S.validate(question(valid_if=[good])), [])
+        for bad, words in (({**good, "text": "x"}, "takes exactly"), ({k: v for k, v in good.items() if k != "sha256"},
+                                                                       "path::Class.method"),
+                           ({**good, "symbol": "Ledger.total\nFAKE"}, "dotted name"),
+                           ({**good, "symbol": "a" * 201}, "dotted name"), ({**good, "symbol": "x<b>"}, "dotted name"),
+                           ({**good, "sha256": "abc"}, "64 lowercase hex"), ({**good, "path": "../out.py"}, "inside"),
+                           ({**good, "path": "/etc/x.py"}, "relative")):
+            with self.subTest(bad=bad):
+                errs = S.validate(question(valid_if=[bad]))
+                self.assertTrue(any(words in e for e in errs), errs)
+
+    def test_a_secrets_file_is_refused_as_a_symbol_path_at_ask(self):
+        # Catches: the ask-time secret check skipping the new kind, so a `.env.py` symbol's body hash (and,
+        # through "why stale", its lines) would be read and shown.
+        c = {"kind": "symbol", "path": "conf/.env.py", "symbol": "f", "sha256": "0" * 64}
+        self.assertTrue(S.secret_condition_paths([c]))
+
+    def test_the_last_release_refuses_a_symbol_condition_by_name(self):
+        # Catches: a new condition a 1.53 kit would read as something else or drop on a rollback; it must
+        # refuse the question naming the kind it does not know, as it does any other (SCHEMA_VERSION stays 1).
+        try:
+            src = subprocess.run(["git", "show", "v1.53.2:plugin/kit/overture/schema.py"], cwd=HERE,
+                                 capture_output=True, text=True, timeout=20, check=True).stdout
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("the v1.53.2 tag is not in this checkout")
+        import types
+        old = types.ModuleType("schema_1532")
+        exec(compile(src, "schema_1532", "exec"), old.__dict__)  # noqa: S102 - our own tagged release
+        errs = old.validate(question(valid_if=[sym_cond("src/pay.py", PY_SRC, "charge")]))
+        self.assertTrue(any("'symbol'" in e and "needs kind in" in e for e in errs), errs)
+        self.assertEqual(S.SCHEMA_VERSION, 1)
+
+    def test_an_export_without_a_symbol_is_byte_for_byte_what_the_last_release_wrote(self):
+        # Catches: the new kind changing what every other ruling file looks like (a new key, another order),
+        # so every project's committed rulings churn on upgrade and a rollback reads files it did not write.
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                kit = old_kit("v1.53.2", Path(td) / "kit", ("plugin/kit",))
+            except AssertionError:
+                self.skipTest("the v1.53.2 tag is not in this checkout")
+            st_path = Path(td) / "store.jsonl"
+            tick = iter(range(1, 60))
+            st = Store(st_path, known_items=ITEMS, clock=lambda: f"2026-10-20T00:00:{next(tick):02d}Z")
+            st.append(question(valid_if=[{"kind": "excerpt", "path": "src/pay.py", "text": "round_half_even(cents)"}]))
+            a1 = st.append(answer())
+            st.append(lock(a1))
+            st.append(question(qid="LANE.1/Q2", valid_if=[{"kind": "file_sha256", "path": "README", "sha256": "0" * 64}]))
+            a2 = st.append(answer(qid="LANE.1/Q2"))
+            st.append(lock(a2))
+            a3 = st.append(answer(qid="LANE.1/Q2", picks=("a",), supersedes=a2["id"], reason="again"))
+            st.append(lock(a3, anchors=[{"kind": "file_sha256", "path": "README", "sha256": "1" * 64}]))
+            ours = {n: json.dumps(e, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+                    for n, e in F.export(st).items()}
+            code = ("import sys, json; sys.path.insert(0, sys.argv[1])\n"
+                    "from overture import fold as F\nfrom overture.store import Store\n"
+                    "out = F.export(Store(__import__('pathlib').Path(sys.argv[2])))\n"
+                    "print(json.dumps({n: json.dumps(e, indent=2, sort_keys=True, ensure_ascii=False) + '\\n' "
+                    "for n, e in out.items()}))\n")
+            r = subprocess.run([sys.executable, "-c", code, str(kit / "plugin/kit"), str(st_path)],
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout), ours)
+
+    def test_fold_takes_a_ruling_file_with_a_symbol_anchor(self):
+        # Catches: an export the fold (and so the CI check) refuses as "not valid" the moment one ruling
+        # rests on a symbol, in valid_if or in a lock's anchors.
+        with tempfile.TemporaryDirectory() as td:
+            st = Store(Path(td) / "s.jsonl", known_items=ITEMS, clock=lambda: "2026-10-20T00:00:01Z")
+            c = sym_cond("src/pay.py", PY_SRC, "charge")
+            st.append(question(valid_if=[c]))
+            a1 = st.append(answer())
+            st.append(lock(a1))
+            a2 = st.append(answer(picks=("a",), supersedes=a1["id"], reason="moved"))
+            st.append(lock(a2, anchors=[{**c, "symbol": "charge_cents"}]))
+            for name, e in F.export(st).items():
+                self.assertEqual(F.check_entry(name, e, ITEMS), [])
+
+
+class SymbolAnchorTests(Tmp):
+    """anchors.Tree on a `symbol` condition (K2, K3): holds, changed, moved, gone, unchecked."""
+
+    def setUp(self):
+        super().setUp()
+        (self.dir / "src").mkdir()
+        self.write("src/pay.py", PY_SRC)
+        self.c = sym_cond("src/pay.py", PY_SRC, "charge")
+
+    def write(self, rel: str, text: str) -> None:
+        (self.dir / rel).write_text(text)
+
+    def tree(self):
+        from overture import anchors as A
+        return A.Tree(self.dir, {})
+
+    def state(self, cands=()):
+        return self.tree().symbol_state(self.c, cands)
+
+    def test_an_edit_elsewhere_in_the_file_keeps_the_symbol(self):
+        # Catches: a symbol checked like file_sha256 (any change breaks it), the gap K2 exists to close.
+        self.write("src/pay.py", PY_SRC.replace("await self.flush()", "await self.flush(True)") + "\nX = 1\n")
+        self.assertEqual(self.state().state, "holds")
+        self.assertIs(self.tree().holds(self.c), True)
+
+    def test_a_body_edit_breaks_it_and_names_the_symbol(self):
+        # Catches: a change of the very code the owner ruled on passing, or failing without saying which.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("round_half_even(cents)", "int(cents)"))
+        t = self.tree()
+        self.assertIs(t.holds(self.c), False)
+        e = A.explain(self.c, t, A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["reason"]), (False, "symbol_changed"))
+        self.assertIn("The body of charge in src/pay.py changed", e["words"])
+
+    def test_a_rename_in_the_same_file_is_followed_and_reported(self):
+        # Catches: a rename read as "deleted" (the K3 gap), and a followed symbol read as fresh on the console
+        # before the owner confirms its new name (holds stays strict; check follows).
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents("))
+        t = self.tree()
+        self.assertEqual((self.state().state, self.state().symbol.qualname), ("moved", "charge_cents"))
+        self.assertIs(t.holds(self.c), False)
+        self.assertIs(t.check(self.c), True)
+        e = A.explain(self.c, t, A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["moved_to"]), (True, {"path": "src/pay.py", "symbol": "charge_cents"}))
+        self.assertIn("src/pay.py::charge -> src/pay.py::charge_cents", e["words"])
+
+    def test_a_move_to_another_file_is_followed_only_into_the_files_named(self):
+        # Catches: a search of the whole checkout (unbounded, and a copy anywhere would "hold" it), and a
+        # moved symbol never found in the change's own files.
+        self.write("src/pay.py", PY_SRC.split("\n\n\nclass")[0].replace("def charge(", "def gone(") + "\n")
+        self.write("src/pay.py", "class Ledger:\n    pass\n")
+        self.write("src/bill.py", PY_SRC.split("\n\n\nclass")[0].replace("def charge(", "def charge_in_bill("))
+        self.assertEqual(self.state().state, "gone")
+        st = self.state(["src/bill.py", "README.md"])
+        self.assertEqual((st.state, st.path, st.symbol.qualname), ("moved", "src/bill.py", "charge_in_bill"))
+        (self.dir / "src/pay.py").unlink()
+        self.assertEqual(self.state(["src/bill.py"]).state, "moved")
+        self.assertEqual(self.state().state, "gone")
+
+    def test_two_identical_bodies_are_unchecked_never_a_pick(self):
+        # Catches: the first of two copies taken as "the" moved symbol: which one the owner meant is unknowable.
+        one = PY_SRC.split("\n\n\nclass")[0]
+        self.write("src/pay.py", "x = 1\n")
+        self.write("src/a.py", one.replace("def charge(", "def a("))
+        self.write("src/b.py", one.replace("def charge(", "def b("))
+        st = self.state(["src/a.py", "src/b.py"])
+        self.assertEqual(st.state, "unchecked")
+        self.assertIn("2 places", st.reason)
+        self.assertIsNone(self.tree().check(self.c, ["src/a.py", "src/b.py"]))
+
+    def test_a_candidate_that_cannot_be_read_never_makes_a_gone_symbol_unchecked(self):
+        # Catches (1.54 review H2): one unparsable file anywhere in the change turning "gone" (a CI failure)
+        # into "unchecked" (a pass), so a PR that renames and changes the ruled function adds a .jsx with
+        # `<p>Don't</p>` and goes green. The cited file reads cleanly: gone, with the unread file named beside.
+        from overture import anchors as A
+        self.write("src/pay.py", "x = 1\n")
+        self.write("src/half.py", "def charge(:\n")
+        st = self.state(["src/half.py"])
+        self.assertEqual(st.state, "gone")
+        self.assertIn("src/half.py cannot be read for definitions", st.reason)
+        self.assertIs(self.tree().check(self.c, ["src/half.py"]), False)
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5", ["src/half.py"])
+        self.assertEqual((e["holds"], e["reason"]), (False, "symbol_gone"))
+        self.assertIn("src/half.py cannot be read for definitions", e["words"])
+        self.assertEqual(self.state().state, "gone")
+        (self.dir / "src/pay.py").unlink()   # the cited file gone as well: still gone, never a pass
+        self.assertEqual(self.state(["src/half.py"]).state, "gone")
+
+    def test_an_unreadable_file_is_unchecked_and_a_secret_is_never_read(self):
+        # Catches: a syntax error read as "the symbol is gone" (a false break) or as holding (a false pass),
+        # and a secrets file read for its definitions.
+        from overture import anchors as A
+        self.write("src/pay.py", "def charge(:\n")
+        self.assertEqual(self.state().state, "unchecked")
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["reason"]), (None, "unchecked"))
+        self.assertIn("never guessed", e["words"])
+        self.write(".env.py", PY_SRC)
+        st = self.tree().symbol_state({**self.c, "path": ".env.py"})
+        self.assertEqual(st.state, "unreadable")
+
+    def test_a_relock_takes_the_symbol_where_it_is_now(self):
+        # Catches: a re-lock that falls back to a whole-file hash for a symbol (strict, so it breaks on any
+        # edit), or that keeps the old name of a symbol it followed.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents(").replace("round_half_even", "rhe"))
+        # Renamed AND changed: gone, so it stays as it was, and keeps the answer stale.
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [self.c])
+        self.write("src/pay.py", PY_SRC.replace("round_half_even", "rhe"))
+        now = (self.dir / "src/pay.py").read_text()
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [sym_cond("src/pay.py", now, "charge")])
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents("))
+        now = (self.dir / "src/pay.py").read_text()
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [sym_cond("src/pay.py", now, "charge_cents")])
+
+    def test_a_gone_symbol_names_the_nearest_name(self):
+        # Catches: "gone" with nothing for the reader to go on when a near name (a typo fix) is right there.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def chargee(").replace("round_half_even", "x"))
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5")
+        self.assertEqual(e["reason"], "symbol_gone")
+        self.assertIn("The nearest name there now is chargee", e["words"])
+
+    def test_symbol_condition_reads_the_tree_and_refuses_by_name(self):
+        # Catches: an ask that takes `path::Name` without finding it (a ruling anchored on nothing), or a
+        # writer's hash trusted over the one read now.
+        from overture import anchors as A
+        c, s, why = A.symbol_condition(self.tree(), "src/pay.py", "Ledger.total")
+        self.assertEqual((c, s.start_line, why), (sym_cond("src/pay.py", PY_SRC, "Ledger.total"), 12, ""))
+        for path, q, words in (("src/pay.py", "Nope", "defines no Nope (it defines charge, Ledger"),
+                               ("src/none.py", "f", "is not in the project"), ("src/pay.py", "a b", "dotted name"),
+                               (".env.py", "f", "secrets file")):
+            with self.subTest(q=q):
+                c, _, why = A.symbol_condition(self.tree(), path, q)
+                self.assertIsNone(c)
+                self.assertIn(words, why)
+
+
+class SymbolReviewHashTests(unittest.TestCase):
+    """1.54 review: what the body hash must count, so a real change is never read as holding."""
+
+    def test_whitespace_inside_a_literal_counts(self):
+        # Catches (1.54 review C1, mutant S1): whitespace normalised inside string, template, regex, raw and
+        # verbatim literals, so `join(", ")` -> `join(",")` or `"x = 1"` -> `"x=1"` keeps the hash and CI says
+        # "touched, still holds" for a change of what the code outputs.
+        for path, q, a, b in (
+                ("a.js", "f", 'function f(a) { return a.join(", "); }\n', 'function f(a) { return a.join(","); }\n'),
+                ("a.js", "f", 'function f() { return "a  b"; }\n', 'function f() { return "a b"; }\n'),
+                ("a.js", "f", "function f() { return 'x = 1'; }\n", "function f() { return 'x=1'; }\n"),
+                ("a.ts", "f", "function f(a) { return `${a}  x`; }\n", "function f(a) { return `${a} x`; }\n"),
+                ("a.js", "f", 'function f(s) { return s.replace(/a  b/, ""); }\n',
+                 'function f(s) { return s.replace(/a b/, ""); }\n'),
+                ("a.go", "f", "package p\nfunc f() string { return `a  b` }\n",
+                 "package p\nfunc f() string { return `a b` }\n"),
+                ("a.go", "f", "package p\nfunc f() string { return `a\nb` }\n",
+                 "package p\nfunc f() string { return `ab` }\n"),
+                ("a.cs", "C.F", 'class C {\n  string F() { return @"p  q"; }\n}\n',
+                 'class C {\n  string F() { return @"p q"; }\n}\n'),
+                ("A.java", "A.m", 'class A {\n  String m() { return """\n    a  b"""; }\n}\n',
+                 'class A {\n  String m() { return """\n    a b"""; }\n}\n'),
+                ("a.rs", "f", 'fn f() -> &str { r#"a  b"# }\n', 'fn f() -> &str { r#"a b"# }\n'),
+                ("a.rs", "f", "fn f() -> char { ' ' }\n", "fn f() -> char { '\t' }\n")):
+            with self.subTest(path=path, a=a):
+                self.assertNotEqual(body(path, a, q), body(path, b, q))
+
+    def test_whitespace_around_a_literal_still_does_not_count(self):
+        # Catches: the C1 fix overshooting, so a reformat around a literal (`f( ", " )`) breaks a ruling (K2).
+        self.assertEqual(body("a.js", 'function f(a) { return a.join( ", " ); }\n', "f"),
+                         body("a.js", 'function f(a) {\n  return a.join(", ");\n}\n', "f"))
+        self.assertEqual(body("a.ts", "function f(a) { return `x${ a }y`; }\n", "f"),
+                         body("a.ts", "function f(a) { return `x${a}y`; }\n", "f"))
+
+    def test_a_slash_after_a_closing_bracket_keeps_the_rest_of_its_line_verbatim(self):
+        # Catches (1.54 review): `if (s) /a  b/.test(s)` read as a division, so the regex's whitespace was
+        # normalised and `/a  b/` -> `/a b/` held. After `)` or `]` a regex cannot be told from a division,
+        # so from that `/` to the line's end the text counts verbatim: a reformatted `(a) / 2` is a false
+        # "stale", the safe way to be wrong.
+        self.assertNotEqual(body("a.js", "function f(s) {\n  if (s) /a  b/.test(s);\n  return 1;\n}\n", "f"),
+                            body("a.js", "function f(s) {\n  if (s) /a b/.test(s);\n  return 1;\n}\n", "f"))
+        self.assertNotEqual(body("a.js", "function f(a) { return a[0] /x  y/ 2; }\n", "f"),
+                            body("a.js", "function f(a) { return a[0] /x y/ 2; }\n", "f"))
+        # No overshoot: whitespace on the other lines, and before the `/`, still normalises.
+        self.assertEqual(body("a.js", "function f(s) {\n  if  ( s ) /a  b/.test(s);\n  return  x  +  1;\n}\n", "f"),
+                         body("a.js", "function f(s) {\n  if (s) /a  b/.test(s);\n  return x + 1;\n}\n", "f"))
+
+    def test_whitespace_between_two_words_counts(self):
+        # Catches (mutant S1): whitespace in code dropped instead of kept as one space between two word
+        # characters, so `return typeof x` and `returntypeofx` (or `a in b` and `ainb`) hash alike.
+        self.assertNotEqual(body("a.js", "function f(x) { return typeof x; }\n", "f"),
+                            body("a.js", "function f(x) { returntypeofx; }\n", "f"))
+        self.assertNotEqual(body("a.go", "package p\nfunc f() int { var a int; return a }\n", "f"),
+                            body("a.go", "package p\nfunc f() int { vara int; returna }\n", "f"))
+
+    def test_a_hole_marker_in_code_is_unchecked(self):
+        # Catches (mutant N19): the \x05 marker that stands for a literal accepted in code, so a body can be
+        # made to hash like one with a literal in that place (the encoding is no longer one-to-one).
+        r = SY.resolve("a.js", "function f() { return 1\x05; }\n", "f")
+        self.assertEqual(r.state, "unchecked")
+        self.assertIn("\\x05", r.reason)
+        self.assertEqual(SY.resolve("a.js", 'function f() { return "\x05"; }\n', "f").state, "found")   # in a literal
+
+    def test_jsx_text_that_looks_like_a_comment_counts(self):
+        # Catches (1.54 review C2): `//` in JSX text (`<a>http://x/{u.id}</a>`) read as a line comment, so
+        # the rest of the line, braces and all, drops out of the hash and `{u.id}` -> `{u.password}` holds.
+        # JSX text cannot be told from a comment by a lexer this small, so in a file with JSX every comment
+        # counts: a comment edit there is a false "stale", the safe way to be wrong.
+        for path in ("a.jsx", "a.tsx", "a.js"):
+            for a in ('function Link(u) {\n  return <a>http://x.example/{u.id}</a>;\n}\n',
+                      'function Link(u) {\n  return (\n    <p>\n      // see {u.id}\n    </p>\n  );\n}\n',
+                      'function Link(u) {\n  return <p>a /* {u.id} */ b</p>;\n}\n'):
+                with self.subTest(path=path, a=a):
+                    b = a.replace("u.id", "u.password")
+                    ra, rb = SY.resolve(path, a, "Link"), SY.resolve(path, b, "Link")
+                    self.assertFalse(ra.state == rb.state == "found" and ra.symbol.body_sha256 == rb.symbol.body_sha256,
+                                     (ra, rb))
+        # Without JSX a comment still does not count (K2), in a .ts file whatever it holds.
+        self.assertEqual(body("a.js", "function f(a) {\n  return a + 1; // one\n}\n", "f"),
+                         body("a.js", "function f(a) {\n  return a + 1; // two\n}\n", "f"))
+        self.assertEqual(body("a.ts", "function f(a: Array<number>) {\n  return a; // <b>one</b>\n}\n", "f"),
+                         body("a.ts", "function f(a: Array<number>) {\n  return a; // <b>two</b>\n}\n", "f"))
+
+    def test_a_quote_inside_a_csharp_interpolation_hole_is_code(self):
+        # Catches (1.54 review C2): `$"{(a ? "//" : "y")}"` lexed as the string `"{(a ? "` then a `//` comment,
+        # so the rest of the line (here "y" -> "z") drops out of the hash.
+        for a in ('class C {\n  string F(bool a) { return $"{(a ? "//" : "y")}"; }\n}\n',
+                  'class C {\n  string F(bool a) {\n    return $@"{(a ? "//" : "y")} ""q""";\n  }\n}\n',
+                  'class C {\n  string F(bool a) { return $"{{{(a ? \'/\' : \'y\')}}}"; }\n}\n'):
+            with self.subTest(a=a):
+                self.assertNotEqual(body("a.cs", a, "C.F"), body("a.cs", a.replace("y", "z"), "C.F"))
+        self.assertEqual(SY.resolve("a.cs", 'class C {\n  string F() { return $"{$"{1}"}"; }\n}\n', "C.F").state,
+                         "unchecked")   # an interpolated string inside a hole: not read, never guessed
+
+
+class SymbolReviewBoundsTests(unittest.TestCase):
+    """1.54 review M1: a hostile file within MAX_CHARS reads in bounded time, and is read once per call."""
+
+    def test_definition_line_patterns_do_not_backtrack(self):
+        # Catches (1.54 review M1): adjacent `\s*`s in the definition-line patterns (`\*?\s*`, `\s*[?!]?\s*`,
+        # Go's receiver), so a 1 MB file of 500 lines of 1990 spaces and an `x` took 16 s per parse, past the
+        # hook's timeout. The bound is generous on purpose: quadratic is seconds a line, linear is milliseconds.
+        import time
+        W = 1990
+        shapes = {"spaces then x": (" " * W + "x\n") * 500, "x spaces y": ("x" + " " * W + "y\n") * 500,
+                  "function spaces": ("function" + " " * W + "(\n") * 500,
+                  "func ( spaces": ("func (" + " " * W + ")\n") * 500,
+                  "name spaces <": ("  x" + " " * W + "<\n") * 500, "public*": ("public " * 280 + "x\n") * 500}
+        for path in ("a.js", "a.ts", "A.java", "a.cs", "a.rs", "a.go"):
+            for label, text in shapes.items():
+                with self.subTest(path=path, shape=label):
+                    t = time.monotonic()
+                    try:
+                        SY.find(path, text)
+                    except SY.Unresolvable:
+                        pass
+                    self.assertLess(time.monotonic() - t, 2.0)
+
+    def test_the_patterns_still_read_what_they_read(self):
+        # Catches: the M1 fix dropping a definition the patterns found before (an indented method, a generator,
+        # an optional or generic method, a Go pointer receiver).
+        src = ("class S {\n  *gen() { yield 1; }\n  async  *agen() { yield 2; }\n  opt?(): void {}\n"
+               "  gen2 <T>(a: T) { return a; }\n  static   get   size() { return 1; }\n}\n"
+               "function  *  g() { yield 1; }\n")
+        self.assertEqual(qn("a.ts", src), ["S", "S.gen", "S.agen", "S.opt", "S.gen2", "S.size", "g"])
+        self.assertEqual(qn("a.go", "package p\nfunc ( s  *  T ) M() {\n}\nfunc (T) N() {\n}\n"), ["T.M", "T.N"])
+        self.assertEqual(qn("a.cs", "class C {\n  public  T  Get <T> (int a) { return default; }\n}\n"), ["C", "C.Get"])
+
+    def test_one_call_parses_a_text_once(self):
+        # Catches (1.54 review M1): the lookup parsing the same old and new text for every ruling's every
+        # condition (4+ parses a ruling), so even a linear parse of a big file adds up past the hook's timeout.
+        from unittest import mock
+        from overture import lookup as L
+        old = "".join(f"function f{i}(a) {{\n  return a + {i};\n}}\n" for i in range(50))
+        new = old.replace("a + 7", "a + 8")
+        conds = [{"kind": "symbol", "path": "a.js", "symbol": f"f{i}",
+                  "sha256": SY.resolve("a.js", old, f"f{i}").symbol.body_sha256} for i in range(10)]
+        SY.clear_cache()
+        with mock.patch.object(SY, "_lexical", wraps=SY._lexical) as lexical:
+            self.assertEqual(len(L.would_break(conds, "a.js", new, old)), 1)
+            self.assertEqual(L.follows(conds, "a.js", new, old), [])
+        self.assertEqual(lexical.call_count, 2)
+        syms = SY.find("a.js", old)
+        syms.clear()   # a caller's list is its own: the memo is never changed through it
+        self.assertEqual(len(SY.find("a.js", old)), 50)
+
+    def test_the_memo_is_keyed_by_path_and_bounded(self):
+        # Catches (mutants N8, N9): a memo keyed by the text alone, so the same text read as `a.js` answers
+        # for `a.py` (another language, another reading), and a memo that never forgets, so a long-running
+        # console server holds every file it ever read (up to MAX_CHARS each).
+        SY.clear_cache()
+        text = "function f() { return 1; }\n"
+        self.assertEqual(SY.resolve("a.js", text, "f").state, "found")
+        self.assertEqual(SY.resolve("a.py", text, "f").state, "unchecked")   # not Python
+        self.assertEqual(SY.resolve("a.go", text, "f").state, "missing")    # Go reads `func`, not `function`
+        for i in range(3 * SY.MEMO_SIZE):
+            SY.find("a.js", f"function f{i}() {{ return {i}; }}\n")
+        self.assertLessEqual(len(SY._MEMO), SY.MEMO_SIZE)
+
+
+class SymbolReviewRedefinitionTests(unittest.TestCase):
+    """1.54 review M2: a second definition of a ruled name that the line patterns do not index."""
+
+    def test_a_redefinition_the_patterns_miss_is_unchecked(self):
+        # Catches (1.54 review M2): `;function f(){return 2}` on a later line (or after code on one line, or
+        # `; m(){}` in a class) overriding the ruled `f` at run time while the hash of the first one holds.
+        base = "function f() { return 1; }\n"
+        cls = "class A {\n  m() { return 1; }\n}\n"
+        for path, text, q in (("a.js", base + ";function f() { return 2; }\n", "f"),
+                              ("a.js", base + "x = 1; function f() { return 2; }\n", "f"),
+                              ("a.js", "function f() { return 1; } function f() { return 2; }\n", "f"),
+                              ("a.ts", base + "export const y = 2; export function f() { return 2; }\n", "f"),
+                              ("a.js", "class A {\n  m() { return 1; }\n  ; m() { return 2; }\n}\n", "A.m"),
+                              ("a.js", "class A {\n  m() { return 1; } static x = 1; m() { return 2; }\n}\n", "A.m"),
+                              ("A.java", "class A {\n  int m() { return 1; } int m() { return 2; }\n}\n", "A.m"),
+                              ("a.py", "def f():\n    return 1\nf = lambda: 2\n", "f"),
+                              ("a.py", "class A:\n    def m(self):\n        return 1\n    m = property(m)\n", "A.m"),
+                              ("a.py", "def f():\n    return 1\nfrom other import f\n", "f")):
+            with self.subTest(path=path, text=text):
+                self.assertEqual(SY.resolve(path, text, q).state, "unchecked")
+        self.assertEqual(SY.resolve("a.js", base, "f").state, "found")
+        self.assertEqual(SY.resolve("a.js", cls, "A.m").state, "found")
+
+    def test_any_python_binding_of_the_name_after_its_def_is_unchecked(self):
+        # Catches (1.54 review M2, security follow-up): a list of rebinding forms (Assign, AugAssign, AnnAssign,
+        # Import) that misses the rest, so `for f in ...`, `with ... as f`, `except E as f`, `(f := ...)`,
+        # `del f`, a match capture, a `type f = ...` alias or a function's `global f` rebinds the ruled `f`
+        # unseen and the reader holds on a definition that is no longer the one that runs.
+        import sys as _sys
+        d = "def f():\n    return 1\n"
+        forms = {"for": d + "for f in range(3):\n    pass\n", "with": d + "with open('x') as f:\n    pass\n",
+                 "except": d + "try:\n    pass\nexcept OSError as f:\n    pass\n",
+                 "walrus": d + "if (f := 2):\n    pass\n", "del": d + "del f\n",
+                 "tuple": d + "a, (b, *f) = 1, (2, 3)\n", "augassign": d + "f += 1\n",
+                 "comprehension walrus": d + "[(f := x) for x in range(2)]\n",
+                 "import as": d + "import os as f\n", "from import": d + "from os import path as f\n",
+                 "star import": d + "from os import *\n",
+                 "global": d + "def g():\n    global f\n    f = 2\n",
+                 "nonlocal": "def outer():\n    def f():\n        return 1\n    def g():\n        nonlocal f\n"
+                             "        f = 2\n    return g\n",
+                 "class attribute": "class A:\n    def f(self):\n        return 1\n    f = 2\n"}
+        if _sys.version_info >= (3, 10):
+            forms.update({"match as": d + "match 1:\n    case int() as f:\n        pass\n",
+                          "match capture": d + "match 1:\n    case f:\n        pass\n",
+                          "match star": d + "match [1]:\n    case [*f]:\n        pass\n",
+                          "match rest": d + "match {}:\n    case {**f}:\n        pass\n"})
+        if _sys.version_info >= (3, 12):
+            forms["type alias"] = d + "type f = int\n"
+        for label, text in forms.items():
+            q = "outer.f" if label == "nonlocal" else "A.f" if label == "class attribute" else "f"
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.py", text, q).state, "unchecked")
+        # Before its def, or local to another function, a binding is no redefinition of it.
+        for text in ("f = None\n" + d, d + "def g():\n    f = 2\n    return f\n", d + "def g(f):\n    return f\n",
+                     d + "x = lambda f: f\n"):
+            with self.subTest(text=text):
+                self.assertEqual(SY.resolve("a.py", text, "f").state, "found")
+
+    def test_a_js_reassignment_of_the_name_is_unchecked(self):
+        # Catches (1.54 review, round 3): `function f(){return 1}` then `f = () => 2;`, `f = function(){}`,
+        # `var|let|const f = ...` or `f += 1` replacing the ruled function at run time, read as holding; and a
+        # method replaced by `this.m = ...` in its class or `A.prototype.m = ...` anywhere.
+        base = "function f() { return 1; }\n"
+        for label, text in (("arrow", base + "f = () => 2;\n"), ("function", base + "f = function () { return 2; };\n"),
+                            ("var", base + "var f = 2;\n"), ("let", base + "let f = 2;\n"),
+                            ("const", base + "const f = () => 2;\n"), ("compound", base + "f += 1;\n"),
+                            ("after code", base + "x = 1; f = 2;\n"),
+                            ("in a function", base + "function g() {\n  f = () => 2;\n}\n"),
+                            ("ts", base.replace("()", "(): number") + "f = (): number => 2;\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.ts" if label == "ts" else "a.js", text, "f").state, "unchecked")
+        cls = "class A {\n  m() { return 1; }\n}\n"
+        for label, text in (("this", "class A {\n  constructor() { this.m = () => 2; }\n  m() { return 1; }\n}\n"),
+                            ("prototype", cls + "A.prototype.m = function () { return 2; };\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", text, "A.m").state, "unchecked")
+        # Not a reassignment of f: a comparison, an arrow's parameter, another object's property, a local
+        # declared in another function, a TS type annotation, a class field, another class's `this.m`.
+        for text in (base + "if (f == 2 || f === 3 || f != 4 || f <= 5 || f >= 6) {}\n", base + "g(f => f + 1);\n",
+                     base + "o.f = 2;\n", base + "function g() {\n  let f = 2;\n  return f;\n}\n",
+                     base + "class B {\n  f = 2;\n}\n"):
+            with self.subTest(text=text):
+                self.assertEqual(SY.resolve("a.js", text, "f").state, "found")
+        self.assertEqual(SY.resolve("a.ts", "class User {\n  n() { return 1; }\n}\nconst u: User = new User();\n",
+                                    "User").state, "found")
+        self.assertEqual(SY.resolve("a.js", cls + "class B {\n  constructor() { this.m = 2; }\n}\n", "A.m").state,
+                         "found")
+
+    def test_a_parameter_or_a_local_of_another_function_is_no_reassignment(self):
+        # Catches (1.54 review, round 4, HIGH): `function g(f = 0)`, `var f = 0` in another body, `(f = 1) =>`,
+        # a parameter assigned, a catch parameter, read as replacing the ruled `f`, so an ordinary edit reads
+        # unchecked (and was promoted to broken). A bare assignment in a function that declares nothing still is.
+        base = "function f() { return 1; }\n"
+        for label, tail in (("default param", "function g(f = 0) {\n  return f;\n}\n"),
+                            ("local var", "function g(xs) {\n  var f = 0;\n  return f;\n}\n"),
+                            ("param assigned", "function g(f) {\n  f = f + 1;\n  return f;\n}\n"),
+                            ("arrow default", "const g = (f = 1) => f;\n"),
+                            ("arrow param, block body", "const g = (f) => {\n  f = 2;\n};\n"),
+                            ("single arrow param", "const g = f => {\n  f = 2;\n};\n"),
+                            ("catch param", "function g() {\n  try {} catch (f) { f = 1; }\n}\n"),
+                            ("method param", "class B {\n  m(f) {\n    f = 2;\n  }\n}\n"),
+                            ("for var", "function g(xs) {\n  for (var f of xs) {}\n}\n"),
+                            ("nested in a block", "function g() {\n  let f = 1;\n  if (f) {\n    f = 2;\n  }\n}\n"),
+                            ("ts typed param", "function g(f: number = 0): number {\n  return f;\n}\n"),
+                            # Catches (mutant T4): a let/const read as reaching out like a var, so one in a
+                            # plain block (no function declares it) replaces the ruled `f`.
+                            ("let in a block", "if (x) {\n  let f = 2;\n}\n"),
+                            ("const in a loop", "for (const x of xs) {\n  const f = x;\n}\n")):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, base + tail, "f").state, "found")
+        for label, tail in (("undeclared in a function", "function g() {\n  f = () => 2;\n}\n"),
+                            ("in an if condition", "if (f = 2) {}\n"),
+                            ("another function's param named else", "function g(h) {\n  f = h;\n}\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", base + tail, "f").state, "unchecked")
+
+    def test_a_shadow_counts_only_on_the_assignments_own_scope_chain(self):
+        # Catches (1.54 review, round 5): the round-4 narrowing reopening false holds. A `let` in a sibling
+        # block, or a `var` in a nested function, taken as declaring the name for an assignment elsewhere in
+        # the function, and a ternary's `(f = ...) :` taken for a parameter list with a TS return type.
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        for label, tail in (
+                ("sibling block let", "function setup() {\n  if (x) { let total = 1; }\n  total = () => 0;\n}\n"),
+                ("nested function var", "function setup() {\n  function h() { var total = 1; }\n  total = () => 0;\n}\n"),
+                ("ternary", "ok ? (total = () => 0) : null;\n"),
+                ("call argument", "run(total = () => 0);\n"),
+                ("if condition", "if (total = () => 0) {}\n"),
+                ("string mentions var", "function setup() {\n  log('var total');\n  total = () => 0;\n}\n"),
+                ("comment mentions let", "function setup() {\n  // let total\n  total = () => 0;\n}\n"),
+                ("other arrow param", "const s = (a) => { total = () => 0; };\n"),
+                ("top-level block", "{\n  total = () => 0;\n}\n"),
+                ("catch(e) block", "try {} catch (e) { total = () => 0; }\n"),
+                ("for body", "for (const x of y) { total = () => 0; }\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", F + tail, "total").state, "unchecked")
+        for label, tail in (
+                ("default param", "function g(total = 0) {\n  return total;\n}\n"),
+                ("arrow default", "const g = (total = 1) => total;\n"),
+                ("var local", "function g() {\n  var total = 0;\n  total += 1;\n  return total;\n}\n"),
+                ("var in a block of the same fn", "function g() {\n  if (a) { var total = 0; }\n  total = 1;\n}\n"),
+                ("param assigned", "function g(total) {\n  total = total + 1;\n}\n"),
+                ("method param", "class B {\n  m(total) {\n    total = 2;\n  }\n}\n"),
+                ("destructured param", "function g({ total }) {\n  total = 1;\n}\n"),
+                ("let in the same block", "function g() {\n  if (a) {\n    let total = 0;\n    total = 1;\n  }\n}\n"),
+                ("let in an outer block", "function g() {\n  let total = 0;\n  if (a) { total = 1; }\n}\n"),
+                ("single-param arrow", "const g = total => { total = 1; };\n"),
+                ("ts return type", "function g(total: number): number {\n  total = 1;\n  return total;\n}\n"),
+                ("ts arrow return type", "const g = (total: number): number => {\n  total = 1;\n  return total;\n};\n")):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, F + tail, "total").state, "found")
+
+    def test_a_for_header_let_and_a_ternary_branch_never_shadow(self):
+        # Catches (1.54 review, round 6): a `let` in a for header credited to the enclosing brace, so a later
+        # `total = ...` in that function read as shadowed; and a ternary branch `(total = ...) : {}` or
+        # `: v => v` read as a parameter list with a TS return type. Each is a real replacement: unchecked.
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        for label, tail in (
+                ("for-let header", "function setup() {\n  for (let total = 0; total < 3; total++) {}\n"
+                                   "  total = () => 0;\n}\n"),
+                ("ternary : {}", "const x = ok ? (total = () => 0) : {};\n"),
+                ("ternary : v =>", "const x = ok ? (total = () => 0) : v => v;\n"),
+                ("ternary then", "const x = ok ? (total = () => 0) => 1 : 2;\n".replace(" => 1", ""))):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", F + tail, "total").state, "unchecked")
+        for label, tail in (
+                ("var in a block of its own fn", "function g() {\n  if (a) { var total = 0; }\n  total = 1;\n}\n"),
+                ("ts arrow param", "const g = (total: number): number => { total = 1; return total; };\n"),
+                ("catch param", "try {} catch (total) { total = 1; }\n"),
+                ("function expression param", "const g = function (total) { total = 1; };\n"),
+                ("arrow in a ternary branch", "const g = ok ? (total) => { total = 1; } : null;\n".replace(
+                    "(total) =>", "x => x;\nconst h = (total) =>"))):
+            with self.subTest(form=label):
+                path = "a.ts" if label.startswith("ts") else "a.js"
+                self.assertEqual(SY.resolve(path, F + tail, "total").state, "found")
+
+    def test_a_catch_binding_is_a_parameter(self):
+        # Catches (mutant U3): `catch (e)` not read as declaring e, so an assignment to a ruled name inside a
+        # catch block that binds that very name reads as a replacement. (U3 is equivalent today: the `{`
+        # after a catch's parentheses reads them as parameters anyway; this holds the behaviour.)
+        F = "function total(xs) {\n  return xs.length;\n}\n"
+        self.assertEqual(SY.resolve("a.js", F + "try {} catch (total) { total = 1; }\n", "total").state, "found")
+        self.assertEqual(SY.resolve("a.ts", F + "try {} catch (total: unknown) { total = 1; }\n", "total").state,
+                         "found")
+        self.assertEqual(SY.resolve("a.js", F + "try {} catch (e) { total = 1; }\n", "total").state, "unchecked")
+
+    def test_a_conditional_python_def_with_any_other_binding_is_unchecked(self):
+        # Catches (1.54 review, round 3): a def under try/except/if/with/for/while whose scope binds the name
+        # elsewhere BEFORE it, read as the one that runs: `try: from fast import f` / `except ImportError: def f`
+        # runs the import when it succeeds, and `f = lambda: 2` then `if False: def f()` never runs the def.
+        d = "    def f():\n        return 1\n"
+        for label, text in (
+                ("try import", "try:\n    from fast import f\nexcept ImportError:\n" + d),
+                ("if False", "f = lambda: 2\nif False:\n" + d),
+                ("with", "f = 2\nwith open('x'):\n" + d),
+                ("for", "f = 2\nfor _ in ():\n" + d),
+                ("while", "import f\nwhile False:\n" + d),
+                ("else branch", "if True:\n    f = 2\nelse:\n" + d),
+                ("nested blocks", "f = 2\nif True:\n    try:\n    " + d.replace("\n    ", "\n        ") + "    except OSError:\n        pass\n"),
+                ("class body", "class A:\n    f = 2\n    if True:\n        def f(self):\n            return 1\n")):
+            q = "A.f" if label == "class body" else "f"
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.py", text, q).state, "unchecked")
+        # An unconditional def keeps the rule: a binding before it is overridden by it.
+        self.assertEqual(SY.resolve("a.py", "f = None\ndef f():\n    return 1\n", "f").state, "found")
+        # A conditional def with no other binding of its name is found.
+        self.assertEqual(SY.resolve("a.py", "if True:\n" + d + "g = 2\n", "f").state, "found")
+
+    def test_a_same_name_in_another_scope_is_no_redefinition(self):
+        # Catches: the M2 check overshooting, so every ruled `render` is unchecked because an object literal,
+        # another class or a nested function also has one, or an anonymous function is taken for one.
+        src = ("function render(a) { return a; }\n"
+               "const view = { render() { return 1; } };\n"
+               "class B {\n  render() { return 2; }\n}\n"
+               "function outer() {\n  function render() { return 3; }\n  return render();\n}\n"
+               "[1, 2].map(function (x) { return x; });\n"
+               "if (render(1)) { render(2); }\n")
+        for q in ("render", "B.render", "outer", "outer.render"):
+            with self.subTest(q=q):
+                self.assertEqual(SY.resolve("a.js", src, q).state, "found")
+        py = "def f():\n    return 1\n\ndef g():\n    f = 2\n    return f\n\nclass A:\n    f = 3\n"
+        self.assertEqual(SY.resolve("a.py", py, "f").state, "found")
+
+
+class SymbolReviewAnchorTests(Tmp):
+    """1.54 review: anchors.Tree on a `symbol` condition, where the first round read a change as holding."""
+
+    def write(self, rel: str, data: str | bytes) -> None:
+        (self.dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.dir / rel).write_bytes(data if isinstance(data, bytes) else data.encode())
+
+    def tree(self):
+        from overture import anchors as A
+        return A.Tree(self.dir, {})
+
+    def test_a_file_that_is_not_utf8_is_unchecked_for_a_symbol(self):
+        # Catches (1.54 review H1): a symbol read from text decoded with errors="replace", where "café" and
+        # "cafè" in a Latin-1 file both decode to "caf�", so a real change of the body holds.
+        from overture import anchors as A
+        good = 'class A {\n  String m() { return "cafe"; }\n}\n'
+        self.write("A.java", good)
+        c, _, why = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.assertEqual(why, "")
+        self.write("A.java", good.replace("cafe", "caf\xe9").encode("latin-1"))
+        _, _, why = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.assertIn("is not UTF-8", why)
+        c2 = {**c, "sha256": SY.resolve("A.java", good.replace("cafe", "caf�"), "A.m").symbol.body_sha256}
+        self.write("A.java", good.replace("cafe", "caf\xe8").encode("latin-1"))
+        st = self.tree().symbol_state(c2)
+        self.assertEqual(st.state, "unchecked")
+        self.assertIn("A.java is not UTF-8 text", st.reason)
+        self.assertIsNone(self.tree().check(c2))
+        # An excerpt still reads such a file as it did (replaced), so nothing else changes for it.
+        self.assertTrue(self.tree().holds({"kind": "excerpt", "path": "A.java", "text": "String m()"}))
+
+    def test_a_renamed_and_changed_symbol_stays_broken_beside_an_unparsable_file(self):
+        # Catches (1.54 review H2), the clearer's case: rename the ruled function and change its body, then
+        # touch any same-language file the kit cannot read (a .jsx with an apostrophe in its text).
+        from overture import anchors as A
+        src = "function pay(a) {\n  return a * 2;\n}\n"
+        self.write("a.js", src)
+        c, _, _ = A.symbol_condition(self.tree(), "a.js", "pay")
+        self.write("a.js", "function charge(a) {\n  return a * 3;\n}\n")
+        self.write("other.jsx", "function X() {\n  return <p>Don't</p>;\n}\n")
+        st = self.tree().symbol_state(c, ["a.js", "other.jsx"])
+        self.assertEqual(st.state, "gone")
+        self.assertIn("other.jsx", st.reason)
+        self.assertIs(self.tree().check(c, ["a.js", "other.jsx"]), False)
+
+    def test_a_body_is_followed_only_into_files_of_its_own_language(self):
+        # Catches (mutant A5): the language filter off, so a Java method deleted from A.java "holds" because
+        # a C# file in the change has the same text (Java and C# bodies hash alike), or a README is searched.
+        from overture import anchors as A
+        src = "class A {\n  int m() { return 1; }\n}\n"
+        self.write("A.java", src)
+        c, _, _ = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.write("A.java", "class A {\n}\n")
+        self.write("B.cs", src)
+        self.assertEqual(SY.resolve("B.cs", src, "A.m").symbol.body_sha256, c["sha256"])   # the premise
+        st = self.tree().symbol_state(c, ["B.cs"])
+        self.assertEqual((st.state, st.path), ("gone", "A.java"))
+        self.write("B.java", src.replace("class A", "class B"))
+        st = self.tree().symbol_state(c, ["B.cs", "B.java"])
+        self.assertEqual((st.state, st.path, st.symbol.qualname), ("moved", "B.java", "B.m"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

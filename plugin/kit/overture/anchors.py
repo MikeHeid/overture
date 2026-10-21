@@ -19,6 +19,21 @@ unrelated change, and the owner had no way to clear it. Three things change:
 `explain` says, in plain words, why each failing condition fails, and
 `plan_reanchor` works out which stale locks can be re-anchored with evidence
 from git history, and which cannot.
+
+1.54 (owner K1-K3) adds a `symbol` condition: one definition, by its dotted
+name and its body's hash (`symbols.py`). It holds while that body is unchanged
+at that name, whatever else in the file changes (K2). When the name is not
+there, the body is looked for (K3): in the same file, and in the files a caller
+names as changed (the CI check passes the pull request's changed and renamed
+files). Found once, the condition holds and says where its code went
+(`moved`); found twice, it is unchecked; found nowhere, it fails, even when a
+changed file could not be searched (that file is named beside the break, 1.54
+review H2). A cited file whose definitions cannot be read (an unknown language,
+a syntax error, not UTF-8) is unchecked, never guessed: `Tree.check`, which
+the CI check and the lookup read, says None for it and True for a moved one.
+`Tree.holds`, which the console reads as "fresh", holds a symbol only at its
+own name: a followed one shows stale there until the owner confirms its
+re-anchor (a proposal, `refactor.py`), and an unchecked one shows stale too.
 """
 
 from __future__ import annotations
@@ -26,13 +41,15 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
+import unicodedata
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, NamedTuple
 
 from . import gitseam as G
 from . import refactor as RX
 from . import rootfs as RF
 from . import schema as S
+from . import symbols as SY
 
 HISTORY_COMMITS = 300   # how far back `git log` looks for the version a lock was taken on
 GIT_TIMEOUT = 20        # seconds for one git call
@@ -45,6 +62,7 @@ UNREADABLE = {"outside": "resolves outside the project", "missing": "is not in t
               "so it is not read",
               "refused": "is not a plain file under the project root (a symlink, or a path that leaves it)"}
 SOURCE_RANGE = re.compile(r"^(?P<path>[^:]+):(?P<a>[0-9]+)(?:-(?P<b>[0-9]+))?\Z")
+MAX_CANDIDATES = 200    # changed files searched for a moved symbol's body (K3), at most
 
 
 def normalise(text: str) -> str:
@@ -52,12 +70,31 @@ def normalise(text: str) -> str:
     return " ".join(text.split())
 
 
+class SymbolState(NamedTuple):
+    """Where a `symbol` condition's code is now.
+
+    `state` is 'holds' (that name, that body), 'moved' (that body, under
+    `path`::`symbol.qualname`), 'changed' (that name, another body), 'gone'
+    (the body is nowhere searched), 'unreadable' (the file is a secret, too big
+    or outside: `status`) or 'unchecked' (`reason`).
+    """
+    state: str
+    path: str
+    symbol: SY.Symbol | None
+    reason: str
+    status: str
+
+
 class _File:
-    __slots__ = ("status", "text", "sha")
+    __slots__ = ("status", "text", "sha", "utf8")
 
     def __init__(self, status: str, data: bytes | None) -> None:
         self.status = status
-        self.text = None if data is None else data.decode("utf-8", errors="replace")
+        self.utf8 = True
+        try:
+            self.text = None if data is None else data.decode("utf-8")
+        except UnicodeDecodeError:   # an excerpt reads it replaced, as before; a symbol never does (1.54 review H1)
+            self.text, self.utf8 = data.decode("utf-8", errors="replace"), False
         self.sha = None if data is None else hashlib.sha256(data).hexdigest()
 
 
@@ -77,6 +114,7 @@ class Tree:
         self.snapshot = snapshot
         self._files: dict[str, _File] = {}
         self._norms: dict[str, str] = {}
+        self._syms: dict[tuple[str, str], list[SY.Symbol] | str] = {}
 
     def _file(self, rel: str) -> _File:
         if RF.confined():
@@ -139,12 +177,76 @@ class Tree:
         return self._norms[f.sha]
 
     def holds(self, c: dict) -> bool:
+        """Whether `c` holds exactly as written; a moved or unchecked symbol does not (see `check`)."""
         if c["kind"] == "item_status":
             return self.item_status.get(c["item"]) == c["status"]
         if c["kind"] == "file_sha256":
             return self.sha(c["path"]) == c["sha256"]
+        if c["kind"] == "symbol":   # at its name with its body; a followed one (moved) waits on a re-anchor
+            return self.symbol_state(c).state == "holds"
         n = self.norm(c["path"])
         return n is not None and normalise(c["text"]) in n
+
+    def check(self, c: dict, candidates: tuple[str, ...] | list[str] = ()) -> bool | None:
+        """`holds` as the CI check and the lookup read it: a symbol followed to its body holds (K3), and one this
+        cannot resolve is None (K1: unchecked, never a guess)."""
+        if c["kind"] != "symbol":
+            return self.holds(c)
+        st = self.symbol_state(c, candidates).state
+        return True if st in ("holds", "moved") else None if st == "unchecked" else False
+
+    def symbols(self, rel: str) -> tuple[str, list[SY.Symbol] | None, str]:
+        """(status, the definitions in `rel` or None, why not): status as `text`; read once per file content."""
+        f = self._file(rel)
+        if f.status != "ok":
+            return f.status, None, ""
+        key = (rel, f.sha)
+        if key not in self._syms and not f.utf8:
+            # 1.54 review H1: replaced text hides a change ("café" and "cafè" in Latin-1 both read "caf\ufffd").
+            self._syms[key] = f"{rel} is not UTF-8 text, so its definitions are not read"
+        if key not in self._syms:
+            try:
+                self._syms[key] = SY.find(rel, f.text)
+            except SY.Unresolvable as e:
+                self._syms[key] = str(e)
+        got = self._syms[key]
+        return ("ok", None, got) if isinstance(got, str) else ("ok", got, "")
+
+    def symbol_state(self, c: dict, candidates: tuple[str, ...] | list[str] = ()) -> SymbolState:
+        """Where `c`'s symbol is now: at its name, moved (its body found once, here or in `candidates`), or not."""
+        path, q, sha = c["path"], c["symbol"], c["sha256"]
+        status, syms, why = self.symbols(path)
+        if status == "ok" and syms is None:
+            return SymbolState("unchecked", path, None, why, status)
+        if status == "ok":
+            same = [s for s in syms if s.qualname == q]
+            if len(same) > 1:
+                return SymbolState("unchecked", path, None, f"{q} is defined {len(same)} times in {path}", status)
+            if same:
+                return SymbolState("holds" if same[0].body_sha256 == sha else "changed", path, same[0], "", status)
+        elif status not in ("missing",):
+            return SymbolState("unreadable", path, None, UNREADABLE[status], status)
+        lang = SY.language(path)
+        hits, blind = [], []
+        for rel in dict.fromkeys([path, *list(candidates)[:MAX_CANDIDATES]]):
+            if SY.language(rel) != lang:
+                continue
+            st, ss, w = self.symbols(rel)
+            if st == "ok" and ss is None:
+                blind.append(w)
+            elif ss:
+                hits += [(rel, s) for s in ss if s.body_sha256 == sha]
+        if len(hits) > 1:   # the paths come from the change: one line each, never one of their own (1.54 review M3)
+            where = ", ".join(plain(f"{r}::{s.qualname}") for r, s in hits[:3])
+            return SymbolState("unchecked", path, None, f"its body is in {len(hits)} places now ({where}), so "
+                                                         f"which one the ruling meant cannot be told", status)
+        if hits:
+            # A body that calls itself by its old name still counts as moved: the name is blanked only where it
+            # is defined, so `f` -> `g` calling `f` hashes alike. The owner confirms the new place (K3).
+            return SymbolState("moved", hits[0][0], hits[0][1], "", status)
+        # 1.54 review H2: a changed file the kit cannot read never turns "gone" into "unchecked", or any PR
+        # could keep a broken ruling green by adding one; it is named beside the break instead.
+        return SymbolState("gone", path, None, f"not searched: {plain(blind[0])}" if blind else "", status)
 
 
 def conditions_for(store, q: dict) -> tuple[list[dict], str]:
@@ -193,12 +295,95 @@ def fresh_anchors(base: list[dict], tree: Tree) -> list[dict]:
     """
     out = []
     for c in base:
+        if c["kind"] == "symbol":
+            out.append(_fresh_symbol(c, tree))
+            continue
         if c["kind"] == "item_status" or tree.holds(c):
             out.append(c)
             continue
         sha = tree.sha(c["path"])
         out.append(c if sha is None else {"kind": "file_sha256", "path": c["path"], "sha256": sha})
     return out
+
+
+def _fresh_symbol(c: dict, tree: Tree) -> dict:
+    """A re-lock's `symbol` anchor: the symbol where it is now (a same-file rename followed), its body re-hashed.
+
+    The owner re-locked against the code as it is, so a changed body is the
+    new body; a symbol that is gone, unreadable or unchecked stays as it was,
+    and keeps the answer stale.
+    """
+    st = tree.symbol_state(c)
+    if st.state in ("holds", "moved", "changed"):
+        return {"kind": "symbol", "path": st.path, "symbol": st.symbol.qualname, "sha256": st.symbol.body_sha256}
+    return c
+
+
+def symbol_ref(path: str, qualname: str) -> str:
+    """The `path::Class.method` form agents write and reports show."""
+    return f"{path}::{qualname}"
+
+
+PLAIN_ARG = re.compile(r"[A-Za-z0-9_./:-]+\Z")   # a value no shell reads as more than itself, POSIX or cmd.exe
+PLAIN_BASIS = re.compile(r"[A-Za-z0-9 ,]+\Z")    # the same inside double quotes
+
+
+def propose_command(qid: str, ref: str, basis: str = "moved, same body") -> str | None:
+    """The `agent.py propose-anchor` command re-anchoring `qid` on `ref`, or None when a value is not plain.
+
+    1.54 review (security): in CI the qid and the moved symbol's path and name
+    come from the pull request's head, so a file named `a;touch x.py` or a name
+    with `$HOME` must reach an operator's copy-paste as data. POSIX quoting is
+    no answer on Windows, where cmd.exe reads `'a;b'` as words and `%X%` in
+    any quotes (1.54 review, LOW), so the command is printed only when the qid
+    and the reference are [A-Za-z0-9_./:-] and the basis is words and commas
+    (double-quoted, which both read alike). Otherwise the caller says so and
+    shows the fields; the JSON keeps them raw.
+    """
+    if not all(isinstance(v, str) for v in (qid, ref, basis)):
+        return None
+    if not (PLAIN_ARG.match(qid) and PLAIN_ARG.match(ref) and PLAIN_BASIS.match(basis)):
+        return None
+    return f'agent.py propose-anchor {qid} --symbol {ref} --basis "{basis}"'
+
+
+def plain(s: str) -> str:
+    """`s` with each control character and line or paragraph separator as `?`: one line, as printed."""
+    return "".join("?" if _control(ch) else ch for ch in s)
+
+
+def _control(v: object) -> bool:
+    return not isinstance(v, str) or any(unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp")
+                                         for ch in v)
+
+
+def symbol_condition(tree: Tree, path: str, qualname: str) -> tuple[dict | None, SY.Symbol | None, str]:
+    """(the `symbol` condition, the definition) for `path::qualname` as the tree is now, or (None, None, why not).
+
+    What `ask` and a re-anchor proposal take: the one definition of that name,
+    its body hash read here. A secrets file, a file that is not there or cannot
+    be read for definitions, a name it does not define and a name it defines
+    twice are each refused by name, never guessed.
+    """
+    ref = symbol_ref(path, qualname)
+    errs = S._check_condition({"kind": "symbol", "path": path, "symbol": qualname, "sha256": "0" * 64})
+    if errs:
+        return None, None, f"{ref}: " + "; ".join(e.removeprefix("valid_if ") for e in errs)
+    if S.secret_path(path):
+        return None, None, f"{ref}: {path} names {S.secret_path(path)}; a condition never reads a secrets file"
+    status, syms, why = tree.symbols(path)
+    if status != "ok":
+        return None, None, f"{ref}: {path} {UNREADABLE[status]}"
+    if syms is None:
+        return None, None, f"{ref}: {why}; anchor on the lines with an excerpt instead"
+    same = [s for s in syms if s.qualname == qualname]
+    if len(same) > 1:
+        return None, None, f"{ref}: {qualname} is defined {len(same)} times in {path}, so it cannot pin one"
+    if not same:
+        names = ", ".join(s.qualname for s in syms[:8]) + (", ..." if len(syms) > 8 else "")
+        return None, None, f"{ref}: {path} defines no {qualname}" + (f" (it defines {names})" if syms else "")
+    s = same[0]
+    return {"kind": "symbol", "path": path, "symbol": qualname, "sha256": s.body_sha256}, s, ""
 
 
 # -- git history ---------------------------------------------------------------
@@ -326,8 +511,14 @@ def nearest(cited: str, current: str) -> dict | None:
     return {"line": start + 1, "diff": _cap(diff)}
 
 
-def explain(c: dict, tree: Tree, history: History, source: str) -> dict:
-    """Why condition `c` holds or not, in plain words, with a small diff where it is cheap."""
+def explain(c: dict, tree: Tree, history: History, source: str, candidates: tuple[str, ...] | list[str] = ()) -> dict:
+    """Why condition `c` holds or not, in plain words, with a small diff where it is cheap.
+
+    A `symbol` condition's `holds` is None when it is unchecked; `candidates`
+    are the files its body is also looked for in (K3: a change's files).
+    """
+    if c["kind"] == "symbol":
+        return explain_symbol(c, tree, candidates)
     out = {"condition": c, "holds": tree.holds(c)}
     if out["holds"]:
         return {**out, "reason": "holds", "words": "This still holds."}
@@ -353,6 +544,46 @@ def explain(c: dict, tree: Tree, history: History, source: str) -> dict:
             return {**out, "reason": "text_changed", "words": words, **near}
         return {**out, "reason": "text_changed", "words": words + " Nothing similar is left in the file."}
     return {**out, "reason": "file_changed", **_file_changed(c, text, history, source)}
+
+
+def explain_symbol(c: dict, tree: Tree, candidates: tuple[str, ...] | list[str] = ()) -> dict:
+    """Why a `symbol` condition holds, moved, changed, is gone or is unchecked, in plain words."""
+    st = tree.symbol_state(c, candidates)
+    ref = symbol_ref(c["path"], c["symbol"])
+    out = {"condition": c}
+    if st.state == "holds":
+        return {**out, "holds": True, "reason": "holds", "words": "This still holds."}
+    if st.state == "moved":
+        to = symbol_ref(st.path, st.symbol.qualname)
+        return {**out, "holds": True, "reason": "moved", "moved_to": {"path": st.path, "symbol": st.symbol.qualname},
+                "line": st.symbol.start_line,
+                "words": f"moved: {ref} -> {to}, with the same body, so it still holds. The owner confirms the "
+                         f"new place (`agent.py propose-anchor` proposes it)."}
+    if st.state == "unchecked":
+        return {**out, "holds": None, "reason": "unchecked",
+                "words": f"{ref}: not checked here, as {st.reason}; a symbol is never guessed."}
+    if st.state == "changed":
+        s = st.symbol
+        return {**out, "holds": False, "reason": "symbol_changed", "line": s.start_line,
+                "words": f"The body of {c['symbol']} in {c['path']} changed since this answer was locked "
+                         f"(it is now lines {s.start_line}-{s.end_line})."}
+    if st.state == "unreadable":
+        return {**out, "holds": False, "reason": "file_unreadable", "words": f"{c['path']} {st.reason}."}
+    where = " or in the files this change touched" if candidates else ""
+    beside = f" ({st.reason}.)" if st.reason else ""   # a changed file it could not search, named (1.54 review H2)
+    if st.status == "missing":
+        return {**out, "holds": False, "reason": "file_missing",
+                "words": f"{c['path']} is gone, and no symbol{where} has the body of {c['symbol']}: it was "
+                         f"deleted, or moved and changed.{beside}"}
+    words = (f"{c['symbol']} is no longer in {c['path']}, and no symbol there{where} has its body: it was "
+             f"deleted, or renamed and changed.{beside}")
+    _, syms, _ = tree.symbols(c["path"])
+    near = difflib.get_close_matches(c["symbol"], [s.qualname for s in syms or []], n=1, cutoff=0.6)
+    if near:
+        s = next(x for x in syms if x.qualname == near[0])
+        words += f" The nearest name there now is {s.qualname} (line {s.start_line})."
+        return {**out, "holds": False, "reason": "symbol_gone", "line": s.start_line, "words": words}
+    return {**out, "holds": False, "reason": "symbol_gone", "words": words}
 
 
 def _file_changed(c: dict, text: str, history: History, source: str) -> dict:
@@ -465,6 +696,9 @@ def _reanchor_one(c: dict, tree: Tree, history: History, source: str) -> tuple[d
         return None, f"item {c['item']} is not {c['status']}; a status change is real, so it stays stale"
     if c["kind"] == "excerpt":
         return None, f"the cited text is no longer in {c['path']}"
+    if c["kind"] == "symbol":
+        return None, (f"{symbol_ref(c['path'], c['symbol'])} is re-anchored by a proposal the owner confirms "
+                      f"(`agent.py propose-anchor <qid> --symbol PATH::NAME`), never from history")
     status = tree.text(c["path"])[0]
     if status != "ok":
         return None, f"{c['path']} {'is gone' if status == 'missing' else UNREADABLE[status]}"

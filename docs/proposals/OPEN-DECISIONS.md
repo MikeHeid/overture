@@ -207,6 +207,25 @@ Q5 was not put to them, so it is an *architect default*.
 | A4 | Checks never run for real | **Split** (owner ★). An agent runs the MCP server against a real client (the `claude` CLI), and checks the lesson chip and the owner-page CSP in a real browser. The owner runs 1.53.1/1.53.2 on real Windows and `service install` on a Mac. **Agent's part done (same day):** `claude -p` with an `--mcp-config` launched `mcp_server.py` against a throwaway console. It listed the 10 tools and posted a question that the console stored under the `--as` name. `answers` and `todo` read it back. Every refusal came back as a tool error naming its fix, and stdout stayed JSON-RPC. The lesson chip and the owner-page CSP already have a real-server test (`test_browser` LiveConsoleTests, 1.34.7); it passes in Chromium and Firefox 155. `agent.py invite` refused inside the session, as designed, so no hand-run sign-in was attempted. |
 | A5 | 1.53.2's skipped LOWs | **Leave them** (architect default). The prerequisite scan links to the vendor's own systemd and launchd steps instead of printing them. Revisit if an operator gets stuck there. |
 
+## Symbol anchors (decided 2026-10-20)
+
+B1 put symbol anchors next. Today a ruling is tied to code by a path and
+either a whole-file hash or an excerpt, so a rename or a move breaks it
+("moved, renamed or deleted"). The owner chose the ★ on all three
+questions.
+
+| # | Question | Decision |
+|---|---|---|
+| K1 | Which languages | **Python through stdlib `ast`, others by their definition lines** (owner ★). JS/TS, Go, Rust, Java and C# symbols are found by `function`, `class`, `fn`, `func`, `struct` and the like, with brace or indent matching. Hooks and the lookup stay stdlib-only and run on native Windows. When a symbol can't be resolved, the anchor reports *unchecked* instead of guessing. |
+| K2 | When a symbol anchor stops holding | **When its body changes** (owner ★). The body is hashed with whitespace and comments normalised. Edits elsewhere in the file don't break it, unlike `file_sha256`. |
+| K3 | A symbol renamed or moved | **Follow, report, propose** (owner ★). The CI check and the lookup look in the changed files (rename detection on) for a symbol with the same body. If one is found, the ruling holds, the new name and place are reported, and a re-anchor proposal goes through `refactor.py` for the owner to confirm. Nothing is rewritten silently. |
+
+Taken without a question (architect defaults): a new `symbol` kind in
+`VALID_IF_KINDS`, so older kits refuse it by name and `SCHEMA_VERSION`
+stays 1; agents may write `path::Class.method`; `agent.py` turns a
+question's `source` line range into the symbol that contains it; the 1.52
+lookup before an agent edits also names the symbols the edit touches.
+
 ## After 1.53, round two (decided 2026-10-20)
 
 A second sweep for open questions found 20 candidates. Seventeen were

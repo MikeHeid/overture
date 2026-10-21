@@ -2990,6 +2990,72 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Symbol anchors (1.54.0)
+
+The owner's B1 and K1 to K3 (2026-10-20, every ★): a ruling can rest on
+one function, method or class, and it still applies after that definition
+is renamed or moved. The architect defaults are in OPEN-DECISIONS.md,
+"Symbol anchors".
+
+- **A `symbol` condition.** An agent writes `"path::Class.method"` in
+  `valid_if`, and the server fills in the hash when the question is asked.
+  The stored form is `{kind, path, symbol, sha256}`. `SCHEMA_VERSION` stays
+  1; an older kit refuses the kind by name.
+- **`symbols.py`** (stdlib only, safe to import from a hook). Python is read
+  through `ast`. JS/TS, Go, Rust, Java and C# are read by their definition
+  lines, with string, comment and template awareness. The hash covers the
+  body with comments and spacing normalised, except inside literals, and
+  leaves out the definition's own name so a rename can be found. Anything
+  the kit cannot read with certainty is *unchecked*, never guessed: two
+  definitions with one name, a later rebinding of the name, a file that is
+  not UTF-8 or is over 1 MiB, or over 5000 definitions. With `--base`, a
+  cited file that read cleanly at the base and cannot be parsed at head is
+  *broken* instead.
+- **The CI check follows a move (K3).** Rename detection is on. When a
+  ruled definition is gone, the changed files of the same language are
+  searched for the same body. Exactly one match: the ruling holds, and is
+  listed as **moved** (`old path::name -> new path::name`), with the
+  `propose-anchor` command. None: broken. Several: unchecked, which fails
+  under `--strict`.
+- **The console stays strict.** A moved definition shows as stale until
+  the owner confirms the steward's proposal; `propose-anchor --symbol
+  PATH::NAME` makes one. Nothing is rewritten silently.
+- **The lookup before an agent edits** names the definitions a ruling
+  rests on, and warns when the edit would change one's body or remove it.
+  It parses each file once per call.
+- **`agent.py symbol-at PATH:A-B [--json]`** prints the definition that
+  holds a question's source lines. It needs no console, and exits 1 when no
+  single definition holds them.
+- Docs: inbox-and-rulings.md "Rulings on a definition (1.54)",
+  mcp-and-ci.md, the console-ask skill, the README.
+- **Review fixes.** An independent review found ways a real change could
+  keep holding. Each is closed, with a test shown red before its fix:
+  - whitespace inside a string, template, regex, Go raw string or C#
+    verbatim string is code;
+  - in a file with JSX, and inside C# interpolation, comment-like text
+    counts;
+  - after `)` or `]`, a `/` keeps the rest of its line verbatim;
+  - a file that is not UTF-8 is unchecked;
+  - an unreadable file elsewhere in the change never turns a broken
+    ruling into an unchecked one;
+  - a regex that backtracked for 16 s on a hostile 1 MB file is bounded;
+  - a redefinition later on a line, or any Python rebinding of the name
+    after its definition, makes it unchecked;
+  - a Python definition under `try`, `if`, `with` or a loop, whose scope
+    binds the name anywhere else (the `try: from fast import f` /
+    `except ImportError: def f` fallback), is unchecked;
+  - a JS/TS reassignment of the name (`f = …`, `var f = …`, `this.m = …`,
+    `A.prototype.m = …`) makes it unchecked, while a parameter or local of
+    the same name in another function does not;
+  - a cited file that read at the base and no longer parses is broken, and
+    only when its definition resolved cleanly there;
+  - a redefinition never hides a changed body: when no definition of the
+    name still has the ruled hash, the ruling is broken, not unchecked;
+  - a file name from the change can no longer forge a line in the report;
+  - the `propose-anchor` command is printed only when every value is
+    plain (`[A-Za-z0-9_./:-]`), so no shell, POSIX or cmd.exe, runs
+    anything from a crafted name.
+
 ## Windows, honestly (1.53.2)
 
 On native Windows the console cannot run, and Overture now says so plainly

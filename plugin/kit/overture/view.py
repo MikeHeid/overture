@@ -677,6 +677,8 @@ def condition_words(c: dict) -> str:
         return f"item `{c['item']}` has status `{c['status']}`"
     if c["kind"] == "excerpt":
         return f"`{c['path']}` still contains the text the question cites"
+    if c["kind"] == "symbol":   # 1.54 (K2)
+        return f"`{c['symbol']}` in `{c['path']}` keeps its body"
     return f"`{c['path']}` is unchanged (a whole-file check)"
 
 
