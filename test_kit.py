@@ -10688,6 +10688,36 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(SY.resolve("a.py", text, "f").state, "found")
 
+    def test_a_js_reassignment_of_the_name_is_unchecked(self):
+        # Catches (1.54 review, round 3): `function f(){return 1}` then `f = () => 2;`, `f = function(){}`,
+        # `var|let|const f = ...` or `f += 1` replacing the ruled function at run time, read as holding; and a
+        # method replaced by `this.m = ...` in its class or `A.prototype.m = ...` anywhere.
+        base = "function f() { return 1; }\n"
+        for label, text in (("arrow", base + "f = () => 2;\n"), ("function", base + "f = function () { return 2; };\n"),
+                            ("var", base + "var f = 2;\n"), ("let", base + "let f = 2;\n"),
+                            ("const", base + "const f = () => 2;\n"), ("compound", base + "f += 1;\n"),
+                            ("after code", base + "x = 1; f = 2;\n"),
+                            ("in a function", base + "function g() {\n  f = () => 2;\n}\n"),
+                            ("ts", base.replace("()", "(): number") + "f = (): number => 2;\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.ts" if label == "ts" else "a.js", text, "f").state, "unchecked")
+        cls = "class A {\n  m() { return 1; }\n}\n"
+        for label, text in (("this", "class A {\n  constructor() { this.m = () => 2; }\n  m() { return 1; }\n}\n"),
+                            ("prototype", cls + "A.prototype.m = function () { return 2; };\n")):
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.js", text, "A.m").state, "unchecked")
+        # Not a reassignment of f: a comparison, an arrow's parameter, another object's property, a local
+        # declared in another function, a TS type annotation, a class field, another class's `this.m`.
+        for text in (base + "if (f == 2 || f === 3 || f != 4 || f <= 5 || f >= 6) {}\n", base + "g(f => f + 1);\n",
+                     base + "o.f = 2;\n", base + "function g() {\n  let f = 2;\n  return f;\n}\n",
+                     base + "class B {\n  f = 2;\n}\n"):
+            with self.subTest(text=text):
+                self.assertEqual(SY.resolve("a.js", text, "f").state, "found")
+        self.assertEqual(SY.resolve("a.ts", "class User {\n  n() { return 1; }\n}\nconst u: User = new User();\n",
+                                    "User").state, "found")
+        self.assertEqual(SY.resolve("a.js", cls + "class B {\n  constructor() { this.m = 2; }\n}\n", "A.m").state,
+                         "found")
+
     def test_a_conditional_python_def_with_any_other_binding_is_unchecked(self):
         # Catches (1.54 review, round 3): a def under try/except/if/with/for/while whose scope binds the name
         # elsewhere BEFORE it, read as the one that runs: `try: from fast import f` / `except ImportError: def f`

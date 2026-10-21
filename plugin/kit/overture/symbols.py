@@ -771,6 +771,15 @@ _METHOD_SHAPE = re.compile(r"(?<![\w$.#])(?P<name>#?[A-Za-z_$][\w$]*)\s*(?:<[^<>
                            r"[^;{}()\n=]*(?:\{|=>)")
 
 
+# 1.54 review, round 3: JS replaces a function by assignment. `f = ...`, `f += ...` or `var|let|const f = ...`
+# (not `==`, `===` or `=>`); a method by `this.m = ...` in its class or `A.prototype.m = ...`. Not covered:
+# destructuring (`[f] = ...`), `Object.defineProperty`, `A.m = ...` for a static method, and `window.f = ...`.
+_JS_OP = r"\s*(?:\*\*|<<|>>>|>>|&&|\|\||\?\?|[-+*/%&|^])?=(?![=>])"
+_JS_ASSIGN = re.compile(r"(?<![\w$.])(?:(?P<decl>var|let|const)\s+)?(?P<name>[A-Za-z_$][\w$]*)" + _JS_OP)
+_JS_THIS = re.compile(r"(?<![\w$.])this\s*\.\s*(?P<name>#?[A-Za-z_$][\w$]*)" + _JS_OP)
+_JS_PROTO = re.compile(r"(?<![\w$.])(?P<type>[A-Za-z_$][\w$]*)\.prototype\.(?P<name>[A-Za-z_$][\w$]*)" + _JS_OP)
+
+
 def _hidden(mask: str, lx: _Lexed, lang: str, defs: list[_Def], type_bodies: set[int]) -> dict[int, int]:
     """Each indexed definition (by index in `defs`) that an unindexed one of the same name, in the same scope,
     redefines: index -> that redefinition's offset. Such a name resolves to unchecked, never to the first."""
@@ -797,7 +806,54 @@ def _hidden(mask: str, lx: _Lexed, lang: str, defs: list[_Def], type_bodies: set
                 continue
             for i in by_name.get((m.group("name"), where), ()):
                 found.setdefault(i, at)
+    if lang == "js":
+        _js_reassigned(mask, lx, defs, type_bodies, indexed, scope, by_name, found)
     return found
+
+
+def _js_reassigned(mask: str, lx: _Lexed, defs: list[_Def], type_bodies: set[int], indexed: set[int], scope,
+                   by_name: dict[tuple[str, int], list[int]], found: dict[int, int]) -> None:
+    """Add to `found` each JS function or method that an assignment replaces (round 3; see _JS_ASSIGN)."""
+    plain: dict[str, list[int]] = {}      # a name -> the defs a bare `name = ...` anywhere may replace (not methods)
+    methods: dict[tuple[int, str], list[int]] = {}   # (its class body's `{`, its name) -> the methods
+    classes = {d.body[0]: d.name for d in defs if d.scope and d.body[0] >= 0}
+    for i, d in enumerate(defs):
+        if not d.name:
+            continue
+        where = scope(d.name_span[0])
+        if where in type_bodies:
+            methods.setdefault((where, d.name), []).append(i)
+        else:
+            plain.setdefault(d.name, []).append(i)
+    for m in _JS_ASSIGN.finditer(mask):
+        at, name = m.start("name"), m.group("name")
+        if at in indexed or name in ("var", "let", "const"):
+            continue
+        k = at - 1
+        while k >= 0 and mask[k] in " \t":
+            k -= 1
+        if k >= 0 and mask[k] == ":":   # a TS annotation (`const u: User = ...`) names a type, not a binding
+            continue
+        where = scope(at)
+        if m.group("decl") in ("let", "const"):   # block-scoped: it shadows only where it is declared
+            hit = by_name.get((name, where), [])
+        elif where in type_bodies:                 # a class field `f = 1` is the class's own
+            hit = []
+        else:                                      # a bare assignment, or a hoisted `var`: it may reach out
+            hit = plain.get(name, [])
+        for i in hit:
+            found.setdefault(i, at)
+    for m in _JS_THIS.finditer(mask):
+        at = m.start("name")
+        for (body, name), hit in methods.items():
+            if name == m.group("name") and body < at < lx.pairs[body]:
+                for i in hit:
+                    found.setdefault(i, at)
+    for m in _JS_PROTO.finditer(mask):
+        for (body, name), hit in methods.items():
+            if name == m.group("name") and classes.get(body) == m.group("type"):
+                for i in hit:
+                    found.setdefault(i, m.start("name"))
 
 
 def _definition(text: str, mask: str, lx: _Lexed, lang: str, at: int, what: str, m: re.Match,
