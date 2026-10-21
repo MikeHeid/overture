@@ -86,11 +86,15 @@ class SymbolState(NamedTuple):
 
 
 class _File:
-    __slots__ = ("status", "text", "sha")
+    __slots__ = ("status", "text", "sha", "utf8")
 
     def __init__(self, status: str, data: bytes | None) -> None:
         self.status = status
-        self.text = None if data is None else data.decode("utf-8", errors="replace")
+        self.utf8 = True
+        try:
+            self.text = None if data is None else data.decode("utf-8")
+        except UnicodeDecodeError:   # an excerpt reads it replaced, as before; a symbol never does (1.54 review H1)
+            self.text, self.utf8 = data.decode("utf-8", errors="replace"), False
         self.sha = None if data is None else hashlib.sha256(data).hexdigest()
 
 
@@ -197,6 +201,9 @@ class Tree:
         if f.status != "ok":
             return f.status, None, ""
         key = (rel, f.sha)
+        if key not in self._syms and not f.utf8:
+            # 1.54 review H1: replaced text hides a change ("café" and "cafè" in Latin-1 both read "caf\ufffd").
+            self._syms[key] = f"{rel} is not UTF-8 text, so its definitions are not read"
         if key not in self._syms:
             try:
                 self._syms[key] = SY.find(rel, f.text)

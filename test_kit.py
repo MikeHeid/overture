@@ -10566,5 +10566,37 @@ class SymbolReviewHashTests(unittest.TestCase):
                          "unchecked")   # an interpolated string inside a hole: not read, never guessed
 
 
+class SymbolReviewAnchorTests(Tmp):
+    """1.54 review: anchors.Tree on a `symbol` condition, where the first round read a change as holding."""
+
+    def write(self, rel: str, data: str | bytes) -> None:
+        (self.dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.dir / rel).write_bytes(data if isinstance(data, bytes) else data.encode())
+
+    def tree(self):
+        from overture import anchors as A
+        return A.Tree(self.dir, {})
+
+    def test_a_file_that_is_not_utf8_is_unchecked_for_a_symbol(self):
+        # Catches (1.54 review H1): a symbol read from text decoded with errors="replace", where "café" and
+        # "cafè" in a Latin-1 file both decode to "caf�", so a real change of the body holds.
+        from overture import anchors as A
+        good = 'class A {\n  String m() { return "cafe"; }\n}\n'
+        self.write("A.java", good)
+        c, _, why = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.assertEqual(why, "")
+        self.write("A.java", good.replace("cafe", "caf\xe9").encode("latin-1"))
+        _, _, why = A.symbol_condition(self.tree(), "A.java", "A.m")
+        self.assertIn("is not UTF-8", why)
+        c2 = {**c, "sha256": SY.resolve("A.java", good.replace("cafe", "caf�"), "A.m").symbol.body_sha256}
+        self.write("A.java", good.replace("cafe", "caf\xe8").encode("latin-1"))
+        st = self.tree().symbol_state(c2)
+        self.assertEqual(st.state, "unchecked")
+        self.assertIn("A.java is not UTF-8 text", st.reason)
+        self.assertIsNone(self.tree().check(c2))
+        # An excerpt still reads such a file as it did (replaced), so nothing else changes for it.
+        self.assertTrue(self.tree().holds({"kind": "excerpt", "path": "A.java", "text": "String m()"}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
