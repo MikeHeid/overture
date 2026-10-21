@@ -83,14 +83,15 @@ Claude installs plugins from a **marketplace**, and the unzipped folder is one.
 from 1.54.0 on is rebuilt from its tag by GitHub Actions, compared byte for
 byte with the uploaded zip, and attested:
 
-    gh attestation verify overture-1.54.0.zip --repo MikeHeid/overture \
-      --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml
+    gh attestation verify overture-1.55.0.zip --repo MikeHeid/overture \
+      --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \
+      --source-ref refs/tags/v1.55.0 --deny-self-hosted-runners
 
-It fails unless that workflow, in this repository, attested these exact
-bytes, and prints the commit and ref of the run. A release's own run names
-its tag; 1.54.0 predates the workflow, so it was attested by a manual run
-started from `main` that checked out the `v1.54.0` tag. Without
-`gh`, compare `sha256sum overture-1.54.0.zip` with the digest shown next to
+It fails unless that workflow, run from that tag on GitHub's own runners,
+attested these exact bytes. 1.54.0 predates the workflow, so a manual run,
+which is accepted only from `main`, built it from the `v1.54.0` tag: check
+it with `--source-ref refs/heads/main`. Without
+`gh`, compare `sha256sum overture-<version>.zip` with the digest shown next to
 the asset on the release page.
 
 1. Unzip it somewhere it can stay; it makes a `overture/` folder, e.g. `~/overture/`. Claude

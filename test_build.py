@@ -293,7 +293,7 @@ class AttestWorkflowTests(unittest.TestCase):
         self.assertIn("types: [published]", self.text)
         self.assertIn("ref: refs/tags/${{ env.TAG }}", self.text)
         self.assertIn("python3 build_zip.py", self.text)
-        self.assertIn("runs-on: ubuntu-24.04", self.text)
+        self.assertIn("runs-on: ubuntu-24.04", self.job("build"))
         self.assertLess(self.text.index("Check the tag"), self.text.index("actions/checkout@"))
         # The mismatch branch must stop the job, and the attest step must come after the match.
         match = next(b for b in self.run_blocks() if 'cmp -s "$BUILT"' in b)
@@ -302,13 +302,31 @@ class AttestWorkflowTests(unittest.TestCase):
         self.assertIn("exit 1", mismatch)
         self.assertLess(self.text.index('cmp -s "$BUILT"'), self.text.index("actions/attest-build-provenance@"))
 
-    def test_the_checkout_keeps_no_token_and_only_the_gh_step_gets_one(self):
-        # Catches: the job token left in .git/config or the job-wide env, where the tag's build_zip.py could read it;
-        # and a trigger that runs on others' code with this workflow's scopes.
-        self.assertIn("persist-credentials: false", self.text)
+    def job(self, name: str) -> str:
+        start = self.text.index(f"\n  {name}:\n")
+        nxt = re.search(r"\n  [a-z][\w-]*:\n", self.text[start + 1:])
+        return self.text[start:start + 1 + nxt.start()] if nxt else self.text[start:]
+
+    def test_the_tag_s_code_runs_without_write_scopes_or_a_signing_identity(self):
+        # Catches: build_zip.py from the tag running in a job that could mint the OIDC token or write the release
+        # (id-token is job-wide, so a step-level token move is not enough); the token left in .git/config; the
+        # attesting job checking out and running the tag's code; a trigger that runs on others' code.
+        build, attest = self.job("build"), self.job("attest")
+        self.assertIn("python3 build_zip.py", build)
+        self.assertRegex(build, r"permissions:\n\s+contents: read\n")
+        for scope in ("write", "id-token"):
+            self.assertNotIn(scope, build)
+        self.assertIn("persist-credentials: false", build)
+        self.assertNotIn("actions/checkout@", attest)
+        self.assertNotIn("build_zip", attest)
+        self.assertIn("needs: build", attest)
         self.assertEqual(self.text.count("GH_TOKEN:"), 1)
-        self.assertLess(self.text.index("Match the published zip"), self.text.index("GH_TOKEN:"))
+        self.assertIn("GH_TOKEN:", attest)
         self.assertNotRegex(self.text, r"pull_request|workflow_run|issue_comment|repository_dispatch")
+
+    def test_a_manual_run_is_accepted_only_from_main(self):
+        # Catches: a workflow_dispatch from any branch, whose attestation would carry that branch's identity.
+        self.assertIn("if: github.event_name == 'release' || github.ref == 'refs/heads/main'", self.job("build"))
 
 
 class UnitTemplateTests(unittest.TestCase):

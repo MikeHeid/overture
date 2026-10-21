@@ -6,13 +6,17 @@
 # The attestation is signed through Sigstore with this workflow's identity,
 # so no key is kept anywhere and no personal address enters the public log.
 #
+# Two jobs: `build` runs the tag's code with read-only access and no signing
+# identity; `attest` holds the write scopes and runs no code from the tag.
+#
 # A release-triggered run is the tag's own, so the attestation names the tag.
 # A manual run (workflow_dispatch, for a tag made before this file existed)
-# names the branch it was started from; the tag is only what it checked out.
+# is accepted only from main and names main; the tag is only what it built.
 #
 # Check a download:
 #   gh attestation verify overture-X.Y.Z.zip --repo MikeHeid/overture \
-#     --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml
+#     --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \
+#     --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
 name: Attest release
 
 on:
@@ -26,16 +30,18 @@ on:
 
 permissions: {}
 
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
 jobs:
-  attest:
+  build:
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
     # The same Ubuntu (and zlib) the owner builds on, so deflate gives the same bytes.
     runs-on: ubuntu-24.04
     permissions:
-      contents: write      # upload the zip to a release that has none
-      id-token: write      # the Sigstore signing identity
-      attestations: write  # store the attestation on the repository
-    env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      contents: read
+    outputs:
+      name: ${{ steps.build.outputs.name }}
     steps:
       - name: Check the tag
         run: |
@@ -57,15 +63,37 @@ jobs:
           fi
           python3 build_zip.py --no-validate --out-dir "$RUNNER_TEMP/dist"
           echo "name=overture-$version.zip" >> "$GITHUB_OUTPUT"
-          echo "path=$RUNNER_TEMP/dist/overture-$version.zip" >> "$GITHUB_OUTPUT"
+          sha256sum "$RUNNER_TEMP/dist/overture-$version.zip"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: zip
+          path: ${{ runner.temp }}/dist/${{ steps.build.outputs.name }}
+          if-no-files-found: error
+          retention-days: 1
+
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # upload the zip to a release that has none
+      id-token: write      # the Sigstore signing identity
+      attestations: write  # store the attestation on the repository
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: zip
+          path: ${{ runner.temp }}/built
 
       - name: Match the published zip, or publish this one
         env:
-          # Only this step holds the token; the build above runs the tag's code without it.
           GH_TOKEN: ${{ github.token }}
-          NAME: ${{ steps.build.outputs.name }}
-          BUILT: ${{ steps.build.outputs.path }}
+          NAME: ${{ needs.build.outputs.name }}
         run: |
+          if [[ ! "$NAME" =~ ^overture-[0-9]+\.[0-9]+\.[0-9]+\.zip$ ]]; then
+            echo "::error::unexpected zip name '$NAME'"; exit 1
+          fi
+          BUILT="$RUNNER_TEMP/built/$NAME"
           assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           if grep -qxF "$NAME" <<< "$assets"; then
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME" --dir "$RUNNER_TEMP/published"
@@ -83,4 +111,4 @@ jobs:
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
-          subject-path: ${{ steps.build.outputs.path }}
+          subject-path: ${{ runner.temp }}/built/${{ needs.build.outputs.name }}

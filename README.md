@@ -433,11 +433,12 @@ Every HIGH finding is closed; the current state:
 
 - **Release zips are attested** (from 1.54.0). When a release is
   published, `.github/workflows/attest-release.yml` rebuilds the zip from
-  its tag (`build_zip.py` is deterministic), refuses to go on if it differs
-  from the uploaded zip by a single byte, and attests it through Sigstore
+  its tag (`build_zip.py` is deterministic) in a job with read-only access,
+  refuses to go on if it differs from the uploaded zip by a single byte,
+  and attests it, in a second job that runs no code from the tag, through Sigstore
   with the workflow's own identity: no key to leak, no personal address in
-  the public log. Check one with `gh attestation verify` and
-  `--signer-workflow` (INSTALL.md, step 1).
+  the public log. Check one with `gh attestation verify`,
+  `--signer-workflow` and `--source-ref` (INSTALL.md, step 1).
 - **The plugin's hooks run in every project you open.** Three act only
   in projects listed in `~/.config/overture/projects.json`, which only
   `agent.py register` and `agent.py steward` write. The fourth,

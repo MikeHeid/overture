@@ -135,7 +135,8 @@ def main(argv: list[str]) -> int:
     print("     a release published without one gets the workflow's build, and a later upload then collides.")
     print("     Watch it with `gh run watch`, then check:")
     print("       gh attestation verify dist/overture-" + argv[1] + ".zip --repo MikeHeid/overture \\")
-    print("         --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml")
+    print("         --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \\")
+    print("         --source-ref refs/tags/v" + argv[1] + " --deny-self-hosted-runners")
     return 0
 
 
