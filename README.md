@@ -312,8 +312,8 @@ CLI inside WSL).
 | Stage | What it means for you | Status |
 |---|---|---|
 | **Wave 1: one person, many agents** | Inbox, rulings, stale, multi-project, automation | ✅ Shipped (v0.7 → v1.32) |
-| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~70%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52), symbol anchors (1.54) |
-| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟠 ~65%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45) |
+| **Wave 2: faster setup, stronger rules** | Install under 10 min without Cloudflare; a broken ruling can block a bad merge | 🟡 ~90%: CI ruling check (1.36), sign-in links without Cloudflare (1.46), ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47), the console as a macOS service (1.51), rulings shown before an agent edits (1.52), symbol anchors (1.54), attested release zips; Docker to come |
+| **Wave 3: teams** | Several people with roles; every decision records who made it | 🟡 ~85%: who decided (1.38), roles (1.39), People (1.40), routing (1.41), role log (1.42), two-key locks (1.43), settings (1.44), notifications (1.45); Linear to come |
 | **Wave 4: an open standard** | Other agent tools (not just Claude) can ask and read rulings | 🟠 ~25%: MCP server (1.35) |
 
 The detailed roadmap, with five development lanes and the reasoning behind
@@ -431,6 +431,13 @@ The security model has been through parallel review passes (code,
 security, python, typescript, adversarial) across the 1.22 → 1.47 arc.
 Every HIGH finding is closed; the current state:
 
+- **Release zips are attested** (from 1.54.0). When a release is
+  published, `.github/workflows/attest-release.yml` rebuilds the zip from
+  its tag (`build_zip.py` is deterministic), refuses to go on if it differs
+  from the uploaded zip by a single byte, and attests it through Sigstore
+  with the workflow's own identity: no key to leak, no personal address in
+  the public log. Check one with `gh attestation verify` and
+  `--signer-workflow` (INSTALL.md, step 1).
 - **The plugin's hooks run in every project you open.** Three act only
   in projects listed in `~/.config/overture/projects.json`, which only
   `agent.py register` and `agent.py steward` write. The fourth,
@@ -536,7 +543,8 @@ notes are current; `release.py` runs it first and bumps nothing until it does.
 ## Changelog
 
 Every release is tagged `vX.Y.Z` with notes in [CHANGELOG.md](CHANGELOG.md)
-and a signed zip on [Releases](https://github.com/MikeHeid/overture/releases).
+and a zip on [Releases](https://github.com/MikeHeid/overture/releases),
+attested by GitHub Actions from 1.54.0 on ([Trust](#trust)).
 The latest three:
 
 - **1.53 — Area notes**: a short note of facts in each declared folder,

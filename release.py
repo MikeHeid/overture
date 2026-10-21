@@ -130,6 +130,12 @@ def main(argv: list[str]) -> int:
     print("     and its overture-local marketplace (1.23.0-1.31.0 shipped repo snapshots by mistake).")
     print("       python3 build_zip.py --deny-file ~/my-deployment-values.txt")
     print("       gh release create v" + argv[1] + " dist/overture-" + argv[1] + ".zip --title 'v" + argv[1] + " — <name>'")
+    print("  8. Publishing starts .github/workflows/attest-release.yml: it rebuilds the zip from the tag, fails if")
+    print("     it differs from the uploaded one, and attests it. Upload the zip in `gh release create` as above:")
+    print("     a release published without one gets the workflow's build, and a later upload then collides.")
+    print("     Watch it with `gh run watch`, then check:")
+    print("       gh attestation verify dist/overture-" + argv[1] + ".zip --repo MikeHeid/overture \\")
+    print("         --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml")
     return 0
 
 

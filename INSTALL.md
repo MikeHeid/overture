@@ -79,6 +79,20 @@ the hooks that need a session restart.
 
 Claude installs plugins from a **marketplace**, and the unzipped folder is one.
 
+**Check the download first** (optional, needs `gh`). Every release zip
+from 1.54.0 on is rebuilt from its tag by GitHub Actions, compared byte for
+byte with the uploaded zip, and attested:
+
+    gh attestation verify overture-1.54.0.zip --repo MikeHeid/overture \
+      --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml
+
+It fails unless that workflow, in this repository, attested these exact
+bytes, and prints the commit and ref of the run. A release's own run names
+its tag; 1.54.0 predates the workflow, so it was attested by a manual run
+started from `main` that checked out the `v1.54.0` tag. Without
+`gh`, compare `sha256sum overture-1.54.0.zip` with the digest shown next to
+the asset on the release page.
+
 1. Unzip it somewhere it can stay; it makes a `overture/` folder, e.g. `~/overture/`. Claude
    reads the plugin from here, so do not delete the folder afterwards.
 2. In Claude Desktop's **Code** tab, or in `claude` in a terminal, run:
