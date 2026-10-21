@@ -125,6 +125,7 @@ from . import peers as PE
 from . import projectcfg as PC
 from . import publish as P
 from . import refactor as RX
+from . import symbols as SY   # 1.54: symbol anchors (K1-K3)
 from . import schema as S
 from . import stewardgit as SG
 from . import tags as T
@@ -802,8 +803,35 @@ def proposal_problem(anchors: list[dict], tree: A.Tree, strict_excerpts: list[di
             else:
                 if not tree.holds(c):
                     return f"{V.condition_words(c)} no longer holds"
+        elif c["kind"] == "symbol":
+            # 1.54: a proposed or kept symbol is AT its name with its body; a followed one (moved) is not yet.
+            st = tree.symbol_state(c)
+            if st.state != "holds":
+                return (f"{A.symbol_ref(c['path'], c['symbol'])} is not at that name with that body now "
+                        f"({st.state}{': ' + st.reason if st.reason else ''})")
         elif not tree.holds(c):
             return f"{V.condition_words(c)} no longer holds"
+    return None
+
+
+def _symbol_hint(tree: A.Tree, path: str, rng: tuple[int, int] | None) -> str:
+    """1.54: ", or on the definition holding those lines: "path::Name"" when exactly one does; else ""."""
+    if rng is None:
+        return ""
+    status, text = tree.text(path)
+    r = SY.enclosing(path, text, *rng) if status == "ok" else None
+    if r is None or r.state != "found":
+        return ""
+    return f', or on the definition that holds them: "{A.symbol_ref(path, r.symbol.qualname)}"'
+
+
+def _symbol_ask(c: object) -> tuple[str, str] | None:
+    """(path, name) when a `valid_if` entry asks for a symbol the server fills in: `path::Name`, or one without sha256."""
+    if isinstance(c, str):
+        return SY.split(c)
+    if isinstance(c, dict) and c.get("kind") == "symbol" and set(c) == {"kind", "path", "symbol"} and \
+            isinstance(c["path"], str) and isinstance(c["symbol"], str):
+        return c["path"], c["symbol"]
     return None
 
 
@@ -1760,6 +1788,32 @@ class Console:
             raise RequestError(400, "; ".join(errs))
         return {**body, "evidence": rows}
 
+    def _fill_symbols(self, body: dict) -> dict:
+        """1.54 (K1): a new question's `symbol` conditions, each read from the tree as it is asked.
+
+        An agent writes `"path::Class.method"` in `valid_if` (or `{"kind": "symbol", "path", "symbol"}`);
+        the server finds that one definition now and fills in its body hash, so no writer supplies a hash it
+        did not read. A secrets file, a name the file does not define or defines twice, and a file whose
+        definitions cannot be read refuse the question, each named (`anchors.symbol_condition`). Any other
+        entry is left for the schema to judge.
+        """
+        conds = body.get("valid_if")
+        refs = [_symbol_ask(c) for c in conds] if isinstance(conds, list) else []
+        if not any(refs):
+            return body
+        tree, out, errs = A.Tree(self.cfg.root, {}), [], []
+        for c, ref in zip(conds, refs):
+            if ref is None:
+                out.append(c)
+                continue
+            cond, _, why = A.symbol_condition(tree, *ref)
+            if cond is None:
+                errs.append(f"valid_if {why}")
+            out.append(cond)
+        if errs:
+            raise RequestError(400, "; ".join(errs))
+        return {**body, "valid_if": out}
+
     def _merge_gate(self, body: dict) -> None:
         """1.33 (D7): an owner's pr-merge is stored only for a PR the steward's last push shows open, not draft,
         passing, and still at the head commit the owner saw, and only one at a time per PR. The server merges
@@ -1838,7 +1892,7 @@ class Console:
             self.items()
             for q in self.adapter.seed_questions():
                 if self.store.question(q["qid"]) is None:
-                    q = self._fill_evidence(dict(q))  # a seed's evidence is read like any other question's
+                    q = self._fill_evidence(self._fill_symbols(dict(q)))  # read like any other question's
                     added.append(self.store.append({**q, "type": "question",
                                                     "schemaVersion": S.SCHEMA_VERSION})["qid"])
         if added:
@@ -3717,28 +3771,51 @@ class Console:
         proposal keeps every condition that still holds and adds those
         excerpts. `reanchor` (re-pin the locked lines at the locked commit) is
         a different thing and is untouched.
+
+        1.54 (K3): or it names definitions (`symbols`: ["path::Class.method"]),
+        each read here as it is now: the new place and name of a symbol the
+        ruling's code moved to (the old condition no longer holds where it
+        names, so it is not kept), and the definition's lines are the
+        proposal's cites, so the record keeps its shape. Nothing is rewritten
+        until the owner confirms.
         """
-        if not isinstance(body, dict) or set(body) != {"qid", "cites", "basis", "nonce"}:
+        keys = set(body) if isinstance(body, dict) else set()
+        if keys not in ({"qid", "cites", "basis", "nonce"}, {"qid", "symbols", "basis", "nonce"},
+                        {"qid", "cites", "symbols", "basis", "nonce"}):
             raise RequestError(400, 'anchor-proposal takes {"qid", "cites": ["path:first-last", ...], "basis", '
-                                    '"nonce"}')
-        errs = RX.cites_problem(body["cites"]) + S._text(body, "basis")
+                                    '"nonce"}, and (1.54) "symbols": ["path::Class.method", ...] beside or instead '
+                                    'of "cites"')
+        syms = body.get("symbols", [])
+        if "symbols" in body and (not isinstance(syms, list) or not 1 <= len(syms) <= RX.MAX_CITES or
+                                  not all(SY.split(s) for s in syms) or len(set(map(str, syms))) != len(syms)):
+            raise RequestError(400, f"symbols is a list of 1 to {RX.MAX_CITES} distinct path::Class.method")
+        errs = (RX.cites_problem(body["cites"]) if "cites" in body else []) + S._text(body, "basis")
         if errs:
             raise RequestError(400, "; ".join(errs))
         self._refactor_problem()
         with self._lock:
             items = self.items()
             q, lk, conds, tree = self._stale_lock(body["qid"], items, "re-anchored")
-            rows, errs = A.fill_evidence([{"cite": c} for c in body["cites"]], tree)
+            rows, errs = A.fill_evidence([{"cite": c} for c in body.get("cites", [])], tree)
             if errs:
                 raise RequestError(400, "; ".join(e.replace("evidence row", "cite") for e in errs))
             excerpts = [{"kind": "excerpt", "path": S.cite_parts(r["cite"])[0], "text": r["text"]} for r in rows]
-            why = proposal_problem(excerpts, tree)
+            found, cites = [], list(body.get("cites", []))
+            for ref in syms:
+                cond, sym, why = A.symbol_condition(tree, *SY.split(ref))
+                if cond is None:
+                    raise RequestError(400, why)
+                found.append(cond)
+                cites.append(f"{cond['path']}:{sym.start_line}-{sym.end_line}")
+            if len(cites) > RX.MAX_CITES or len(set(cites)) != len(cites):
+                raise RequestError(400, f"a proposal cites at most {RX.MAX_CITES} distinct places, symbols included")
+            why = proposal_problem(excerpts + found, tree)
             if why:
                 raise RequestError(400, why)
             anchors = [c for c in conds if tree.holds(c)]
-            anchors += [e for e in excerpts if e not in anchors]
+            anchors += [e for e in excerpts + found if e not in anchors]
             rec = self._rx_append({"type": "proposal", "by": "agent", "qid": q["qid"], "lock": lk["id"],
-                                   "base": conds, "anchors": anchors, "cites": body["cites"],
+                                   "base": conds, "anchors": anchors, "cites": cites,
                                    "basis": body["basis"], "nonce": body["nonce"]})
             self._name(rec, agent)
         return {"record": rec}
@@ -3767,7 +3844,7 @@ class Console:
             if rng is not None or path in cited:
                 where = f"lines {rng[0]}-{rng[1]}" if rng else "lines"
                 errs.append(f"valid_if: file_sha256 on {path}, but the question cites {where} of that same file; "
-                            f"anchor on those lines with an excerpt instead: {form}")
+                            f"anchor on those lines with an excerpt instead: {form}{_symbol_hint(tree, path, rng)}")
                 continue
             status, text = tree.text(path)
             n = len(A._split(text)) if status == "ok" and text else 0
@@ -3937,6 +4014,7 @@ class Console:
             raise RequestError(400, f"{', '.join(named)} is the server's to set, not the writer's")
         replaces = None
         if kind == "question":
+            body = self._fill_symbols(body)   # 1.54: `path::Class.method` read from the tree; reads files
             secrets_named = S.secret_condition_paths(body.get("valid_if"))
             if secrets_named:
                 raise RequestError(400, "; ".join(secrets_named))

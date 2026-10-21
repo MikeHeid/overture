@@ -12345,5 +12345,138 @@ class RulingsRouteTests(_Live, unittest.TestCase):
             self.assertEqual(code, 404, path)
 
 
+# -- 1.54 symbol anchors (owner K1-K3) ----------------------------------------------------------------
+
+PAY = ('def charge(cents):\n    """Round half to even."""\n    return round_half_even(cents)\n\n\n'
+       'class Ledger:\n    def total(self):\n        return 1\n')
+
+
+class SymbolAnchorServerTests(_Live, unittest.TestCase):
+    """The server's side of symbol anchors: `path::Name` at ask, the R1 hint, a re-anchor proposal, /rulings."""
+
+    QID = "LANE.1/Q2"
+
+    def setUp(self):
+        ServerTests.setUp(self)
+        seam_closed(self)
+        (self.cfg.root / "src").mkdir()
+        (self.cfg.root / "src/pay.py").write_text(PAY)
+        (self.cfg.root / "README").write_text("def f():\n    pass\n")
+
+    def ask(self, valid_if, n=2, source="src/pay.py:3"):
+        return self.agent_post("/question", {
+            "qid": f"LANE.1/Q{n}", "item": "LANE.1", "text": "Do charges round half to even?", "kind": "single",
+            "options": [{"id": "a", "label": "Yes"}, {"id": "b", "label": "No"}], "star": "a",
+            "valid_if": valid_if, "source": source, "nonce": "symask" + os.urandom(4).hex()})
+
+    def lock_it(self):
+        code, a = self.req("POST", "/api/answer", self.answer(qid=self.QID, nonce="symanswer1"), tok=token())
+        self.assertEqual(code, 200, a)
+        code, lk = self.req("POST", "/api/lock", {"qid": self.QID, "answer": a["record"]["id"], "nonce": "symlock001"},
+                            tok=token())
+        self.assertEqual(code, 200, lk)
+
+    def view_q(self):
+        code, out = self.req("GET", "/api/view", tok=token())
+        self.assertEqual(code, 200, out)
+        return out["view"]["questions"][self.QID]
+
+    def test_ask_reads_path_colon_colon_name_and_fills_the_body_hash(self):
+        # Catches: the shorthand stored as a string (every older reader refuses it, and nothing checks it),
+        # or a hash taken from the writer instead of read from the tree when the question is asked.
+        code, out = self.ask(["src/pay.py::charge", {"kind": "symbol", "path": "src/pay.py", "symbol": "Ledger.total"}])
+        self.assertEqual(code, 200, out)
+        conds = self.console.store.question(self.QID)["valid_if"]
+        from overture import symbols as SYM
+        self.assertEqual(conds, [
+            {"kind": "symbol", "path": "src/pay.py", "symbol": "charge",
+             "sha256": SYM.resolve("src/pay.py", PAY, "charge").symbol.body_sha256},
+            {"kind": "symbol", "path": "src/pay.py", "symbol": "Ledger.total",
+             "sha256": SYM.resolve("src/pay.py", PAY, "Ledger.total").symbol.body_sha256}])
+
+    def test_ask_refuses_a_symbol_it_cannot_pin_naming_why(self):
+        # Catches: a ruling anchored on a name that is not there, is there twice, sits in a file the kit cannot
+        # read for definitions, or in a secrets file; each must refuse the ask, by name, writing nothing.
+        (self.cfg.root / "src/twice.py").write_text("def f():\n    pass\ndef f():\n    pass\n")
+        (self.cfg.root / "src/bad.py").write_text("def f(:\n")
+        (self.cfg.root / "src/.env.py").write_text("def f():\n    pass\n")
+        for ref, words in (("src/pay.py::nope", "defines no nope (it defines charge, Ledger, Ledger.total)"),
+                           ("src/twice.py::f", "defined 2 times"), ("src/bad.py::f", "does not parse as Python"),
+                           ("src/.env.py::f", "secrets file"), ("src/none.py::f", "is not in the project"),
+                           ("README::f", "not a language this reads")):
+            with self.subTest(ref=ref):
+                code, out = self.ask([ref])
+                self.assertEqual(code, 400, out)
+                self.assertIn(words, out["error"])
+        self.assertIsNone(self.console.store.question(self.QID))
+
+    def test_a_whole_file_hash_on_cited_lines_is_refused_with_the_symbol_that_holds_them(self):
+        # Catches: R1's refusal offering only an excerpt when the cited lines sit inside one definition,
+        # which is the anchor that survives edits elsewhere and a rename (K2, K3).
+        code, out = self.ask([{"kind": "file_sha256", "path": "src/pay.py", "sha256": "0" * 64}], source="src/pay.py:3")
+        self.assertEqual(code, 400, out)
+        self.assertIn('or on the definition that holds them: "src/pay.py::charge"', out["error"])
+
+    def test_a_rename_reads_stale_on_the_console_until_the_owner_confirms_the_proposed_symbol(self):
+        # Catches: a followed rename read as fresh with nobody told (K3 says report AND propose), a proposal
+        # that keeps the old symbol beside the new one, and one confirmed without being read again.
+        code, out = self.ask(["src/pay.py::charge"])
+        self.assertEqual(code, 200, out)
+        self.lock_it()
+        self.assertEqual(self.view_q()["state"], "locked")
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("def charge(", "def charge_cents("))
+        self.assertEqual(self.view_q()["state"], "stale")
+        code, out = self.agent_post("/anchor-proposal", {"qid": self.QID, "symbols": ["src/pay.py::nope"],
+                                                         "basis": "renamed", "nonce": "symprop0001"})
+        self.assertEqual(code, 400, out)
+        self.assertIn("defines no nope", out["error"])
+        code, out = self.agent_post("/anchor-proposal", {"qid": self.QID, "symbols": ["src/pay.py::charge_cents"],
+                                                         "basis": "charge was renamed charge_cents, same body",
+                                                         "nonce": "symprop0002"})
+        self.assertEqual(code, 200, out)
+        p = out["record"]
+        self.assertEqual([(c["kind"], c["symbol"]) for c in p["anchors"]], [("symbol", "charge_cents")])
+        self.assertEqual(p["cites"], ["src/pay.py:1-3"])
+        self.assertEqual(self.view_q()["state"], "stale")           # nothing changes until the owner confirms
+        code, out = self.req("POST", "/api/refactor", {"action": "confirm", "qid": self.QID, "proposal": p["id"],
+                                                        "nonce": "symconf0001"}, tok=token())
+        self.assertEqual(code, 200, out)
+        self.assertEqual(self.view_q()["state"], "locked")
+
+    def test_a_proposed_symbol_that_changed_before_the_confirm_is_refused(self):
+        # Catches: property 4 skipped for the new kind: a confirm of a symbol whose body changed after the
+        # proposal would anchor the ruling on code the owner never saw.
+        self.ask(["src/pay.py::charge"])
+        self.lock_it()
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("def charge(", "def charge_cents("))
+        code, out = self.agent_post("/anchor-proposal", {"qid": self.QID, "symbols": ["src/pay.py::charge_cents"],
+                                                         "basis": "renamed", "nonce": "symprop0003"})
+        self.assertEqual(code, 200, out)
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("def charge(", "def charge_cents(")
+                                                  .replace("round_half_even", "int"))
+        code, out = self.req("POST", "/api/refactor", {"action": "confirm", "qid": self.QID,
+                                                        "proposal": out["record"]["id"], "nonce": "symconf0002"},
+                             tok=token())
+        self.assertEqual(code, 409, out)
+        self.assertIn("src/pay.py::charge_cents is not at that name with that body now (changed)", out["error"])
+
+    def test_rulings_follow_a_renamed_symbol_and_flag_an_unreadable_one_unchecked_not_stale(self):
+        # Catches: the lookup calling a renamed symbol's ruling stale (K3: it holds, followed), and a file
+        # it cannot read for definitions making a ruling stale (K1: unchecked, never a guess).
+        self.ask(["src/pay.py::charge"])
+        self.lock_it()
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("def charge(", "def charge_cents("))
+        code, out = self.agent_post("/rulings", {"paths": ["src/pay.py"]})
+        self.assertEqual(code, 200, out)
+        [h] = out["rulings"]["src/pay.py"]
+        self.assertEqual((h["qid"], h["label"], h["stale"]), (self.QID, "holds", False))
+        (self.cfg.root / "src/pay.py").write_text("def charge(:\n")
+        code, out = self.agent_post("/rulings", {"paths": ["src/pay.py"]})
+        self.assertEqual(out["rulings"]["src/pay.py"][0]["stale"], False)
+        (self.cfg.root / "src/pay.py").write_text(PAY.replace("round_half_even", "int"))
+        code, out = self.agent_post("/rulings", {"paths": ["src/pay.py"]})
+        self.assertEqual(out["rulings"]["src/pay.py"][0]["stale"], True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
