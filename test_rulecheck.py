@@ -657,6 +657,34 @@ class SymbolCheck(Repo):
         (self.root / "src/bill.py").write_bytes(BILL.replace("\n", "\r\n").encode())
         self.assertEqual(self.report()[0], 0)
 
+    def test_the_propose_anchor_hint_is_shell_quoted_and_withheld_for_a_control_character(self):
+        # Catches (1.54 review, security): the printed `agent.py propose-anchor` hint built from the PR head's
+        # file and symbol names unquoted, so an operator who copies it runs `touch x` or a `$(...)`; and a name
+        # with a newline forging a line of its own. The JSON keeps the raw fields, never a shell string.
+        # (A qualified name never holds "(" or a space, so `$NAME`, which a shell expands, is the worst it can be.)
+        import shlex
+        js = "function charge(c) {\n  return roundHalfEven(c);\n}\n"
+        (self.root / "src/pay.js").write_text(js)
+        self.store.append(question(qid="LANE.1/Q3", valid_if=[sym(js, "charge", "src/pay.js")], source="src/pay.js:2"))
+        self.store.append(lock(self.store.append(answer(qid="LANE.1/Q3"))))
+        self.export()
+        self.base = self.commit("base: a JS ruling")
+        (self.root / "src/pay.js").write_text("export const x = 1;\n")
+        (self.root / "a;touch x.js").write_text(js.replace("function charge(", "function $HOME_x("))
+        self.commit("pr")
+        rc, rep = self.report("--base", self.base)
+        self.assertEqual(rep["moved"], [{"qid": "LANE.1/Q3", "from": "src/pay.js::charge", "to": "a;touch x.js::$HOME_x"}])
+        self.assertNotIn("propose-anchor", json.dumps(rep["moved"]))
+        _, out, _ = self.check("--base", self.base)
+        [line] = [ln for ln in out.splitlines() if ln.startswith("moved LANE.1/Q3")]
+        cmd = line.split("Re-anchor it for the owner to confirm: ", 1)[1]
+        self.assertEqual(shlex.split(cmd), ["agent.py", "propose-anchor", "LANE.1/Q3", "--symbol",
+                                            "a;touch x.js::$HOME_x", "--basis", "moved, same body"])
+        self.assertIn("'a;touch x.js::$HOME_x'", cmd)
+        from overture import rulecheck as RCm
+        self.assertIsNone(RCm.A.propose_command("LANE.1/Q2", "a\nrm -rf x.py::f"))
+        self.assertIsNone(RCm.A.propose_command("LANE.1/Q2", "a\x1b[2J.py::f"))
+
     def test_ci_never_writes(self):
         # Catches: the check "helpfully" re-anchoring a moved symbol in the committed ruling (K3: only the
         # owner's confirm re-anchors; CI reads).
@@ -1068,7 +1096,11 @@ class SymbolWouldBreak(unittest.TestCase):
         self.assertEqual(lines[3:5], [
             "NOTE: this edit renames charge to charge_cents, which ruling LANE.1/Q2 rests on; its body is unchanged, "
             "so the ruling follows it. After the edit, propose the new name for the owner to confirm:",
-            "  `agent.py propose-anchor LANE.1/Q2 --symbol src/bill.py::charge_cents --basis \"renamed, same body\"`"])
+            "  `agent.py propose-anchor LANE.1/Q2 --symbol src/bill.py::charge_cents --basis 'renamed, same body'`"])
+        # Catches (1.54 review, security): the hook's command built unquoted from a checkout's own file name.
+        text = L.say("src/a;touch x.py", [h], [], None, "cmd", info=False,
+                     moves=[(h, [{"condition": self.c, "to": "charge_cents"}])])
+        self.assertIn("--symbol 'src/a;touch x.py::charge_cents'", text)
 
 
 class _Registered(Repo):

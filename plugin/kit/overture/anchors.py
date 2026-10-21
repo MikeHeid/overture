@@ -40,6 +40,8 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
+import shlex
+import unicodedata
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
 
@@ -313,6 +315,25 @@ def symbol_ref(path: str, qualname: str) -> str:
     return f"{path}::{qualname}"
 
 
+def propose_command(qid: str, ref: str, basis: str = "moved, same body") -> str | None:
+    """The `agent.py propose-anchor` command re-anchoring `qid` on `ref`, every value shell-quoted; None when unsafe.
+
+    1.54 review (security): in CI the qid and the moved symbol's path and name
+    come from the pull request's head, so a file named `a;touch x.py` or a name
+    with `$HOME` must reach an operator's copy-paste as data. A value holding a
+    control character or a line break is not printed at all (it could forge a
+    line of the report); the caller says so, and the JSON keeps the raw fields.
+    """
+    if any(_control(v) for v in (qid, ref, basis)):
+        return None
+    return shlex.join(["agent.py", "propose-anchor", qid, "--symbol", ref, "--basis", basis])
+
+
+def _control(v: object) -> bool:
+    return not isinstance(v, str) or any(unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp")
+                                         for ch in v)
+
+
 def symbol_condition(tree: Tree, path: str, qualname: str) -> tuple[dict | None, SY.Symbol | None, str]:
     """(the `symbol` condition, the definition) for `path::qualname` as the tree is now, or (None, None, why not).
 
@@ -514,7 +535,7 @@ def explain_symbol(c: dict, tree: Tree, candidates: tuple[str, ...] | list[str] 
         return {**out, "holds": True, "reason": "moved", "moved_to": {"path": st.path, "symbol": st.symbol.qualname},
                 "line": st.symbol.start_line,
                 "words": f"moved: {ref} -> {to}, with the same body, so it still holds. The owner confirms the "
-                         f"new place: `agent.py propose-anchor <qid> --symbol {to}` proposes it."}
+                         f"new place (`agent.py propose-anchor` proposes it)."}
     if st.state == "unchecked":
         return {**out, "holds": None, "reason": "unchecked",
                 "words": f"{ref}: not checked here, as {st.reason}; a symbol is never guessed."}

@@ -609,12 +609,12 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
     warned, out, notes = [], [], []
     for h, ms in moves:
         for m in ms:
+            cmd = A.propose_command(str(h.get("qid")), f"{path}::{symbol_name(m['to'])}", "renamed, same body")
             notes.append("\n".join([
                 _cut(f"NOTE: this edit renames {symbol_name(m['condition'].get('symbol'))} to "
-                     f"{symbol_name(m['to'])}, which ruling {h['qid']} rests on; its body is unchanged, so the ruling "
-                     f"follows it. After the edit, propose the new name for the owner to confirm:"),
-                f"  `agent.py propose-anchor {h['qid']} --symbol {path}::{symbol_name(m['to'])} --basis "
-                f"\"renamed, same body\"`"]))
+                     f"{symbol_name(m['to'])}, which ruling {_short(h.get('qid'), 80)} rests on; its body is "
+                     f"unchanged, so the ruling follows it. After the edit, propose the new name for the owner to "
+                     f"confirm:"), f"  `{cmd}`" if cmd else "  (`agent.py propose-anchor`; a name here is not printable)"]))
     warn = [(h, b) for h, b in breaks if b]
     for i, (h, b) in enumerate(warn):
         w = "\n".join([f"WARNING: this edit would break ruling {h['qid']} (\"{_short(h['question'], 80)}\").",

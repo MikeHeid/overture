@@ -10431,6 +10431,16 @@ class SymbolAnchorTests(Tmp):
         self.assertIn("2 places", st.reason)
         self.assertIsNone(self.tree().check(self.c, ["src/a.py", "src/b.py"]))
 
+    def test_a_candidate_that_cannot_be_read_makes_a_missing_symbol_unchecked_not_gone(self):
+        # Catches: "gone" (a CI failure) said when the body may sit in a changed file the kit could not read
+        # for definitions; that is a guess, and K1 says unchecked.
+        self.write("src/pay.py", "x = 1\n")
+        self.write("src/half.py", "def charge(:\n")
+        st = self.state(["src/half.py"])
+        self.assertEqual(st.state, "unchecked")
+        self.assertIn("src/half.py cannot be read for definitions", st.reason)
+        self.assertEqual(self.state().state, "gone")
+
     def test_an_unreadable_file_is_unchecked_and_a_secret_is_never_read(self):
         # Catches: a syntax error read as "the symbol is gone" (a false break) or as holding (a false pass),
         # and a secrets file read for its definitions.

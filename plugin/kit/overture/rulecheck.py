@@ -254,6 +254,19 @@ def _fence(diff: str) -> str:
     return f"{ticks}diff\n{diff}\n{ticks}"
 
 
+def _moved_line(m: dict) -> str:
+    """One moved ruling in the text report; its re-anchor command shell-quoted, or withheld and said why (1.54 review)."""
+    cmd = A.propose_command(m["qid"], m["to"])
+    if cmd is None:
+        return (f"moved {_plain(m['qid'])}: {_plain(m['from'])} -> {_plain(m['to'])}; it still holds. No re-anchor "
+                f"command is printed: a name holds a control character or a line break (see --format json)")
+    return f"moved {m['qid']}: {m['from']} -> {m['to']}; it still holds. Re-anchor it for the owner to confirm: {cmd}"
+
+
+def _plain(s: str) -> str:
+    return "".join("?" if A._control(ch) else ch for ch in s)
+
+
 def _unchecked_words(j: dict) -> str:
     """Why a ruling was not checked: its unchecked conditions' own words (an item status, a symbol)."""
     return " ".join(c["words"] for c in j["conditions"] if c["holds"] is None)
@@ -330,8 +343,7 @@ def text(rep: dict) -> str:
     out += [f"re-ruled {j['qid']}: {'settled' if j['by'] == 'outcome' else 'new lock ' + j['new_lock']}; "
             f"confirm the owner did this" for j in rep["reruled"]]
     out += [f"unchecked {j['qid']}: {_unchecked_words(j)}" for j in rep["unchecked"]]
-    out += [f"moved {m['qid']}: {m['from']} -> {m['to']}; it still holds. Re-anchor it for the owner to confirm: "
-            f"agent.py propose-anchor {m['qid']} --symbol {m['to']} --basis \"moved, same body\"" for m in rep["moved"]]
+    out += [_moved_line(m) for m in rep["moved"]]
     out += [f"touched {j['qid']}: {', '.join(j['files'])} changed; it still holds" for j in rep["touched"]]
     out += [f"ruling files {k}: {', '.join(v)}" for k, v in rep["files"].items() if v]
     if rep["empty"]:
