@@ -27,7 +27,9 @@ Line endings never count.
 **Never a guess.** A file this cannot read (an unknown extension, a syntax
 error, an unclosed literal, braces that do not balance, past its bounds) raises
 `Unresolvable` with the reason, and a name defined twice in one file resolves
-to `unchecked`, not to either one. Every read is bounded (MAX_CHARS,
+to `unchecked`, not to either one; so does one redefined where no definition
+line is read (after `;` or other code on a line, or in Python by an assignment
+or an import in its own scope: 1.54 review M2). Every read is bounded (MAX_CHARS,
 MAX_SYMBOLS, MAX_SIGNATURE) and nothing recurses on the input, so a hostile
 file cannot hang a hook.
 
@@ -208,6 +210,7 @@ def _python(text: str) -> list[Symbol]:
     except (SyntaxError, ValueError) as e:
         raise Unresolvable(f"it does not parse as Python ({type(e).__name__}: {getattr(e, 'msg', e)})") from None
     defs = []   # (qualname, kind, first line, last line, the line of `def`/`class`, the name)
+    rebound: dict[tuple[str, str], int] = {}   # (scope prefix, name) -> the line an assignment or import rebinds it
     stack: list[tuple[ast.AST, str, bool]] = [(tree, "", False)]
     while stack:    # iterative: a deep tree costs memory, never Python's stack
         node, prefix, in_class = stack.pop()
@@ -222,6 +225,8 @@ def _python(text: str) -> list[Symbol]:
                     raise Unresolvable(f"it has over {MAX_SYMBOLS} definitions")
                 stack.append((child, q + ".", cls))
             elif not isinstance(child, (ast.expr_context, ast.operator, ast.unaryop, ast.cmpop, ast.boolop)):
+                for name in _rebinds(child):
+                    rebound.setdefault((prefix, name), child.lineno)
                 stack.append((child, prefix, in_class))
     try:
         toks = [t for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in _SKIP_TOKENS]
@@ -242,7 +247,32 @@ def _python(text: str) -> list[Symbol]:
             else:
                 words.append(_MARK.get(t.type, t.string))
         out.append(Symbol(q, kind, first, last, _digest(" ".join(words))))
+        again = rebound.get((q[:len(q) - len(name)], name))
+        if again is not None:   # 1.54 review M2: `f = lambda: 2` after `def f` is f now; resolve says unchecked
+            out.append(Symbol(q, kind, again, again, ""))
     return sorted(out, key=lambda s: (s.start_line, -s.end_line))
+
+
+def _rebinds(node: ast.AST) -> list[str]:
+    """The names a statement binds in its own scope by assignment or import (not by `def` or `class`)."""
+    if isinstance(node, ast.Assign):
+        targets = node.targets
+    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and getattr(node, "value", None) is not None:
+        targets = [node.target]
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        return [(a.asname or a.name).split(".")[0] for a in node.names]
+    else:
+        return []
+    out, todo = [], list(targets)
+    while todo:
+        x = todo.pop()
+        if isinstance(x, ast.Name):
+            out.append(x.id)
+        elif isinstance(x, (ast.Tuple, ast.List)):
+            todo += x.elts
+        elif isinstance(x, ast.Starred):
+            todo.append(x.value)
+    return out
 
 
 # -- the brace languages, by definition lines -------------------------------------------------
@@ -271,6 +301,7 @@ class _Lexed(NamedTuple):
     literals: list[tuple[int, int]]   # each literal's [start, end): its text counts verbatim in a body's hash
     pairs: dict[int, int]           # each code `{` offset -> its `}` offset
     owner: list[int]                # per line: the offset of the innermost `{` open at its start, or -1
+    events: list[tuple[int, int]]   # (offset, the innermost `{` open from there), at each brace, in offset order
 
 
 def _lex(text: str, lang: str) -> _Lexed:
@@ -490,7 +521,7 @@ def _lex(text: str, lang: str) -> _Lexed:
             k += 1
         owner.append(cur)
         pos += len(line) + 1
-    return _Lexed(mask, comments, literals, pairs, owner)
+    return _Lexed(mask, comments, literals, pairs, owner, owner_at)
 
 
 def _block_comment_end(text: str, i: int, nested: bool) -> int:
@@ -670,7 +701,54 @@ def _lexical(text: str, lang: str, jsx: bool = False) -> list[Symbol]:
         if d is not None:
             found.append((ln, d))
     defs = [d for _, d in sorted(found, key=lambda x: x[1].start)]
-    return _symbols(text, lx, starts, defs, lang, comments_count=jsx and _JSX.search(mask) is not None)
+    hidden = _hidden(mask, lx, lang, defs, type_bodies)
+    return _symbols(text, lx, starts, defs, lang, comments_count=jsx and _JSX.search(mask) is not None,
+                    hidden=hidden)
+
+
+# 1.54 review M2: a definition the line patterns do not index (after `;` or other code on its line) that
+# redefines an indexed name in the same scope. Each is linear: no two adjacent unbounded repeats.
+_REDEF = {
+    "js": [re.compile(r"(?<![\w$.])function\b\s*(?:\*\s*)?(?P<name>[A-Za-z_$][\w$]*)"),
+           re.compile(r"(?<![\w$.])class\s+(?P<name>[A-Za-z_$][\w$]*)")],
+    "go": [re.compile(r"(?<![\w.])func\s*(?:\([^()\n]*\)\s*)?(?P<name>[A-Za-z_]\w*)"),
+           re.compile(r"(?<![\w.])type\s+(?P<name>[A-Za-z_]\w*)")],
+    "rust": [re.compile(r"(?<![\w.])(?:fn|struct|enum|union|trait|mod)\s+(?P<name>[A-Za-z_]\w*)")],
+    "java": [re.compile(r"(?<![\w.$@])(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_$][\w$]*)")],
+    "csharp": [re.compile(r"(?<![\w.])(?:class|interface|struct|enum|record)\s+(?P<name>[A-Za-z_]\w*)")],
+}
+# A method's shape, counted only directly in a type's body (where code is only definitions): `m(..) {` or `=> `.
+_METHOD_SHAPE = re.compile(r"(?<![\w$.#])(?P<name>#?[A-Za-z_$][\w$]*)\s*(?:<[^<>()\n]*>\s*)?\([^()\n]*\)"
+                           r"[^;{}()\n=]*(?:\{|=>)")
+
+
+def _hidden(mask: str, lx: _Lexed, lang: str, defs: list[_Def], type_bodies: set[int]) -> dict[int, int]:
+    """Each indexed definition (by index in `defs`) that an unindexed one of the same name, in the same scope,
+    redefines: index -> that redefinition's offset. Such a name resolves to unchecked, never to the first."""
+    offs = [o for o, _ in lx.events]
+
+    def scope(off: int) -> int:
+        k = bisect.bisect_right(offs, off) - 1
+        return lx.events[k][1] if k >= 0 else -1
+
+    indexed = {d.name_span[0] for d in defs}
+    by_name: dict[tuple[str, int], list[int]] = {}
+    for i, d in enumerate(defs):
+        if d.name:
+            by_name.setdefault((d.name, scope(d.name_span[0])), []).append(i)
+    found: dict[int, int] = {}
+    pats = [(p, False) for p in _REDEF[lang]] + ([(_METHOD_SHAPE, True)] if lang in ("js", "java", "csharp") else [])
+    for pat, in_type in pats:
+        for m in pat.finditer(mask):
+            at = m.start("name")
+            if at in indexed:
+                continue
+            where = scope(at)
+            if in_type and (where not in type_bodies or m.group("name") in _KEYWORDS):
+                continue
+            for i in by_name.get((m.group("name"), where), ()):
+                found.setdefault(i, at)
+    return found
 
 
 def _definition(text: str, mask: str, lx: _Lexed, lang: str, at: int, what: str, m: re.Match,
@@ -797,7 +875,7 @@ def _decorated_start(mask: str, at: int, marks: tuple[str, ...]) -> int:
 
 
 def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: str,
-             comments_count: bool = False) -> list[Symbol]:
+             comments_count: bool = False, hidden: dict[int, int] | None = None) -> list[Symbol]:
     def line(off: int) -> int:
         return bisect.bisect_right(starts, off)
 
@@ -809,7 +887,8 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
     dropped = [] if comments_count else [(s, e, " ") for s, e in lx.comments]
     cuts = sorted(dropped + [(s, e, None) for s, e in lx.literals])
     cstarts = [s for s, _, _ in cuts]
-    for d in defs:
+    hidden = hidden or {}
+    for n, d in enumerate(defs):
         a, b = extent(d)
         while chain and chain[-1][1] <= a:
             chain.pop()
@@ -824,6 +903,8 @@ def _symbols(text: str, lx: _Lexed, starts: list[int], defs: list[_Def], lang: s
         kind = "method" if d.kind == "function" and chain[:-1] and chain[-2][0].scope else d.kind
         body = _normalise(text, a, b, cuts, cstarts, d.name_span)
         out.append(Symbol(q, kind, line(a), line(b - 1), _digest(body)))
+        if n in hidden:   # redefined where no pattern reads it: a second entry, so the name resolves unchecked
+            out.append(Symbol(q, kind, line(hidden[n]), line(hidden[n]), ""))
         if len(out) > MAX_SYMBOLS:
             raise Unresolvable(f"it has over {MAX_SYMBOLS} definitions")
     return out

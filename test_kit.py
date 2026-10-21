@@ -10626,6 +10626,45 @@ class SymbolReviewBoundsTests(unittest.TestCase):
         self.assertEqual(len(SY.find("a.js", old)), 50)
 
 
+class SymbolReviewRedefinitionTests(unittest.TestCase):
+    """1.54 review M2: a second definition of a ruled name that the line patterns do not index."""
+
+    def test_a_redefinition_the_patterns_miss_is_unchecked(self):
+        # Catches (1.54 review M2): `;function f(){return 2}` on a later line (or after code on one line, or
+        # `; m(){}` in a class) overriding the ruled `f` at run time while the hash of the first one holds.
+        base = "function f() { return 1; }\n"
+        cls = "class A {\n  m() { return 1; }\n}\n"
+        for path, text, q in (("a.js", base + ";function f() { return 2; }\n", "f"),
+                              ("a.js", base + "x = 1; function f() { return 2; }\n", "f"),
+                              ("a.js", "function f() { return 1; } function f() { return 2; }\n", "f"),
+                              ("a.ts", base + "export const y = 2; export function f() { return 2; }\n", "f"),
+                              ("a.js", "class A {\n  m() { return 1; }\n  ; m() { return 2; }\n}\n", "A.m"),
+                              ("a.js", "class A {\n  m() { return 1; } static x = 1; m() { return 2; }\n}\n", "A.m"),
+                              ("A.java", "class A {\n  int m() { return 1; } int m() { return 2; }\n}\n", "A.m"),
+                              ("a.py", "def f():\n    return 1\nf = lambda: 2\n", "f"),
+                              ("a.py", "class A:\n    def m(self):\n        return 1\n    m = property(m)\n", "A.m"),
+                              ("a.py", "def f():\n    return 1\nfrom other import f\n", "f")):
+            with self.subTest(path=path, text=text):
+                self.assertEqual(SY.resolve(path, text, q).state, "unchecked")
+        self.assertEqual(SY.resolve("a.js", base, "f").state, "found")
+        self.assertEqual(SY.resolve("a.js", cls, "A.m").state, "found")
+
+    def test_a_same_name_in_another_scope_is_no_redefinition(self):
+        # Catches: the M2 check overshooting, so every ruled `render` is unchecked because an object literal,
+        # another class or a nested function also has one, or an anonymous function is taken for one.
+        src = ("function render(a) { return a; }\n"
+               "const view = { render() { return 1; } };\n"
+               "class B {\n  render() { return 2; }\n}\n"
+               "function outer() {\n  function render() { return 3; }\n  return render();\n}\n"
+               "[1, 2].map(function (x) { return x; });\n"
+               "if (render(1)) { render(2); }\n")
+        for q in ("render", "B.render", "outer", "outer.render"):
+            with self.subTest(q=q):
+                self.assertEqual(SY.resolve("a.js", src, q).state, "found")
+        py = "def f():\n    return 1\n\ndef g():\n    f = 2\n    return f\n\nclass A:\n    f = 3\n"
+        self.assertEqual(SY.resolve("a.py", py, "f").state, "found")
+
+
 class SymbolReviewAnchorTests(Tmp):
     """1.54 review: anchors.Tree on a `symbol` condition, where the first round read a change as holding."""
 
