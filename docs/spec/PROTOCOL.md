@@ -91,8 +91,17 @@ MUST return the record it already holds and write nothing. A flaky network there
 a decision twice. Two separate writes carry different nonces and are two records, even when they
 say the same thing.
 
-**Text fields.** "Non-empty" means it holds something other than whitespace. A **one-line** field
-holds no line feed, carriage return, U+2028 or U+2029. Lengths count Unicode code points.
+**Text fields.** **Whitespace** is exactly these code points: U+0009 to U+000D, U+001C to U+0020,
+U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. That is
+Python's `str.isspace`. It is not ECMA-262's `\s`, which adds U+FEFF and leaves out U+001C to U+001F
+and U+0085, so the JSON Schema spells the set out instead of using `\S`. "Non-empty" means a field
+holds a code point outside that set. A **one-line** field holds no line feed, carriage return,
+U+2028 or U+2029. Lengths count Unicode code points. A string MUST NOT hold an unpaired surrogate
+(U+D800 to U+DFFF), which UTF-8 cannot carry. JSON's `"\ud800"` escape can produce one, and a store
+refuses the record.
+
+**`schemaVersion` from a writer.** A writer MAY leave `schemaVersion` out of what it sends, and the
+store fills in 1. Every stored record carries it, and it is the integer 1, not `true`.
 
 ## 4. `question`
 
@@ -121,7 +130,7 @@ never answered.
 **Evidence rows.** Each row is `{cite, command?, result?, text}`:
 
 - `cite`: `path:line` or `path:start-end`. The path is relative, its parts are `A-Z a-z 0-9 _ . -`, and
-  none is empty or `..`. The range names 1 to `MAX_EVIDENCE_LINES` = 200 lines, and start comes before end.
+  none is empty or `..`. The range names 1 to `MAX_EVIDENCE_LINES` = 200 lines: its end is not before its start.
 - `command`: one line, the command that was run.
 - `result`: non-empty, at most `MAX_EVIDENCE_RESULT` = 2,000 characters, what it printed.
 - `text`: the cited lines as the store read them when the question was asked, at most
@@ -185,9 +194,9 @@ Every condition is an object with exactly the fields below, all of them non-empt
 | `symbol` | `path`, `symbol`, `sha256` | the definition named `symbol` in `path` has the body hash `sha256` |
 
 **Paths** are relative to the project root. They do not start with `/`, have no `..` part and hold
-no control character. A `symbol` path is at most 300 characters.
+no code point from U+0000 to U+001F. A `symbol` path is at most 300 characters.
 
-**`excerpt`.** To normalise, replace every run of whitespace (line endings included) with one space
+**`excerpt`.** To normalise, replace every run of whitespace (section 3's set, line endings included) with one space
 and trim both ends. The excerpt's `text` is at least `MIN_EXCERPT` = 8 characters once normalised,
 because a shorter one matches by accident, and at most 4,000 characters as written, because a longer
 one is a whole-file hash by another name. The file is read as UTF-8, and a byte sequence that is not
@@ -253,7 +262,7 @@ MUST make them too:
 - a question's `qid` names its own `item`;
 - `star` is one of the question's option ids, and option ids do not repeat;
 - an `excerpt` is at least 8 characters **after** normalisation (the schema checks 8 as written);
-- an evidence `cite` names 1 to 200 lines, start before end.
+- an evidence `cite` names 1 to 200 lines, and its end is not before its start.
 
 **Against the store (section 2's single writer):**
 
@@ -263,13 +272,13 @@ MUST make them too:
 - `supersedes` names the question's current answer, and an answer to a locked question supersedes;
 - a lock names the question's current answer, and locks it once;
 - an anchor names the question's current lock;
-- a `forked_from` names an owner's request;
+- a `forked_from` names an owner's request, and one request yields at most 5 questions;
 - when the store knows the tracker's item list, a question's `item` is on it.
 
 ## 10. Conformance
 
-- **A conforming writer** sends only records that are valid under sections 3 to 8 and pass the JSON
-  Schema, without `id`, `seq` or `ts`.
+- **A conforming writer** sends only records that are valid under sections 3 to 8, without `id`,
+  `seq` or `ts`. Once `schemaVersion` is filled in, they pass the JSON Schema.
 - **A conforming store** makes every check in section 9, assigns `id`, `seq` and `ts` as section 3
   says, and returns the stored record on a retry.
 - **A conforming reader** refuses a store that fails section 2, skips kinds it does not know, and
@@ -371,8 +380,8 @@ An **earlier answer** carries exactly `answer_id`, `picks`, `picked_labels`, `ow
   but no longer checked) may carry one. A `superseded` one names the newer question in `replaced_by`.
 - `replaces`: the `qid` of an older ruling that this question was asked to replace.
 - `fork`: when `forked_from` is present, the owner's request it names, as Overture stored it. Its
-  shape is Overture's own (section 11). Its `id` MUST equal `forked_from` and derive from it as
-  section 3 says.
+  shape is Overture's own (section 11). Its `id` MUST equal `forked_from`, and MUST be the id that
+  section 3 derives from the fork message itself.
 
 **Checks beyond the JSON Schema.** These files arrive by pull request, not through the store, so a
 reader MUST check them as strictly as the store checked the records:
@@ -394,7 +403,8 @@ A writer MUST NOT add fields. A reader SHOULD refuse a field this section does n
 Overture's server is the store's single writer. Agents reach it through `agent.py`, or through its MCP
 server, `plugin/kit/mcp_server.py`, which any MCP client can launch over stdio. The MCP tools are
 `todo`, `view`, `answers`, `check`, `lesson_match`, `health`, `ask`, `reply`, `working` and `rulings`;
-[MCP and CI](../features/mcp-and-ci.md) describes them.
+[MCP and CI](https://github.com/MikeHeid/overture/blob/main/docs/features/mcp-and-ci.md) describes
+them. (The link is absolute because this page also ships alone in the release zip.)
 
 A request to `ask` differs from the stored question in three ways:
 

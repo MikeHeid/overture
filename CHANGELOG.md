@@ -3008,8 +3008,8 @@ rulings without running Overture. The rulings are in OPEN-DECISIONS.md, "Wave
 - **`overture-protocol-1.schema.json`** (JSON Schema 2020-12). It checks one
   record, and a ruling file against `#/$defs/rulingFile`. Section 9 of the
   spec lists the checks it cannot express.
-- **Conformance vectors** (`docs/spec/vectors/`): 49 records, 12 store
-  sequences with each id and seq, and 27 ruling files. Each one is valid or
+- **Conformance vectors** (`docs/spec/vectors/`): 53 records, 14 store
+  sequences with each id and seq, and 31 ruling files. Each one is valid or
   invalid, says whether the schema alone catches it, and gives the
   reference's error. `spec_vectors.py` builds them from hand-written verdicts
   and stops if the kit disagrees with one.
@@ -3019,7 +3019,7 @@ rulings without running Overture. The rulings are in OPEN-DECISIONS.md, "Wave
   that refuses any keyword it does not implement. Its limits, shapes and
   lists equal the kit's constants. The prose states the kit's limits and the
   symbol hash's name (`overture-symbol-1`). The committed vectors equal what
-  the generator builds. 18 mutants across the schema, vectors, prose,
+  the generator builds. 20 mutants across the schema, vectors, prose,
   checker and kit were each killed.
 - **The release zip carries the spec** under `overture/spec/` (P4), so a
   release's attestation covers the spec it implements.
@@ -3028,6 +3028,20 @@ rulings without running Overture. The rulings are in OPEN-DECISIONS.md, "Wave
   SHOULD, and the schema does.
 - Docs: mcp-and-ci.md "The protocol, published (1.55)", the README, and
   STRATEGY.md (all three of the board's limits are now answered).
+- **Review fixes.** An independent review found places where the spec, the
+  schema and the kit disagreed. Each is closed, and a vector failed before
+  each kit fix:
+  - whitespace is one named set (`str.isspace`), and the schema spells it
+    out instead of ECMA-262's `\S`, which differs on U+FEFF, U+001C to
+    U+001F and U+0085;
+  - a ruling file's forked, starred question needs `star_by` in the schema
+    too;
+  - the store refuses an unpaired surrogate by name; it used to fail inside
+    the id hash;
+  - `schemaVersion: true` is no longer read as 1;
+  - in ruling files, `picked_star: 0` is no longer read as `false`, a
+    timestamp takes only ASCII digits, and a locked answer's `reason` must
+    not be blank.
 
 ## Symbol anchors (1.54.0)
 

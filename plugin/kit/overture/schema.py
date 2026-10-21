@@ -297,6 +297,11 @@ MAX_OPTIONS = 12
 MAX_VALID_IF = 16
 
 
+def is_schema_version(v: object) -> bool:
+    """Whether `v` is this kit's schemaVersion; `true` is not 1, though Python says True == 1 (1.55 review L1)."""
+    return not isinstance(v, bool) and v == SCHEMA_VERSION
+
+
 def validate(rec: object) -> list[str]:
     """List every problem with `rec` as its author wrote it; an empty list means well-formed.
 
@@ -306,11 +311,17 @@ def validate(rec: object) -> list[str]:
     """
     if not isinstance(rec, dict):
         return ["a record must be a JSON object"]
+    try:   # JSON's "\ud800" parses to a lone surrogate, which no UTF-8 store line or id hash can hold (1.55 review M3)
+        json.dumps(rec, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        return ["a string holds an unpaired surrogate (U+D800 to U+DFFF), which UTF-8 cannot carry; refused"]
+    except (TypeError, ValueError):
+        pass   # not JSON at all; the checks below name what is wrong
     kind = rec.get("type")
     if kind not in KINDS:
         return [f"unknown record type {kind!r}; expected one of {', '.join(KINDS)}"]
     errs: list[str] = []
-    if rec.get("schemaVersion") != SCHEMA_VERSION:
+    if not is_schema_version(rec.get("schemaVersion")):
         errs.append(f"schemaVersion {rec.get('schemaVersion')!r} is not {SCHEMA_VERSION}; refused, not coerced")
     missing = [k for k in REQUIRED[kind] if k not in rec]
     if missing:

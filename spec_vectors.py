@@ -138,6 +138,12 @@ RECORDS = [
     ("lock naming no answer", w(L, answer=""), False, True, "answer must be the id of the answer"),
     ("anchor with an empty basis", w(N, basis="   "), False, True, "basis must not be empty"),
     ("anchor naming a lock by a bad id", w(N, lock="L1"), False, True, "lock must be the id of the lock"),
+    # Whitespace is the set PROTOCOL.md section 3 names (Python's str.isspace): U+FEFF is not in it, U+001C and
+    # U+0085 are, though ECMA-262's \s says the opposite of all three (1.55 review M1).
+    ("text only U+FEFF, which is not whitespace", w(Q, text="﻿"), True),
+    ("text only U+001C, which is whitespace", w(Q, text="\x1c"), False, True, "text must not be empty"),
+    ("text only U+0085, which is whitespace", w(Q, text="\x85"), False, True, "text must not be empty"),
+    ("schemaVersion true, not 1", w(Q, schemaVersion=True), False, True, "schemaVersion True is not 1"),
 ]
 
 
@@ -210,6 +216,12 @@ SEQS = [
         (w(N, lock=ref(2)), False, "only the current lock is re-anchored")]),
     ("the writer never assigns id, seq or ts", [
         (w(Q, seq=1), False, "seq is the store's to assign")]),
+    # The id's canonical JSON with what escapes and what does not: non-ASCII, a quote, a backslash, a control
+    # character and U+2028 (1.55 review M3).
+    ("the id of text that JSON escapes, and text it does not", [
+        (w(Q, text="Café: \"retry\" \\ once\x01 then stop"), True)]),
+    ("an unpaired surrogate is refused, never hashed", [
+        (w(Q, text="retry \ud800 once"), False, "unpaired surrogate")]),
 ]
 
 
@@ -292,6 +304,8 @@ def rulings() -> list[dict]:
     one = files["one answer, locked"]
     fname, base = next(iter(one.items()))
     chain_name, chain = next(iter(files["superseded, changed once before the new lock, then re-anchored"].items()))
+    fork_name, fork = next(iter(files["forked from an owner's request"].items()))
+    relock_name, relock = next(iter(files["superseded, then locked again"].items()))
     cases = [(n, *next(iter(f.items())), True) for n, f in files.items()]
     cases += [
         ("settled: kept, but no longer checked", fname,
@@ -340,6 +354,14 @@ def rulings() -> list[dict]:
         ("a fork message without forked_from", fname, bad(fork=FORK), False, True, "without forked_from"),
         ("forked_from with no fork message", fname, bad(forked_from="0123456789abcdef01234567", star_by="panel"),
          False, True, "does not carry the fork message"),
+        # 1.55 review M2 and L2.
+        ("forked and starred, without star_by", fork_name, w(fork, star_by=DROP), False, True, "add star_by"),
+        ("picked_star as 0, not false", relock_name, w(relock, locked=dict(relock["locked"], picked_star=0)),
+         False, True, "picked_star does not match"),
+        ("asked_at in other digits", fname, bad(asked_at="٢٠٢٦-10-21T20:00:00Z"), False, True,
+         "is not a store timestamp"),
+        ("a locked answer's blank reason", relock_name, w(relock, locked=dict(relock["locked"], reason="  ")),
+         False, True, "reason must be non-empty text"),
     ]
     out = []
     for case in cases:
@@ -364,7 +386,8 @@ def build() -> dict[str, str]:
     out = {}
     for fname, key, data in (("records.json", "records", check_records()), ("store.json", "sequences", check_store()),
                              ("rulings.json", "rulings", rulings())):
-        out[fname] = json.dumps({"protocol": "1.0", "about": HEAD, key: data}, indent=1, ensure_ascii=False) + "\n"
+        # ASCII escapes: a vector may hold an unpaired surrogate, which UTF-8 cannot write.
+        out[fname] = json.dumps({"protocol": "1.0", "about": HEAD, key: data}, indent=1, ensure_ascii=True) + "\n"
     return out
 
 

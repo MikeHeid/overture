@@ -354,6 +354,20 @@ class DriftTests(unittest.TestCase):
         self.assertEqual(tuple(defs("condition")["properties"]["kind"]["enum"]), S.VALID_IF_KINDS)
         self.assertEqual(set(ev), S.EVIDENCE_FIELDS)
 
+    def test_the_schemas_whitespace_is_the_kits(self):
+        # Catches (1.55 review M1): the schema saying "non-blank" with ECMA-262's \S, which counts U+FEFF as
+        # whitespace and U+001C-001F and U+0085 as not, while the kit strips with str.isspace. Every code point
+        # the explicit class refuses must be exactly one the kit calls whitespace.
+        blank = defs("text")["pattern"]
+        rx = re.compile(blank)
+        wrong = [hex(c) for c in range(0x110000) if not 0xD800 <= c <= 0xDFFF
+                 and bool(rx.fullmatch(chr(c))) == chr(c).isspace()]
+        self.assertEqual(wrong, [])
+        users = [p for p in re.findall(r'"pattern": "([^"]*)"', (SPEC / "overture-protocol-1.schema.json")
+                                       .read_text(encoding="utf-8")) if "\\\\S" in p or p == "\\\\S"]
+        self.assertEqual(users, [], "a pattern still uses \\S")
+        self.assertEqual(json.dumps(blank).count("x1c"), 1)
+
     def test_the_ruling_file_rules_are_folds(self):
         # Catches: a limit or a name rule changed in fold.py or names.py and not in the published rulingFile.
         self.assertEqual(defs("rulingFile")["properties"]["earlier"]["maxItems"], F.MAX_EARLIER)

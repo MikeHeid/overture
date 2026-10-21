@@ -900,6 +900,87 @@
      "reference_error": "seq is the store's to assign"
     }
    ]
+  },
+  {
+   "name": "the id of text that JSON escapes, and text it does not",
+   "steps": [
+    {
+     "record": {
+      "type": "question",
+      "schemaVersion": 1,
+      "qid": "PAY-2/Q1",
+      "item": "PAY-2",
+      "text": "Caf\u00e9: \"retry\" \\ once\u0001 then\u2028stop",
+      "kind": "single",
+      "options": [
+       {
+        "id": "retry_once",
+        "label": "Retry once",
+        "description": "One more try after 30 s; cheap"
+       },
+       {
+        "id": "no_retry",
+        "label": "Never retry",
+        "description": "Fail at once; the caller decides"
+       }
+      ],
+      "star": "retry_once",
+      "valid_if": [
+       {
+        "kind": "excerpt",
+        "path": "docs/payments.md",
+        "text": "A charge is attempted at most twice."
+       }
+      ],
+      "source": "docs/payments.md:12-14",
+      "by": "agent",
+      "nonce": "q1-nonce-0001"
+     },
+     "accepted": true,
+     "id": "be075159f05b0d1319dcf25a",
+     "seq": 1
+    }
+   ]
+  },
+  {
+   "name": "an unpaired surrogate is refused, never hashed",
+   "steps": [
+    {
+     "record": {
+      "type": "question",
+      "schemaVersion": 1,
+      "qid": "PAY-2/Q1",
+      "item": "PAY-2",
+      "text": "retry \ud800 once",
+      "kind": "single",
+      "options": [
+       {
+        "id": "retry_once",
+        "label": "Retry once",
+        "description": "One more try after 30 s; cheap"
+       },
+       {
+        "id": "no_retry",
+        "label": "Never retry",
+        "description": "Fail at once; the caller decides"
+       }
+      ],
+      "star": "retry_once",
+      "valid_if": [
+       {
+        "kind": "excerpt",
+        "path": "docs/payments.md",
+        "text": "A charge is attempted at most twice."
+       }
+      ],
+      "source": "docs/payments.md:12-14",
+      "by": "agent",
+      "nonce": "q1-nonce-0001"
+     },
+     "accepted": false,
+     "reference_error": "unpaired surrogate"
+    }
+   ]
   }
  ]
 }
