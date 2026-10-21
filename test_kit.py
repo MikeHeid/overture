@@ -10649,6 +10649,41 @@ class SymbolReviewRedefinitionTests(unittest.TestCase):
         self.assertEqual(SY.resolve("a.js", base, "f").state, "found")
         self.assertEqual(SY.resolve("a.js", cls, "A.m").state, "found")
 
+    def test_any_python_binding_of_the_name_after_its_def_is_unchecked(self):
+        # Catches (1.54 review M2, security follow-up): a list of rebinding forms (Assign, AugAssign, AnnAssign,
+        # Import) that misses the rest, so `for f in ...`, `with ... as f`, `except E as f`, `(f := ...)`,
+        # `del f`, a match capture, a `type f = ...` alias or a function's `global f` rebinds the ruled `f`
+        # unseen and the reader holds on a definition that is no longer the one that runs.
+        import sys as _sys
+        d = "def f():\n    return 1\n"
+        forms = {"for": d + "for f in range(3):\n    pass\n", "with": d + "with open('x') as f:\n    pass\n",
+                 "except": d + "try:\n    pass\nexcept OSError as f:\n    pass\n",
+                 "walrus": d + "if (f := 2):\n    pass\n", "del": d + "del f\n",
+                 "tuple": d + "a, (b, *f) = 1, (2, 3)\n", "augassign": d + "f += 1\n",
+                 "comprehension walrus": d + "[(f := x) for x in range(2)]\n",
+                 "import as": d + "import os as f\n", "from import": d + "from os import path as f\n",
+                 "star import": d + "from os import *\n",
+                 "global": d + "def g():\n    global f\n    f = 2\n",
+                 "nonlocal": "def outer():\n    def f():\n        return 1\n    def g():\n        nonlocal f\n"
+                             "        f = 2\n    return g\n",
+                 "class attribute": "class A:\n    def f(self):\n        return 1\n    f = 2\n"}
+        if _sys.version_info >= (3, 10):
+            forms.update({"match as": d + "match 1:\n    case int() as f:\n        pass\n",
+                          "match capture": d + "match 1:\n    case f:\n        pass\n",
+                          "match star": d + "match [1]:\n    case [*f]:\n        pass\n",
+                          "match rest": d + "match {}:\n    case {**f}:\n        pass\n"})
+        if _sys.version_info >= (3, 12):
+            forms["type alias"] = d + "type f = int\n"
+        for label, text in forms.items():
+            q = "outer.f" if label == "nonlocal" else "A.f" if label == "class attribute" else "f"
+            with self.subTest(form=label):
+                self.assertEqual(SY.resolve("a.py", text, q).state, "unchecked")
+        # Before its def, or local to another function, a binding is no redefinition of it.
+        for text in ("f = None\n" + d, d + "def g():\n    f = 2\n    return f\n", d + "def g(f):\n    return f\n",
+                     d + "x = lambda f: f\n"):
+            with self.subTest(text=text):
+                self.assertEqual(SY.resolve("a.py", text, "f").state, "found")
+
     def test_a_same_name_in_another_scope_is_no_redefinition(self):
         # Catches: the M2 check overshooting, so every ruled `render` is unchecked because an object literal,
         # another class or a nested function also has one, or an anonymous function is taken for one.

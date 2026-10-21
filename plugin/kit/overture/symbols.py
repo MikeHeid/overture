@@ -210,13 +210,17 @@ def _python(text: str) -> list[Symbol]:
     except (SyntaxError, ValueError) as e:
         raise Unresolvable(f"it does not parse as Python ({type(e).__name__}: {getattr(e, 'msg', e)})") from None
     defs = []   # (qualname, kind, first line, last line, the line of `def`/`class`, the name)
-    rebound: dict[tuple[str, str], int] = {}   # (scope prefix, name) -> the line an assignment or import rebinds it
+    # (scope prefix, name) -> where each binding of it that is not a def or class sits: (line, column)
+    rebound: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    starred: dict[str, list[tuple[int, int]]] = {}   # scope prefix -> where a `from x import *` sits
+    defs_at: dict[str, tuple[int, int]] = {}      # qualname -> where its def or class statement sits
     stack: list[tuple[ast.AST, str, bool]] = [(tree, "", False)]
     while stack:    # iterative: a deep tree costs memory, never Python's stack
         node, prefix, in_class = stack.pop()
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 q = prefix + child.name
+                defs_at.setdefault(q, (child.lineno, child.col_offset))
                 cls = isinstance(child, ast.ClassDef)
                 kind = "class" if cls else "method" if in_class else "function"
                 first = min([child.lineno] + [d.lineno for d in child.decorator_list])
@@ -225,8 +229,7 @@ def _python(text: str) -> list[Symbol]:
                     raise Unresolvable(f"it has over {MAX_SYMBOLS} definitions")
                 stack.append((child, q + ".", cls))
             elif not isinstance(child, (ast.expr_context, ast.operator, ast.unaryop, ast.cmpop, ast.boolop)):
-                for name in _rebinds(child):
-                    rebound.setdefault((prefix, name), child.lineno)
+                _bindings(child, prefix, rebound, starred)
                 stack.append((child, prefix, in_class))
     try:
         toks = [t for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in _SKIP_TOKENS]
@@ -247,32 +250,58 @@ def _python(text: str) -> list[Symbol]:
             else:
                 words.append(_MARK.get(t.type, t.string))
         out.append(Symbol(q, kind, first, last, _digest(" ".join(words))))
-        again = rebound.get((q[:len(q) - len(name)], name))
-        if again is not None:   # 1.54 review M2: `f = lambda: 2` after `def f` is f now; resolve says unchecked
-            out.append(Symbol(q, kind, again, again, ""))
+        scope = q[:len(q) - len(name)]
+        here = defs_at.get(q, (at, 0))
+        after = [w for w in rebound.get((scope, name), []) + starred.get(scope, []) if w > here]
+        if after:   # 1.54 review M2: bound again after its def (`f = ...`, `for f in`, `global f`): unchecked
+            out.append(Symbol(q, kind, after[0][0], after[0][0], ""))
     return sorted(out, key=lambda s: (s.start_line, -s.end_line))
 
 
-def _rebinds(node: ast.AST) -> list[str]:
-    """The names a statement binds in its own scope by assignment or import (not by `def` or `class`)."""
-    if isinstance(node, ast.Assign):
-        targets = node.targets
-    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and getattr(node, "value", None) is not None:
-        targets = [node.target]
-    elif isinstance(node, (ast.Import, ast.ImportFrom)):
-        return [(a.asname or a.name).split(".")[0] for a in node.names]
-    else:
-        return []
-    out, todo = [], list(targets)
-    while todo:
-        x = todo.pop()
-        if isinstance(x, ast.Name):
-            out.append(x.id)
-        elif isinstance(x, (ast.Tuple, ast.List)):
-            todo += x.elts
-        elif isinstance(x, ast.Starred):
-            todo.append(x.value)
-    return out
+_LATER = (1 << 30, 0)   # a binding whose time cannot be told (a function's `global f`): after every def
+
+
+def _bindings(node: ast.AST, prefix: str, rebound: dict[tuple[str, str], list[tuple[int, int]]],
+              starred: dict[str, list[tuple[int, int]]]) -> None:
+    """Record any binding `node` itself makes in scope `prefix`, by any form but `def` and `class`.
+
+    Fail closed (1.54 review M2, security): not a list of statements but every
+    node that binds a name: a Name stored or deleted (assignment, `for`, `with`,
+    walrus, `del`, a `type` alias), a match capture, an `except ... as`, an
+    import's alias. A function's `global f` or `nonlocal f` binds f in the
+    module or an enclosing scope, at a time that cannot be told: always later.
+    The traversal reaches each node once, with the prefix of the scope it is in.
+    """
+    def add(scope: str, name: str, where: tuple[int, int]) -> None:
+        rebound.setdefault((scope, name), []).append(where)
+
+    where = (getattr(node, "lineno", _LATER[0]), getattr(node, "col_offset", 0))
+    names: list[str] = []
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        names = [node.id]
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        names = [node.name]
+    elif isinstance(node, ast.alias):
+        if node.name == "*":
+            starred.setdefault(prefix, []).append(where)
+        else:
+            names = [(node.asname or node.name).split(".")[0]]
+    elif type(node).__name__ in ("MatchAs", "MatchStar") and getattr(node, "name", None):
+        names = [node.name]
+    elif type(node).__name__ == "MatchMapping" and getattr(node, "rest", None):
+        names = [node.rest]
+    elif type(node).__name__ == "TypeAlias" and isinstance(getattr(node, "name", None), ast.Name):
+        names = [node.name.id]
+    elif isinstance(node, ast.Global):
+        for n in node.names:
+            add("", n, _LATER)
+    elif isinstance(node, ast.Nonlocal):
+        parts = prefix.split(".")[:-1]   # "outer.g." -> ["outer", "g"]: every enclosing scope but the module's
+        for k in range(1, len(parts)):
+            for n in node.names:
+                add(".".join(parts[:k]) + ".", n, _LATER)
+    for n in names:
+        add(prefix, n, where)
 
 
 # -- the brace languages, by definition lines -------------------------------------------------
