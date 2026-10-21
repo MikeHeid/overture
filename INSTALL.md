@@ -83,9 +83,9 @@ Claude installs plugins from a **marketplace**, and the unzipped folder is one.
 from 1.54.0 on is rebuilt from its tag by GitHub Actions, compared byte for
 byte with the uploaded zip, and attested:
 
-    gh attestation verify overture-1.55.0.zip --repo MikeHeid/overture \
+    gh attestation verify overture-1.55.1.zip --repo MikeHeid/overture \
       --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \
-      --source-ref refs/tags/v1.55.0 --deny-self-hosted-runners
+      --source-ref refs/tags/v1.55.1 --deny-self-hosted-runners
 
 It fails unless that workflow, run from that tag on GitHub's own runners,
 attested these exact bytes. 1.54.0 predates the workflow, so a manual run,

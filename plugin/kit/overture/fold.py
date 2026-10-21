@@ -66,6 +66,16 @@ RECORD_ID = S.RECORD_ID
 MAX_EARLIER = 100
 MAX_FORK_QUESTIONS = 5  # the store's cap, re-checked across committed files (§6.6)
 TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")   # [0-9]: `\d` takes any script's digits (1.55 L2)
+# Every field a ruling file and its locked answers may carry (PROTOCOL.md section 13); fold refuses
+# any other by name, as the schema's rulingFile and lockedAnswer do (1.55.1).
+RULING_KEYS = frozenset({
+    "schemaVersion", "qid", "item", "question", "kind", "options", "star", "source", "asked_by", "asked_at",
+    "valid_if", "locked", "history", "earlier", "order", "forked_from", "star_by", "evidence", "asked_by_agent",
+    "outcome", "replaces", "fork"})
+LOCKED_KEYS = frozenset({
+    "answer_id", "picks", "picked_labels", "picked_star", "rejected_labels", "own_text", "by", "answered_at",
+    "lock_id", "locked_by", "locked_at", "locked_by_name", "supersedes", "reason", "anchored_by", "anchors",
+    "anchor_id", "anchor_basis", "anchored_at"})
 
 
 def locked_filename(qid: str) -> str:
@@ -228,6 +238,9 @@ def check_entry(name: str, e: object, items: dict[str, dict]) -> list[str]:
     if not S.is_schema_version(e.get("schemaVersion")):
         return [f"{name}: schemaVersion {e.get('schemaVersion')!r} is not {S.SCHEMA_VERSION}"]
     errs = []
+    unknown = sorted(map(str, set(e) - RULING_KEYS))
+    if unknown:
+        errs.append(f"{name}: unknown field(s) {', '.join(unknown)}")
     qid = e.get("qid")
     if not isinstance(qid, str) or locked_filename(qid) != name:
         errs.append(f"{name}: file name does not match qid {qid!r}")
@@ -414,6 +427,9 @@ def _check_locked_answer(name: str, a: object, option_ids: list, labels: dict, s
     if not isinstance(a, dict):
         return [f"{name}: an answer in the chain is not an object"]
     errs = []
+    unknown = sorted(map(str, set(a) - LOCKED_KEYS))
+    if unknown:
+        errs.append(f"{name}: answer {a.get('answer_id')}: unknown field(s) {', '.join(unknown)}")
     for k in ("answer_id", "lock_id") + (("supersedes",) if "supersedes" in a else ()):
         if not isinstance(a.get(k), str) or not RECORD_ID.match(a[k]):
             errs.append(f"{name}: {k} {a.get(k)!r} is not a store record id")
