@@ -480,6 +480,15 @@ def _lex(text: str, lang: str) -> _Lexed:
         elif tok == "/":   # JS only: a regex literal, or division
             j = _regex_end(text, i) if _regex_may_start(text, last, i) else -1
             if j < 0:
+                k = i - 1
+                while k >= last and text[k] in " \t":
+                    k -= 1
+                if k >= last and text[k] in ")]":
+                    # 1.54 review: after `)` or `]` a regex (`if (s) /a  b/`) cannot be told from a division,
+                    # so to the line's end the text counts verbatim in the hash, either way it reads. It stays
+                    # code in the mask (braces count); a reformatted division is a false "stale", never a hold.
+                    e = text.find("\n", i)
+                    literals.append((i, n if e < 0 else e))
                 i += 1
             else:
                 blank(i, j, LIT)

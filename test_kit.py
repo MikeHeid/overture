@@ -10533,14 +10533,18 @@ class SymbolReviewHashTests(unittest.TestCase):
         self.assertEqual(body("a.ts", "function f(a) { return `x${ a }y`; }\n", "f"),
                          body("a.ts", "function f(a) { return `x${a}y`; }\n", "f"))
 
-    def test_a_slash_after_a_closing_bracket_divides(self):
-        # Catches: `)` or `]` counted among the operators a regex may follow, so `(a) / 2 + (b) / 3` is read
-        # as a literal whose spacing counts (C1), and a reformat breaks a ruling (or a brace in it is hidden).
-        # (The review's mutant S8, dropping `if prev in ")]"`, is equivalent: neither is in _REGEX_AFTER.)
-        self.assertEqual(body("a.js", "function f(a, b) { return (a) / 2 + (b) / 3; }\n", "f"),
-                         body("a.js", "function f(a, b) { return (a)/2 + (b)/3; }\n", "f"))
-        self.assertEqual(body("a.js", "function f(a) { return a[0] / 2 + a[1] / 3; }\n", "f"),
-                         body("a.js", "function f(a) { return a[0]/2 + a[1]/3; }\n", "f"))
+    def test_a_slash_after_a_closing_bracket_keeps_the_rest_of_its_line_verbatim(self):
+        # Catches (1.54 review): `if (s) /a  b/.test(s)` read as a division, so the regex's whitespace was
+        # normalised and `/a  b/` -> `/a b/` held. After `)` or `]` a regex cannot be told from a division,
+        # so from that `/` to the line's end the text counts verbatim: a reformatted `(a) / 2` is a false
+        # "stale", the safe way to be wrong.
+        self.assertNotEqual(body("a.js", "function f(s) {\n  if (s) /a  b/.test(s);\n  return 1;\n}\n", "f"),
+                            body("a.js", "function f(s) {\n  if (s) /a b/.test(s);\n  return 1;\n}\n", "f"))
+        self.assertNotEqual(body("a.js", "function f(a) { return a[0] /x  y/ 2; }\n", "f"),
+                            body("a.js", "function f(a) { return a[0] /x y/ 2; }\n", "f"))
+        # No overshoot: whitespace on the other lines, and before the `/`, still normalises.
+        self.assertEqual(body("a.js", "function f(s) {\n  if  ( s ) /a  b/.test(s);\n  return  x  +  1;\n}\n", "f"),
+                         body("a.js", "function f(s) {\n  if (s) /a  b/.test(s);\n  return x + 1;\n}\n", "f"))
 
     def test_jsx_text_that_looks_like_a_comment_counts(self):
         # Catches (1.54 review C2): `//` in JSX text (`<a>http://x/{u.id}</a>`) read as a line comment, so
