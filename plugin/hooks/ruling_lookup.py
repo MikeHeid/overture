@@ -32,6 +32,11 @@ rulings-shown.json, keyed by session, path and the set of rulings), and again
 when that set changes; a would-break warning is said every time. Nothing is
 printed for a file with no rulings.
 
+**Symbols (1.54).** A ruling anchored on a definition (`path::Class.method`)
+is broken only by an edit of that definition's body: the warning names it, an
+edit elsewhere in the file says nothing, and a rename that keeps the body is
+said as a NOTE with the `propose-anchor` command that re-anchors it (K3).
+
 **It fails OPEN and silent**: input it cannot read, an unreadable registry,
 any error at all prints nothing and exits 0.
 
@@ -165,15 +170,16 @@ def note(payload: object) -> str | None:
     hits = res["rulings"].get(rel) or []
     if not hits:
         return None
-    breaks = []   # C5: only with the current text read is anything a would-break
+    breaks, moves = [], []   # C5: only with the current text read is anything a would-break
     current = None if tool == "NotebookEdit" else _current(f)
     after = None if current is None else L.post_edit(tool, ti, current)
     if after is not None and len(after.encode("utf-8")) <= A.MAX_READ:
-        breaks = [(h, L.would_break(h.get("conditions") or [], rel, after, current))
-                  for h in hits if h.get("label") == L.HOLDS]
+        held = [h for h in hits if h.get("label") == L.HOLDS]
+        breaks = [(h, L.would_break(h.get("conditions") or [], rel, after, current)) for h in held]
+        moves = [(h, L.follows(h.get("conditions") or [], rel, after, current)) for h in held]   # 1.54, K3
     more = more_command(e, rel)
     info = not seen_before(SS.session_id(payload), rel, _digest(hits))
-    return L.say(rel, hits, breaks, res.get("note"), more, info=info)
+    return L.say(rel, hits, breaks, res.get("note"), more, info=info, moves=moves)
 
 
 def main() -> int:

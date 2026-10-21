@@ -23,8 +23,16 @@ fallback reads the committed files. A ruling that was withdrawn, kept
 unchecked or superseded is no ruling and is never listed; a stale one is
 listed with `stale: true`, because its evidence moved.
 
+1.54 (owner K1-K3): a `symbol` condition decides a ruling like any other on
+its path. `would_break` warns when the edit changes that definition's body or
+removes it, and says nothing for an edit elsewhere in the file (K2); `follows`
+names a definition the edit renames with its body unchanged (K3), which the
+ruling follows, so the agent can propose the new name for the owner to
+confirm. A ruling on a definition the kit cannot read is unchecked, never
+stale.
+
 Safe to import from a hook: the standard library and the kit's own pure
-modules (`anchors`, `schema`) only; the store, the server and the export
+modules (`anchors`, `schema`, `symbols`) only; the store, the server and the export
 reader are imported where they are used, never at import time. Nothing here
 runs git or any project code.
 """
@@ -43,6 +51,7 @@ from typing import Callable, Iterable
 
 from . import anchors as A
 from . import schema as S
+from . import symbols as SY
 
 TIMEOUT = 1.5            # seconds the WHOLE socket exchange may take before the committed rulings answer (L7, C7)
 MAX_PATHS = 50           # paths one lookup may name
@@ -179,11 +188,15 @@ def entry(e: dict, label: str, conds: list[dict], stale: bool) -> dict:
 
 
 def holds_fn(tree: A.Tree, statuses_known: bool) -> Callable[[dict], bool | None]:
-    """`holds(condition)` over `tree`; None for an item status when the register is not known here."""
+    """`holds(condition)` over `tree`; None for an item status when the register is not known here.
+
+    1.54: a symbol followed to its body in the same file holds (K3), and one
+    the kit cannot resolve is None (K1), as `anchors.Tree.check` reads them.
+    """
     def holds(c: dict) -> bool | None:
         if c.get("kind") == "item_status" and not statuses_known:
             return None
-        return tree.holds(c)
+        return tree.check(c)
     return holds
 
 
@@ -273,7 +286,62 @@ def would_break(conds: list[dict], path: str, new_text: str, old_text: str | Non
         elif c.get("kind") == "file_sha256":
             if _sha(old_text) == c.get("sha256") and _sha(new_text) != c.get("sha256"):
                 out.append({"condition": c, "words": "it changes the file the ruling pins"})
+        elif c.get("kind") == "symbol":
+            why = _symbol_change(c, path, new_text, old_text)
+            if why and why[0] == "break":
+                out.append({"condition": c, "words": why[1]})
     return out
+
+
+def follows(conds: list[dict], path: str, new_text: str, old_text: str | None) -> list[dict]:
+    """1.54 (K3): the `symbol` conditions on `path` this edit renames, its body unchanged: {condition, to}.
+
+    The ruling follows such a definition, so it is no warning; the note names
+    the new name, so the agent can propose it for the owner to confirm.
+    """
+    if old_text is None:
+        return []
+    out = []
+    for c in conds:
+        if covers(path, c.get("path")) and c.get("kind") == "symbol":
+            why = _symbol_change(c, path, new_text, old_text)
+            if why and why[0] == "moved":
+                out.append({"condition": c, "to": why[1]})
+    return out
+
+
+def symbol_name(q: object) -> str:
+    """A definition's name as a note may show it: the schema's dotted shape, else `?` (it enters a context)."""
+    return q if isinstance(q, str) and not SY.qualname_problem(q) else "?"
+
+
+def _symbol_change(c: dict, path: str, new_text: str, old_text: str) -> tuple[str, str] | None:
+    """('break', why) or ('moved', new name) for a symbol condition that holds on `old_text`; None for neither.
+
+    C5: only a definition that holds now (that name, that body) can be broken
+    by this edit. A definition the kit cannot read after the edit is left
+    unsaid: the lookup informs, and never guesses.
+    """
+    q, sha = c.get("symbol"), c.get("sha256")
+    if not isinstance(q, str) or not isinstance(sha, str):
+        return None
+    before = SY.resolve(path, old_text, q)
+    if before.state != "found" or before.symbol.body_sha256 != sha:
+        return None
+    after = SY.resolve(path, new_text, q)
+    name = symbol_name(q)
+    if after.state == "found":
+        return None if after.symbol.body_sha256 == sha else ("break", f"it changes the body of {name}, which the "
+                                                                      f"ruling rests on")
+    if after.state == "unchecked":
+        return None
+    try:
+        hits = SY.by_body(path, new_text, sha)
+    except SY.Unresolvable:
+        return None
+    if len(hits) == 1:
+        return "moved", hits[0].qualname
+    return "break", f"it removes {name}, or renames it and changes its body"
 
 
 # -- where the rulings come from ---------------------------------------------------------------
@@ -517,7 +585,10 @@ def line_of(h: dict) -> str:
     """One ruling in one line: label, qid, question, answer, when and who, and whether it is stale."""
     who = f" by {h['locked_by_name']}" if h.get("locked_by_name") else ""
     when = (h.get("locked_at") or "")[:10]
-    s = (f"- {LABELS.get(h['label'], h['label'])}: {h['qid']} \"{h['question']}\" -> {h['answer']} "
+    syms = [symbol_name(c.get("symbol")) for c in h.get("conditions") or [] if isinstance(c, dict)
+            and c.get("kind") == "symbol"]
+    on = f" [on {', '.join(syms[:3])}{', ...' if len(syms) > 3 else ''}]" if syms else ""   # 1.54: which definitions
+    s = (f"- {LABELS.get(h['label'], h['label'])}{on}: {h['qid']} \"{h['question']}\" -> {h['answer']} "
          f"(locked {when}{who})")
     if h.get("stale"):
         s += " STALE: its evidence changed since it was locked, so do not rely on it"
@@ -525,15 +596,25 @@ def line_of(h: dict) -> str:
 
 
 def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note: str | None, more: str,
-        info: bool = True) -> str | None:
+        info: bool = True, moves: list[tuple[dict, list[dict]]] = ()) -> str | None:
     """The hook's note for one file, or None when it has nothing to say.
 
     `info` False leaves out the list (already shown this session); a warning
     that the edit would break a ruling is always said. C4: the warnings come
     first and always fit, each whole (three lines, U2); the list gets what is
-    left of SAY_TOTAL. `more` is the command that shows everything.
+    left of SAY_TOTAL. `more` is the command that shows everything. `moves`
+    (1.54, K3) are the definitions the edit renames with their bodies kept:
+    each is said after the warnings, with the proposal that re-anchors it.
     """
-    warned, out = [], []
+    warned, out, notes = [], [], []
+    for h, ms in moves:
+        for m in ms:
+            notes.append("\n".join([
+                _cut(f"NOTE: this edit renames {symbol_name(m['condition'].get('symbol'))} to "
+                     f"{symbol_name(m['to'])}, which ruling {h['qid']} rests on; its body is unchanged, so the ruling "
+                     f"follows it. After the edit, propose the new name for the owner to confirm:"),
+                f"  `agent.py propose-anchor {h['qid']} --symbol {path}::{symbol_name(m['to'])} --basis "
+                f"\"renamed, same body\"`"]))
     warn = [(h, b) for h, b in breaks if b]
     for i, (h, b) in enumerate(warn):
         w = "\n".join([f"WARNING: this edit would break ruling {h['qid']} (\"{_short(h['question'], 80)}\").",
@@ -545,6 +626,9 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
             warned.append(f"- and {len(warn) - i} more would break: `{more}`")
             break
         warned.append(w)
+    for n in notes:   # after the warnings, while they fit: a rename is news, not a break
+        if len("\n".join(warned + [n])) <= SAY_TOTAL:
+            warned.append(n)
     left = SAY_TOTAL - len("\n".join(warned)) - (1 if warned else 0)
     if info and hits:
         out.append(f"Owner rulings on {path}{' ' + note if note else ''}. Follow them; to go against one, ask the "
