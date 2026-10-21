@@ -49,6 +49,11 @@ field of any record: `validate` refuses a field it does not know (see
 `unknown field(s)` below) and `Store._load` refuses the whole store on the
 first line that fails, so a name in `store.jsonl` would stop a 0.8.1 kit from
 starting. The names are kept beside the store instead (`names.py`).
+
+1.54 adds one shape and keeps SCHEMA_VERSION 1: a `symbol` condition, which a
+1.53 kit refuses by name ("needs kind in file_sha256, item_status, excerpt"),
+on the question and in a lock's or a proposal's anchors alike. A store or an
+export without one is byte for byte what 1.53 wrote.
 """
 
 from __future__ import annotations
@@ -187,12 +192,19 @@ SHA256 = re.compile(r"^[0-9a-f]{64}\Z")
 # Whose recommendation a forked question's ★ is: the whole panel, one of the
 # default committee's seats (§6.6), a roster seat (D13), or a typed `other:` seat.
 STAR_BY = ("panel", "architect", "ux", "security", "determinism", "devops", "adversarial", "analyst")
-VALID_IF_KINDS = ("file_sha256", "item_status", "excerpt")
+# 1.54 (owner K1-K3) adds `symbol`: {kind, path, symbol, sha256}, one definition by its dotted name and its
+# body's hash (`symbols.py`). A kit before it refuses the condition by name ("needs kind in ..."), so a
+# rollback never reads it as something else; SCHEMA_VERSION stays 1.
+VALID_IF_KINDS = ("file_sha256", "item_status", "excerpt", "symbol")
 # An `excerpt` holds while its text is found anywhere in the file, after
 # whitespace and line endings are normalised (0.5.0). Too short, and it matches
 # by accident; too long, and it is a whole-file hash by another name.
 MIN_EXCERPT = 8        # characters, after normalising
 MAX_EXCERPT = 4000     # characters, as written
+# A `symbol` condition's name: dotted, one line (the same shape symbols.QUALNAME holds; kept here so the
+# schema imports nothing).
+QUALNAME = re.compile(r"^[A-Za-z_$#][A-Za-z0-9_$]*(?:\.[A-Za-z_$#][A-Za-z0-9_$]*)*\Z")
+MAX_QUALNAME = 200
 # Structured evidence on a question (0.7.0): each row cites lines, and may say
 # the command that was run and what it printed. The SERVER reads the cited
 # lines when the question is asked and stores them as the row's `text`, so the
@@ -482,12 +494,21 @@ def _check_condition(c: object) -> list[str]:
     if not isinstance(c, dict) or c.get("kind") not in VALID_IF_KINDS:
         return [f"valid_if condition {c!r} needs kind in {', '.join(VALID_IF_KINDS)}"]
     want = {"file_sha256": {"kind", "path", "sha256"}, "item_status": {"kind", "item", "status"},
-            "excerpt": {"kind", "path", "text"}}[c["kind"]]
+            "excerpt": {"kind", "path", "text"}, "symbol": {"kind", "path", "symbol", "sha256"}}[c["kind"]]
     if set(c) != want or not all(isinstance(c[k], str) and c[k] for k in want):
-        return [f"valid_if {c['kind']} takes exactly {sorted(want)}, all non-empty strings"]
-    if c["kind"] in ("file_sha256", "excerpt") and (
+        hint = " (or write it as \"path::Class.method\" in a question's valid_if)" if c["kind"] == "symbol" else ""
+        return [f"valid_if {c['kind']} takes exactly {sorted(want)}, all non-empty strings{hint}"]
+    if c["kind"] != "item_status" and (
             c["path"].startswith("/") or ".." in c["path"].split("/") or any(ord(ch) < 32 for ch in c["path"])):
         return [f"valid_if path {c['path']!r} must be relative, on one line, and stay inside the project"]
+    if c["kind"] == "symbol":
+        if len(c["path"]) > MAX_LINE:
+            return [f"valid_if path is {len(c['path'])} characters; the limit is {MAX_LINE}"]
+        if not QUALNAME.match(c["symbol"]) or len(c["symbol"]) > MAX_QUALNAME:
+            return [f"valid_if symbol {c['symbol'][:80]!r} must be a dotted name such as Class.method (letters, "
+                    f"digits, _ and $), at most {MAX_QUALNAME} characters"]
+        if not SHA256.match(c["sha256"]):
+            return ["valid_if symbol sha256 must be 64 lowercase hex: the body hash the server reads"]
     if c["kind"] == "excerpt":
         n = len(" ".join(c["text"].split()))
         if n < MIN_EXCERPT:

@@ -10270,5 +10270,216 @@ class SymbolBodyHashTests(unittest.TestCase):
         self.assertEqual(SY.resolve("x.js", "function f() { return '\ud800'; }", "f").state, "found")
 
 
+def sym_cond(path: str, text: str, q: str) -> dict:
+    return {"kind": "symbol", "path": path, "symbol": q, "sha256": body(path, text, q)}
+
+
+class SymbolSchemaTests(unittest.TestCase):
+    """The `symbol` condition's shape (1.54): exact keys, a dotted name, a body hash, the same path rules."""
+
+    def test_a_symbol_condition_is_valid_and_its_shape_is_exact(self):
+        # Catches: a kind the schema still refuses (no ruling could carry one), or one that takes any keys,
+        # a name with markup or a newline (it is printed inline), or a "hash" that is not one.
+        good = sym_cond("src/pay.py", PY_SRC, "Ledger.total")
+        self.assertEqual(S.validate(question(valid_if=[good])), [])
+        for bad, words in (({**good, "text": "x"}, "takes exactly"), ({k: v for k, v in good.items() if k != "sha256"},
+                                                                       "path::Class.method"),
+                           ({**good, "symbol": "Ledger.total\nFAKE"}, "dotted name"),
+                           ({**good, "symbol": "a" * 201}, "dotted name"), ({**good, "symbol": "x<b>"}, "dotted name"),
+                           ({**good, "sha256": "abc"}, "64 lowercase hex"), ({**good, "path": "../out.py"}, "inside"),
+                           ({**good, "path": "/etc/x.py"}, "relative")):
+            with self.subTest(bad=bad):
+                errs = S.validate(question(valid_if=[bad]))
+                self.assertTrue(any(words in e for e in errs), errs)
+
+    def test_a_secrets_file_is_refused_as_a_symbol_path_at_ask(self):
+        # Catches: the ask-time secret check skipping the new kind, so a `.env.py` symbol's body hash (and,
+        # through "why stale", its lines) would be read and shown.
+        c = {"kind": "symbol", "path": "conf/.env.py", "symbol": "f", "sha256": "0" * 64}
+        self.assertTrue(S.secret_condition_paths([c]))
+
+    def test_the_last_release_refuses_a_symbol_condition_by_name(self):
+        # Catches: a new condition a 1.53 kit would read as something else or drop on a rollback; it must
+        # refuse the question naming the kind it does not know, as it does any other (SCHEMA_VERSION stays 1).
+        try:
+            src = subprocess.run(["git", "show", "v1.53.2:plugin/kit/overture/schema.py"], cwd=HERE,
+                                 capture_output=True, text=True, timeout=20, check=True).stdout
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("the v1.53.2 tag is not in this checkout")
+        import types
+        old = types.ModuleType("schema_1532")
+        exec(compile(src, "schema_1532", "exec"), old.__dict__)  # noqa: S102 - our own tagged release
+        errs = old.validate(question(valid_if=[sym_cond("src/pay.py", PY_SRC, "charge")]))
+        self.assertTrue(any("'symbol'" in e and "needs kind in" in e for e in errs), errs)
+        self.assertEqual(S.SCHEMA_VERSION, 1)
+
+    def test_an_export_without_a_symbol_is_byte_for_byte_what_the_last_release_wrote(self):
+        # Catches: the new kind changing what every other ruling file looks like (a new key, another order),
+        # so every project's committed rulings churn on upgrade and a rollback reads files it did not write.
+        try:
+            kit = old_kit("v1.53.2", Path(tempfile.mkdtemp(prefix="ck-1532-")), ("plugin/kit",))
+        except AssertionError:
+            self.skipTest("the v1.53.2 tag is not in this checkout")
+        with tempfile.TemporaryDirectory() as td:
+            st_path = Path(td) / "store.jsonl"
+            tick = iter(range(1, 60))
+            st = Store(st_path, known_items=ITEMS, clock=lambda: f"2026-10-20T00:00:{next(tick):02d}Z")
+            st.append(question(valid_if=[{"kind": "excerpt", "path": "src/pay.py", "text": "round_half_even(cents)"}]))
+            a1 = st.append(answer())
+            st.append(lock(a1))
+            st.append(question(qid="LANE.1/Q2", valid_if=[{"kind": "file_sha256", "path": "README", "sha256": "0" * 64}]))
+            a2 = st.append(answer(qid="LANE.1/Q2"))
+            st.append(lock(a2))
+            a3 = st.append(answer(qid="LANE.1/Q2", picks=("a",), supersedes=a2["id"], reason="again"))
+            st.append(lock(a3, anchors=[{"kind": "file_sha256", "path": "README", "sha256": "1" * 64}]))
+            ours = {n: json.dumps(e, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+                    for n, e in F.export(st).items()}
+            code = ("import sys, json; sys.path.insert(0, sys.argv[1])\n"
+                    "from overture import fold as F\nfrom overture.store import Store\n"
+                    "out = F.export(Store(__import__('pathlib').Path(sys.argv[2])))\n"
+                    "print(json.dumps({n: json.dumps(e, indent=2, sort_keys=True, ensure_ascii=False) + '\\n' "
+                    "for n, e in out.items()}))\n")
+            r = subprocess.run([sys.executable, "-c", code, str(kit / "plugin/kit"), str(st_path)],
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout), ours)
+
+    def test_fold_takes_a_ruling_file_with_a_symbol_anchor(self):
+        # Catches: an export the fold (and so the CI check) refuses as "not valid" the moment one ruling
+        # rests on a symbol, in valid_if or in a lock's anchors.
+        with tempfile.TemporaryDirectory() as td:
+            st = Store(Path(td) / "s.jsonl", known_items=ITEMS, clock=lambda: "2026-10-20T00:00:01Z")
+            c = sym_cond("src/pay.py", PY_SRC, "charge")
+            st.append(question(valid_if=[c]))
+            a1 = st.append(answer())
+            st.append(lock(a1))
+            a2 = st.append(answer(picks=("a",), supersedes=a1["id"], reason="moved"))
+            st.append(lock(a2, anchors=[{**c, "symbol": "charge_cents"}]))
+            for name, e in F.export(st).items():
+                self.assertEqual(F.check_entry(name, e, ITEMS), [])
+
+
+class SymbolAnchorTests(Tmp):
+    """anchors.Tree on a `symbol` condition (K2, K3): holds, changed, moved, gone, unchecked."""
+
+    def setUp(self):
+        super().setUp()
+        (self.dir / "src").mkdir()
+        self.write("src/pay.py", PY_SRC)
+        self.c = sym_cond("src/pay.py", PY_SRC, "charge")
+
+    def write(self, rel: str, text: str) -> None:
+        (self.dir / rel).write_text(text)
+
+    def tree(self):
+        from overture import anchors as A
+        return A.Tree(self.dir, {})
+
+    def state(self, cands=()):
+        return self.tree().symbol_state(self.c, cands)
+
+    def test_an_edit_elsewhere_in_the_file_keeps_the_symbol(self):
+        # Catches: a symbol checked like file_sha256 (any change breaks it), the gap K2 exists to close.
+        self.write("src/pay.py", PY_SRC.replace("await self.flush()", "await self.flush(True)") + "\nX = 1\n")
+        self.assertEqual(self.state().state, "holds")
+        self.assertIs(self.tree().holds(self.c), True)
+
+    def test_a_body_edit_breaks_it_and_names_the_symbol(self):
+        # Catches: a change of the very code the owner ruled on passing, or failing without saying which.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("round_half_even(cents)", "int(cents)"))
+        t = self.tree()
+        self.assertIs(t.holds(self.c), False)
+        e = A.explain(self.c, t, A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["reason"]), (False, "symbol_changed"))
+        self.assertIn("The body of charge in src/pay.py changed", e["words"])
+
+    def test_a_rename_in_the_same_file_is_followed_and_reported(self):
+        # Catches: a rename read as "deleted" (the K3 gap), and a followed symbol read as fresh on the console
+        # before the owner confirms its new name (holds stays strict; check follows).
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents("))
+        t = self.tree()
+        self.assertEqual((self.state().state, self.state().symbol.qualname), ("moved", "charge_cents"))
+        self.assertIs(t.holds(self.c), False)
+        self.assertIs(t.check(self.c), True)
+        e = A.explain(self.c, t, A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["moved_to"]), (True, {"path": "src/pay.py", "symbol": "charge_cents"}))
+        self.assertIn("src/pay.py::charge -> src/pay.py::charge_cents", e["words"])
+
+    def test_a_move_to_another_file_is_followed_only_into_the_files_named(self):
+        # Catches: a search of the whole checkout (unbounded, and a copy anywhere would "hold" it), and a
+        # moved symbol never found in the change's own files.
+        self.write("src/pay.py", PY_SRC.split("\n\n\nclass")[0].replace("def charge(", "def gone(") + "\n")
+        self.write("src/pay.py", "class Ledger:\n    pass\n")
+        self.write("src/bill.py", PY_SRC.split("\n\n\nclass")[0].replace("def charge(", "def charge_in_bill("))
+        self.assertEqual(self.state().state, "gone")
+        st = self.state(["src/bill.py", "README.md"])
+        self.assertEqual((st.state, st.path, st.symbol.qualname), ("moved", "src/bill.py", "charge_in_bill"))
+        (self.dir / "src/pay.py").unlink()
+        self.assertEqual(self.state(["src/bill.py"]).state, "moved")
+        self.assertEqual(self.state().state, "gone")
+
+    def test_two_identical_bodies_are_unchecked_never_a_pick(self):
+        # Catches: the first of two copies taken as "the" moved symbol: which one the owner meant is unknowable.
+        one = PY_SRC.split("\n\n\nclass")[0]
+        self.write("src/pay.py", "x = 1\n")
+        self.write("src/a.py", one.replace("def charge(", "def a("))
+        self.write("src/b.py", one.replace("def charge(", "def b("))
+        st = self.state(["src/a.py", "src/b.py"])
+        self.assertEqual(st.state, "unchecked")
+        self.assertIn("2 places", st.reason)
+        self.assertIsNone(self.tree().check(self.c, ["src/a.py", "src/b.py"]))
+
+    def test_an_unreadable_file_is_unchecked_and_a_secret_is_never_read(self):
+        # Catches: a syntax error read as "the symbol is gone" (a false break) or as holding (a false pass),
+        # and a secrets file read for its definitions.
+        from overture import anchors as A
+        self.write("src/pay.py", "def charge(:\n")
+        self.assertEqual(self.state().state, "unchecked")
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5")
+        self.assertEqual((e["holds"], e["reason"]), (None, "unchecked"))
+        self.assertIn("never guessed", e["words"])
+        self.write(".env.py", PY_SRC)
+        st = self.tree().symbol_state({**self.c, "path": ".env.py"})
+        self.assertEqual(st.state, "unreadable")
+
+    def test_a_relock_takes_the_symbol_where_it_is_now(self):
+        # Catches: a re-lock that falls back to a whole-file hash for a symbol (strict, so it breaks on any
+        # edit), or that keeps the old name of a symbol it followed.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents(").replace("round_half_even", "rhe"))
+        # Renamed AND changed: gone, so it stays as it was, and keeps the answer stale.
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [self.c])
+        self.write("src/pay.py", PY_SRC.replace("round_half_even", "rhe"))
+        now = (self.dir / "src/pay.py").read_text()
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [sym_cond("src/pay.py", now, "charge")])
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def charge_cents("))
+        now = (self.dir / "src/pay.py").read_text()
+        self.assertEqual(A.fresh_anchors([self.c], self.tree()), [sym_cond("src/pay.py", now, "charge_cents")])
+
+    def test_a_gone_symbol_names_the_nearest_name(self):
+        # Catches: "gone" with nothing for the reader to go on when a near name (a typo fix) is right there.
+        from overture import anchors as A
+        self.write("src/pay.py", PY_SRC.replace("def charge(", "def chargee(").replace("round_half_even", "x"))
+        e = A.explain(self.c, self.tree(), A.History(self.dir), "src/pay.py:5")
+        self.assertEqual(e["reason"], "symbol_gone")
+        self.assertIn("The nearest name there now is chargee", e["words"])
+
+    def test_symbol_condition_reads_the_tree_and_refuses_by_name(self):
+        # Catches: an ask that takes `path::Name` without finding it (a ruling anchored on nothing), or a
+        # writer's hash trusted over the one read now.
+        from overture import anchors as A
+        c, s, why = A.symbol_condition(self.tree(), "src/pay.py", "Ledger.total")
+        self.assertEqual((c, s.start_line, why), (sym_cond("src/pay.py", PY_SRC, "Ledger.total"), 12, ""))
+        for path, q, words in (("src/pay.py", "Nope", "defines no Nope (it defines charge, Ledger"),
+                               ("src/none.py", "f", "is not in the project"), ("src/pay.py", "a b", "dotted name"),
+                               (".env.py", "f", "secrets file")):
+            with self.subTest(q=q):
+                c, _, why = A.symbol_condition(self.tree(), path, q)
+                self.assertIsNone(c)
+                self.assertIn(words, why)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

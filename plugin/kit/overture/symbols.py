@@ -30,7 +30,7 @@ to `unchecked`, not to either one. Every read is bounded (MAX_CHARS,
 MAX_SYMBOLS, MAX_SIGNATURE) and nothing recurses on the input, so a hostile
 file cannot hang a hook.
 
-Standard library only, no git, no project code: hooks import it.
+Standard library and `schema` only, no git, no project code: hooks import it.
 """
 
 from __future__ import annotations
@@ -43,13 +43,13 @@ import re
 import tokenize
 from typing import NamedTuple
 
+from .schema import MAX_QUALNAME, QUALNAME   # the one shape a `symbol` condition's name is held to
+
 MAX_CHARS = 1 << 20      # a larger file is not read for symbols (its anchor reports unchecked)
 MAX_SYMBOLS = 5000       # definitions in one file, at most
 MAX_SIGNATURE = 4000     # characters between a definition's name and its body's opening brace
 MAX_DEF_LINE = 2000      # a longer line is never read as a definition line
-MAX_QUALNAME = 200
 HASH_PREFIX = "overture-symbol-1\n"   # changes only if the normalisation does
-QUALNAME = re.compile(r"^[A-Za-z_$#][A-Za-z0-9_$]*(?:\.[A-Za-z_$#][A-Za-z0-9_$]*)*\Z")
 
 LANGS = {".py": "python", ".pyi": "python",
          ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "js", ".ts": "js", ".mts": "js", ".cts": "js",

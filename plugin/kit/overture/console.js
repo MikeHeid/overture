@@ -335,6 +335,7 @@
   function conditionWords(c) {
     if (c.kind === 'item_status') return 'item ' + c.item + ' has status ' + c.status;
     if (c.kind === 'excerpt') return c.path + ' still contains the text the question cites';
+    if (c.kind === 'symbol') return c.symbol + ' in ' + c.path + ' keeps its body';
     return c.path + ' is unchanged (a whole-file check)';
   }
 
@@ -3933,6 +3934,7 @@
         let msg = '';
         if (c.kind === 'file_sha256') msg = 'File ' + c.path + ' changed';
         else if (c.kind === 'excerpt') msg = 'The text cited from ' + c.path + ' changed or is gone';
+        else if (c.kind === 'symbol') msg = c.symbol + ' in ' + c.path + ' changed or is gone';
         else if (c.kind === 'item_status') msg = c.item + ' is no longer ' + c.status;
         list.appendChild(el('li', {}, [msg]));
       }
@@ -9506,6 +9508,7 @@
       for (const c of q.failing) {
         list.appendChild(el('li', {}, [c.kind === 'file_sha256' ? 'File ' + c.path + ' changed'
           : c.kind === 'excerpt' ? 'The text cited from ' + c.path + ' changed or is gone'
+          : c.kind === 'symbol' ? c.symbol + ' in ' + c.path + ' changed or is gone'
           : c.kind === 'item_status' ? c.item + ' is no longer ' + c.status : String(c.kind || '')]));
       }
       box.appendChild(el('div', { className: 'ck-stale-banner' }, [
