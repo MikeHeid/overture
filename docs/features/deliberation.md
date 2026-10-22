@@ -52,7 +52,7 @@ The post ends with one **on-course question**:
 Where the record disagrees with the plan, up to three drift questions follow.
 Before you lock an answer, you can **Grill** the lane or **Branch out** on any
 part of it from 💬 Chat ▾. Nothing in the lane is built until you lock the
-on-course question. Each waypoint is logged in
+on-course question (WP1–WP3). Each waypoint is logged in
 [docs/proposals/WAYPOINTS.md](../proposals/WAYPOINTS.md).
 
 Run one yourself with `/overture:waypoint [lane]`. In a project with no
