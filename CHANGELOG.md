@@ -3036,9 +3036,19 @@ Claude plugin says unasked, through their own hooks.
   - Cursor is built from its docs and not yet run.
   - Cloud agents cannot reach the console; the CI check covers them.
   - Antigravity CLI, which replaced Gemini CLI, waits for documented hooks.
-- Tests: `test_adapters.py`, 26, built from the vendors' documented inputs,
-  which the real run then confirmed for Codex and Copilot. Ten mutants were
-  each shown red by the author; an independent clearer's run is below.
+- **An independent review** found these, and each is fixed with a test:
+  - a repository nested inside a registered one was not tested to stay quiet;
+  - install could write a second `[mcp_servers.overture]` table into Codex's
+    `config.toml`. It now reads that file with `tomllib`, keeps CRLF and the
+    comments around tables, and checks that each write parses back;
+  - a symlinked config was replaced by a plain file;
+  - a user's own script named `adapter_hook.py` was taken for ours.
+- Tests: `test_adapters.py`, 51, built from the vendors' documented inputs,
+  which the real run then confirmed for Codex and Copilot. The independent
+  clearer re-applied 49 mutants with its own runner over two rounds. Five
+  survived round 2, and each now has a test that kills it. One mutant is
+  equivalent: a symlink check that `realpath` has already made unreachable.
+  Three "would change more than that" guards have no input that fires them.
 
 ## Unknown fields refused at fold (1.55.1)
 

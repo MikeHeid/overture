@@ -100,6 +100,18 @@ class CodexTests(_Hook):
         self.assertIsNone(self.edit(body))
         self.assertIsNotNone(self.edit(body, sid="s2"))
 
+    def test_a_ruling_that_changed_since_the_list_was_said_is_said_again(self):
+        # Catches: the once-per-session record keyed on the file alone, so a ruling the agent was shown as
+        # holding goes stale and the agent never hears it (1.56 review round 2, mutant q).
+        body = patch("*** Update File: src/pay.py", "@@", "-def charge(cents):", "+def charge(cents, /):",
+                     f"     {KEEP}")
+        self.assertIsNotNone(self.edit(body))
+        self.break_code()
+        text = self.edit(patch("*** Update File: src/pay.py", "@@", " def charge(cents):",
+                               "-    return int(cents)", "+    return int(cents)  # kept"))
+        self.assertIsNotNone(text)
+        self.assertIn("LANE.1/Q1", text)
+
     def test_a_patch_that_removes_what_the_ruling_rests_on_is_warned_every_time(self):
         # Catches: a Codex edit that breaks a ruling with no warning, or a warning said only once.
         body = patch("*** Update File: src/pay.py", "@@", " def charge(cents):", f"-    {KEEP}",
@@ -328,6 +340,30 @@ class InstallTests(unittest.TestCase):
         p.write_bytes(text.encode("utf-8"))
         return p
 
+    def test_a_reinstall_with_our_mcp_table_in_place_still_writes_the_hooks(self):
+        # Catches: install stopping when config.toml already holds our table, so a hooks file the user
+        # deleted is never written back (1.56 review round 2, mutant N12).
+        where = AD.paths("codex", self.home)
+        self.toml('model = "x"\n')
+        AD.install("codex", KIT, "codex", self.home)
+        before = where["mcp"].read_bytes()
+        where["hooks"].unlink()
+        AD.install("codex", KIT, "codex", self.home)
+        self.assertEqual(where["mcp"].read_bytes(), before)
+        self.assertIn("apply_patch", [g["matcher"] for g in json.loads(where["hooks"].read_text())["hooks"]["PreToolUse"]])
+
+    def test_a_hook_of_ours_written_for_powershell_is_ours(self):
+        # Catches: only `command`/`bash` read, so an entry of ours in Copilot's `powershell` field is doubled on
+        # install and left behind on uninstall (1.56 review round 2, mutant N13).
+        where = AD.paths("copilot", self.home)["hooks"]
+        where.parent.mkdir(parents=True)
+        old = {"type": "command", "powershell": AD.hook_command(Path("/old kit"), "copilot", "edit")}
+        where.write_text(json.dumps({"version": 1, "hooks": {"postToolUse": [old]}}))
+        AD.install("copilot", KIT, "copilot", self.home)
+        self.assertEqual(len(json.loads(where.read_text())["hooks"]["postToolUse"]), 1)
+        AD.uninstall("copilot", self.home)
+        self.assertFalse(where.exists())
+
     def test_a_table_after_ours_and_its_comment_survive_uninstall(self):
         # Catches: uninstall cutting from our table to the end of the file, or taking the next table's comment.
         # Mutant m.
@@ -529,6 +565,20 @@ class TrustAndShapeTests(_Hook):
         big = json.dumps({"session_id": "t", "cwd": str(self.root), "tool_name": "apply_patch",
                           "tool_input": {"command": self.BREAK}, "pad": "x" * AD.MAX_INPUT})
         self.assertEqual(self.run_hook("codex", "edit", big), (0, ""))
+        # Whole and valid JSON one character past the cap (trailing blanks): still nothing, so the cap is
+        # checked, not only the read cut short (1.56 review round 2, mutant ii).
+        whole = json.dumps({"session_id": "t", "cwd": str(self.root), "tool_name": "apply_patch",
+                            "tool_input": {"command": self.BREAK}})
+        self.assertEqual(self.run_hook("codex", "edit", whole.ljust(AD.MAX_INPUT + 1)), (0, ""))
+        self.assertIn("WARNING", self.run_hook("codex", "edit", whole.ljust(AD.MAX_INPUT))[1])
+
+    def test_old_text_without_new_text_is_not_an_old_new_edit(self):
+        # Catches: old OR new taken as an old/new edit, so a write that carries its whole content beside a stray
+        # old text is read as half a replacement (1.56 review round 2, mutant o).
+        f = str(self.root / "src/pay.py")
+        self.assertIsNone(AD.edit_from_args({"path": f, "old_str": KEEP}, None))
+        e = AD.edit_from_args({"path": f, "old_str": KEEP, "file_text": BROKEN}, None)
+        self.assertEqual((e.old, e.new, e.content), (None, None, BROKEN))
 
     def test_a_symlinked_shown_file_is_not_trusted(self):
         # Catches: the once-per-session record read through a link, so a planted file can silence the list.
