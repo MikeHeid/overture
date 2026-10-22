@@ -2990,6 +2990,33 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Waypoints: a course check before each lane (1.57.0)
+
+The owner's directive of 2026-10-22: before any new lane, phase or wave
+starts, check that the project is still on course (OPEN-DECISIONS.md
+"Waypoints", WP1–WP3).
+
+- **A new skill, `overture:waypoint`.** Before the first change of a new
+  lane, an agent posts one announcement to the inbox with:
+  - a recap;
+  - the *roll-up* of what shipped and was decided since the last waypoint;
+  - the *direction map*, showing where the plan said the project would go,
+    where it is, and what drifted;
+  - the *execution path* of the lane and its gates.
+
+  Every line cites its source. One on-course question follows: proceed,
+  adjust, re-plan, or pause. Up to three drift questions come after it, and
+  the owner can Grill the lane or Branch out on it first. The lane waits for
+  the lock. You can also run one with `/overture:waypoint [lane]`. In a
+  project with no console, the same waypoint is given in the conversation.
+- **The development plan says so.** STRATEGY.md "How each lane starts"
+  gives the order of every lane: waypoint → the lane's own decisions →
+  build → red checks and a real run → an independent clearer → the owner's
+  approve → release. Each waypoint is logged in
+  `docs/proposals/WAYPOINTS.md`, and the next roll-up starts from it.
+- The plugin ships the skill (test_build `SHIPPED_SKILLS`).
+- Docs: features/deliberation.md, "Waypoints".
+
 ## Guardrails for Codex, Cursor and Copilot (1.56.0)
 
 Wave 4's remainder, the owner's V1–V4 (2026-10-21, every ★). Any MCP client
