@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import atfile as AF
 from . import names as N
+from . import trust as T
 
 ISSUES = "issues.json"
 MAX_FILE = 3 << 20              # a full push under every cap below, in UTF-8, fits with room to spare
@@ -40,8 +41,10 @@ MAX_LIMIT = 100
 STATES = ("open", "closed")
 PUSH_FIELDS = {"repo", "window_days", "issues"}
 STORED_FIELDS = PUSH_FIELDS | {"pushed_at", "by"}
-ISSUE_FIELDS = {"number", "title", "body", "state", "author", "labels",
-                "created_at", "updated_at", "closed_at", "url"}
+ISSUE_REQUIRED = {"number", "title", "body", "state", "author", "labels",
+                  "created_at", "updated_at", "closed_at", "url"}
+# 1.58 (T1): optional, as for PRs (prs.py); an issue without it is from an outside author.
+ISSUE_FIELDS = ISSUE_REQUIRED | {T.FIELD}
 REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z")
 TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -90,8 +93,8 @@ def issue_problem(issue: object, n: int, repo: str) -> str | None:
     where = f"issues[{n}]"
     if not isinstance(issue, dict):
         return f"{where} is not an object"
-    if set(issue) != ISSUE_FIELDS:
-        extra, missing = sorted(set(issue) - ISSUE_FIELDS), sorted(ISSUE_FIELDS - set(issue))
+    if not ISSUE_REQUIRED <= set(issue) <= ISSUE_FIELDS:
+        extra, missing = sorted(set(issue) - ISSUE_FIELDS), sorted(ISSUE_REQUIRED - set(issue))
         return (f"{where} has unknown fields {extra[:5]}" if extra else f"{where} is missing {missing[:5]}") + \
             f"; known: {sorted(ISSUE_FIELDS)}"
     num = issue["number"]
@@ -116,6 +119,9 @@ def issue_problem(issue: object, n: int, repo: str) -> str | None:
             return why
     if issue["url"] != f"https://github.com/{repo}/issues/{num}":
         return f"{where}.url must be https://github.com/{repo}/issues/{num}"
+    why = T.problem(issue.get(T.FIELD), where)
+    if why:
+        return why
     if issue["state"] == "open" and issue["closed_at"] is not None:
         return f"{where} is open, so closed_at is null"
     if issue["state"] == "closed" and issue["closed_at"] is None:

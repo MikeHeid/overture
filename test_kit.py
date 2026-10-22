@@ -6345,6 +6345,68 @@ class PrsFromGhTests(Tmp):
             self.assertEqual(G.gh(["pr", "list"], self.dir)[0], 127)
 
 
+from overture import trust as TR  # noqa: E402
+
+
+class TrustTests(unittest.TestCase):
+    """1.58 (T1): a backlink's author association, read from gh's GraphQL reply and checked by name."""
+
+    def test_only_the_owner_a_member_or_a_collaborator_is_trusted(self):
+        # Catches: a trusted set that takes in CONTRIBUTOR (anyone whose PR was ever merged), or one
+        # that reads a missing association, or a non-string, as trusted.
+        for a in ("OWNER", "MEMBER", "COLLABORATOR"):
+            self.assertTrue(TR.trusted({"association": a}), a)
+        for a in ("CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "NONE", None, "owner",
+                  ["OWNER"], {"OWNER": 1}):
+            self.assertFalse(TR.trusted({"association": a}), a)
+        self.assertFalse(TR.trusted({}))
+
+    def test_an_unknown_association_is_refused_by_name(self):
+        self.assertIsNone(TR.problem(None, "prs[0]"))
+        self.assertIsNone(TR.problem("FIRST_TIMER", "prs[0]"))
+        for bad in ("ADMIN", "owner", "", 1, True, ["OWNER"]):
+            self.assertIn("prs[0].association is null or one of OWNER", TR.problem(bad, "prs[0]"), bad)
+
+    def test_the_query_asks_for_each_number_and_passes_the_repository_as_variables(self):
+        # Catches: a repository spliced into the query text, where its name would be GraphQL source.
+        args = TR.gh_query("octo/re-po", "pr", [12, 9])
+        self.assertEqual(args[:2], ["api", "graphql"])
+        self.assertEqual(args[-4:], ["-f", "owner=octo", "-f", "name=re-po"])
+        query = args[3]
+        self.assertIn("n12: pullRequest(number: 12) { authorAssociation }", query)
+        self.assertIn("n9: pullRequest(number: 9) { authorAssociation }", query)
+        self.assertNotIn("octo", query)
+        self.assertIn("n5: issue(number: 5)", TR.gh_query("octo/repo", "issue", [5])[3])
+
+    def test_a_reply_gives_what_it_can_and_nothing_it_cannot(self):
+        # Catches: a partial reply (GraphQL answers what it can) taken as nothing, or a bad node as trusted.
+        doc = {"data": {"repository": {"n1": {"authorAssociation": "MEMBER"}, "n2": None,
+                                       "n3": {"authorAssociation": "ADMIN"}, "n4": {"authorAssociation": 7}}},
+               "errors": [{"message": "Could not resolve to a PullRequest with the number of 2."}]}
+        self.assertEqual(TR.from_gh(doc, [1, 2, 3, 4, 5]), {1: "MEMBER"})
+        for junk in (None, [], "x", {"data": None}, {"data": {"repository": []}}):
+            self.assertEqual(TR.from_gh(junk, [1]), {}, junk)
+
+    def test_the_page_trusts_only_a_true_flag_and_never_calls_an_outsider_shipped(self):
+        # Catches (no JS tests exist, so a text guard): the Shift report counting an outside author's merged
+        # PR or closed issue; a chip trusted on a missing flag; outside PRs folded back into "Shipped:".
+        js = (Path(__file__).parent / "plugin" / "kit" / "overture" / "console.js").read_text()
+        report = js[js.index("function computeShift"):js.index("function fmtDur")]
+        self.assertIn("pr.trusted === true && pr.state === 'merged'", report)
+        self.assertIn("is.trusted === true && is.state === 'closed'", report)
+        prs = js[js.index("function renderPrBacklinks"):]
+        prs = prs[:prs.index("\n  }\n")]
+        self.assertIn("renderBacklinkChips('pr', 'Shipped: ', trusted,", prs)
+        self.assertIn("backlinks.filter((pr) => pr && pr.trusted === true)", prs)
+        self.assertIn("const outside = it.trusted !== true;", js)
+
+    def test_the_push_body_is_copied_never_changed(self):
+        body = {"repo": "octo/repo", "prs": [{"number": 1}, {"number": 2}]}
+        out = TR.with_associations(body, "prs", {1: "OWNER"})
+        self.assertEqual(out["prs"], [{"number": 1, "association": "OWNER"}, {"number": 2, "association": None}])
+        self.assertEqual(body["prs"], [{"number": 1}, {"number": 2}])
+
+
 from overture import tickets as TK  # noqa: E402
 
 

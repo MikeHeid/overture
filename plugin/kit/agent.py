@@ -1588,6 +1588,33 @@ def _history_push(a) -> int:
     return 1 if refused else 0
 
 
+def _with_trust(root: Path, body: dict, key: str, kind: str) -> dict:
+    """1.58 (T1): `body` with each PR's or issue's GitHub author association, from one `gh api graphql` call.
+
+    `gh pr list` and `gh issue list` cannot give it. A lookup that fails, in whole or in part, is named
+    on stderr and the push goes on: a row with no association shows as an outside author, never trusted.
+    """
+    from overture import trust as T
+    numbers = [r["number"] for r in body[key]]
+    if not numbers:
+        return body
+    out = G.gh(T.gh_query(body["repo"], kind, numbers), root)
+    found: dict[int, str] = {}
+    if isinstance(out, G.Unavailable):
+        why = f"gh is {out.reason}"
+    else:
+        rc, stdout, stderr = out   # GraphQL answers what it can and exits 1 for the rest: read stdout anyway
+        try:
+            found = T.from_gh(json.loads(stdout), numbers)
+            why = None
+        except ValueError:
+            why = f"`gh api graphql` failed ({rc}): {stderr.strip()[:300] or 'no message'}"
+    if why or len(found) < len(numbers):
+        print(f"warning: GitHub gave no author association for {len(numbers) - len(found)} of {len(numbers)}"
+              f"{f' ({why})' if why else ''}; their backlinks show as from outside authors", file=sys.stderr)
+    return T.with_associations(body, key, found)
+
+
 def _prs_push(a) -> int:
     """`prs-push`: gh runs HERE, in the steward's process; the server gets the pull requests as data.
 
@@ -1631,6 +1658,10 @@ def _prs_push(a) -> int:
         body = PR.from_gh(got[0], got[1], got[2], a.days)
     except PR.PushError as e:
         return refuse(str(e))
+    why = PR.snapshot_problem(body)   # checked before the lookup too: gh_query interpolates each number
+    if why:
+        return refuse(why)
+    body = _with_trust(root, body, "prs", "pr")
     why = PR.snapshot_problem(body)   # the server's own check, here first, so a bad push is named before sending
     if why:
         return refuse(why)
@@ -1773,6 +1804,10 @@ def _issues_push(a) -> int:
         body = IS.from_gh(got[0], got[1], got[2], a.days)
     except IS.PushError as e:
         return refuse(str(e))
+    why = IS.snapshot_problem(body)   # as in prs-push: checked before the lookup interpolates a number
+    if why:
+        return refuse(why)
+    body = _with_trust(root, body, "issues", "issue")
     why = IS.snapshot_problem(body)
     if why:
         return refuse(why)

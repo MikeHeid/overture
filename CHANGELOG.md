@@ -2990,6 +2990,49 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Trusted backlinks (1.58.0)
+
+Wave 5's first lane, closing risk 5: anyone with a GitHub account could
+open a PR or an issue naming a ruling's qid, and it showed on the ruling
+like the team's own work. The second waypoint and a design round decided
+how trust works (OPEN-DECISIONS.md "Trusted backlinks", T1 and T2, the
+owner's ★ on both).
+
+- **GitHub decides who is trusted (T1).** `agent.py prs-push` and
+  `issues-push` now ask GitHub for each PR's or issue's author association
+  in one `gh api graphql` call, because `gh pr list` and `gh issue list`
+  cannot give it. The association travels with the push as `association`.
+  OWNER, MEMBER and COLLABORATOR are trusted. Any other value is an
+  outside author, and so is a missing one, as from an older agent.py or a
+  lookup that failed. A failed or partial lookup is named on stderr, and
+  the push still goes through.
+- **Outside authors are dimmed for you and kept from agents (T2).** A
+  backlink from an outside author still shows on the ruling, dimmed and
+  dashed, with "outside author" after the login. "Shipped:" now lists only
+  trusted PRs. An outside author's PR goes in a neutral strip of its own,
+  "Cited by outside authors:", so a ruling never shows green on an
+  outsider's word. The Shift report counts only trusted backlinks.
+  Backlinks were already kept out of the agent door's `/view`; a test now
+  pins that.
+- **Real run** (sigma1environments/overture-scratch, two GitHub accounts):
+  - a PR and an issue citing `TRUST.1/Q1`, from an account with write
+    access, came back `COLLABORATOR` and trusted;
+  - after the repo's owner removed that account, the same two came back
+    `CONTRIBUTOR` and showed as outside authors;
+  - the agent door carried neither;
+  - in Chromium, the page showed both chips dimmed. The run also caught the
+    green "Shipped:" strip still framing the outside PR, which is fixed
+    above.
+- New module `overture/trust.py`. The snapshot checks refuse an unknown
+  association by name.
+- **Upgrading:** upgrade the server first, because an older server refuses
+  the new field. Until the steward runs `prs-push` and `issues-push`
+  again, every backlink already kept shows as from an outside author. The
+  server still cannot tell a steward's push from any other agent's on the
+  agent socket. Trust rests on `gh` running in the steward's own process,
+  as before.
+- Docs: features/navigation.md, "Rulings → PRs"; STRATEGY.md risk 5.
+
 ## Waypoints: a course check before each lane (1.57.0)
 
 The owner's directive of 2026-10-22: before any new lane, phase or wave

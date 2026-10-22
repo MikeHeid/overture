@@ -3984,7 +3984,7 @@
       // ruling that caused it. Server-side scan in page_payload().
       const backlinks = view && view.pr_backlinks && view.pr_backlinks[qData.qid];
       if (Array.isArray(backlinks) && backlinks.length) {
-        bodyEl.appendChild(renderPrBacklinks(backlinks));
+        for (const strip of renderPrBacklinks(backlinks)) bodyEl.appendChild(strip);
       }
       // Issues → Rulings — a sibling chip strip labelled "Discussed in"
       // for every GitHub Issue (open or closed) whose title/body mentions this qid.
@@ -5738,14 +5738,21 @@
         chipChildren.push(el('span', { className: 'ck-backlink-author ck-muted' },
           [' by @' + author]));
       }
+      // 1.58 (T1, T2): only `trusted: true` is trusted, so an older server's backlink, with
+      // no flag, shows dimmed too. The owner still sees an outside author's PR or issue.
+      const outside = it.trusted !== true;
+      if (outside) {
+        chipChildren.push(el('span', { className: 'ck-backlink-outside' }, [' · outside author']));
+      }
       const chip = el('a', {
-        className: chipClass + (primary ? ' ' + primaryClass : ''),
+        className: chipClass + (primary ? ' ' + primaryClass : '') + (outside ? ' ck-backlink-untrusted' : ''),
         href: safeGithubUrl(it.url),
         target: '_blank',
         rel: 'noopener',
         'aria-label': 'Open ' + (kind === 'pr' ? 'pull request' : 'issue')
           + ' #' + it.number + ' (' + stateWord(it) + ')'
           + (author ? ' by ' + author : '')
+          + (outside ? ', outside author' : '')
       }, chipChildren);
       wrap.appendChild(chip);
     }
@@ -5759,11 +5766,23 @@
       (is) => is.state === 'closed',
       (is) => is.state === 'closed' ? 'closed' : 'open');
   }
+  // 1.58 (T2): "Shipped" is only the team's own work. An outside author's PR goes in a
+  // neutral strip of its own, so a ruling nobody trusted shipped never shows green.
+  // Returns the strips to append, trusted first; either may be absent.
   function renderPrBacklinks(backlinks) {
-    return renderBacklinkChips('pr', 'Shipped: ', backlinks,
-      (pr) => pr.state === 'merged' || !!pr.merged_at,
-      (pr) => pr.state === 'merged' || !!pr.merged_at
-        ? 'merged' : (pr.state || 'open'));
+    const merged = (pr) => pr.state === 'merged' || !!pr.merged_at;
+    const word = (pr) => merged(pr) ? 'merged' : (pr.state || 'open');
+    const trusted = backlinks.filter((pr) => pr && pr.trusted === true);
+    const outside = backlinks.filter((pr) => pr && pr.trusted !== true);
+    const strips = [];
+    if (trusted.length) strips.push(renderBacklinkChips('pr', 'Shipped: ', trusted, merged, word));
+    if (outside.length) {
+      const strip = renderBacklinkChips('pr', 'Cited by outside authors: ', outside, merged, word);
+      strip.classList.add('ck-pr-backlinks-outside');
+      strip.setAttribute('aria-label', 'Pull requests by outside authors that cite this ruling');
+      strips.push(strip);
+    }
+    return strips;
   }
 
   function renderReceipt(qData, answer) {
@@ -8931,7 +8950,8 @@
     const median = diffs.length ? diffs[Math.floor(diffs.length / 2)] : null;
     // Items advanced: unique item ids that got a new lock in the window.
     const items = new Set(inWindow.map(q => q.question && q.question.item).filter(Boolean));
-    // PRs merged tied to a ruling, Issues closed tied to a ruling.
+    // PRs merged tied to a ruling, Issues closed tied to a ruling. 1.58 (T2): trusted authors
+    // only, since the report is copied out and can reach a team or an agent.
     const prBacks = (view && view.pr_backlinks) || {};
     const issBacks = (view && view.issue_backlinks) || {};
     const mergedPRs = new Map();   // key: number → pr
@@ -8940,10 +8960,10 @@
       const qid = q.question && q.question.qid;
       if (!qid) continue;
       for (const pr of (prBacks[qid] || [])) {
-        if (pr && pr.state === 'merged') mergedPRs.set(pr.number, pr);
+        if (pr && pr.trusted === true && pr.state === 'merged') mergedPRs.set(pr.number, pr);
       }
       for (const is of (issBacks[qid] || [])) {
-        if (is && is.state === 'closed') closedIssues.set(is.number, is);
+        if (is && is.trusted === true && is.state === 'closed') closedIssues.set(is.number, is);
       }
     }
     // Living rulings currently stale (not scoped to window — "what still needs you").
