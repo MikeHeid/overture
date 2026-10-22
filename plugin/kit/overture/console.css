@@ -2646,10 +2646,16 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-issue-chip-closed .ck-backlink-author { color: color-mix(in srgb, #fff 70%, transparent); }
 
 /* 1.58 (T2): a backlink whose author is not the repository's owner, a member or a collaborator.
-   Dimmed and dashed, never filled even when merged, so it does not read as "this ruling shipped". */
-.ck-backlink-untrusted,
-.ck-backlink-untrusted.ck-pr-chip-merged,
-.ck-backlink-untrusted.ck-issue-chip-closed {
+   Dimmed and dashed, never filled even when merged, so it does not read as "this ruling shipped".
+   Three classes, so the chip rules further down (and their merged :hover) never win. */
+.ck-pr-chip.ck-backlink-untrusted.ck-backlink-untrusted,
+.ck-issue-chip.ck-backlink-untrusted.ck-backlink-untrusted,
+.ck-pr-chip.ck-backlink-untrusted.ck-pr-chip-merged,
+.ck-issue-chip.ck-backlink-untrusted.ck-issue-chip-closed,
+.ck-pr-chip.ck-backlink-untrusted.ck-pr-chip-merged:hover,
+.ck-pr-chip.ck-backlink-untrusted.ck-pr-chip-merged:focus-visible,
+.ck-issue-chip.ck-backlink-untrusted.ck-issue-chip-closed:hover,
+.ck-issue-chip.ck-backlink-untrusted.ck-issue-chip-closed:focus-visible {
   opacity: 0.6;
   border-style: dashed;
   background: transparent;
@@ -2756,6 +2762,12 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
   border-left: 3px solid var(--c-built, #1a7f37);
   border-radius: var(--radius-sm);
   font-size: 12px;
+}
+/* 1.58 (T2): outside authors' PRs, in a neutral strip: never the green of "Shipped". */
+.ck-pr-backlinks.ck-pr-backlinks-outside {
+  background: var(--c-surface-alt);
+  border: 1px dashed var(--c-border);
+  border-left: 3px solid var(--c-fg-muted);
 }
 .ck-pr-backlinks-label {
   color: var(--c-fg-muted);

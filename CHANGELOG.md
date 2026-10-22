@@ -3008,10 +3008,21 @@ owner's ★ on both).
   the push still goes through.
 - **Outside authors are dimmed for you and kept from agents (T2).** A
   backlink from an outside author still shows on the ruling, dimmed and
-  dashed, with "outside author" after the login. It never renders as
-  filled "Shipped". The Shift report counts only trusted backlinks.
+  dashed, with "outside author" after the login. "Shipped:" now lists only
+  trusted PRs. An outside author's PR goes in a neutral strip of its own,
+  "Cited by outside authors:", so a ruling never shows green on an
+  outsider's word. The Shift report counts only trusted backlinks.
   Backlinks were already kept out of the agent door's `/view`; a test now
   pins that.
+- **Real run** (sigma1environments/overture-scratch, two GitHub accounts):
+  - a PR and an issue citing `TRUST.1/Q1`, from an account with write
+    access, came back `COLLABORATOR` and trusted;
+  - after the repo's owner removed that account, the same two came back
+    `CONTRIBUTOR` and showed as outside authors;
+  - the agent door carried neither;
+  - in Chromium, the page showed both chips dimmed. The run also caught the
+    green "Shipped:" strip still framing the outside PR, which is fixed
+    above.
 - New module `overture/trust.py`. The snapshot checks refuse an unknown
   association by name.
 - Docs: features/navigation.md, "Rulings → PRs"; STRATEGY.md risk 5.
