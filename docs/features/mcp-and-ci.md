@@ -56,6 +56,77 @@ checks apply: the project picks its console and token, `--as` (or
 each one. A bad request fails alone; the server stays up. The steward's
 and the owner's commands are not offered. Standard library only.
 
+## Guardrails for Codex, Cursor and Copilot (1.56)
+
+The MCP server lets any agent ask. The Claude plugin also says things
+unasked, in its hooks: the note a session starts with, and the owner's
+rulings on a file around an edit. From 1.56 Codex CLI, Cursor and Copilot
+CLI get the same, through their own hooks (owner V1–V4 in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#wave-4-adapters-for-other-agent-vendors-decided-2026-10-21)).
+
+    python3 <kit>/agent.py adapter install --vendor codex     # or cursor, copilot
+    python3 <kit>/agent.py adapter agents-md                  # in a registered checkout: its AGENTS.md block
+
+**What it installs.** `install` writes the vendor's own user config, never
+the repository's, and leaves everyone else's entries alone:
+
+| Vendor | Hooks | MCP server |
+|---|---|---|
+| Codex CLI | `~/.codex/hooks.json` | `~/.codex/config.toml` |
+| Cursor | `~/.cursor/hooks.json` | `~/.cursor/mcp.json` |
+| Copilot CLI | `~/.copilot/hooks/overture.json` | `~/.copilot/mcp-config.json` |
+
+`uninstall --vendor V` takes out only what `install` put in. Codex runs new
+hooks once you trust them: type `/hooks` in Codex and approve the two. You
+run these commands, never a session.
+
+**When it speaks.** Each vendor's hooks decide it:
+
+- **Codex** before an edit, as Claude Code does: the rulings on each file a
+  patch touches, once per session, and a warning every time the patch would
+  break one. A rename of a definition a ruling rests on is followed, with
+  the `propose-anchor` command.
+- **Cursor and Copilot** after an edit, because before a tool they can only
+  allow or deny it. The warning says the edit broke the ruling. Where the
+  tool's input shows the old and new text, the edit is undone in memory to
+  tell a ruling this edit broke from one that was already stale. Where it
+  does not, a stale ruling is named without blaming the edit.
+
+It never allows or denies anything, and it fails open: any error is
+"nothing to add", exit 0.
+
+**Which projects.** Only those registered on this machine (`agent.py
+register`), as for the Claude plugin. The MCP server it installs has no
+`--state`: it takes the console your registry names for the project it runs
+in, and refuses anywhere else.
+
+**Run for real (2026-10-22).** Codex CLI 0.163.0 and Copilot CLI 1.0.102
+ran against a throwaway project, with each hook's input captured:
+- Each session started with the note.
+- Codex was warned before a breaking patch, and put the line back itself.
+- Copilot called `rulings` before editing, and was told afterwards that its edit broke the ruling.
+- The MCP server found its console with no `--state`.
+
+Every input matched what the adapter reads. Copilot's undocumented edit
+arguments are `{path, old_str, new_str}`, and `create`'s are
+`{path, file_text}`.
+
+**Under Codex, ask through MCP.** Codex's `workspace-write` sandbox blocks
+Unix sockets, so `agent.py` run from Codex's shell cannot reach the console.
+The hooks and the MCP server run outside the sandbox and can.
+
+**Known limits.**
+- **Cursor is built from its docs, not yet from a captured run.** It names
+  few of its tools, so the file and text are looked for under the keys
+  editors are known to use; a shape it does not recognise says nothing. On
+  Windows, open the project in WSL (Remote-WSL), where the console is.
+  `install` writes the WSL home's `~/.cursor`, where a Cursor used that way
+  keeps its config; that it runs the hooks from there is not yet checked.
+- **Cloud agents** (Copilot's coding agent, Cursor's background agents)
+  cannot reach the console's socket; the CI check below covers them.
+- **Antigravity CLI**, which replaced Gemini CLI, waits until its hooks are
+  documented (V1).
+
 ## The protocol, published (1.55)
 
 The format underneath both is a published spec: [docs/spec/PROTOCOL.md](../spec/PROTOCOL.md),

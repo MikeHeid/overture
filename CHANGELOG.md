@@ -2990,6 +2990,67 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Guardrails for Codex, Cursor and Copilot (1.56.0)
+
+Wave 4's remainder, the owner's V1–V4 (2026-10-21, every ★). Any MCP client
+could already ask; now Codex CLI, Cursor and Copilot CLI also get what the
+Claude plugin says unasked, through their own hooks.
+
+- **`agent.py adapter install --vendor codex|cursor|copilot`** writes the
+  vendor's user-level hooks and MCP config (V3) and leaves every other entry
+  alone. `uninstall` takes out only its own, and deletes a hooks file it
+  leaves empty. `adapter agents-md` writes a marked block into a registered
+  checkout's AGENTS.md. All three refuse inside a Claude Code session: you
+  run them.
+- **One core, a thin layer per vendor (V4):** `overture/adapters.py` and
+  `adapter_hook.py VENDOR EVENT`. Every session in a registered project
+  starts with the note: ask through the MCP `ask` tool, read `answers` and
+  `rulings`, leave `watch`, `synced` and the fold to the steward. The Claude
+  plugin's hooks are unchanged.
+- **Around an edit:** Codex is told before an `apply_patch`, as Claude Code
+  is: the rulings once per session, a warning every time a patch would break
+  one, and a rename followed with its `propose-anchor` command. Cursor and
+  Copilot are told after the edit, since before a tool they can only allow
+  or deny. The edit is undone in memory from its own old and new text, so
+  only a ruling this edit broke is blamed on it.
+- **It informs, never decides (V2),** and fails open: any error is "nothing
+  to add", exit 0. That matters most for Copilot, which blocks a tool when a
+  hook fails.
+- **The MCP server's `--state` is optional:** without it, the console is the
+  one your registry names for the project it runs in, and it refuses
+  anywhere else. One user-level config serves every project.
+- `lookup.say` takes the adapters' wording ("broke", and how to ask); the
+  Claude hook's words are byte for byte what they were.
+- **Run for real (2026-10-22), Codex CLI 0.163.0 and Copilot CLI 1.0.102:**
+  - each started with the note;
+  - Codex was warned before a breaking patch and put the line back itself;
+  - Copilot called `rulings` before editing and was told afterwards that its
+    edit broke the ruling;
+  - the MCP server found its console with no `--state`;
+  - every captured input matched what the adapter reads.
+
+  The run found two things. Codex's sandbox blocks Unix sockets, so under
+  Codex `agent.py` cannot reach the console and the MCP tools can (now in the
+  docs). Uninstall left an empty hooks file behind (fixed).
+- **Known limits:**
+  - Cursor is built from its docs and not yet run.
+  - Cloud agents cannot reach the console; the CI check covers them.
+  - Antigravity CLI, which replaced Gemini CLI, waits for documented hooks.
+- **An independent review** found these, and each is fixed with a test:
+  - a repository nested inside a registered one was not tested to stay quiet;
+  - install could write a second `[mcp_servers.overture]` table into Codex's
+    `config.toml`. It now reads that file with `tomllib`, keeps CRLF and the
+    comments around tables, and checks that each write parses back;
+  - a symlinked config was replaced by a plain file;
+  - a user's own script named `adapter_hook.py` was taken for ours.
+- Tests: `test_adapters.py`, 51, built from the vendors' documented inputs,
+  which the real run then confirmed for Codex and Copilot. The independent
+  clearer re-applied 49 mutants with its own runner over two rounds. Five
+  survived round 2, and each now has a test that kills it. Round 3 re-ran
+  them in 19 variants and cleared the release. One mutant is
+  equivalent: a symlink check that `realpath` has already made unreachable.
+  Three "would change more than that" guards have no input that fires them.
+
 ## Unknown fields refused at fold (1.55.1)
 
 - **`fold.check_entry` refuses a field the protocol does not define**, at a

@@ -604,8 +604,12 @@ def line_of(h: dict) -> str:
     return s if len(s) <= SAY_LINE else s[:SAY_LINE - 1] + "…"
 
 
+ASK_CLAUDE = "`agent.py ask`; the console-ask skill shows how"
+
+
 def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note: str | None, more: str,
-        info: bool = True, moves: list[tuple[dict, list[dict]]] = ()) -> str | None:
+        info: bool = True, moves: list[tuple[dict, list[dict]]] = (), done: bool = False,
+        how_to_ask: str = ASK_CLAUDE) -> str | None:
     """The hook's note for one file, or None when it has nothing to say.
 
     `info` False leaves out the list (already shown this session); a warning
@@ -614,6 +618,10 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
     left of SAY_TOTAL. `more` is the command that shows everything. `moves`
     (1.54, K3) are the definitions the edit renames with their bodies kept:
     each is said after the warnings, with the proposal that re-anchors it.
+
+    Wave 4 (V2): an adapter that speaks only after the edit passes `done`, so a
+    warning says the edit broke the ruling, and `how_to_ask` names its own way to
+    ask (the MCP `ask` tool). The defaults are the Claude hook's words, unchanged.
     """
     warned, out, notes = [], [], []
     for h, ms in moves:
@@ -628,13 +636,15 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
                      f"confirm:"), f"  `{cmd}`" if cmd else "  (`agent.py propose-anchor`; a name here is not printable)"]))
     warn = [(h, b) for h, b in breaks if b]
     for i, (h, b) in enumerate(warn):
-        w = "\n".join([f"WARNING: this edit would break ruling {h['qid']} (\"{_short(h['question'], 80)}\").",
+        verb, fix = ("broke", "restore") if done else ("would break", "keep")
+        ask = "`agent.py ask`" if how_to_ask == ASK_CLAUDE else how_to_ask
+        w = "\n".join([f"WARNING: this edit {verb} ruling {h['qid']} (\"{_short(h['question'], 80)}\").",
                        _cut(f"  Why: {'; '.join(x['words'] for x in b)}."),
-                       "  What to do: keep what the ruling rests on, or ask the owner to re-lock it (`agent.py ask`). "
+                       f"  What to do: {fix} what the ruling rests on, or ask the owner to re-lock it ({ask}). "
                        "The edit is not blocked."])
-        tail = f"- and {len(warn) - i - 1} more would break: `{more}`" if i < len(warn) - 1 else ""
+        tail = f"- and {len(warn) - i - 1} more {verb}: `{more}`" if i < len(warn) - 1 else ""
         if len("\n".join(warned + [w, tail])) > SAY_TOTAL and warned:
-            warned.append(f"- and {len(warn) - i} more would break: `{more}`")
+            warned.append(f"- and {len(warn) - i} more {verb}: `{more}`")
             break
         warned.append(w)
     for n in notes:   # after the warnings, while they fit: a rename is news, not a break
@@ -643,7 +653,7 @@ def say(path: str, hits: list[dict], breaks: list[tuple[dict, list[dict]]], note
     left = SAY_TOTAL - len("\n".join(warned)) - (1 if warned else 0)
     if info and hits:
         out.append(f"Owner rulings on {path}{' ' + note if note else ''}. Follow them; to go against one, ask the "
-                   f"owner first with a new question (`agent.py ask`; the console-ask skill shows how):")
+                   f"owner first with a new question ({how_to_ask}):")
         shown = [line_of(h) for h in hits[:SAY_RULINGS]]
         rest = len(hits) - len(shown)
         tail = lambda n: [f"- and {n} more: `{more}`"] if n else []  # noqa: E731

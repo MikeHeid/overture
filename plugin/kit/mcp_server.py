@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The agent's side of the owner console as an MCP server, so any MCP client can ask the owner (1.35).
 
-    mcp_server.py --state DIR [--project DIR] [--as NAME]
+    mcp_server.py [--state DIR] [--project DIR] [--as NAME]
 
 Cursor, Codex, Copilot, Claude or any other client that speaks the Model
 Context Protocol launches this over stdio and gets the agent door as tools:
@@ -18,7 +18,10 @@ needs nothing beyond the standard library, and neither does this.
 `--project` is the checkout to run in, for a client that starts servers
 somewhere else; the door is chosen from it exactly as agent.py chooses it from
 its working directory. `--as` names this client's session (0.8.2), checked at
-start, so every write it makes carries that name.
+start, so every write it makes carries that name. Without `--state` (Wave 4,
+V3), the console is the one the user's registry names for that checkout, so
+one user-level config serves every registered project; anywhere else it
+refuses at start, naming `agent.py register`.
 
 What is NOT here, on purpose: the steward's commands (watch, synced, inbox: one
 cursor, one steward), the owner's (register, server, steward, role), and every
@@ -49,6 +52,7 @@ require("mcp_server.py")   # 1.53.2: before the imports below, which fail on nat
 import agent as AG  # noqa: E402
 from overture import __version__  # noqa: E402
 from overture import names as N  # noqa: E402
+from overture import registry as R  # noqa: E402
 
 MODERN = ("2026-07-28",)                                          # per-request `_meta` version, no handshake
 LEGACY = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")  # the `initialize` handshake; newest first
@@ -330,20 +334,34 @@ def serve(door: Door, rx, tx) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--state", type=Path, required=True, help="the console's state dir, as agent.py takes it")
+    ap.add_argument("--state", type=Path, help="the console's state dir, as agent.py takes it (default: the one "
+                                               "your registry names for the project, Wave 4 V3)")
     ap.add_argument("--project", type=Path, help="the checkout to run in (default: the working directory)")
     ap.add_argument("--as", dest="agent", metavar="NAME", help="this client's agent name, e.g. cursor-1")
     a = ap.parse_args(argv)
     if a.agent is not None and N.problem(a.agent):
         print(f"mcp_server.py: --as: {N.problem(a.agent)}", file=sys.stderr)
         return 2
-    state = a.state.resolve()   # before --project moves us: a relative --state means where we were started
+    state = a.state.resolve() if a.state is not None else None   # before --project moves us (a relative --state)
     if a.project is not None:
         try:
             os.chdir(a.project)   # agent.py picks the console and its token from where it runs (K4)
         except OSError as e:
             print(f"mcp_server.py: --project {a.project}: {e}", file=sys.stderr)
             return 2
+    if state is None:
+        # Wave 4 (V3): one user-level MCP config serves every project, so the console is the one the user's own
+        # registry names for the project this runs in; trust comes from the user, never the repository (§7.7).
+        try:
+            hit = R.enclosing(Path.cwd())
+        except R.RegistryError as e:
+            print(f"mcp_server.py: your registry: {e}", file=sys.stderr)
+            return 2
+        if hit is None:
+            print(f"mcp_server.py: {Path.cwd()} is not in a project registered on this machine; run `agent.py "
+                  f"register` there, or pass --state and --project", file=sys.stderr)
+            return 2
+        state = Path(hit[1]["state"])
     tx = sys.stdout.buffer
     sys.stdout = sys.stderr   # a stray print must never corrupt the protocol stream
     serve(Door(state, a.agent), sys.stdin.buffer, tx)

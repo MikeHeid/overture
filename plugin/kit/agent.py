@@ -498,6 +498,51 @@ def _rulings(state: Path, raw: list[str], as_json: bool) -> int:
     return 0
 
 
+def _adapter(a) -> int:
+    """`adapter install|uninstall --vendor V`, `adapter agents-md` (Wave 4, V1-V4); refused inside a session.
+
+    A session writing its own guardrails' config is what the owner's terminal is
+    for, as with `server auth`. Codex runs new hooks only once the user trusts
+    them (`/hooks`), so install says so.
+    """
+    from overture import adapters as AD
+    if os.environ.get("CLAUDECODE"):
+        print("agent.py: adapter: " + SESSION_REFUSAL.format(what="an agent's hooks are set"), file=sys.stderr)
+        return 2
+    kit = Path(__file__).resolve().parent
+    try:
+        if a.ad_cmd == "agents-md":
+            hit = R.enclosing(a.project)
+            if hit is None:
+                print(f"agent.py: adapter agents-md: {a.project.resolve()} is not in a registered project; run "
+                      f"`agent.py register` first. Nothing was written", file=sys.stderr)
+                return 2
+            p = Path(hit[0]) / "AGENTS.md"
+            old = p.read_text(encoding="utf-8") if p.exists() else ""
+            new = AD.agents_md(old)
+            if new != old:
+                AD._write_text(p, new)
+            print(f"{p}: {'written' if new != old else 'already current'}; commit it with the project")
+            return 0
+        if a.ad_cmd == "install":
+            name = a.name or a.vendor
+            if N.problem(name):
+                print(f"agent.py: adapter install: --name: {N.problem(name)}; nothing was written", file=sys.stderr)
+                return 2
+            done = AD.install(a.vendor, kit, name)
+        else:
+            done = AD.uninstall(a.vendor)
+    except (AD.InstallError, R.RegistryError, OSError, UnicodeDecodeError) as e:
+        print(f"agent.py: adapter {a.ad_cmd}: {e}", file=sys.stderr)
+        return 2
+    print("\n".join(done) if done else f"{a.vendor}: nothing of ours was installed")
+    if a.ad_cmd == "install":
+        print(f"They act only in projects registered on this machine (`agent.py register`)."
+              + (" Codex runs new hooks once you trust them: type /hooks in Codex and approve these two."
+                 if a.vendor == "codex" else "") + " Restart the agent to load them.")
+    return 0
+
+
 def _symbol_at(source: str, as_json: bool) -> int:
     """1.54 (K1): the `path::Class.method` condition for the definition that holds `source`'s lines, or why not.
 
@@ -1924,6 +1969,20 @@ def main(argv=None) -> int:
         "Exit 1 when no single definition holds them (an excerpt is then the anchor), 2 for a bad source."))
     s.add_argument("source", metavar="PATH:FIRST-LAST", help="a question's source, e.g. src/pay.py:12-30")
     s.add_argument("--json", action="store_true", help="print the condition object instead of the short form")
+    s = sub.add_parser("adapter", description=(
+        "Wave 4 (owner V1-V4): the plugin's guardrails for other agent vendors. `install --vendor V` writes V's "
+        "user-level hooks (the session-start note, the owner's rulings around an edit) and its MCP config; "
+        "`uninstall` takes them out again; both leave everyone else's entries alone. They act only in projects "
+        "registered here. `agents-md` writes the console's block into this project's AGENTS.md. You run these, "
+        "never a session."))
+    ads = s.add_subparsers(dest="ad_cmd", required=True)
+    for name in ("install", "uninstall"):
+        t = ads.add_parser(name)
+        t.add_argument("--vendor", required=True, choices=("codex", "cursor", "copilot"))
+        if name == "install":
+            t.add_argument("--name", metavar="NAME", help="the agent name its MCP writes carry (default: the vendor)")
+    t = ads.add_parser("agents-md")
+    t.add_argument("--project", type=Path, default=Path("."), help="a registered checkout (default: here)")
     s = sub.add_parser("advise", description=(
         "Answer a scan for a resolve (CONSOLE-kit/Q40) with a star recommendation for one stale ruling: withdraw "
         "it or keep it, with the evidence. It changes nothing; the owner's own Withdraw or Keep does. Prefer "
@@ -2227,6 +2286,8 @@ def main(argv=None) -> int:
         return _notes(a)
     if a.cmd == "symbol-at":   # 1.54: a reading of this checkout alone, like `notes`
         return _symbol_at(a.source, a.json)
+    if a.cmd == "adapter":   # Wave 4: the user's own vendor config and a checkout's AGENTS.md; no console, no door
+        return _adapter(a)
     if a.state is None:
         ap.error("the following arguments are required: --state")
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);

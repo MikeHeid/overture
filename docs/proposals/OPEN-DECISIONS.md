@@ -207,6 +207,29 @@ the first four questions had not named.
 | P4 | Where it lives, and its license | **`docs/spec/` in this repository, MIT** (owner ★). The release zip carries it under `overture/spec/`, so each release's attestation (C1) covers the spec that release implements. Weighed and not chosen: CC-BY-4.0 for the prose; a repository of its own. |
 | P5 | Whether 1.0 also covers the committed ruling file (`fold.py export`), which CI and other tools read | **Yes, in 1.0** (owner ★): section 13 and `#/$defs/rulingFile`. `outcome`, `replaces` and `fork` are specified as optional, and `fork`'s own shape is the console's. The spec says a reader SHOULD refuse a field it does not define, and the schema does. `fold.check_entry` refuses one too, at every level (1.55.1; 1.55.0 checked only `earlier` answers' fields). Weighed and not chosen: leaving it to 1.1. |
 
+## Wave 4: adapters for other agent vendors (decided 2026-10-21)
+
+What is left of Wave 4 after the spec. Any MCP client already asks and
+reads rulings through `mcp_server.py` (1.35); what only Claude Code had
+is the plugin's guardrails: the session-start note and the rulings shown
+around an edit. Each vendor's documented hooks (read 2026-10-21) decide
+what an adapter can say, and when:
+
+| | Session start | Before an edit | After an edit | A crashed hook |
+|---|---|---|---|---|
+| Codex CLI | `additionalContext` | `additionalContext` (edits are `apply_patch`) | `additionalContext` | fails open; hooks need the user's `/hooks` trust |
+| Cursor | `additional_context` | only on a deny (`agent_message`) | `additional_context` (`postToolUse`) | fails open |
+| Copilot CLI | `additionalContext` | allow or deny only | `additionalContext` (`postToolUse`) | `preToolUse` fails closed |
+
+The owner chose the ★ on all four.
+
+| # | Question | Decision |
+|---|---|---|
+| V1 | Which vendors first | **Codex CLI, Cursor and Copilot CLI** (owner ★): each documents JSON hooks. Antigravity CLI, which replaced Gemini CLI on 2026-06-18, waits until Google documents its hooks. Weighed and not chosen: all four, on Gemini CLI's docs; Codex alone first. |
+| V2 | What an adapter installs | **MCP config, hooks and an AGENTS.md block** (owner ★): the session-start note, the rulings on a file before an edit where the vendor can say them without deciding (Codex), and after it otherwise, and a block telling the agent to ask through the console. As in 1.52 R2 it informs and never denies. Weighed and not chosen: MCP and AGENTS.md alone; denying an edit that breaks a ruling. |
+| V3 | Where it is installed | **User-level, by a command** (owner ★): `agent.py adapter install --vendor NAME` writes the vendor's user config (`~/.codex/hooks.json`, `~/.cursor/hooks.json`, `~/.copilot/hooks/`). The hooks act only in a project the user registered, the plugin's rule (§7.7): trust comes from the user, never the repository. Weighed and not chosen: project files committed for the team (trust from the repository; cloud agents cannot reach the console); printed snippets. |
+| V4 | How the hook code is shaped | **One vendor-neutral core, the Claude hooks untouched** (owner ★): the core turns an event, a working directory and the edited paths into a note; a thin layer per vendor reads its input and writes its output. The Claude plugin's hooks stay as shipped and move onto the core later. Weighed and not chosen: moving the Claude hooks in the same release. |
+
 ## After 1.54 (decided 2026-10-21)
 
 The owner chose the ★ on both.
