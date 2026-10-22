@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 from test_kit import answer, lock, question
-from test_rulecheck import BILL, KIT, _Registered, sym  # test_kit (through it) isolates the user's registry
+from test_rulecheck import BILL, KIT, _Registered, git, sym  # test_kit (through it) isolates the user's registry
 from overture import adapters as AD  # noqa: E402
 from overture import lookup as L  # noqa: E402
 
@@ -31,6 +31,7 @@ AGENT = KIT / "agent.py"
 MCP = KIT / "mcp_server.py"
 KEEP = "return round_half_even(cents)"     # what the ruling rests on
 BROKEN = "def charge(cents):\n    return int(cents)\n"
+VENDORS_WITH_JSON = ("cursor", "copilot")
 
 
 def patch(*body: str) -> str:
@@ -259,6 +260,16 @@ class PatchTests(unittest.TestCase):
         self.assertEqual(AD.after_patch("a\nb\nc\nd\n", blocks), "a\nB\nc\n")
         self.assertIsNone(AD.after_patch("a\nX\n", blocks))
 
+    def test_hunks_apply_in_order_each_after_the_last(self):
+        # Catches: each hunk searched from the top, landing on text an earlier hunk wrote. Mutant n.
+        self.assertEqual(AD.after_patch("x\nx", [("x", "x y"), ("x", "z")]), "x y\nz")
+
+    def test_end_of_file_does_not_drop_the_files_later_hunks(self):
+        # Catches: `*** End of File` read as the end of the file's section (1.56 review, LOW).
+        _, [(_p, blocks)] = AD.parse_patch(patch("*** Update File: a.py", "@@", "-a", "+A", "*** End of File",
+                                                 "@@", "-b", "+B"), Path("/w"))
+        self.assertEqual(blocks, [("a", "A"), ("b", "B")])
+
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
@@ -311,6 +322,105 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(set(json.loads(where["mcp"].read_text())["mcpServers"]), {"theirs"})
                 self.assertFalse(where["hooks"].exists())
 
+    def toml(self, text: str) -> Path:
+        p = AD.paths("codex", self.home)["mcp"]
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(text.encode("utf-8"))
+        return p
+
+    def test_a_table_after_ours_and_its_comment_survive_uninstall(self):
+        # Catches: uninstall cutting from our table to the end of the file, or taking the next table's comment.
+        # Mutant m.
+        p = self.toml('model = "x"\n')
+        AD.install("codex", KIT, "codex", self.home)
+        p.write_text(p.read_text() + "\n# theirs, below\n[mcp_servers.theirs]\ncommand = \"t\"\n")
+        AD.uninstall("codex", self.home)
+        text = p.read_text()
+        self.assertIn("# theirs, below\n[mcp_servers.theirs]", text)
+        self.assertEqual(tomllib.loads(text), {"model": "x", "mcp_servers": {"theirs": {"command": "t"}}})
+
+    def test_our_table_with_a_comment_or_in_another_form_is_never_doubled(self):
+        # Catches: a header with a trailing comment not seen, so install appends a second table and Codex's
+        # config no longer parses; an inline table edited by a regex it does not match (1.56 review, MEDIUM).
+        p = self.toml('[mcp_servers.overture] # mine\ncommand = "x"\n')
+        self.assertIn("already names", AD.install("codex", KIT, "codex", self.home)[1])
+        self.assertEqual(p.read_text(), '[mcp_servers.overture] # mine\ncommand = "x"\n')
+        AD.uninstall("codex", self.home)
+        self.assertEqual(tomllib.loads(p.read_text()), {})
+        inline = 'mcp_servers = { overture = { command = "x" } }\n'
+        self.toml(inline)
+        AD.install("codex", KIT, "codex", self.home)
+        self.assertIn("remove it by hand", " ".join(AD.uninstall("codex", self.home)))
+        self.assertEqual(p.read_text(), inline)
+
+    def test_crlf_is_kept_and_uninstall_restores_the_file(self):
+        # Catches: CRLF line ends turned into LF in the user's config (1.56 review, LOW).
+        original = 'model = "x"\r\n\r\n[mcp_servers.theirs]\r\ncommand = "t"\r\n'
+        p = self.toml(original)
+        AD.install("codex", KIT, "codex", self.home)
+        raw = p.read_bytes()
+        self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
+        self.assertIn("overture", tomllib.loads(raw.decode())["mcp_servers"])
+        AD.uninstall("codex", self.home)
+        self.assertEqual(tomllib.loads(p.read_bytes().decode()), tomllib.loads(original))
+        self.assertNotIn(b"\n", p.read_bytes().replace(b"\r\n", b""))
+
+    def test_a_symlinked_config_stays_a_link(self):
+        # Catches: a dotfiles link replaced by a plain file (1.56 review, MEDIUM).
+        real = self.home / "dotfiles" / "config.toml"
+        real.parent.mkdir()
+        real.write_text('model = "x"\n')
+        p = AD.paths("codex", self.home)["mcp"]
+        p.parent.mkdir(parents=True)
+        p.symlink_to(real)
+        AD.install("codex", KIT, "codex", self.home)
+        self.assertTrue(p.is_symlink())
+        self.assertIn("overture", tomllib.loads(real.read_text())["mcp_servers"])
+
+    def test_a_users_own_hook_named_adapter_hook_is_not_ours(self):
+        # Catches: every command containing "adapter_hook.py" taken as ours and removed (1.56 review, MEDIUM).
+        for vendor in VENDORS_WITH_JSON:
+            with self.subTest(vendor):
+                where = AD.paths(vendor, self.home)["hooks"]
+                where.parent.mkdir(parents=True, exist_ok=True)
+                mine = {"command": "/me/adapter_hook.py --check", "bash": "/me/adapter_hook.py --check"}
+                where.write_text(json.dumps({"version": 1, "hooks": {"sessionStart": [mine]}}))
+                AD.install(vendor, KIT, vendor, self.home)
+                AD.uninstall(vendor, self.home)
+                self.assertEqual(json.loads(where.read_text())["hooks"], {"sessionStart": [mine]})
+        where = AD.paths("codex", self.home)["hooks"]
+        where.parent.mkdir(parents=True, exist_ok=True)
+        theirs = {"type": "command", "command": "/me/adapter_hook.py --check"}
+        where.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "apply_patch", "hooks": [
+            theirs, {"type": "command", "command": AD.hook_command(Path("/old kit"), "codex", "edit")}]}]}}))
+        AD.uninstall("codex", self.home)   # ours from an older kit path goes; theirs in the same group stays
+        self.assertEqual(json.loads(where.read_text())["hooks"]["PreToolUse"][0]["hooks"], [theirs])
+
+    def test_a_bad_mcp_file_writes_nothing_at_all(self):
+        # Catches: hooks written before the MCP file is read, leaving half an install (1.56 review, LOW).
+        where = AD.paths("cursor", self.home)
+        where["mcp"].parent.mkdir(parents=True)
+        where["mcp"].write_text("{broken")
+        with self.assertRaises(AD.InstallError):
+            AD.install("cursor", KIT, "cursor", self.home)
+        self.assertFalse(where["hooks"].exists())
+
+    def test_file_modes_are_kept(self):
+        # Catches: a config the user made world-readable on purpose turned 0600, or the reverse. Mutant x.
+        where = AD.paths("cursor", self.home)["mcp"]
+        where.parent.mkdir(parents=True)
+        where.write_text("{}")
+        where.chmod(0o644)
+        AD.install("cursor", KIT, "cursor", self.home)
+        self.assertEqual(where.stat().st_mode & 0o777, 0o644)
+
+    def test_agents_md_with_a_stray_begin_keeps_the_users_text(self):
+        # Catches: a BEGIN marker with no END above our block taking the text between them (1.56 review, LOW).
+        text = f"intro\n{AD.AGENTS_BEGIN}\nthe user's own words\n"
+        once = AD.agents_md(text)
+        self.assertIn("the user's own words", once)
+        self.assertEqual(AD.agents_md(once), once)
+
     def test_uninstall_leaves_no_empty_hooks_file_it_made(self):
         # Catches: `{"hooks": {}}` left behind in a vendor folder that had no hooks file before install
         # (found in the 2026-10-22 real run).
@@ -350,6 +460,92 @@ class InstallTests(unittest.TestCase):
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((self.home / ".cursor" / "hooks.json").exists())
+
+
+class TrustAndShapeTests(_Hook):
+    """The 1.56 review's survivors: each test names the mutant it kills."""
+
+    BREAK = patch("*** Update File: src/pay.py", "@@", f"-    {KEEP}", "+    return int(cents)")
+
+    def codex(self, body: str = BREAK, cwd: Path | None = None, tool: str = "apply_patch", sid: str = "t1"):
+        return self.said("codex", "edit", {"session_id": sid, "cwd": str(cwd or self.root), "tool_name": tool,
+                                           "tool_input": {"command": body}})
+
+    def test_a_repo_nested_inside_the_registered_one_gets_nothing(self):
+        # Catches: the edited file's checkout found by walking up to an enclosing registered root (AS1), so a
+        # vendored or nested repository's paths reach the outer project's console. Mutant c2.
+        subprocess.run(["git", "clone", "-q", str(self.root), str(self.root / "vend")], check=True,
+                       capture_output=True)
+        self.assertIsNone(self.codex(self.BREAK.replace("src/pay.py", "vend/src/pay.py")))
+
+    def test_a_real_worktree_of_the_registered_checkout_speaks(self):
+        # Catches: worktree support dropped, so an agent working in `agent.py worktree new` hears nothing. Mutant u.
+        wt = Path(self._td.name) / "wt"
+        git(self.root, "worktree", "add", "-q", "-b", "lane", str(wt))
+        self.assertIn("would break ruling LANE.1/Q1", self.codex(cwd=wt))
+
+    def test_a_path_through_a_symlinked_folder_is_the_real_file(self):
+        # Catches: paths made absolute without resolving links, so the file is not found under its checkout. Mutant k.
+        link = Path(self._td.name) / "link"
+        link.symlink_to(self.root)
+        self.assertIn("would break ruling LANE.1/Q1", self.codex(cwd=link))
+
+    def test_a_symlinked_file_is_its_target(self):
+        # Catches: a link edited under its own name, so the rulings of a path it merely stands for are said. As in
+        # the Claude hook, the path is resolved first: here src/pay.py links to real.py, which has no ruling.
+        # (`_text`'s own link check is then reached only in a race: mutant l is equivalent, not killed.)
+        real = self.root / "real.py"
+        (self.root / "src/pay.py").rename(real)
+        (self.root / "src/pay.py").symlink_to(real)
+        self.assertIsNone(self.codex())
+
+    def test_a_fragment_that_is_not_unique_is_not_undone(self):
+        # Catches: an edit undone at a guessed place, blaming it for a break it may not have made. Mutant cc.
+        (self.root / "src/pay.py").write_text("def charge(cents):\n    return int(cents)\n# return int(cents)\n")
+        text = self.said("cursor", "edit", {"conversation_id": "c9", "cwd": str(self.root), "tool_input": {
+            "file_path": str(self.root / "src/pay.py"), "old_string": KEEP, "new_string": "return int(cents)"}})
+        self.assertIn("it is stale on the file as it is now", text)
+        self.assertNotIn("it changes or removes", text)
+
+    def test_with_no_old_text_a_ruling_that_holds_is_not_warned(self):
+        # Catches: the "stale on the file now" fallback naming rulings that still hold. Mutant gg.
+        text = self.said("cursor", "edit", {"conversation_id": "c8", "cwd": str(self.root), "tool_input": {
+            "file_path": str(self.root / "src/pay.py"), "content": (self.root / "src/pay.py").read_text()}})
+        self.assertIn("LANE.1/Q1", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_a_malformed_registry_entry_is_no_registration(self):
+        # Catches: an entry the kit's own rules refuse (a relative kit path) still used. Mutant ff.
+        (self.cfg_home / "overture" / "projects.json").write_text(json.dumps(
+            {"projects": {os.path.realpath(self.root): {"state": str(self.state), "kit": "kit"}}}))
+        self.assertIsNone(self.codex())
+
+    def test_a_patch_under_another_tool_name_is_not_read(self):
+        # Catches: any Codex tool's command read as a patch (the matcher is the vendor's, not ours). Mutant hh.
+        self.assertIsNone(self.codex(tool="Bash"))
+
+    def test_input_past_the_cap_is_nothing_to_add(self):
+        # Catches: an unbounded read of the hook's input. Mutant ii.
+        big = json.dumps({"session_id": "t", "cwd": str(self.root), "tool_name": "apply_patch",
+                          "tool_input": {"command": self.BREAK}, "pad": "x" * AD.MAX_INPUT})
+        self.assertEqual(self.run_hook("codex", "edit", big), (0, ""))
+
+    def test_a_symlinked_shown_file_is_not_trusted(self):
+        # Catches: the once-per-session record read through a link, so a planted file can silence the list.
+        # Mutant r.
+        keep = patch("*** Update File: src/pay.py", "@@", "-def charge(cents):", "+def charge(cents, /):")
+        self.assertIsNotNone(self.codex(keep, sid="r1"))
+        shown = self.xstate / "overture" / AD.SHOWN_FILE
+        moved = shown.with_name("elsewhere.json")
+        shown.rename(moved)
+        shown.symlink_to(moved)
+        self.assertIsNotNone(self.codex(keep, sid="r1"))
+
+    def test_a_patch_of_many_files_is_cut_to_the_limit(self):
+        # Catches: an unbounded number of lookups for one tool call. Mutant p.
+        body = patch(*[f"*** Add File: f{i}.py\n+x" for i in range(AD.MAX_EDITS + 5)])
+        ev = AD.read("codex", "edit", {"cwd": "/w", "tool_name": "apply_patch", "tool_input": {"command": body}})
+        self.assertEqual(len(ev.edits), AD.MAX_EDITS)
 
 
 class McpStateTests(_Registered):

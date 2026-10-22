@@ -52,6 +52,7 @@ import re
 import shlex
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
@@ -68,13 +69,14 @@ KEEP_SHOWN = 500
 KEEP_SECONDS = 7 * 86400
 HOW_TO_ASK = "the overture MCP `ask` tool, or `agent.py ask`"
 
-# Where an edit's file and text sit in a tool's input. Copilot CLI documents its edit tools
-# (`edit`, `create`) but not their arguments, and Cursor names few of its tools, so the keys
-# the vendors are known to use are tried in order; a call whose shape is not recognised says nothing.
+# Where an edit's file and text sit in a tool's input. Copilot CLI's edit tools, seen in a real run
+# (2026-10-22), are `edit` {path, old_str, new_str} and `create` {path, file_text}; Cursor names few of
+# its tools, so the keys editors are known to use are tried in order. A call whose shape is not
+# recognised says nothing.
 PATH_KEYS = ("file_path", "path", "filePath", "target_file", "targetFile", "filename")
 OLD_KEYS = ("old_string", "old_str", "oldString", "old_text")
 NEW_KEYS = ("new_string", "new_str", "newString", "new_text")
-CONTENT_KEYS = ("content", "contents", "file_text", "fileText", "text")
+CONTENT_KEYS = ("content", "contents", "file_text", "fileText")
 
 
 class Edit(NamedTuple):
@@ -150,6 +152,7 @@ def parse_patch(text: str, cwd: Path | None) -> tuple[list[Edit], list[tuple[Pat
         *** Begin Patch
         *** Update File: a.py       hunks follow: "@@ ..." then lines " ctx", "-old", "+new"
         *** Move to: b.py           (optional, right after an Update)
+        *** End of File             (optional, after a hunk that ends the file; more hunks may follow)
         *** Add File: c.py          every line "+..."
         *** Delete File: d.py
         *** End Patch
@@ -199,8 +202,10 @@ def parse_patch(text: str, cwd: Path | None) -> tuple[list[Edit], list[tuple[Pat
                 edits.append(Edit(p, deleted=True))
         elif line.startswith("*** Move to: "):
             pass   # the text moves with the file; the rulings said are the source's
+        elif line.strip() == "*** End of File":
+            close_hunk()   # the hunk ends the file; the file's later hunks still follow
         elif line.startswith("*** "):
-            close_file()   # Begin/End Patch, End of File
+            close_file()   # Begin/End Patch
         elif mode == "add" and line.startswith("+"):
             added.append(line[1:])
         elif mode == "update":
@@ -430,10 +435,13 @@ def render(vendor: str, event: str, text: str | None) -> str:
 
 # -- installing (V3: the user's own config, never the repository's) ----------------------------------------
 
-MARK = "adapter_hook.py"     # how an installed hook is known as ours, to replace or remove it
 MCP_NAME = "overture"
 AGENTS_BEGIN = "<!-- overture:begin (written by `agent.py adapter agents-md`; edit outside these lines) -->"
 AGENTS_END = "<!-- overture:end -->"
+# A hook command of ours, as `hook_command` writes it from any kit path: `... adapter_hook.py VENDOR EVENT`.
+# A user's own script that is merely named adapter_hook.py, run with anything else, is not ours (1.56 review).
+OURS = re.compile(r"adapter_hook\.py'? (?:codex|cursor|copilot) (?:session-start|edit)\Z")
+HOOK_FIELDS = ("command", "bash", "powershell")
 
 
 class InstallError(Exception):
@@ -468,12 +476,24 @@ def paths(vendor: str, home: Path | None = None) -> dict[str, Path]:
                         "mcp": h / ".copilot" / "mcp-config.json"}}[vendor]
 
 
-def _load_json(p: Path) -> dict:
+def _read(p: Path) -> str:
+    """The file's text exactly as stored (CRLF kept); "" when there is none."""
     if not p.exists():
+        return ""
+    try:
+        with open(p, encoding="utf-8", newline="") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise InstallError(f"{p} cannot be read ({e}); fix or move it, then run again")
+
+
+def _load_json(p: Path) -> dict:
+    text = _read(p)
+    if not text.strip():
         return {}
     try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as e:
+        doc = json.loads(text)
+    except ValueError as e:
         raise InstallError(f"{p} is not JSON this command can merge into ({e}); fix or move it, then run again")
     if not isinstance(doc, dict):
         raise InstallError(f"{p} is not a JSON object; fix or move it, then run again")
@@ -481,15 +501,17 @@ def _load_json(p: Path) -> dict:
 
 
 def _write_text(p: Path, text: str) -> None:
-    """Replace `p` whole and at once, keeping its mode; a new file is the user's alone (0600)."""
-    p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.")
+    """Replace the file whole and at once, keeping its mode; through a symlink to its target, so a dotfiles
+    link stays a link (1.56 review). A new file is the user's alone (0600)."""
+    target = Path(os.path.realpath(p)) if p.is_symlink() else p
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
-        if p.exists():
-            os.chmod(tmp, p.stat().st_mode & 0o777)
-        os.replace(tmp, p)
+        if target.exists():
+            os.chmod(tmp, target.stat().st_mode & 0o777)
+        os.replace(tmp, target)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -498,8 +520,24 @@ def _write_text(p: Path, text: str) -> None:
         raise
 
 
-def _ours(entry: object) -> bool:
-    return MARK in json.dumps(entry)
+def _ours(hook: object) -> bool:
+    return isinstance(hook, dict) and any(isinstance(hook.get(k), str) and OURS.search(hook[k].strip())
+                                          for k in HOOK_FIELDS)
+
+
+def _without_ours(entries: list, vendor: str) -> list:
+    """An event's entries with each hook of ours taken out; a Codex group keeps any hook of someone else's."""
+    out = []
+    for x in entries:
+        if vendor == "codex" and isinstance(x, dict) and isinstance(x.get("hooks"), list):
+            inner = [h for h in x["hooks"] if not _ours(h)]
+            if inner == x["hooks"]:
+                out.append(x)
+            elif inner:
+                out.append({**x, "hooks": inner})
+        elif not _ours(x):
+            out.append(x)
+    return out
 
 
 def merge_hooks(doc: dict, specs: dict | None, vendor: str, where: Path) -> dict:
@@ -512,7 +550,7 @@ def merge_hooks(doc: dict, specs: dict | None, vendor: str, where: Path) -> dict
         raise InstallError(f"{where}: \"hooks\" is not an object; fix it, then run again")
     merged = {}
     for name, entries in hooks.items():
-        kept = [x for x in entries if not _ours(x)] if isinstance(entries, list) else entries
+        kept = _without_ours(entries, vendor) if isinstance(entries, list) else entries
         if kept != []:
             merged[name] = kept
     for name, entries in (specs or {}).items():
@@ -526,76 +564,146 @@ def mcp_args(kit: Path, agent: str) -> list[str]:
     return [str(kit / "mcp_server.py"), "--as", agent]
 
 
-TOML_TABLE = re.compile(r"^\[mcp_servers\.overture\]\s*$", re.M)
+# Our table's header as `install` writes it, give or take spaces and a trailing comment.
+TOML_TABLE = re.compile(r"^[ \t]*\[[ \t]*mcp_servers[ \t]*\.[ \t]*overture[ \t]*\][ \t]*(?:#[^\r\n]*)?\r?$", re.M)
+TOML_NEXT = re.compile(r"^[ \t]*\[", re.M)
 
 
-def codex_mcp_block(kit: Path, agent: str) -> str:
+def _toml(p: Path, text: str) -> dict:
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise InstallError(f"{p} is not TOML this command can edit ({e}); fix it, then run again")
+
+
+def _servers(doc: dict) -> dict:
+    s = doc.get("mcp_servers")
+    return s if isinstance(s, dict) else {}
+
+
+def _same_but_ours(a: dict, b: dict) -> bool:
+    """Whether two parsed configs are equal once our server is taken out of each."""
+    def strip(d: dict) -> dict:
+        d = dict(d)
+        s = {k: v for k, v in _servers(d).items() if k != MCP_NAME}
+        d.pop("mcp_servers", None)
+        if s:
+            d["mcp_servers"] = s
+        return d
+    return strip(a) == strip(b)
+
+
+def codex_mcp_block(kit: Path, agent: str, nl: str = "\n") -> str:
     args = ", ".join(json.dumps(a) for a in mcp_args(kit, agent))
-    return f"[mcp_servers.{MCP_NAME}]\ncommand = \"python3\"\nargs = [{args}]\n"
+    return nl.join([f"[mcp_servers.{MCP_NAME}]", "command = \"python3\"", f"args = [{args}]", ""])
+
+
+def _codex_add(p: Path, kit: Path, agent: str) -> tuple[str | None, str]:
+    """(the new config.toml text, or None when ours is already there, what to report). Checked before it is written."""
+    cfg = _read(p)
+    before = _toml(p, cfg)
+    if MCP_NAME in _servers(before):
+        return None, f"mcp: {p} already names mcp_servers.{MCP_NAME}; left as it is"
+    nl = "\r\n" if "\r\n" in cfg else "\n"
+    sep = "" if not cfg else (nl if cfg.endswith("\n") else nl + nl)
+    new = cfg + sep + codex_mcp_block(kit, agent, nl)
+    after = _toml(p, new)
+    if MCP_NAME not in _servers(after) or not _same_but_ours(before, after):
+        raise InstallError(f"{p}: adding [mcp_servers.{MCP_NAME}] would change more than that; add it by hand")
+    return new, f"mcp: {p}"
+
+
+def _codex_remove(p: Path) -> tuple[str | None, str | None]:
+    """(the new config.toml text, what to report); (None, None) when ours is not there. Checked before written.
+
+    Our table runs from its header to the next table's; comment lines just before
+    that next table are its own, and are kept.
+    """
+    cfg = _read(p)
+    before = _toml(p, cfg)
+    if MCP_NAME not in _servers(before):
+        return None, None
+    m = TOML_TABLE.search(cfg)
+    if m is None:
+        return None, f"mcp: {p} names mcp_servers.{MCP_NAME} in a form this command does not edit; remove it by hand"
+    nxt = TOML_NEXT.search(cfg, m.end())
+    end = nxt.start() if nxt else len(cfg)
+    lines = cfg[m.start():end].splitlines(keepends=True)
+    keep = len(lines)
+    while keep > 1 and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+        keep -= 1
+    tail = "".join(lines[keep:]).lstrip("\r\n") if nxt else ""
+    new = cfg[:m.start()] + tail + cfg[end:]
+    after = _toml(p, new)
+    if MCP_NAME in _servers(after) or not _same_but_ours(before, after):
+        raise InstallError(f"{p}: taking out [mcp_servers.{MCP_NAME}] would change more than that; remove it by hand")
+    return new, f"mcp: {p}"
+
+
+def _json_mcp(p: Path, vendor: str, server: dict | None) -> tuple[str | None, str | None]:
+    """(the new mcp JSON with our server set, or taken out when `server` is None; what to report)."""
+    doc = _load_json(p)
+    servers = doc.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise InstallError(f"{p}: \"mcpServers\" is not an object; fix it, then run again")
+    if server is None:
+        if MCP_NAME not in servers:
+            return None, None
+        doc["mcpServers"] = {k: v for k, v in servers.items() if k != MCP_NAME}
+    else:
+        doc["mcpServers"] = {**servers, MCP_NAME: server}
+    return json.dumps(doc, indent=2) + "\n", f"mcp: {p}"
 
 
 def install(vendor: str, kit: Path, agent: str, home: Path | None = None) -> list[str]:
-    """Write the vendor's user-level hooks and MCP config (V3); return one line per file written."""
+    """Write the vendor's user-level hooks and MCP config (V3); return one line per file.
+
+    Both files are read and checked before either is written, so a config this
+    cannot edit leaves the other untouched (1.56 review).
+    """
     if vendor not in VENDORS:
         raise InstallError(f"--vendor must be one of {', '.join(VENDORS)}")
     where = paths(vendor, home)
-    done = []
-    doc = merge_hooks(_load_json(where["hooks"]), hook_specs(kit, vendor), vendor, where["hooks"])
-    _write_text(where["hooks"], json.dumps(doc, indent=2) + "\n")
-    done.append(f"hooks: {where['hooks']}")
+    hooks = json.dumps(merge_hooks(_load_json(where["hooks"]), hook_specs(kit, vendor), vendor, where["hooks"]),
+                       indent=2) + "\n"
     if vendor == "codex":
-        cfg = where["mcp"].read_text(encoding="utf-8") if where["mcp"].exists() else ""
-        if TOML_TABLE.search(cfg):
-            done.append(f"mcp: {where['mcp']} already has [mcp_servers.{MCP_NAME}]; left as it is")
-        else:
-            sep = "" if not cfg else ("\n" if cfg.endswith("\n") else "\n\n")
-            _write_text(where["mcp"], cfg + sep + codex_mcp_block(kit, agent))
-            done.append(f"mcp: {where['mcp']}")
-        return done
-    mdoc = _load_json(where["mcp"])
-    servers = mdoc.get("mcpServers", {})
-    if not isinstance(servers, dict):
-        raise InstallError(f"{where['mcp']}: \"mcpServers\" is not an object; fix it, then run again")
-    server: dict = {"command": "python3", "args": mcp_args(kit, agent)}
-    if vendor == "copilot":
-        server = {"type": "local", **server, "tools": ["*"]}
-    mdoc["mcpServers"] = {**servers, MCP_NAME: server}
-    _write_text(where["mcp"], json.dumps(mdoc, indent=2) + "\n")
-    done.append(f"mcp: {where['mcp']}")
-    return done
+        mcp, said = _codex_add(where["mcp"], kit, agent)
+    else:
+        server: dict = {"command": "python3", "args": mcp_args(kit, agent)}
+        if vendor == "copilot":
+            server = {"type": "local", **server, "tools": ["*"]}
+        mcp, said = _json_mcp(where["mcp"], vendor, server)
+    _write_text(where["hooks"], hooks)
+    if mcp is not None:
+        _write_text(where["mcp"], mcp)
+    return [f"hooks: {where['hooks']}", said]
 
 
 def uninstall(vendor: str, home: Path | None = None) -> list[str]:
-    """Remove our hooks and MCP entry from the vendor's user config; everyone else's stay."""
+    """Remove our hooks and MCP entry from the vendor's user config; everyone else's stay.
+
+    A hooks file left with nothing in it is deleted (real run, 2026-10-22).
+    """
     if vendor not in VENDORS:
         raise InstallError(f"--vendor must be one of {', '.join(VENDORS)}")
     where = paths(vendor, home)
-    done = []
+    hooks = None
     if where["hooks"].exists():
-        doc = merge_hooks(_load_json(where["hooks"]), None, vendor, where["hooks"])
-        if vendor == "copilot" or (not doc["hooks"] and set(doc) <= {"hooks", "version"}):
-            where["hooks"].unlink()   # a file of our own, or one with nothing left in it (real run, 2026-10-22)
+        hooks = merge_hooks(_load_json(where["hooks"]), None, vendor, where["hooks"])
+    mcp, said = (None, None)
+    if where["mcp"].exists():
+        mcp, said = _codex_remove(where["mcp"]) if vendor == "codex" else _json_mcp(where["mcp"], vendor, None)
+    done = []
+    if hooks is not None:
+        if not hooks["hooks"] and set(hooks) <= {"hooks", "version"}:
+            where["hooks"].unlink()
         else:
-            _write_text(where["hooks"], json.dumps(doc, indent=2) + "\n")
+            _write_text(where["hooks"], json.dumps(hooks, indent=2) + "\n")
         done.append(f"hooks: {where['hooks']}")
-    if not where["mcp"].exists():
-        return done
-    if vendor == "codex":
-        cfg = where["mcp"].read_text(encoding="utf-8")
-        m = TOML_TABLE.search(cfg)
-        if m:
-            nxt = re.compile(r"^\[", re.M).search(cfg, m.end())
-            head = cfg[:m.start()].rstrip("\n")
-            tail = cfg[nxt.start():] if nxt else ""
-            _write_text(where["mcp"], head + ("\n\n" if head and tail else "\n" if head else "") + tail)
-            done.append(f"mcp: {where['mcp']}")
-        return done
-    mdoc = _load_json(where["mcp"])
-    servers = mdoc.get("mcpServers")
-    if isinstance(servers, dict) and MCP_NAME in servers:
-        mdoc["mcpServers"] = {k: v for k, v in servers.items() if k != MCP_NAME}
-        _write_text(where["mcp"], json.dumps(mdoc, indent=2) + "\n")
-        done.append(f"mcp: {where['mcp']}")
+    if mcp is not None:
+        _write_text(where["mcp"], mcp)
+    if said is not None:
+        done.append(said)
     return done
 
 
@@ -610,10 +718,14 @@ This project's decisions are made by its owner in an Overture console.
 
 
 def agents_md(text: str) -> str:
-    """`text` (a project's AGENTS.md, maybe empty) with our block written or replaced; the rest kept as it is."""
+    """`text` (a project's AGENTS.md, maybe empty) with our block written or replaced; the rest kept as it is.
+
+    The block is the last BEGIN before the first END, so a stray BEGIN above it
+    never takes the user's text with it (1.56 review).
+    """
     block = f"{AGENTS_BEGIN}\n{AGENTS_BLOCK}{AGENTS_END}\n"
-    a = text.find(AGENTS_BEGIN)
-    b = text.find(AGENTS_END, a + 1) if a >= 0 else -1
-    if a >= 0 and b > a:
+    b = text.find(AGENTS_END)
+    a = text.rfind(AGENTS_BEGIN, 0, b) if b >= 0 else -1
+    if a >= 0:
         return text[:a] + block + text[b + len(AGENTS_END):].lstrip("\n")
     return (text.rstrip("\n") + "\n\n" if text.strip() else "") + block
