@@ -359,6 +359,22 @@ Each wave below builds on the one before it.
     other tools emit.
   - *Scope:* publish the question/ruling/`valid_if` format as an open spec,
     plus an MCP reference server and adapters for other agent vendors.
+  - *Status (2026-10-22):* built. The spec is 1.55, and the Codex, Cursor
+    and Copilot adapters are 1.56. Still to do: the Cursor real run, and
+    Antigravity CLI, which waits for documented hooks.
+- **Wave 5, Trust at team scale** (owner, 2026-10-22, the first waypoint;
+  OPEN-DECISIONS.md W5-1 to W5-3).
+  - *Goal:* a team can rely on what the console records, and sees rulings
+    where it reviews code.
+  - *Scope and order:*
+    1. The Trust lane, in this order:
+       - collaborator-only backlinks (risk 5), starting with a design round
+         on how trust is decided;
+       - GitHub webhooks verified by their HMAC signature, with no bridge;
+       - a recipe for keeping agents that run as the same user apart.
+    2. Then ruling-aware PR comments and Linear (Wave 3's last item).
+  - *Not in it, kept for a later wave:* Docker (optional, A8), Jira, MADR/ADR
+    templates, a hosted demo, and ruling search and dependencies.
 
 ### How each lane starts: a waypoint (owner, 2026-10-22)
 
