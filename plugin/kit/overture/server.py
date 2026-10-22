@@ -110,6 +110,7 @@ from . import triggers as TR
 from . import designs as DG
 from . import prs as PR
 from . import issues as IS
+from . import trust as TRU
 from . import lessons as LN   # owner's withdraw/untrack reasons become lessons future sessions read
 from . import lookup as L     # 1.52.0: the ruling lookup before an agent edits
 from . import tickets as TK
@@ -2132,6 +2133,9 @@ class Console:
                         # qid literal into an issue body and have it render as "Discussed in" on
                         # a ruling. Showing @alice signals this is a mention, not a trusted link.
                         "author": issue.get("author"),
+                        # 1.58 (T1, T2): false for an outside author; the page dims it and keeps it
+                        # out of the Shift report. Backlinks never reach the agent door's /view.
+                        "trusted": TRU.trusted(issue),
                     })
         return out
 
@@ -2166,6 +2170,7 @@ class Console:
                         # PR author shown on the chip to signal provenance,
                         # same as issue backlinks.
                         "author": pr.get("author"),
+                        "trusted": TRU.trusted(pr),   # 1.58: as for issue backlinks
                     })
         return out
 

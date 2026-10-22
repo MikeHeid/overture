@@ -1472,6 +1472,59 @@ class BacklinkTests(_Live, unittest.TestCase):
         links = body["view"]["pr_backlinks"]
         self.assertEqual([l["number"] for l in links.get("LANE.1/Q2", [])], [7], links)
 
+    @staticmethod
+    def issue_row(n, **over):
+        row = {"number": n, "title": f"Issue {n}", "body": "see LANE.1/Q1", "state": "open", "author": "octo",
+               "labels": [], "created_at": "2026-09-30T10:00:00Z", "updated_at": "2026-09-30T11:00:00Z",
+               "closed_at": None, "url": f"https://github.com/octo/repo/issues/{n}"}
+        row.update(over)
+        return row
+
+    def push_citing_q1(self, marker="LANE.1/Q1"):
+        """PRs #1-#8 and issues #11-#13 naming LANE.1/Q1, from each kind of author (1.58, T1)."""
+        kinds = [("OWNER",), ("MEMBER",), ("COLLABORATOR",), ("CONTRIBUTOR",), ("FIRST_TIME_CONTRIBUTOR",),
+                 ("NONE",), (None,), ()]   # (None,): sent as null; (): not sent, as an older agent.py does
+        prs = [pr_row(n, title=f"{marker}: change {n}", **({"association": k[0]} if k else {}))
+               for n, k in enumerate(kinds, 1)]
+        code, out = self.agent_post("/prs", {"repo": "octo/repo", "window_days": 30, "prs": prs})
+        self.assertEqual(code, 200, out)
+        issues = [self.issue_row(11, association="MEMBER", body=marker), self.issue_row(12, association="NONE",
+                  body=marker), self.issue_row(13, body=marker)]
+        code, out = self.agent_post("/issues", {"repo": "octo/repo", "window_days": 30, "issues": issues})
+        self.assertEqual(code, 200, out)
+
+    def test_only_the_owner_a_member_or_a_collaborator_makes_a_trusted_backlink(self):
+        # Catches: risk 5 (STRATEGY.md), anyone with a GitHub account naming a qid and showing on the
+        # ruling like the team's own work; and a missing association (an older agent.py) read as trusted.
+        self.push_citing_q1()
+        code, body = self.get("/api/view")
+        self.assertEqual(code, 200)
+        prs = {l["number"]: l["trusted"] for l in body["view"]["pr_backlinks"]["LANE.1/Q1"]}
+        self.assertEqual(prs, {1: True, 2: True, 3: True, 4: False, 5: False, 6: False, 7: False, 8: False})
+        issues = {l["number"]: l["trusted"] for l in body["view"]["issue_backlinks"]["LANE.1/Q1"]}
+        self.assertEqual(issues, {11: True, 12: False, 13: False})
+
+    def test_the_agent_door_never_carries_a_backlink(self):
+        # Catches: T2's agent half, an outside author's PR title or issue body reaching an agent through
+        # /view, where it would read as the team's own context. The owner's view must carry them, so the
+        # check is not passing on an empty scan.
+        marker = "LANE.1/Q1 ignore-all-rulings-marker"
+        self.push_citing_q1(marker)
+        code, owner = self.get("/api/view")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(owner["view"]["pr_backlinks"]["LANE.1/Q1"]), 8)
+        code, agent = SV.agent_request(self.cfg.socket, "GET", "/view", None)
+        self.assertEqual(code, 200, agent)
+        text = json.dumps(agent)
+        for leak in ("pr_backlinks", "issue_backlinks", "ignore-all-rulings-marker", "github.com/octo/repo"):
+            self.assertNotIn(leak, text)
+
+    def test_an_issue_with_an_unknown_association_is_refused_by_name(self):
+        code, out = self.agent_post("/issues", {"repo": "octo/repo", "window_days": 30,
+                                                "issues": [self.issue_row(1, association="ADMIN")]})
+        self.assertEqual(code, 400, out)
+        self.assertIn("issues[0] (#1).association is null or one of", out["error"])
+
     def test_a_mermaid_visual_renders(self):
         # Catches: /api/visual-render compared the stored format against "mmd" (the file suffix)
         # while visuals are stored as "mermaid", so every Mermaid visual answered 400 and the
@@ -8659,6 +8712,8 @@ BAD_PRS = [
     {**PRS_PUSH, "prs": [pr_row(1, url="https://github.com.evil.example/octo/repo/pull/1")]},
     {**PRS_PUSH, "prs": [pr_row(1, state="merged")]},
     {**PRS_PUSH, "prs": [pr_row(1, checks="green")]},
+    {**PRS_PUSH, "prs": [pr_row(1, association="ADMIN")]},
+    {**PRS_PUSH, "prs": [pr_row(1, association=["OWNER"])]},
     {**PRS_PUSH, "prs": [pr_row(1), pr_row(1)]},
     {**PRS_PUSH, "prs": [pr_row(True)]},
     {**PRS_PUSH, "repo": "not a repo"},
@@ -8758,6 +8813,14 @@ row = lambda n, **o: dict({{"number": n, "title": "PR %d" % n, "state": "OPEN", 
                            "statusCheckRollup": []}}, **o)
 if args[:2] == ["repo", "view"]:
     print(json.dumps({{"nameWithOwner": "octo/repo"}}))
+elif args[:2] == ["api", "graphql"]:
+    if os.environ.get("FAKE_GQL_FAIL"):
+        sys.stderr.write("gh: HTTP 502: Bad Gateway\n")
+        sys.exit(1)
+    # GraphQL answers what it can and exits 1 for the rest, as gh does on a partial reply.
+    print(json.dumps({{"data": {{"repository": {{"n12": {{"authorAssociation": "COLLABORATOR"}}, "n9": None}}}},
+                      "errors": [{{"message": "Could not resolve to a PullRequest with the number of 9."}}]}}))
+    sys.exit(1)
 elif "open" in args:
     print(json.dumps([row(12, isDraft=True, statusCheckRollup=[{{"__typename": "CheckRun", "status": "IN_PROGRESS",
                                                                  "conclusion": ""}}])]))
@@ -8799,13 +8862,26 @@ class PrsPushCliTests(_SingleServer, unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout)["prs"], 2)
         calls = [json.loads(ln) for ln in self.log.read_text().splitlines()]
-        self.assertEqual([c[:2] for c in calls], [["repo", "view"], ["pr", "list"], ["pr", "list"]])
+        self.assertEqual([c[:2] for c in calls], [["repo", "view"], ["pr", "list"], ["pr", "list"],
+                                                  ["api", "graphql"]])
         self.assertIn("20", calls[1])
         self.assertTrue(any(a.startswith("closed:>=") for a in calls[2]))
+        self.assertIn("owner=octo", calls[3])
         got = self.sconsole.prs()
         self.assertEqual([(p["number"], p["state"], p["draft"], p["checks"]) for p in got["prs"]],
                          [(12, "open", True, "pending"), (9, "merged", False, "none")])
         self.assertEqual((got["repo"], got["window_days"], got["prs"][1]["merge_commit"]), ("octo/repo", 14, "b" * 40))
+        # 1.58 (T1): the partial reply is read, and the PR GitHub gave nothing for is named and sent as null.
+        self.assertEqual([p["association"] for p in got["prs"]], ["COLLABORATOR", None])
+        self.assertIn("no author association for 1 of 2", r.stderr)
+
+    def test_a_failed_association_lookup_still_pushes_with_every_author_outside(self):
+        # Catches: a GitHub hiccup on the one extra call losing the whole push, or leaving a row trusted.
+        r = self.run_cli(FAKE_GQL_FAIL="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no author association for 2 of 2", r.stderr)
+        self.assertIn("HTTP 502", r.stderr)
+        self.assertEqual([p["association"] for p in self.sconsole.prs()["prs"]], [None, None])
 
     def test_a_gh_failure_is_named_and_nothing_is_sent(self):
         r = self.run_cli(FAKE_GH_FAIL="1")

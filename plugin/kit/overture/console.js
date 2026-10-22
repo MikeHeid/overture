@@ -5738,14 +5738,21 @@
         chipChildren.push(el('span', { className: 'ck-backlink-author ck-muted' },
           [' by @' + author]));
       }
+      // 1.58 (T1, T2): only `trusted: true` is trusted, so an older server's backlink, with
+      // no flag, shows dimmed too. The owner still sees an outside author's PR or issue.
+      const outside = it.trusted !== true;
+      if (outside) {
+        chipChildren.push(el('span', { className: 'ck-backlink-outside' }, [' · outside author']));
+      }
       const chip = el('a', {
-        className: chipClass + (primary ? ' ' + primaryClass : ''),
+        className: chipClass + (primary ? ' ' + primaryClass : '') + (outside ? ' ck-backlink-untrusted' : ''),
         href: safeGithubUrl(it.url),
         target: '_blank',
         rel: 'noopener',
         'aria-label': 'Open ' + (kind === 'pr' ? 'pull request' : 'issue')
           + ' #' + it.number + ' (' + stateWord(it) + ')'
           + (author ? ' by ' + author : '')
+          + (outside ? ', outside author' : '')
       }, chipChildren);
       wrap.appendChild(chip);
     }
@@ -8931,7 +8938,8 @@
     const median = diffs.length ? diffs[Math.floor(diffs.length / 2)] : null;
     // Items advanced: unique item ids that got a new lock in the window.
     const items = new Set(inWindow.map(q => q.question && q.question.item).filter(Boolean));
-    // PRs merged tied to a ruling, Issues closed tied to a ruling.
+    // PRs merged tied to a ruling, Issues closed tied to a ruling. 1.58 (T2): trusted authors
+    // only, since the report is copied out and can reach a team or an agent.
     const prBacks = (view && view.pr_backlinks) || {};
     const issBacks = (view && view.issue_backlinks) || {};
     const mergedPRs = new Map();   // key: number → pr
@@ -8940,10 +8948,10 @@
       const qid = q.question && q.question.qid;
       if (!qid) continue;
       for (const pr of (prBacks[qid] || [])) {
-        if (pr && pr.state === 'merged') mergedPRs.set(pr.number, pr);
+        if (pr && pr.trusted === true && pr.state === 'merged') mergedPRs.set(pr.number, pr);
       }
       for (const is of (issBacks[qid] || [])) {
-        if (is && is.state === 'closed') closedIssues.set(is.number, is);
+        if (is && is.trusted === true && is.state === 'closed') closedIssues.set(is.number, is);
       }
     }
     // Living rulings currently stale (not scoped to window — "what still needs you").

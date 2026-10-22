@@ -2645,6 +2645,21 @@ a.ck-pr-link:hover .ck-pr-title, a.ck-pr-link:focus-visible .ck-pr-title { text-
 .ck-pr-chip-merged .ck-backlink-author,
 .ck-issue-chip-closed .ck-backlink-author { color: color-mix(in srgb, #fff 70%, transparent); }
 
+/* 1.58 (T2): a backlink whose author is not the repository's owner, a member or a collaborator.
+   Dimmed and dashed, never filled even when merged, so it does not read as "this ruling shipped". */
+.ck-backlink-untrusted,
+.ck-backlink-untrusted.ck-pr-chip-merged,
+.ck-backlink-untrusted.ck-issue-chip-closed {
+  opacity: 0.6;
+  border-style: dashed;
+  background: transparent;
+  color: var(--c-fg-muted);
+}
+.ck-backlink-untrusted .ck-backlink-author,
+.ck-backlink-untrusted .ck-pr-chip-glyph,
+.ck-backlink-untrusted .ck-issue-chip-glyph { color: var(--c-fg-muted); }
+.ck-backlink-outside { font-size: 11px; font-style: italic; }
+
 /* 1.31.0: grill-provenance chip on a question. ⚡ in the project's accent to say "you asked for
    this; the agent generated it in response to your grill". Visually distinct from an agent-
    originated question so an attacker who compromised the agent fleet cannot sneak crafted

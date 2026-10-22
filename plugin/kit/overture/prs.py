@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import atfile as AF
 from . import names as N
+from . import trust as T
 
 PRS = "prs.json"
 MAX_FILE = 3 << 20              # a full push under every cap below, in UTF-8, fits with room to spare
@@ -46,7 +47,9 @@ PR_REQUIRED = {"number", "title", "state", "draft", "head", "base", "author", "c
                "merged_at", "closed_at", "url", "merge_commit", "checks"}
 # 1.33 (UX-VIEW.md, D7): the commit a PR's head is at, so a merge request names the exact code the owner saw.
 # Optional: a push from an older agent.py has none, and its PRs just show no Merge button.
-PR_FIELDS = PR_REQUIRED | {"head_sha"}
+# 1.58 (T1): the author's GitHub association, which decides whether a backlink is trusted (trust.py). Optional too:
+# an older agent.py sends none, and its PRs' backlinks show as outside authors.
+PR_FIELDS = PR_REQUIRED | {"head_sha", T.FIELD}
 REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z")
 TS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -124,6 +127,9 @@ def pr_problem(pr: object, n: int, repo: str) -> str | None:
     hs = pr.get("head_sha")
     if hs is not None and (not isinstance(hs, str) or not COMMIT.match(hs)):
         return f"{where}.head_sha is a full commit id in lowercase hex"
+    why = T.problem(pr.get(T.FIELD), where)
+    if why:
+        return why
     if pr["state"] == "merged" and pr["merged_at"] is None:
         return f"{where} is merged, so merged_at is a time"
     if pr["state"] == "open" and (pr["merged_at"] is not None or pr["closed_at"] is not None):
