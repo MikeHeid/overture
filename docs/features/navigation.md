@@ -72,8 +72,14 @@ The live page, the sections and their tabs, pop-outs, moving through a long Inbo
   title (and issue body) mentions a ruling's qid like `A/Q7`, each
   matching PR/issue appears as a chip under the locked ruling. Merged PRs
   render filled green ("Shipped: #142"); closed issues as filled grey.
-  Chips carry the author (`#142 by @alice`) so you can tell a drive-by
-  mention from a trusted one.
+  Chips carry the author (`#142 by @alice`). Since 1.58, GitHub decides
+  whether an author is trusted: the repository's owner, a member or a
+  collaborator is trusted, and anyone else is an outside author. An
+  outside author's chip is dimmed and dashed, reads "outside author", and
+  never shows as filled "Shipped". The Shift report leaves it out, and no
+  backlink ever reaches an agent. A push from an agent.py older than 1.58
+  carries no association, so all of its chips show as outside authors
+  until the steward pushes again.
 - **The Favorite tab** lists everything you starred, grouped by item.
 
   <img src="../screenshots/feature-favorite.png" alt="The Favorite tab listing two starred items" width="400">

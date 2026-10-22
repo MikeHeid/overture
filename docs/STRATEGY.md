@@ -177,7 +177,9 @@ Overture's `ask_guard.py` hook sends those questions to the console instead.
 4. **Anchors are lexical, not semantic.** A behaviour change that keeps the
    cited text intact never goes stale.
 5. **Backlinks depend on someone typing the qid literally.** They can also be
-   spammed. 1.31 shows the author but does not filter by trust.
+   spammed. 1.31 shows the author. Since 1.58, GitHub's author association
+   decides trust: an outside author's backlink is dimmed for the owner and
+   never reaches an agent (OPEN-DECISIONS T1, T2).
 6. **Question fatigue leads to rubber-stamping.**
 7. **Feature breadth dilutes the moat story.** Launch Idea, Branch Out,
    tickets and visuals all compete for attention.
@@ -326,7 +328,7 @@ are still judgement calls.
 | Lane | Progress | Shipped | Next items |
 |---|---|---|---|
 | Core decision engine | 85% | Rulings as a CI check (1.36); the "rulings touching this path" lookup before an agent edits (1.52); symbol anchors (1.54) | An open spec for the schema; ruling search and dependencies |
-| Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1) | Same-UID isolation recipe; built-in webhook HMAC; collaborator-only backlinks |
+| Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1); trusted backlinks (1.58) | Same-UID isolation recipe; built-in webhook HMAC |
 | Ecosystem & integrations | 55% | MCP server for other agent tools (1.35); a Slack-style webhook digest (1.45) | Linear/Jira adapters; ruling-aware PR comments; MADR/ADR templates |
 | Onboarding & distribution | 65% | Sign-in links without Cloudflare (1.46); ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47); launchd (1.51); the prerequisite scan (1.53.2); the USER-GUIDE drift fixed | Docker; a hosted demo; a 5-minute path with no adapter; native Windows (A1: not now) |
 | Team & multi-operator | 80% | Named operators (1.38); roles and People (1.39, 1.40); routing (1.41); the role log (1.42); two-key locks (1.43); settings (1.44) | Per-operator handoff |
@@ -369,7 +371,7 @@ Each wave below builds on the one before it.
   - *Scope and order:*
     1. The Trust lane, in this order:
        - collaborator-only backlinks (risk 5), starting with a design round
-         on how trust is decided;
+         on how trust is decided (built in 1.58, OPEN-DECISIONS T1, T2);
        - GitHub webhooks verified by their HMAC signature, with no bridge;
        - a recipe for keeping agents that run as the same user apart.
     2. Then ruling-aware PR comments and Linear (Wave 3's last item).
@@ -451,4 +453,6 @@ The rest:
   "attested".
 - **The out-of-date user guide:** fixed; it describes the one server for all
   projects as shipped.
-- **Risk 5, backlinks without trust:** open (collaborator-only backlinks).
+- **Risk 5, backlinks without trust:** answered in 1.58. GitHub's author
+  association decides trust, and an outside author's backlink is dimmed for
+  the owner and kept from agents (OPEN-DECISIONS T1, T2).
