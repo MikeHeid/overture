@@ -3046,7 +3046,8 @@ Claude plugin says unasked, through their own hooks.
 - Tests: `test_adapters.py`, 51, built from the vendors' documented inputs,
   which the real run then confirmed for Codex and Copilot. The independent
   clearer re-applied 49 mutants with its own runner over two rounds. Five
-  survived round 2, and each now has a test that kills it. One mutant is
+  survived round 2, and each now has a test that kills it. Round 3 re-ran
+  them in 19 variants and cleared the release. One mutant is
   equivalent: a symlink check that `realpath` has already made unreachable.
   Three "would change more than that" guards have no input that fires them.
 
