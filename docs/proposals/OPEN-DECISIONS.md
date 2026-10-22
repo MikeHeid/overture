@@ -221,6 +221,17 @@ questions, and the owner chose the ★ on each.
 | W5-2 | The order inside the Trust lane | **Backlinks first** (owner ★). The order is: collaborator-only backlinks (risk 5), then GitHub webhooks verified by their HMAC signature instead of through a bridge (features/automation.md), then a recipe for keeping agents that run as the same user apart. Backlinks starts with a design round on how trust is decided. Weighed and not chosen: signed webhooks first, as the smallest item. |
 | W5-3 | What stays out | **Kept for a later wave** (owner ★): Docker (optional, A8), Jira, MADR/ADR templates, a hosted demo, and ruling search and dependencies. |
 
+## Trusted backlinks (decided 2026-10-22)
+
+The first lane of Wave 5 (risk 5 in STRATEGY.md). Its waypoint was given in
+the conversation ([WAYPOINTS.md](WAYPOINTS.md)). Then a design round asked
+these two questions, and the owner chose the ★ on each.
+
+| # | Question | Decision |
+|---|---|---|
+| T1 | Where a backlink's trust comes from | **GitHub's author association** (owner ★). `gh pr list` cannot return it, so `agent.py` asks GitHub for `authorAssociation` in one GraphQL call per push. OWNER, MEMBER and COLLABORATOR are trusted; every other value, or a missing one, is not. No setup, GitHub stays the authority, and it follows people joining and leaving. Weighed and not chosen: an owner allowlist of logins; association plus an allowlist. |
+| T2 | What happens to an untrusted backlink | **Dimmed for the owner, dropped for agents** (owner ★). The console shows it dimmed with an "outside author" chip, so a real outside PR is not lost. Anything that reaches an agent leaves it out, which closes the path by which outside text steers an agent. Weighed and not chosen: hidden everywhere; dimmed everywhere. |
+
 ## Wave 4: the protocol (decided 2026-10-21)
 
 The owner picked Wave 4 as the next lane, then the ★ on every question. P5 was
