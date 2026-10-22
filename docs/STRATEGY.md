@@ -389,8 +389,9 @@ limits are now answered:
 - **No published protocol:** answered (1.55, P1–P5). The question, ruling
   and `valid_if` format is a versioned spec, `docs/spec/PROTOCOL.md` 1.0, with
   a JSON Schema and conformance vectors that the kit is tested against. The
-  MCP server (1.35) is how Overture carries it. What is left of Wave 4 is
-  adapters for other agent vendors. The symbol hash is specified by its
+  MCP server (1.35) is how Overture carries it, and from 1.56 Codex CLI,
+  Cursor and Copilot CLI also get the plugin's guardrails in their own hooks
+  (V1–V4). Antigravity CLI waits for documented hooks. The symbol hash is specified by its
   reference code, not in prose, and another reader that cannot compute it
   reports such a ruling unchecked.
 

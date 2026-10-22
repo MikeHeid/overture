@@ -95,6 +95,7 @@ Each area links to its own page, with the full reference and screenshots.
 | **Sign-in links and networks** (1.46–1.47) | Cloudflare Access, or one-time sign-in links with no Cloudflare · signed-in browsers listed and revoked under People · `--listen` on a ZeroTier or Tailscale address · onboarding that asks how you reach the console | [Sign-in and networks](docs/features/sign-in-and-networks.md) |
 | **Automation** | **⚑ Delegate** bar · playbooks with `when` branching and Preview · webhook and cron triggers · trigger log and Replay · impact graph | [Automation](docs/features/automation.md) |
 | **MCP** (1.35) | An MCP server, so Cursor, Codex, Copilot and other MCP clients ask and read rulings like Claude Code | [MCP and CI](docs/features/mcp-and-ci.md) |
+| **Other agents' hooks** (1.56) | `agent.py adapter install` gives Codex, Cursor and Copilot the plugin's session note and the owner's rulings around an edit | [MCP and CI](docs/features/mcp-and-ci.md#guardrails-for-codex-cursor-and-copilot-156) |
 | **CI** (1.36–1.37) | `rulecheck.py` and a GitHub Action fail a pull request that breaks a locked ruling, with no server · `--strict` | [MCP and CI](docs/features/mcp-and-ci.md#block-a-merge-that-breaks-a-ruling-ci-136) |
 | **UX View** (1.32) | Full-screen component modal · versions and sizes · Generate · Save as component (opens a PR) · Claude Design link · design-system picker · Scripts switch | [UX View](docs/features/ux-view.md) |
 | **Deliberation** | Up to three advisor seats · Roar panels · Refine / Drill · Next step ▾ on every locked answer · Launch Idea · Branch out · Grill with agent | [Deliberation](docs/features/deliberation.md) |
@@ -196,7 +197,9 @@ tickets and its PR show each agent's branch, and warn when two agents meet.
 ### MCP and CI
 
 Agents other than Claude Code (Cursor, Codex, Copilot) ask and read rulings
-through an MCP server. In CI, a GitHub Action fails a pull request that
+through an MCP server, and `agent.py adapter install --vendor NAME` gives them
+the plugin's session note and the owner's rulings around an edit, in their own
+hooks (1.56). In CI, a GitHub Action fails a pull request that
 breaks a locked ruling, with no console server needed:
 
 ```yaml
