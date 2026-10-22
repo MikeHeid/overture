@@ -3016,6 +3016,15 @@ starts, check that the project is still on course (OPEN-DECISIONS.md
   `docs/proposals/WAYPOINTS.md`, and the next roll-up starts from it.
 - The plugin ships the skill (test_build `SHIPPED_SKILLS`).
 - Docs: features/deliberation.md, "Waypoints".
+- **The first waypoint ran** (2026-10-22). Waves 1–4 were built and the plan
+  named no next wave, so the owner chose to re-plan first. **Wave 5 is Trust
+  at team scale** (OPEN-DECISIONS.md W5-1 to W5-3):
+  - collaborator-only backlinks (risk 5);
+  - GitHub webhooks verified by their HMAC signature;
+  - a recipe for keeping agents that run as the same user apart;
+  - then ruling-aware PR comments and Linear.
+
+  It is in STRATEGY.md, and the waypoint is logged in WAYPOINTS.md.
 
 ## Guardrails for Codex, Cursor and Copilot (1.56.0)
 
