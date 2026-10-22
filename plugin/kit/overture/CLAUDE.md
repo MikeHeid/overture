@@ -6,4 +6,4 @@
 - The view is computed per request and never stored (R5). Owner-only fields such as `stale_worktrees` are dropped per login in `cursor_for` (W3).
 - console.js is plain ES2020 in one IIFE: no framework, no external request. Text from GitHub, agents or the store goes in as text nodes through `el()`; innerHTML only empties a box.
 - A poll redraw replaces the panel's nodes, so an async fill looks up the box on screen when it lands, not the one it captured (1.52, `loadPRs`); a same-view redraw carries a playing fade on (`playingEnter`, 1.52).
-- symbols.py, anchors.py, schema.py and lookup.py stay stdlib-only and git-free, because the edit hook and rulecheck.py import them. A symbol read the kit can't be sure of is `unchecked`, never a guess, and a false hold is the failure to test for (K1–K3, 1.54).
+- symbols.py, anchors.py, schema.py, lookup.py and adapters.py stay stdlib-only and git-free, because the edit hooks (the Claude plugin's and other vendors', 1.56) and rulecheck.py import them. A symbol read the kit can't be sure of is `unchecked`, never a guess, and a false hold is the failure to test for (K1–K3, 1.54).
