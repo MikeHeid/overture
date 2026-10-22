@@ -8898,6 +8898,52 @@ class PrsPushCliTests(_SingleServer, unittest.TestCase):
         self.assertFalse(self.log.exists())
 
 
+FAKE_GH_ISSUES = r"""#!{python}
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+row = lambda n, **o: dict({{"number": n, "title": "Issue %d" % n, "body": "see A/Q1", "state": "OPEN",
+                           "author": {{"login": "octo"}}, "labels": [], "createdAt": "2026-09-30T10:00:00Z",
+                           "updatedAt": "2026-09-30T11:00:00Z", "closedAt": None,
+                           "url": "https://github.com/octo/repo/issues/%d" % n}}, **o)
+if args[:2] == ["repo", "view"]:
+    print(json.dumps({{"nameWithOwner": "octo/repo"}}))
+elif args[:2] == ["api", "graphql"]:
+    print(json.dumps({{"data": {{"repository": {{"n5": {{"authorAssociation": "MEMBER"}},
+                                                 "n4": {{"authorAssociation": "NONE"}}}}}}}}))
+elif "open" in args:
+    print(json.dumps([row(5)]))
+else:
+    print(json.dumps([row(4, state="CLOSED", closedAt="2026-09-29T08:00:00Z")]))
+"""
+
+
+class IssuesPushCliTests(_SingleServer, unittest.TestCase):
+    """`agent.py issues-push`, run as a process: its own gh call for each issue's author association (1.58)."""
+
+    def setUp(self):
+        PrsPushCliTests.setUp(self)
+        (self.base / "bin" / "gh").write_text(FAKE_GH_ISSUES.format(python=sys.executable))
+
+    def run_cli(self, *extra, **env):
+        return subprocess.run([sys.executable, str(HERE / "plugin" / "kit" / "agent.py"), "--state",
+                               str(self.scfg.state), "issues-push", "--project", str(self.scfg.root), *extra],
+                              capture_output=True, text=True, env={**self.env, **env}, timeout=120,
+                              cwd=self.scfg.root)
+
+    def test_the_cli_runs_gh_here_and_the_server_keeps_what_it_sent(self):
+        # Catches: issues-push sending no association, so every issue backlink shows as an outside author.
+        r = self.run_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = [json.loads(ln) for ln in self.log.read_text().splitlines()]
+        self.assertEqual(calls[-1][:2], ["api", "graphql"])
+        self.assertIn("n5: issue(number: 5)", calls[-1][3])
+        got = self.sconsole.issues()
+        self.assertEqual([(i["number"], i["association"]) for i in got["issues"]], [(5, "MEMBER"), (4, "NONE")])
+        self.assertEqual(r.stderr, "")
+
+
 FAKE_GH_MERGE = r"""#!{python}
 import json, os, sys
 args = sys.argv[1:]

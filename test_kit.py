@@ -6387,6 +6387,19 @@ class TrustTests(unittest.TestCase):
         for junk in (None, [], "x", {"data": None}, {"data": {"repository": []}}):
             self.assertEqual(TR.from_gh(junk, [1]), {}, junk)
 
+    def test_the_page_trusts_only_a_true_flag_and_never_calls_an_outsider_shipped(self):
+        # Catches (no JS tests exist, so a text guard): the Shift report counting an outside author's merged
+        # PR or closed issue; a chip trusted on a missing flag; outside PRs folded back into "Shipped:".
+        js = (Path(__file__).parent / "plugin" / "kit" / "overture" / "console.js").read_text()
+        report = js[js.index("function computeShift"):js.index("function fmtDur")]
+        self.assertIn("pr.trusted === true && pr.state === 'merged'", report)
+        self.assertIn("is.trusted === true && is.state === 'closed'", report)
+        prs = js[js.index("function renderPrBacklinks"):]
+        prs = prs[:prs.index("\n  }\n")]
+        self.assertIn("renderBacklinkChips('pr', 'Shipped: ', trusted,", prs)
+        self.assertIn("backlinks.filter((pr) => pr && pr.trusted === true)", prs)
+        self.assertIn("const outside = it.trusted !== true;", js)
+
     def test_the_push_body_is_copied_never_changed(self):
         body = {"repo": "octo/repo", "prs": [{"number": 1}, {"number": 2}]}
         out = TR.with_associations(body, "prs", {1: "OWNER"})

@@ -37,7 +37,7 @@ def trusted(row: dict) -> bool:
 def gh_query(repo: str, kind: str, numbers: list[int]) -> list[str]:
     """The `gh api graphql` command line (without the leading `gh`) asking for each number's author association.
 
-    The numbers come from a checked snapshot, so each is a whole number; the repository travels as variables.
+    agent.py checks the snapshot first, so each number is a whole number; the repository travels as variables.
     """
     owner, name = repo.split("/")
     parts = " ".join(f"n{int(n)}: {KINDS[kind]}(number: {int(n)}) {{ authorAssociation }}" for n in numbers)

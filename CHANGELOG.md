@@ -3025,6 +3025,12 @@ owner's ★ on both).
     above.
 - New module `overture/trust.py`. The snapshot checks refuse an unknown
   association by name.
+- **Upgrading:** upgrade the server first, because an older server refuses
+  the new field. Until the steward runs `prs-push` and `issues-push`
+  again, every backlink already kept shows as from an outside author. The
+  server still cannot tell a steward's push from any other agent's on the
+  agent socket. Trust rests on `gh` running in the steward's own process,
+  as before.
 - Docs: features/navigation.md, "Rulings → PRs"; STRATEGY.md risk 5.
 
 ## Waypoints: a course check before each lane (1.57.0)

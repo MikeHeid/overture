@@ -1658,6 +1658,9 @@ def _prs_push(a) -> int:
         body = PR.from_gh(got[0], got[1], got[2], a.days)
     except PR.PushError as e:
         return refuse(str(e))
+    why = PR.snapshot_problem(body)   # checked before the lookup too: gh_query interpolates each number
+    if why:
+        return refuse(why)
     body = _with_trust(root, body, "prs", "pr")
     why = PR.snapshot_problem(body)   # the server's own check, here first, so a bad push is named before sending
     if why:
@@ -1801,6 +1804,9 @@ def _issues_push(a) -> int:
         body = IS.from_gh(got[0], got[1], got[2], a.days)
     except IS.PushError as e:
         return refuse(str(e))
+    why = IS.snapshot_problem(body)   # as in prs-push: checked before the lookup interpolates a number
+    if why:
+        return refuse(why)
     body = _with_trust(root, body, "issues", "issue")
     why = IS.snapshot_problem(body)
     if why:
