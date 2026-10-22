@@ -309,10 +309,16 @@ class InstallTests(unittest.TestCase):
                     self.assertEqual(hooks["hooks"]["postToolUse"][0]["matcher"], "edit|create")
                 AD.uninstall(vendor, self.home)
                 self.assertEqual(set(json.loads(where["mcp"].read_text())["mcpServers"]), {"theirs"})
-                if vendor == "copilot":
-                    self.assertFalse(where["hooks"].exists())
-                else:
-                    self.assertEqual(json.loads(where["hooks"].read_text())["hooks"], {})
+                self.assertFalse(where["hooks"].exists())
+
+    def test_uninstall_leaves_no_empty_hooks_file_it_made(self):
+        # Catches: `{"hooks": {}}` left behind in a vendor folder that had no hooks file before install
+        # (found in the 2026-10-22 real run).
+        for vendor in ("codex", "cursor"):
+            with self.subTest(vendor):
+                AD.install(vendor, KIT, vendor, self.home)
+                AD.uninstall(vendor, self.home)
+                self.assertFalse(AD.paths(vendor, self.home)["hooks"].exists())
 
     def test_a_config_it_cannot_read_is_refused_and_left_alone(self):
         # Catches: a malformed user config overwritten.

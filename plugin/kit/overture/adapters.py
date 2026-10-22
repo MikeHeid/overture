@@ -572,10 +572,10 @@ def uninstall(vendor: str, home: Path | None = None) -> list[str]:
     where = paths(vendor, home)
     done = []
     if where["hooks"].exists():
-        if vendor == "copilot":   # a file of our own
-            where["hooks"].unlink()
+        doc = merge_hooks(_load_json(where["hooks"]), None, vendor, where["hooks"])
+        if vendor == "copilot" or (not doc["hooks"] and set(doc) <= {"hooks", "version"}):
+            where["hooks"].unlink()   # a file of our own, or one with nothing left in it (real run, 2026-10-22)
         else:
-            doc = merge_hooks(_load_json(where["hooks"]), None, vendor, where["hooks"])
             _write_text(where["hooks"], json.dumps(doc, indent=2) + "\n")
         done.append(f"hooks: {where['hooks']}")
     if not where["mcp"].exists():

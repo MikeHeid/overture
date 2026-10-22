@@ -100,14 +100,32 @@ register`), as for the Claude plugin. The MCP server it installs has no
 `--state`: it takes the console your registry names for the project it runs
 in, and refuses anywhere else.
 
-**Known limits.** The vendors' hook inputs were built from their docs
-(2026-10-21), not yet from a captured run. Copilot does not document its
-edit tools' arguments and Cursor names few of its tools, so the file and
-text are looked for under the keys they are known to use; a shape not
-recognised says nothing. Cloud agents (Copilot's coding agent, Cursor's
-background agents) cannot reach the console's socket; the CI check below
-covers them. Antigravity CLI, which replaced Gemini CLI, waits until its
-hooks are documented (V1).
+**Run for real (2026-10-22).** Codex CLI 0.163.0 and Copilot CLI 1.0.102
+ran against a throwaway project, with each hook's input captured:
+- Each session started with the note.
+- Codex was warned before a breaking patch, and put the line back itself.
+- Copilot called `rulings` before editing, and was told afterwards that its edit broke the ruling.
+- The MCP server found its console with no `--state`.
+
+Every input matched what the adapter reads. Copilot's undocumented edit
+arguments are `{path, old_str, new_str}`, and `create`'s are
+`{path, file_text}`.
+
+**Under Codex, ask through MCP.** Codex's `workspace-write` sandbox blocks
+Unix sockets, so `agent.py` run from Codex's shell cannot reach the console.
+The hooks and the MCP server run outside the sandbox and can.
+
+**Known limits.**
+- **Cursor is built from its docs, not yet from a captured run.** It names
+  few of its tools, so the file and text are looked for under the keys
+  editors are known to use; a shape it does not recognise says nothing. On
+  Windows, open the project in WSL (Remote-WSL), where the console is.
+  `install` writes the WSL home's `~/.cursor`, where a Cursor used that way
+  keeps its config; that it runs the hooks from there is not yet checked.
+- **Cloud agents** (Copilot's coding agent, Cursor's background agents)
+  cannot reach the console's socket; the CI check below covers them.
+- **Antigravity CLI**, which replaced Gemini CLI, waits until its hooks are
+  documented (V1).
 
 ## The protocol, published (1.55)
 
