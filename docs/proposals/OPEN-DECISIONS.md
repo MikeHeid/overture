@@ -193,6 +193,34 @@ subagent isolation (W1 B, C); every request, or only when asked (W2 B, C);
 pruning when the PR opens, or only by hand (W3 B, C); blocking the second
 agent, or showing branches with no warning (W4 B, C).
 
+## Waypoints (decided 2026-10-22)
+
+An owner directive, not a choice between options: "when entering into a new
+lane/phase/wave or main new section of development, make an announcement and
+recap in the inbox, along with the roll-up, direction map, and execution path
+of what is about to proceed. Give an opportunity for a chat session with
+grills and breakouts to make sure that where we arrived is still relevant."
+The rows record how it was built.
+
+| # | Question | Decision |
+|---|---|---|
+| WP1 | When a waypoint runs | **Before the first change of every new lane, phase, wave or major section** (owner). The lane's own design questions come after it, so the direction is agreed before the details. It does not run for a fix inside a lane already under way, a review round, or a release of work already agreed. When it is unclear whether something is a new lane, it is treated as one. |
+| WP2 | Where it goes, and what it holds | **The console inbox** (owner): one announcement on the lane's item, with a recap, the roll-up, the direction map with drift, and the execution path. Every line cites its source. It is followed by one lockable on-course question (a proceed / b adjust / c re-plan / d pause) and at most three drift questions. The invitation to Grill, Branch out or a deliberation round comes with it. A project with no console gets the same waypoint in the conversation. Built as the `overture:waypoint` skill (1.57). |
+| WP3 | What waits for it | **The lane's first change waits for the on-course question to be locked** (owner: "make sure that where we arrived is still relevant"). Work already under way in other lanes goes on. The answer is logged in [WAYPOINTS.md](WAYPOINTS.md), and the next roll-up starts from that entry. |
+
+## Wave 5 (decided 2026-10-22)
+
+These came from the first waypoint ([WAYPOINTS.md](WAYPOINTS.md)). Waves 1–4
+were built and the plan named no next wave, so the owner chose to re-plan
+first, with Trust leading. A deliberation round then laid out these
+questions, and the owner chose the ★ on each.
+
+| # | Question | Decision |
+|---|---|---|
+| W5-1 | What Wave 5 is for | **Trust at team scale** (owner ★): a team can rely on what the console records, and sees rulings where it reviews code. The Trust lane comes first, then ruling-aware PR comments and Linear. Weighed and not chosen: Trust alone, then another waypoint; Trust, then adoption (a 5-minute path and a hosted demo). |
+| W5-2 | The order inside the Trust lane | **Backlinks first** (owner ★). The order is: collaborator-only backlinks (risk 5), then GitHub webhooks verified by their HMAC signature instead of through a bridge (features/automation.md), then a recipe for keeping agents that run as the same user apart. Backlinks starts with a design round on how trust is decided. Weighed and not chosen: signed webhooks first, as the smallest item. |
+| W5-3 | What stays out | **Kept for a later wave** (owner ★): Docker (optional, A8), Jira, MADR/ADR templates, a hosted demo, and ruling search and dependencies. |
+
 ## Wave 4: the protocol (decided 2026-10-21)
 
 The owner picked Wave 4 as the next lane, then the ★ on every question. P5 was

@@ -18,7 +18,7 @@ from unittest import mock
 import build_zip as B
 
 # Skills the console's rounds lean on, shipped in the plugin so a fresh install has them.
-SHIPPED_SKILLS = ("roar", "refine", "drill", "deliberate")
+SHIPPED_SKILLS = ("roar", "refine", "drill", "deliberate", "waypoint")
 
 
 class Base(unittest.TestCase):

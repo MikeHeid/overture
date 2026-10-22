@@ -31,6 +31,33 @@ Get advice before you answer, and turn an idea into questions and tickets.
 
   <img src="../screenshots/feature-chat-menu.png" alt="The Chat ▾ menu on an item: Branch out, Grill, Advise, Delegate" width="400">
 
+## Waypoints: a course check before each lane (1.57)
+
+Before an agent starts a new lane, phase or wave, it stops and posts a
+**waypoint** to the inbox (the `overture:waypoint` skill). The post has three
+parts, and every line cites a file, PR or commit:
+
+- **Roll-up:** what shipped and was decided since the last waypoint.
+- **Direction map:** where the plan said the project would go, where it is,
+  and what drifted.
+- **Execution path:** the lane's steps and gates, and what it postpones.
+
+The post ends with one **on-course question**:
+
+- **a** proceed as mapped;
+- **b** proceed with an adjustment you name;
+- **c** re-plan first, with a deliberation round;
+- **d** pause the lane.
+
+Where the record disagrees with the plan, up to three drift questions follow.
+Before you lock an answer, you can **Grill** the lane or **Branch out** on any
+part of it from 💬 Chat ▾. Nothing in the lane is built until you lock the
+on-course question (WP1–WP3). Each waypoint is logged in
+[docs/proposals/WAYPOINTS.md](../proposals/WAYPOINTS.md).
+
+Run one yourself with `/overture:waypoint [lane]`. In a project with no
+console, the agent gives the same waypoint in the conversation.
+
 ## Launch Idea (1.26, 1.30)
 
 **✧ Launch Idea** on every item opens a pane beside the item that walks
