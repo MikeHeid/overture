@@ -1,5 +1,6 @@
 <!-- area: plugin/skills · checked: 9aa3736 -->
-- One folder per skill, one SKILL.md whose front matter starts `name: <folder>`; roar, refine, drill and deliberate ship because the console's rounds lean on them (test_build `SHIPPED_SKILLS`).
+- One folder per skill, one SKILL.md whose front matter starts `name: <folder>`; roar, refine, drill, deliberate and waypoint ship because the console's rounds lean on them (test_build `SHIPPED_SKILLS`).
+- `waypoint` runs before the first change of every new lane (owner, OPEN-DECISIONS WP1–WP3). It only posts and asks: the one file it writes is the docs/proposals/WAYPOINTS.md entry, committed with the lane's first commit, and the lane waits for the on-course lock.
 - The owner is never handed a blank question: lettered options, a one-line tradeoff each, and a ★ default (deliberate, drill, refine). "Defaults" takes every ★ and records each as an architect default, not an owner decision.
 - Skills that change files start in the agent's own worktree, `agent.py worktree new --kind KIND --item ITEM` (1.50 W2); the deliberation skills change no files and make none (test_kit `WritingSkillWorktreeTests`).
 - A fork is done when its `Result:` reply exists; console-fork and console-process state that one rule in the same words, so a change goes into both.

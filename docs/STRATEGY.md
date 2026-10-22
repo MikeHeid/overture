@@ -360,6 +360,36 @@ Each wave below builds on the one before it.
   - *Scope:* publish the question/ruling/`valid_if` format as an open spec,
     plus an MCP reference server and adapters for other agent vendors.
 
+### How each lane starts: a waypoint (owner, 2026-10-22)
+
+The waves above were planned once. Work moves after that: a real run, a review
+or a new owner decision can make part of a plan less true. So before the first
+change of any new lane, phase, wave or major section, the agent runs the
+**waypoint** skill (OPEN-DECISIONS.md, "Waypoints", WP1–WP3):
+
+1. **Announce and recap in the inbox.** One post on the lane's item with three
+   parts:
+   - the *roll-up*: what shipped and was decided since the last waypoint;
+   - the *direction map*: each stage of this plan marked done, in progress,
+     next or dropped, with the drift from the plan named;
+   - the *execution path*: the lane's steps and their gates, and what it
+     postpones.
+
+   Every line names its source.
+2. **Check.** One on-course question: proceed as mapped, proceed with an
+   adjustment, re-plan first, or pause. At most three drift questions follow,
+   one for each place where the plan and the record disagree.
+3. **Push on it.** Before answering, the owner can grill the lane (💬 Chat ▾ →
+   Grill), branch out on any part of it, or ask for a deliberation round.
+4. **Go where the answer points.** The lane's first change waits for the
+   on-course question to be locked. Each waypoint is logged in
+   [proposals/WAYPOINTS.md](proposals/WAYPOINTS.md), and the next roll-up
+   starts from that entry.
+
+So the order of every lane is: waypoint → the lane's own decisions → build →
+red checks and a real run → an independent clearer → the owner's approve →
+release.
+
 ### Board bottom line
 
 The engine (Living rulings plus the fold) is real, well tested and unusually
