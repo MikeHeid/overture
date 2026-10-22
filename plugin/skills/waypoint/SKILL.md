@@ -12,8 +12,9 @@ let them push on it. Nothing in the new lane is built until the owner has
 answered the on-course question (owner directive, OPEN-DECISIONS "Waypoints"
 WP1-WP3).
 
-A waypoint informs and asks; it never decides. It changes no files except the
-one waypoint record (step 5), and makes no worktree.
+A waypoint informs and asks; it never decides. Until the lock it changes no
+files and makes no worktree. Its one file, the waypoint record (step 5), is
+written after the lock in the lane's own worktree, the one the lane starts in.
 
 ## When to run
 
@@ -78,7 +79,10 @@ Two kinds, both from step 1:
 ## 3. Post it to the inbox
 
 1. **The announcement**, one reply on the lane's item (`A reply ITEM TEXT`;
-   the item the lane's questions will belong to, or the plan's own item). Use
+   the item the lane's questions will belong to, or the plan's own item).
+   `A reply` needs an item that exists. If neither exists, do not make one
+   up: give the waypoint in the conversation, as in step 0, and ask the owner
+   which item the lane belongs to. Use
    this shape and keep it under 60 lines; link to files rather than pasting
    them:
 
@@ -124,7 +128,8 @@ other lanes; do not start this one.
   path on the item, then start.
 - `c`: run the deliberate skill (or a roar panel, if the owner asked for one)
   on the direction; the lane starts only after its questions are locked.
-- `d`: record what the lane waits for, and stand down its claim.
+- `d`: record what the lane waits for, and release the lane: make no worktree
+  for it, and close any claim your setup keeps on it.
 
 If the owner answers in the conversation instead, post that answer to the
 console as console-ask's steward rule says, so the decision is on the record
@@ -133,8 +138,9 @@ either way.
 ## 5. Record it
 
 Append one entry to the project's waypoint log (`docs/proposals/WAYPOINTS.md`
-here; another project keeps it beside its decision log) and commit it with
-the lane's first commit: the date, the lane, the qid, the owner's answer, and
+here; another project keeps it beside its decision log) in the lane's own
+worktree, and commit it with the lane's first commit. For `d`, where no lane
+worktree is made, the entry goes in with the next commit that has one: the date, the lane, the qid, the owner's answer, and
 a one-line roll-up. The next waypoint's roll-up starts from it.
 
 ## What NOT to do
