@@ -12659,7 +12659,9 @@ class GithubWebhookTests(_Live, unittest.TestCase):
         return "sha256=" + _h.new((secret or self.SECRET).encode(), body, hashlib.sha256).hexdigest()
 
     def deliver(self, name="pr-opened", body=None, event="pull_request", delivery=None, sig=True, path=None):
-        body = self.BODY if body is None else body
+        delivery = delivery or ("d-" + os.urandom(6).hex())
+        if body is None:   # each real delivery's body differs (GitHub's ids and times are in it)
+            body = self.BODY[:-1] + b',"delivery":"' + delivery.encode() + b'"}'
         h = {"Content-Type": "application/json"}
         if sig is True:
             h["X-Hub-Signature-256"] = self.sign(body)
@@ -12667,7 +12669,7 @@ class GithubWebhookTests(_Live, unittest.TestCase):
             h["X-Hub-Signature-256"] = sig
         if event is not None:
             h["X-GitHub-Event"] = event
-        h["X-GitHub-Delivery"] = delivery or ("d-" + os.urandom(6).hex())
+        h["X-GitHub-Delivery"] = delivery
         return self.req("POST", path or f"/api/github/{name}", body, headers=h, origin=False)
 
     def chats(self):
@@ -12724,6 +12726,28 @@ class GithubWebhookTests(_Live, unittest.TestCase):
         with mock.patch("time.time", return_value=later):   # GitHub's Redeliver, after the window
             self.assertEqual(self.deliver(delivery="bbbb-2")[0], 200)
         self.assertEqual(len(self.chats()), 2)
+
+    def test_a_captured_body_under_a_fresh_delivery_id_or_another_event_does_not_fire_again(self):
+        # Catches (clearer, MEDIUM): GitHub signs the body only, so whoever saw one signed body (a repo admin, the
+        # delivery log) could resend it with a new X-GitHub-Delivery, or a listed event name, and fire again.
+        body = b'{"action":"opened","number":7}'
+        self.assertEqual(self.deliver(body=body, delivery="eeee-1")[0], 200)
+        later = time.time() + self.TR.MIN_INTERVAL_S + 1
+        with mock.patch("time.time", return_value=later):
+            code, out = self.deliver(body=body, delivery="ffff-2")
+        self.assertEqual(code, 409, out)
+        self.assertIn("exact body", out["error"])
+        self.assertEqual(len(self.chats()), 1)
+
+    def test_a_real_sized_payload_fires_and_malformed_delivery_ids_are_refused(self):
+        # Catches (clearer, LOW): the route left on the 64 KiB cap every other route keeps (a 100 KB pull_request
+        # payload is ordinary), and a delivery id taken in any shape.
+        big = b'{"action":"opened","pad":"' + b"x" * 100_000 + b'"}'
+        code, out = self.deliver(body=big)
+        self.assertEqual(code, 200, out)
+        for bad in ("a b", "x" * 65, "../x", "id;1"):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.deliver(delivery=bad)[0], 400)
 
     def test_no_secret_no_github_block_or_no_trigger_is_refused_by_name(self):
         # Catches: a trigger with no secret yet checked against an empty one; the bearer-only trigger reachable on

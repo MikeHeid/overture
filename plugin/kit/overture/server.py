@@ -2485,9 +2485,10 @@ class Console:
         if event not in trigger.github_events:
             return 202, {"fired": False, "reason": f"trigger {name!r} does not take {event!r} events"}
         import time as _t
-        admitted = self.triggers.admit(name, delivery, _t.time())
+        admitted = self.triggers.admit(name, delivery, hashlib.sha256(body).hexdigest(), _t.time())
         if admitted == "replay":
-            raise RequestError(409, f"delivery {delivery} was received before; it does not fire twice")
+            raise RequestError(409, f"delivery {delivery}, or its exact body, was received before; it does not "
+                                    "fire twice")
         if admitted is not None:
             raise RequestError(429, f"trigger {name!r} is rate-limited; next firing allowed at epoch "
                                     f"{int(admitted)}")

@@ -6386,25 +6386,29 @@ class GithubTriggerTests(unittest.TestCase):
 
     def test_admit_refuses_a_replay_keeps_no_id_when_rate_limited_and_forgets_the_oldest(self):
         s = TG.Store()
-        self.assertIsNone(s.admit("t", "d1", 100.0))
-        self.assertEqual(s.admit("t", "d1", 200.0), "replay")
-        self.assertEqual(s.admit("t", "d2", 101.0), 100.0 + TG.MIN_INTERVAL_S)
-        self.assertIsNone(s.admit("t", "d2", 200.0))          # the rate-limited id was not kept
-        self.assertIsNone(s.admit("u", "d1", 200.0))          # ids are per trigger
+        self.assertIsNone(s.admit("t", "d1", "b1", 100.0))
+        self.assertEqual(s.admit("t", "d1", "b9", 200.0), "replay")     # the same id
+        self.assertEqual(s.admit("t", "d9", "b1", 200.0), "replay")     # the same signed body, a fresh id
+        self.assertEqual(s.admit("t", "d2", "b2", 101.0), 100.0 + TG.MIN_INTERVAL_S)
+        self.assertIsNone(s.admit("t", "d2", "b2", 200.0))    # the rate-limited id and body were not kept
+        self.assertIsNone(s.admit("u", "d1", "b1", 200.0))    # ids and bodies are per trigger
         now = 300.0
         for i in range(TG.DELIVERIES_KEPT):
             now += TG.MIN_INTERVAL_S
-            self.assertIsNone(s.admit("t", f"x{i}", now))
-        self.assertLessEqual(len(s._delivered), TG.DELIVERIES_KEPT)
-        self.assertIsNone(s.admit("t", "d1", now + 100))      # long gone from the bounded memory
+            self.assertIsNone(s.admit("t", f"x{i}", f"y{i}", now))
+        self.assertLessEqual(len(s._delivered), 2 * TG.DELIVERIES_KEPT)
+        self.assertIsNone(s.admit("t", "d1", "b1", now + 100))   # long gone from the bounded memory
 
     def test_the_secret_file_is_exact_0600_and_never_followed_through_a_link(self):
         with tempfile.TemporaryDirectory() as d:
             st = Path(d)
             self.assertIsNone(TG.load_secret(st, "t"))
+            (st / TG.SECRET_DIR).mkdir(mode=0o755)   # made loose by someone else: tightened, not kept
+            os.chmod(st / TG.SECRET_DIR, 0o755)
             TG.set_secret(st, "t", "s" * 20)
             p = st / TG.SECRET_DIR / "t.json"
             self.assertEqual(oct(p.stat().st_mode & 0o777), "0o600")
+            self.assertEqual(oct(p.parent.stat().st_mode & 0o777), "0o700")
             self.assertEqual(TG.load_secret(st, "t"), "s" * 20)
             for doc in ({"secret": "short"}, {"secret": "s" * 20, "x": 1}, {"secret": 5}, ["s" * 20]):
                 with self.subTest(doc=doc):

@@ -3017,8 +3017,10 @@ owner's ★ on each).
 - **Only the events you list, once each (G3).** The signature is checked
   before anything else in the delivery is believed. GitHub's `ping` gets
   200 and an event the trigger does not list gets 202, and neither fires.
-  A delivery id received before gets 409. One refused by the 10-second
-  limit is not remembered, so GitHub's Redeliver works later. The payload
+  A delivery whose id or exact body was received since the console
+  started gets 409: GitHub signs only the body, so the body is what a
+  replay is known by. One refused by the 10-second limit is not
+  remembered, so GitHub's Redeliver works later. The payload
   is not passed to the playbook: deliveries that carry backlink data wait
   for a later lane.
 - **Real run.** A test console in Cloudflare mode was reached through a
@@ -3033,6 +3035,13 @@ owner's ★ on each).
     re-checked against GitHub's own signature), got 409;
   - the rate-limited `edited` delivery, sent again after the window,
     got 200.
+- **Independent clearer: CLEARED**, with no CRITICAL or HIGH findings.
+  Fixed after it:
+  - the replay guard now also knows a delivery by its body, since GitHub
+    does not sign the delivery id or the event name;
+  - an existing `github-secrets` directory is tightened to 0700;
+  - tests now cover a 100 KB payload, malformed delivery ids and a body
+    replayed under a fresh id.
 - **Known limit, from the real run:** an event fires on every one of its
   actions. A trigger listing `pull_request` also fires on `edited`,
   `synchronize` and `closed`, within the 10-second limit.

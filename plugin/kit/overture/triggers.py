@@ -35,7 +35,8 @@ Bypass rule on `/api/github/*` lets GitHub through and the signature is the gate
 The secret is the owner's, set in the terminal (`agent.py github-secret NAME`), and
 kept in STATE/github-secrets/NAME.json (0600), never in the repository. A `ping`
 is answered and fires nothing; an event not listed is answered and fires nothing;
-a delivery id already received is refused. The payload is not given to the playbook.
+a delivery whose id or exact body was already received is refused (GitHub signs the
+body only). The payload is not given to the playbook.
 
 Rate limit: at most one firing per `MIN_INTERVAL_S` seconds per trigger (in-process).
 A rejected call responds 429 and names the next-allowed time.
@@ -46,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -130,21 +132,24 @@ class Store:
             self._last_fired[name] = now
             return None
 
-    def admit(self, name: str, delivery: str, now: float) -> str | float | None:
-        """1.59.0: one signed GitHub delivery. "replay" when its id was received before; the next-allowed
-        time when rate-limited (the id is NOT kept, so GitHub's Redeliver works later); else None, and both
-        the firing and the id are kept. One lock, so two copies of one delivery cannot both fire."""
+    def admit(self, name: str, delivery: str, digest: str, now: float) -> str | float | None:
+        """1.59.0: one signed GitHub delivery. "replay" when its id, or its body's sha256 `digest`, was received
+        before (GitHub signs the body only, so a captured body sent again under a fresh id is still the same
+        delivery); the next-allowed time when rate-limited (neither is kept, so GitHub's Redeliver works later);
+        else None, and the firing, the id and the digest are kept, until DELIVERIES_KEPT newer ones or a restart.
+        One lock, so two copies of one delivery cannot both fire."""
         with self._lock:
-            key = (name, delivery)
-            if key in self._delivered:
+            keys = (("id", name, delivery), ("body", name, digest))
+            if any(k in self._delivered for k in keys):
                 return "replay"
             last = self._last_fired.get(name)
             if last is not None and now - last < MIN_INTERVAL_S:
                 return last + MIN_INTERVAL_S
             self._last_fired[name] = now
-            self._delivered.add(key)
-            self._deliveries.append(key)
-            while len(self._deliveries) > DELIVERIES_KEPT:
+            for k in keys:
+                self._delivered.add(k)
+                self._deliveries.append(k)
+            while len(self._deliveries) > 2 * DELIVERIES_KEPT:
                 self._delivered.discard(self._deliveries.popleft())
             return None
 
@@ -305,6 +310,7 @@ def set_secret(state: Path, name: str, secret: str | None) -> None:
             return None
         if secret is not None:
             p.parent.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(p.parent, 0o700)   # an existing directory is tightened too (clearer, LOW)
         return ({"setting": {"key": "github_secret", "from": name if had else None,
                              "to": name if secret is not None else None}},
                 lambda: _write(p, {"secret": secret} if secret is not None else None))

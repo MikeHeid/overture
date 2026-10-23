@@ -138,7 +138,9 @@ a console behind Cloudflare Access only.
    Access application with the action **Bypass**, on the path
    `/api/github/*` only. GitHub cannot sign in to Access, so on that one
    path the signature is the gate. Everything else, `/api/trigger/`
-   included, stays behind Access.
+   included, stays behind Access. The console answers a credential-less
+   call only at exactly `/api/github/<trigger>`; any other path the
+   rule lets through still meets its own sign-in check.
 4. In the repository's **Settings → Webhooks → Add webhook**, set:
    - Payload URL: `https://console.example.com/api/github/pr-opened`;
    - Content type: `application/json`;
@@ -151,9 +153,13 @@ What the console does with a delivery:
   anything else the delivery says. A wrong or missing signature gets 401.
 - GitHub's `ping`, sent when you add the webhook, gets 200 and fires
   nothing. An event the trigger does not list gets 202 and fires nothing.
-- A delivery it has received before gets 409, so a captured delivery
-  cannot fire the trigger twice. One refused by the 10-second limit
-  (429) is not remembered, so GitHub's **Redeliver** works afterwards.
+- A delivery whose id, or whose exact body, it has received since it
+  started gets 409. GitHub signs the body but not the event name or the
+  delivery id, so the body is what is remembered: a captured delivery
+  sent again under a new id does not fire twice. The memory is the
+  console's own (the last 4096 deliveries), so a restart forgets it. One
+  refused by the 10-second limit (429) is not remembered, so GitHub's
+  **Redeliver** works afterwards.
 - A body over 256 KiB gets 413. The payload is not passed to the
   playbook; the delivery only starts it.
 - An event fires on every one of its actions: `pull_request` covers
