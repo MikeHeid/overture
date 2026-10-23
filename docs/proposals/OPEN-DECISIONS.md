@@ -221,6 +221,22 @@ questions, and the owner chose the ★ on each.
 | W5-2 | The order inside the Trust lane | **Backlinks first** (owner ★). The order is: collaborator-only backlinks (risk 5), then GitHub webhooks verified by their HMAC signature instead of through a bridge (features/automation.md), then a recipe for keeping agents that run as the same user apart. Backlinks starts with a design round on how trust is decided. Weighed and not chosen: signed webhooks first, as the smallest item. |
 | W5-3 | What stays out | **Kept for a later wave** (owner ★): Docker (optional, A8), Jira, MADR/ADR templates, a hosted demo, and ruling search and dependencies. |
 
+## Signed GitHub webhooks (decided 2026-10-22)
+
+The second lane of Wave 5. Its waypoint was given in the conversation
+([WAYPOINTS.md](WAYPOINTS.md)): GitHub reaches the console through a
+Cloudflare Access Bypass rule on one path only, with the signature as the
+gate, and the lane fires triggers only. Reading the server showed that its
+own credential check (D5) runs before any route, so a bypass rule alone would
+still be refused. A design round asked these three questions, and the owner
+chose the ★ on each.
+
+| # | Question | Decision |
+|---|---|---|
+| G1 | How a signed GitHub call passes the server's own credential check | **A separate signed route** (owner ★). `POST /api/github/<trigger>` is served only when the console runs behind Cloudflare Access. It skips the Access credential and nothing else: it needs a valid `X-Hub-Signature-256` instead, and the Host check, the body cap and the rate limit stay. The Bypass rule names `/api/github/*` only, so bearer triggers stay behind Access. Weighed and not chosen: the same route switched on the header (the Bypass rule would open the bearer route too); a static header added by a Cloudflare rule (a Cloudflare-only secret, hard to run for real). |
+| G2 | Where each trigger's GitHub secret lives | **In the console's state directory, set in the terminal** (owner ★). `agent.py github-secret NAME` writes a 0600 file there and is refused inside a Claude Code session, as `notify-url` is. `triggers.json` says only that the trigger takes GitHub calls. HMAC needs the plaintext, so it cannot be kept as a hash, and it never goes in the repository. Weighed and not chosen: in `triggers.json`; an environment variable. |
+| G3 | Which deliveries fire the playbook | **An allow-list of events, and a replay guard** (owner ★). `triggers.json` lists the events each trigger takes. A `ping` is answered and fires nothing, another event is answered with a named no-op, and a delivery id seen before is refused. The payload is still not passed to the playbook: event-fed backlinks wait for a later lane. Weighed and not chosen: every signed event fires. |
+
 ## Trusted backlinks (decided 2026-10-22)
 
 The first lane of Wave 5 (risk 5 in STRATEGY.md). Its waypoint was given in
