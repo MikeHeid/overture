@@ -3021,6 +3021,21 @@ owner's ★ on each).
   limit is not remembered, so GitHub's Redeliver works later. The payload
   is not passed to the playbook: deliveries that carry backlink data wait
   for a later lane.
+- **Real run.** A test console in Cloudflare mode was reached through a
+  Cloudflare quick tunnel, with a webhook on a scratch fork:
+  - an unsigned call through the tunnel got 401, and `/api/view` and
+    `/api/trigger/` got 403;
+  - GitHub's own `ping` got 200 and fired nothing;
+  - opening a PR sent `pull_request` (`opened`), which got 200 and ran the
+    playbook. The firing showed with the kind `github`;
+  - GitHub's `edited` delivery 2 seconds later got 429;
+  - the captured `opened` delivery, replayed byte for byte (its bytes
+    re-checked against GitHub's own signature), got 409;
+  - the rate-limited `edited` delivery, sent again after the window,
+    got 200.
+- **Known limit, from the real run:** an event fires on every one of its
+  actions. A trigger listing `pull_request` also fires on `edited`,
+  `synchronize` and `closed`, within the 10-second limit.
 - Docs: features/automation.md, "GitHub webhooks (1.59)", with the
   Cloudflare and GitHub settings step by step.
 

@@ -156,6 +156,9 @@ What the console does with a delivery:
   (429) is not remembered, so GitHub's **Redeliver** works afterwards.
 - A body over 256 KiB gets 413. The payload is not passed to the
   playbook; the delivery only starts it.
+- An event fires on every one of its actions: `pull_request` covers
+  `opened`, `edited`, `synchronize`, `closed` and the rest, so pick
+  events whose every action should start the playbook.
 - The Triggers tab lists the firing with the kind `github`.
 
 On a console with `--auth link` the route meets the sign-in gate like
