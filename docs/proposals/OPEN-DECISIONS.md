@@ -221,6 +221,23 @@ questions, and the owner chose the ★ on each.
 | W5-2 | The order inside the Trust lane | **Backlinks first** (owner ★). The order is: collaborator-only backlinks (risk 5), then GitHub webhooks verified by their HMAC signature instead of through a bridge (features/automation.md), then a recipe for keeping agents that run as the same user apart. Backlinks starts with a design round on how trust is decided. Weighed and not chosen: signed webhooks first, as the smallest item. |
 | W5-3 | What stays out | **Kept for a later wave** (owner ★): Docker (optional, A8), Jira, MADR/ADR templates, a hosted demo, and ruling search and dependencies. |
 
+## Same-user isolation (decided 2026-10-22)
+
+The third lane of Wave 5. Its waypoint was given in the conversation
+([WAYPOINTS.md](WAYPOINTS.md)): protect everything in STATE (tokens, GitHub
+secrets, the webhook URL, roles and the stores), not only what the docs named.
+Claude Code's sandboxing docs were read first: the sandbox's `denyRead` stops
+sandboxed Bash, `Read(...)` deny rules stop the built-in tools, MCP servers
+and hooks run outside it, and managed settings cannot be loosened by a
+project. A design round asked these three questions, and the owner chose the
+★ on each.
+
+| # | Question | Decision |
+|---|---|---|
+| I1 | What keeps a session out of STATE | **Claude Code's sandbox now; a separate OS user later** (owner ★). Every state directory is denied to sandboxed Bash and to the built-in tools, with no unsandboxed retry, and a session reaches only its console's socket. The steward gets back exactly the three files its watch reads (`inbox.jsonl`, `agent-cursor.json`, `watch.json`), never a secret. No server change. Running the console as its own OS user is written up as the stronger option. Weighed and not chosen: a separate OS user now (a socket-group option, a socket-based watch, sudo setup per machine); both in one release. |
+| I2 | Whether the kit ships a self-check | **Yes: `agent.py isolation check`** (owner ★). Run inside a session, it tries to read each protected file and to reach its own socket, reports each as blocked or open, and exits 1 on any opening. It works in any vendor's session. Weighed and not chosen: docs only. |
+| I3 | Where the recipe's settings live | **Managed settings** (owner ★), written once with sudo, which neither a session nor a project can loosen, and which an agent running as your user cannot edit. The check says where its sandbox settings came from. Weighed and not chosen: user settings plus a write-deny (anything outside the sandbox can still change them). |
+
 ## Signed GitHub webhooks (decided 2026-10-22)
 
 The second lane of Wave 5. Its waypoint was given in the conversation
