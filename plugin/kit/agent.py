@@ -2140,6 +2140,12 @@ def main(argv=None) -> int:
     g.add_argument("url", nargs="?", help="the webhook URL, https://... (none: show its host)")
     g.add_argument("--clear", action="store_true", help="remove the webhook: nothing is sent")
     g.add_argument("--test", action="store_true", help="post one test message to the webhook now")
+    s = sub.add_parser("github-secret", description="Make a new secret for a trigger that takes signed GitHub "
+                       "webhooks (1.59), keep it in STATE/github-secrets/ (0600), and print it once to paste into "
+                       "the webhook's Secret field on GitHub. Whoever holds it can fire the trigger, so it is set "
+                       "here, never from the console or a session. Running it again replaces the secret.")
+    s.add_argument("name", help="the trigger's name in .overture/triggers.json")
+    s.add_argument("--clear", action="store_true", help="remove the secret: GitHub's calls are refused")
     s = sub.add_parser("access", description="Show, set or clear what an Access login may do in the console (1.39). "
                        "With no roles set, every login that passes Access is the owner. Once one is set, an unlisted "
                        "login only reads. owner: everything; member AREA...: answers, locks and plain messages on "
@@ -2357,7 +2363,7 @@ def main(argv=None) -> int:
 
 
 USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access",
-                 "notify-url", "invite", "devices")
+                 "notify-url", "invite", "devices", "github-secret")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -2448,6 +2454,31 @@ def _notify_url(state: Path, url: str | None, clear: bool, test: bool) -> int:
     except (OSError, NT.NotifyError, RO.RolesError) as e:
         print(f"agent.py: notify-url: {e}", file=sys.stderr)
         return 2
+
+
+def _github_secret(state: Path, name: str, clear: bool) -> int:
+    """`github-secret` (1.59, OPEN-DECISIONS G2): mint and keep a trigger's GitHub secret, printed once; or remove it."""
+    from overture import triggers as TR
+    if os.environ.get("CLAUDECODE"):
+        # As `notify-url`: a session holding the secret could fire the trigger at will. A guardrail between the
+        # owner's own sessions (the same user can still read STATE); the owner's terminal does it.
+        print("agent.py: github-secret: refused inside a Claude Code session: the secret is made by you, in your "
+              "own terminal", file=sys.stderr)
+        return 2
+    try:
+        if clear:
+            TR.set_secret(state, name, None)
+            print(f"github-secret: {name}: removed; GitHub's calls to it are refused")
+            return 0
+        secret = TR.mint_secret()
+        TR.set_secret(state, name, secret)
+    except (OSError, TR.TriggerError, RO.RolesError) as e:
+        print(f"agent.py: github-secret: {e}", file=sys.stderr)
+        return 2
+    print(f"github-secret: {name}: paste this into the webhook's Secret field on GitHub (shown once):")
+    print(f"  {secret}")
+    print(f"Payload URL: https://<your console>/api/github/{name}   Content type: application/json")
+    return 0
 
 
 def _show_role(entry: dict) -> str:
@@ -2730,6 +2761,8 @@ def _run(a, bell: Path) -> int:
         return _operator_name(a.state, a.email, a.short, a.clear)
     if a.cmd == "notify-url":
         return _notify_url(a.state, a.url, a.clear, a.test)
+    if a.cmd == "github-secret":
+        return _github_secret(a.state, a.name, a.clear)
     if a.cmd == "access":
         return _access(a.state, a.email, a.role, a.areas, a.clear, a.director)
     if a.cmd == "role":

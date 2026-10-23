@@ -1,4 +1,4 @@
-<!-- area: plugin/kit · checked: 566cf72 -->
+<!-- area: plugin/kit · checked: ef0a2a3 -->
 - agent.py is the agent's side, run in the agent's own session; its git and gh calls go through overture/gitseam.py, open here and closed in the server (CONSOLE-kit/Q23).
 - A command that reaches a console reaches one: the one the working directory's registered project names (K4, `resolve_door`). The user's own commands (`USER_COMMANDS`), `worktree list`/`prune`, `notes` and `adapter` (Wave 4: the user's vendor config, refused inside a session) need none.
 - watch, synced and the fold belong to the console's steward (`steward_refusal`, 0.8.3). The watch's side work (prune, notes check) runs after its first heartbeat, throttled by a time kept in STATE (1.50 review C2).

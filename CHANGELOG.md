@@ -2990,6 +2990,64 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Signed GitHub webhooks (1.59.0)
+
+Wave 5's second lane: GitHub calls a trigger directly, with no bridge.
+Until now GitHub's webhooks needed a Worker or shim in front, because
+GitHub signs its deliveries with HMAC instead of sending a bearer token,
+and cannot pass Cloudflare Access. The lane's waypoint and a design round
+decided how (OPEN-DECISIONS.md "Signed GitHub webhooks", G1–G3, the
+owner's ★ on each).
+
+- **A separate signed route (G1).** A trigger with a `github` block in
+  `.overture/triggers.json` takes `POST /api/github/<name>`. The console
+  serves it only behind Cloudflare Access, where the owner adds a Bypass
+  rule for `/api/github/*` alone, and only there does a request skip the
+  console's own credential check. The `X-Hub-Signature-256` signature over
+  the exact body is the gate instead. The Host check, a 256 KiB body cap
+  and the rate limit still apply. Bearer triggers on `/api/trigger/` stay
+  behind Access. On a console with `--auth link`, GitHub's calls are
+  refused like any other unsigned request.
+- **The secret is yours, made in the terminal (G2).** `agent.py
+  github-secret NAME` makes a secret, keeps it in
+  `STATE/github-secrets/NAME.json` (0600, never in the repository) and
+  prints it once for GitHub's Secret field. The role log records that a
+  trigger's secret changed, never the secret. A Claude Code session
+  cannot run it. `--clear` removes it.
+- **Only the events you list, once each (G3).** The signature is checked
+  before anything else in the delivery is believed. GitHub's `ping` gets
+  200 and an event the trigger does not list gets 202, and neither fires.
+  A delivery whose id or exact body was received since the console
+  started gets 409: GitHub signs only the body, so the body is what a
+  replay is known by. One refused by the 10-second limit is not
+  remembered, so GitHub's Redeliver works later. The payload
+  is not passed to the playbook: deliveries that carry backlink data wait
+  for a later lane.
+- **Real run.** A test console in Cloudflare mode was reached through a
+  Cloudflare quick tunnel, with a webhook on a scratch fork:
+  - an unsigned call through the tunnel got 401, and `/api/view` and
+    `/api/trigger/` got 403;
+  - GitHub's own `ping` got 200 and fired nothing;
+  - opening a PR sent `pull_request` (`opened`), which got 200 and ran the
+    playbook. The firing showed with the kind `github`;
+  - GitHub's `edited` delivery 2 seconds later got 429;
+  - the captured `opened` delivery, replayed byte for byte (its bytes
+    re-checked against GitHub's own signature), got 409;
+  - the rate-limited `edited` delivery, sent again after the window,
+    got 200.
+- **Independent clearer: CLEARED**, with no CRITICAL or HIGH findings.
+  Fixed after it:
+  - the replay guard now also knows a delivery by its body, since GitHub
+    does not sign the delivery id or the event name;
+  - an existing `github-secrets` directory is tightened to 0700;
+  - tests now cover a 100 KB payload, malformed delivery ids and a body
+    replayed under a fresh id.
+- **Known limit, from the real run:** an event fires on every one of its
+  actions. A trigger listing `pull_request` also fires on `edited`,
+  `synchronize` and `closed`, within the 10-second limit.
+- Docs: features/automation.md, "GitHub webhooks (1.59)", with the
+  Cloudflare and GitHub settings step by step.
+
 ## Trusted backlinks (1.58.0)
 
 Wave 5's first lane, closing risk 5: anyone with a GitHub account could

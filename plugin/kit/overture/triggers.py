@@ -25,9 +25,18 @@ must satisfy BOTH gates:
 The server NEVER stores the plaintext token. Rotate by generating a new token,
 putting its sha256 into the file, and giving the plaintext to the sender.
 
-**GitHub-webhook users**: GitHub signs with HMAC, not bearer. A 10-line Worker
-or small shim can accept GitHub's `X-Hub-Signature-256`, verify it, and re-emit
-`Authorization: Bearer <token>` to this endpoint.
+**GitHub webhooks (1.59.0, OPEN-DECISIONS G1-G3)**: GitHub signs with HMAC, not
+a bearer token, and cannot send Access headers. A trigger with a `github` block
+takes `POST /api/github/<name>`, served only behind Cloudflare Access, where a
+Bypass rule on `/api/github/*` lets GitHub through and the signature is the gate:
+
+        "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}}
+
+The secret is the owner's, set in the terminal (`agent.py github-secret NAME`), and
+kept in STATE/github-secrets/NAME.json (0600), never in the repository. A `ping`
+is answered and fires nothing; an event not listed is answered and fires nothing;
+a delivery whose id or exact body was already received is refused (GitHub signs the
+body only). The payload is not given to the playbook.
 
 Rate limit: at most one firing per `MIN_INTERVAL_S` seconds per trigger (in-process).
 A rejected call responds 429 and names the next-allowed time.
@@ -38,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -53,6 +63,12 @@ MAX_BODY = 256 * 1024
 MIN_INTERVAL_S = 10.0
 NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}\Z")
+EVENT = re.compile(r"^[a-z][a-z_]{0,63}\Z")          # GitHub's X-GitHub-Event names: pull_request, push, ...
+DELIVERY = re.compile(r"^[0-9A-Za-z-]{1,64}\Z")      # X-GitHub-Delivery, a GUID
+MAX_EVENTS = 32
+SECRET_DIR = "github-secrets"
+_SECRET = re.compile(r"^[\x20-\x7e]{16,256}\Z")      # printable ASCII: what GitHub's Secret field takes
+DELIVERIES_KEPT = 4096   # delivery ids remembered per process, for the replay guard
 
 
 class TriggerError(ValueError):
@@ -65,6 +81,7 @@ class Trigger:
     playbook: str
     token_sha256: str | None    # None → webhook disabled (cron-only trigger)
     cron: tuple | None          # (minutes, hours, days-of-month, months, days-of-week) each a frozenset of ints
+    github_events: frozenset | None = None   # 1.59.0: None → no GitHub route; else the events that fire it
 
     def to_public(self) -> dict:
         """For /view: token hash + cron shape aren't exposed; only name + playbook + what trigger kinds are armed."""
@@ -73,6 +90,8 @@ class Trigger:
             kinds.append("webhook")
         if self.cron:
             kinds.append("cron")
+        if self.github_events:
+            kinds.append("github")
         return {"name": self.name, "playbook": self.playbook, "kinds": kinds}
 
 
@@ -88,6 +107,8 @@ class Store:
         self._last_fired: dict[str, float] = {}
         import collections
         self._history: collections.deque = collections.deque(maxlen=HISTORY_LIMIT)
+        self._deliveries: collections.deque = collections.deque()   # 1.59.0: (name, id), oldest first
+        self._delivered: set = set()
 
     def set_all(self, triggers: dict[str, Trigger]) -> None:
         with self._lock:
@@ -109,6 +130,27 @@ class Store:
             if last is not None and now - last < MIN_INTERVAL_S:
                 return last + MIN_INTERVAL_S
             self._last_fired[name] = now
+            return None
+
+    def admit(self, name: str, delivery: str, digest: str, now: float) -> str | float | None:
+        """1.59.0: one signed GitHub delivery. "replay" when its id, or its body's sha256 `digest`, was received
+        before (GitHub signs the body only, so a captured body sent again under a fresh id is still the same
+        delivery); the next-allowed time when rate-limited (neither is kept, so GitHub's Redeliver works later);
+        else None, and the firing, the id and the digest are kept, until DELIVERIES_KEPT newer ones or a restart.
+        One lock, so two copies of one delivery cannot both fire."""
+        with self._lock:
+            keys = (("id", name, delivery), ("body", name, digest))
+            if any(k in self._delivered for k in keys):
+                return "replay"
+            last = self._last_fired.get(name)
+            if last is not None and now - last < MIN_INTERVAL_S:
+                return last + MIN_INTERVAL_S
+            self._last_fired[name] = now
+            for k in keys:
+                self._delivered.add(k)
+                self._deliveries.append(k)
+            while len(self._deliveries) > 2 * DELIVERIES_KEPT:
+                self._delivered.discard(self._deliveries.popleft())
             return None
 
     def log(self, name: str, kind: str, ts: str, records: int, skipped: int, error: str | None = None) -> None:
@@ -187,10 +229,92 @@ def _validate(name: str, cfg: object) -> Trigger:
             cron_fields = parse_cron(cron_raw)
         except ValueError as e:
             raise TriggerError(f"{FILE}: triggers[{name!r}].cron: {e}") from None
-    if token_sha is None and cron_fields is None:
-        raise TriggerError(f"{FILE}: triggers[{name!r}] must set at least one of token_sha256 (webhook) "
-                           "or cron (schedule)")
-    return Trigger(name=name, playbook=playbook, token_sha256=token_sha, cron=cron_fields)
+    events = _github_events(name, cfg.get("github")) if "github" in cfg else None
+    if token_sha is None and cron_fields is None and events is None:
+        raise TriggerError(f"{FILE}: triggers[{name!r}] must set at least one of token_sha256 (webhook), "
+                           "cron (schedule) or github (signed GitHub webhook)")
+    return Trigger(name=name, playbook=playbook, token_sha256=token_sha, cron=cron_fields, github_events=events)
+
+
+def _github_events(name: str, gh: object) -> frozenset:
+    """1.59.0: `"github": {"events": ["pull_request", ...]}`, exactly; `ping` is always answered, never listed."""
+    shape = f'{FILE}: triggers[{name!r}].github is exactly {{"events": ["pull_request", ...]}}'
+    if not isinstance(gh, dict) or set(gh) != {"events"}:
+        raise TriggerError(shape)
+    events = gh["events"]
+    if not isinstance(events, list) or not 1 <= len(events) <= MAX_EVENTS:
+        raise TriggerError(f"{shape}, with 1-{MAX_EVENTS} events")
+    for e in events:
+        if not isinstance(e, str) or not EVENT.match(e):
+            raise TriggerError(f"{FILE}: triggers[{name!r}].github.events: {e!r} is not a GitHub event name "
+                               "(lowercase letters and '_', as X-GitHub-Event sends it)")
+        if e == "ping":
+            raise TriggerError(f"{FILE}: triggers[{name!r}].github.events: 'ping' is answered and never fires; "
+                               "leave it out")
+    return frozenset(events)
+
+
+# -- GitHub's signature and the owner's secret (1.59.0) ---------------------------------------------------
+
+def signature_matches(secret: str, body: bytes, header: str | None) -> bool:
+    """`X-Hub-Signature-256: sha256=<hex>` over the exact body bytes, compared in constant time."""
+    if not isinstance(header, str) or not header.startswith("sha256="):
+        return False
+    want = hmac.new(secret.encode("ascii"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(header[len("sha256="):].encode("ascii", "replace"), want.encode("ascii"))
+
+
+def _secret_path(state: Path, name: str) -> Path:
+    if not isinstance(name, str) or not NAME.match(name):
+        raise TriggerError("a trigger name is lowercase letters, digits, '_' or '-' (1-64)")
+    return Path(state) / SECRET_DIR / f"{name}.json"
+
+
+def load_secret(state: Path, name: str) -> str | None:
+    """The trigger's GitHub secret, or None when none is set. A file the kit refuses raises TriggerError,
+    naming the file but never its contents."""
+    p = _secret_path(state, name)
+    try:
+        raw = read_regular(p, 4096, nofollow=True)
+    except (RegistryError, ValueError, OSError) as e:
+        raise TriggerError(f"{p}: not readable ({type(e).__name__})") from None
+    if raw is None:
+        return None
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        doc = None
+    secret = doc.get("secret") if isinstance(doc, dict) and set(doc) == {"secret"} else None
+    if not isinstance(secret, str) or not _SECRET.match(secret):
+        raise TriggerError(f'{p}: the file is exactly {{"secret": "..."}}, 16-256 printable characters')
+    return secret
+
+
+def mint_secret() -> str:
+    import secrets
+    return secrets.token_urlsafe(32)
+
+
+def set_secret(state: Path, name: str, secret: str | None) -> None:
+    """Write (None: remove) the trigger's GitHub secret: 0600, written whole and renamed into place, and
+    logged in the role log by the trigger's name only (RO.logged_change), never by the secret."""
+    from . import roles as RO
+    from .notify import _write
+    p = _secret_path(state, name)
+    if secret is not None and not _SECRET.match(secret):
+        raise TriggerError("a GitHub secret is 16-256 printable ASCII characters")
+
+    def plan():
+        had = p.exists()
+        if secret is None and not had:
+            return None
+        if secret is not None:
+            p.parent.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(p.parent, 0o700)   # an existing directory is tightened too (clearer, LOW)
+        return ({"setting": {"key": "github_secret", "from": name if had else None,
+                             "to": name if secret is not None else None}},
+                lambda: _write(p, {"secret": secret} if secret is not None else None))
+    RO.logged_change(state, None, plan)
 
 
 # -- cron parser ------------------------------------------------------------------------

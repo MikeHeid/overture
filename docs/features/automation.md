@@ -101,7 +101,7 @@ stops the start, named):
       "monday-review": {"playbook": "weekly-review",  "cron": "0 9 * * MON"}
     }}
 
-A trigger has a webhook, a schedule, or both.
+A trigger has a webhook, a schedule, a GitHub webhook, or any of them.
 
 ### Webhook triggers
 
@@ -111,13 +111,64 @@ in `triggers.json` and give the token to the sender, which calls
 `X-Console-Trigger-Token`). The server keeps only the hash and compares
 in constant time. Behind Cloudflare the call first passes Access with a
 service token. A trigger fires at most once every 10 seconds; a webhook
-call to a schedule-only trigger is refused. GitHub signs its webhooks
-with HMAC rather than a bearer token, so it needs a small bridge.
+call to a schedule-only trigger is refused. For GitHub, which signs its
+webhooks instead of sending a token, see the next section.
 
 **Sign-in links (1.46).** A console that runs with `--auth link` lets in
 only signed-in browsers, so it refuses every external trigger call: a
 webhook has no device cookie. Keep webhook triggers on a console behind
 Cloudflare. Schedules and Replay still work.
+
+### GitHub webhooks (1.59)
+
+GitHub can call a trigger directly, with no bridge in between. It signs
+each delivery with a secret you share with it, and the console checks that
+signature (OPEN-DECISIONS "Signed GitHub webhooks", G1–G3). This works on
+a console behind Cloudflare Access only.
+
+1. Give the trigger a `github` block naming the events that fire it:
+
+        "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}}
+
+2. In your own terminal, run `agent.py github-secret pr-opened`. It makes
+   a secret, keeps it in the console's state directory (0600, never in the
+   repository) and prints it once. A Claude Code session cannot run it.
+   Running it again replaces the secret; `--clear` removes it.
+3. In the Cloudflare Zero Trust dashboard, add a policy to the console's
+   Access application with the action **Bypass**, on the path
+   `/api/github/*` only. GitHub cannot sign in to Access, so on that one
+   path the signature is the gate. Everything else, `/api/trigger/`
+   included, stays behind Access. The console answers a credential-less
+   call only at exactly `/api/github/<trigger>`; any other path the
+   rule lets through still meets its own sign-in check.
+4. In the repository's **Settings → Webhooks → Add webhook**, set:
+   - Payload URL: `https://console.example.com/api/github/pr-opened`;
+   - Content type: `application/json`;
+   - Secret: the one `github-secret` printed;
+   - the events you listed in step 1.
+
+What the console does with a delivery:
+
+- It checks `X-Hub-Signature-256` over the exact body before it believes
+  anything else the delivery says. A wrong or missing signature gets 401.
+- GitHub's `ping`, sent when you add the webhook, gets 200 and fires
+  nothing. An event the trigger does not list gets 202 and fires nothing.
+- A delivery whose id, or whose exact body, it has received since it
+  started gets 409. GitHub signs the body but not the event name or the
+  delivery id, so the body is what is remembered: a captured delivery
+  sent again under a new id does not fire twice. The memory is the
+  console's own (the last 4096 deliveries), so a restart forgets it. One
+  refused by the 10-second limit (429) is not remembered, so GitHub's
+  **Redeliver** works afterwards.
+- A body over 256 KiB gets 413. The payload is not passed to the
+  playbook; the delivery only starts it.
+- An event fires on every one of its actions: `pull_request` covers
+  `opened`, `edited`, `synchronize`, `closed` and the rest, so pick
+  events whose every action should start the playbook.
+- The Triggers tab lists the firing with the kind `github`.
+
+On a console with `--auth link` the route meets the sign-in gate like
+every other, and GitHub's calls are refused.
 
 ### Scheduled triggers
 

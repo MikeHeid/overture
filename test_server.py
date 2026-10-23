@@ -10900,7 +10900,8 @@ class SigninLinkTests(unittest.TestCase):
         for method, path in (("GET", "/api/view"), ("GET", "/api/status"), ("POST", "/api/message"),
                              ("GET", "/signin/x"), ("GET", "/signinx?t=x"), ("POST", "/signin?t=x"),
                              ("PUT", "/signin"), ("DELETE", "/signin"), ("PATCH", "/"), ("OPTIONS", "/signin"),
-                             ("GET", "/health"), ("POST", "/api/trigger/nightly")):
+                             ("GET", "/health"), ("POST", "/api/trigger/nightly"),
+                             ("POST", "/api/github/nightly")):   # 1.59.0 (G1): signed only behind Access
             with self.subTest(method=method, path=path):
                 code, h, text = self.raw(method, path, b"{}" if method != "GET" else None,
                                          {"Content-Type": "application/json", "Origin": self.ORIGIN})
@@ -12631,6 +12632,186 @@ class SymbolAnchorServerTests(_Live, unittest.TestCase):
         (self.cfg.root / "src/pay.py").write_text(PAY.replace("round_half_even", "int"))
         code, out = self.agent_post("/rulings", {"paths": ["src/pay.py"]})
         self.assertEqual(out["rulings"]["src/pay.py"][0]["stale"], True)
+
+
+class GithubWebhookTests(_Live, unittest.TestCase):
+    """1.59.0 (OPEN-DECISIONS G1-G3): a signed GitHub delivery fires a trigger, behind Access, without its JWT."""
+
+    SECRET = "It's a Secret to Everybody"   # GitHub's own documented example secret
+    BODY = b'{"action":"opened","number":1}'
+
+    def setUp(self):
+        _Live.setUp(self)
+        from overture import triggers as TR
+        self.TR = TR
+        ov = Path(self.cfg.root, ".overture")
+        (ov / "playbooks").mkdir(parents=True)
+        (ov / "playbooks" / "triage.json").write_text(json.dumps(
+            {"description": "d", "steps": [{"kind": "chat", "text": "a PR opened; triage it"}]}))
+        (ov / "triggers.json").write_text(json.dumps({"triggers": {
+            "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}},
+            "bearer": {"playbook": "triage", "token_sha256": "0" * 64}}}))
+        self.console.triggers.set_all(TR.load(self.cfg.root))
+        TR.set_secret(self.cfg.state, "pr-opened", self.SECRET)
+
+    def sign(self, body, secret=None):
+        import hmac as _h
+        return "sha256=" + _h.new((secret or self.SECRET).encode(), body, hashlib.sha256).hexdigest()
+
+    def deliver(self, name="pr-opened", body=None, event="pull_request", delivery=None, sig=True, path=None):
+        delivery = delivery or ("d-" + os.urandom(6).hex())
+        if body is None:   # each real delivery's body differs (GitHub's ids and times are in it)
+            body = self.BODY[:-1] + b',"delivery":"' + delivery.encode() + b'"}'
+        h = {"Content-Type": "application/json"}
+        if sig is True:
+            h["X-Hub-Signature-256"] = self.sign(body)
+        elif sig:
+            h["X-Hub-Signature-256"] = sig
+        if event is not None:
+            h["X-GitHub-Event"] = event
+        h["X-GitHub-Delivery"] = delivery
+        return self.req("POST", path or f"/api/github/{name}", body, headers=h, origin=False)
+
+    def chats(self):
+        p = Path(self.cfg.state, "store.jsonl")
+        return [x for x in (p.read_text().splitlines() if p.exists() else []) if "triage it" in x]
+
+    def test_a_signed_delivery_fires_without_the_access_jwt_and_logs_github(self):
+        # Catches: the route left behind the credential gate (GitHub has no Access JWT, so it never fires), and a
+        # firing not logged under its own kind.
+        code, out = self.deliver()
+        self.assertEqual(code, 200, out)
+        self.assertTrue(out["fired"])
+        self.assertEqual(len(out["records"]), 1)
+        self.assertEqual(len(self.chats()), 1)
+        self.assertEqual(self.console.triggers.recent(1)[0]["kind"], "github")
+
+    def test_a_wrong_missing_or_other_body_signature_fires_nothing(self):
+        # Catches: a signature not checked, checked over something other than the exact bytes, compared against
+        # another secret, or accepted with GitHub's old sha1 header shape.
+        import hmac as _h
+        for sig in (False, self.sign(b"{}"), self.sign(self.BODY, "another secret, long enough"),
+                    "sha1=" + _h.new(self.SECRET.encode(), self.BODY, hashlib.sha1).hexdigest(),
+                    self.sign(self.BODY).upper(), "sha256="):
+            with self.subTest(sig=sig):
+                code, out = self.deliver(sig=sig)
+                self.assertEqual(code, 401, out)
+        self.assertEqual(self.chats(), [])
+
+    def test_the_signature_is_checked_before_anything_the_delivery_says(self):
+        # Catches: headers believed before the signature: an unsigned call learning which events a trigger takes
+        # (202 vs 401), or answered as a ping.
+        for event in ("ping", "issues", None):
+            with self.subTest(event=event):
+                self.assertEqual(self.deliver(event=event, sig=False)[0], 401)
+
+    def test_ping_and_an_unlisted_event_are_answered_and_fire_nothing_nor_spend_the_rate_limit(self):
+        # Catches (G3): a ping firing the playbook (every new webhook would run it once), every event firing, and a
+        # no-op that spends the 10 s window so the next real delivery is refused.
+        code, out = self.deliver(event="ping")
+        self.assertEqual((code, out["fired"]), (200, False))
+        code, out = self.deliver(event="issues")
+        self.assertEqual((code, out["fired"]), (202, False))
+        self.assertIn("issues", out["reason"])
+        self.assertEqual(self.chats(), [])
+        self.assertEqual(self.deliver()[0], 200)
+
+    def test_a_delivery_id_fires_once_and_a_rate_limited_one_may_be_redelivered(self):
+        # Catches (G3): a captured delivery replayed to fire again; and a delivery refused for the rate limit whose
+        # id was kept anyway, so GitHub's Redeliver of it is refused as a replay.
+        self.assertEqual(self.deliver(delivery="aaaa-1")[0], 200)
+        self.assertEqual(self.deliver(delivery="aaaa-1")[0], 409)
+        self.assertEqual(self.deliver(delivery="bbbb-2")[0], 429)
+        later = time.time() + self.TR.MIN_INTERVAL_S + 1
+        with mock.patch("time.time", return_value=later):   # GitHub's Redeliver, after the window
+            self.assertEqual(self.deliver(delivery="bbbb-2")[0], 200)
+        self.assertEqual(len(self.chats()), 2)
+
+    def test_a_captured_body_under_a_fresh_delivery_id_or_another_event_does_not_fire_again(self):
+        # Catches (clearer, MEDIUM): GitHub signs the body only, so whoever saw one signed body (a repo admin, the
+        # delivery log) could resend it with a new X-GitHub-Delivery, or a listed event name, and fire again.
+        body = b'{"action":"opened","number":7}'
+        self.assertEqual(self.deliver(body=body, delivery="eeee-1")[0], 200)
+        later = time.time() + self.TR.MIN_INTERVAL_S + 1
+        with mock.patch("time.time", return_value=later):
+            code, out = self.deliver(body=body, delivery="ffff-2")
+        self.assertEqual(code, 409, out)
+        self.assertIn("exact body", out["error"])
+        self.assertEqual(len(self.chats()), 1)
+
+    def test_a_real_sized_payload_fires_and_malformed_delivery_ids_are_refused(self):
+        # Catches (clearer, LOW): the route left on the 64 KiB cap every other route keeps (a 100 KB pull_request
+        # payload is ordinary), and a delivery id taken in any shape.
+        big = b'{"action":"opened","pad":"' + b"x" * 100_000 + b'"}'
+        code, out = self.deliver(body=big)
+        self.assertEqual(code, 200, out)
+        for bad in ("a b", "x" * 65, "../x", "id;1"):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.deliver(delivery=bad)[0], 400)
+
+    def test_no_secret_no_github_block_or_no_trigger_is_refused_by_name(self):
+        # Catches: a trigger with no secret yet checked against an empty one; the bearer-only trigger reachable on
+        # the signed route; an unknown name answered as anything but 404.
+        self.TR.set_secret(self.cfg.state, "pr-opened", None)
+        code, out = self.deliver()
+        self.assertEqual(code, 503, out)
+        self.assertIn("agent.py github-secret", out["error"])
+        self.assertEqual(self.deliver(name="bearer")[0], 404)
+        self.assertEqual(self.deliver(name="nope")[0], 404)
+        self.assertEqual(self.deliver(path="/api/github/pr-opened/x")[0], 400)
+        self.assertEqual(self.deliver(path="/api/github/pr-opened?x=1")[0], 400)
+        self.assertEqual(self.chats(), [])
+
+    def test_the_bypass_opens_nothing_else(self):
+        # Catches (G1): the signed route's exemption reaching the bearer route, another method, or a path that only
+        # starts the same way; each still meets the Access gate.
+        body = self.BODY
+        h = {"Content-Type": "application/json", "X-Hub-Signature-256": self.sign(body),
+             "X-GitHub-Event": "pull_request", "X-GitHub-Delivery": "cccc-3"}
+        self.assertEqual(self.req("POST", "/api/trigger/bearer", body, headers=h, origin=False)[0], 403)
+        self.assertEqual(self.req("GET", "/api/github/pr-opened", headers=h)[0], 403)
+        self.assertEqual(self.req("PUT", "/api/github/pr-opened", body, headers=h)[0], 403)
+        self.assertEqual(self.req("POST", "/api/githubx/pr-opened", body, headers=h, origin=False)[0], 403)
+
+    def test_the_body_cap_and_the_github_headers_are_kept(self):
+        # Catches: the body read uncapped before the signature can be checked, and a delivery with no event or
+        # delivery id taken as one.
+        big = b" " * (self.TR.MAX_BODY + 1)
+        self.assertEqual(self.deliver(body=big)[0], 413)
+        code, out = self.deliver(event="Pull Request")
+        self.assertEqual(code, 400, out)
+        h = {"Content-Type": "application/json", "X-Hub-Signature-256": self.sign(self.BODY),
+             "X-GitHub-Event": "pull_request"}
+        self.assertEqual(self.req("POST", "/api/github/pr-opened", self.BODY, headers=h, origin=False)[0], 400)
+        self.assertEqual(self.chats(), [])
+
+    def test_the_terminal_makes_the_secret_and_a_session_may_not(self):
+        # Catches (G2): a Claude Code session able to read a fresh secret off the command (and so fire the trigger),
+        # a secret not kept 0600, and a role-log line carrying the secret itself.
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            rc, out, err = self.agent_cli("github-secret", "pr-opened")
+            self.assertEqual(rc, 2)
+            self.assertIn("refused inside a Claude Code session", err)
+            self.assertEqual(self.agent_cli("github-secret", "pr-opened", "--clear")[0], 2)
+        self.assertEqual(self.TR.load_secret(self.cfg.state, "pr-opened"), self.SECRET)
+        clean = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            rc, out, err = self.agent_cli("github-secret", "pr-opened")
+        self.assertEqual(rc, 0, err)
+        new = self.TR.load_secret(self.cfg.state, "pr-opened")
+        self.assertNotEqual(new, self.SECRET)
+        self.assertIn(new, out)
+        p = Path(self.cfg.state, "github-secrets", "pr-opened.json")
+        self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600)
+        log = "".join(f.read_text() for f in Path(self.cfg.state).glob("roles*.jsonl"))
+        self.assertIn('"github_secret"', log)
+        self.assertNotIn(new, log)
+        self.assertNotIn(self.SECRET, log)
+        self.assertEqual(self.deliver()[0], 401)   # the old secret no longer fires it
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertEqual(self.agent_cli("github-secret", "pr-opened", "--clear")[0], 0)
+        self.assertIsNone(self.TR.load_secret(self.cfg.state, "pr-opened"))
 
 
 if __name__ == "__main__":

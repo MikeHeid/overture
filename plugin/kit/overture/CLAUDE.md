@@ -1,6 +1,6 @@
-<!-- area: plugin/kit/overture · checked: 566cf72 -->
+<!-- area: plugin/kit/overture · checked: ef0a2a3 -->
 - server.py is one process and the store's only writer (store.py: one writer per file); agents write through its socket, never a second Store.
-- Two doors: the owner's (HTTP on 127.0.0.1, an Access token or a 1.46 device cookie, D5 even on loopback) stamps `by: owner`; the agent's (a 0600 Unix socket) stamps `by: agent`. The page never picks its author.
+- Two doors: the owner's (HTTP on 127.0.0.1, an Access token or a 1.46 device cookie, D5 even on loopback) stamps `by: owner`; the agent's (a 0600 Unix socket) stamps `by: agent`. The page never picks its author. One route skips the owner door's credential: `POST /api/github/<trigger>` (G1, 1.59), in Cloudflare mode only, gated by GitHub's HMAC over the exact body, and it can only start that trigger's playbook; any other credential-less path is a hole.
 - `serve` calls `gitseam.close()` first: the server starts no git (CONSOLE-kit/Q23); git facts arrive pushed by the steward (stewardgit.py). It never imports or runs a project's adapter (Q24, items.py).
 - Refusals carry their reason (`RequestError` with the rule's own words), so the agent or owner can act on them; a bad `.overture.json` key stops the start, named (projectcfg.py).
 - PR and issue data, and the backlinks built from it, travel the owner door only; the agent door's /view never carries them (T2, pinned in test_server). A backlink is trusted only when its pushed `association` is OWNER, MEMBER or COLLABORATOR (trust.py, T1, 1.58); a missing one is outside.
