@@ -157,6 +157,7 @@ MEMBER_MESSAGE = frozenset({"item", "text", "nonce", "reply_to"})
 OWNER_FAVORITE = "/api/favorite"
 OWNER_PLAYBOOK = "/api/playbook"
 OWNER_TRIGGER_REPLAY = "/api/trigger-replay"
+GITHUB_ROUTE = "/api/github/"   # 1.59.0 (G1): signed GitHub deliveries, behind Access only (do_POST)
 OWNER_ITEM_MOVE = "/api/item-move"
 OWNER_DRAFT = "/api/draft"
 # tickets — children of items; owner-only writes.
@@ -2435,19 +2436,62 @@ class Console:
         if next_at is not None:
             raise RequestError(429, f"trigger {name!r} is rate-limited; next firing allowed at epoch "
                                      f"{int(next_at)}")
+        return self._run_trigger(trigger, "webhook")
+
+    def _run_trigger(self, trigger: "TR.Trigger", kind: str) -> dict:
+        """Run an admitted trigger's playbook and log the firing; a playbook's refusal is a 500, logged."""
+        import time as _t
         # Re-use the playbook path; mint a nonce from the trigger name + now so a retry is idempotent.
-        nonce = f"trg-{name}-{int(_t.time())}"
+        nonce = f"trg-{trigger.name}-{int(_t.time())}"
         err: str | None = None
         try:
             out = self.run_playbook({"name": trigger.playbook, "nonce": nonce})
         except RequestError as e:
             err = str(e)
             out = {"records": [], "skipped": []}
-        self.triggers.log(name, "webhook", _iso_now(), len(out.get("records", [])),
+        self.triggers.log(trigger.name, kind, _iso_now(), len(out.get("records", [])),
                           len(out.get("skipped", [])), err)
         if err:
             raise RequestError(500, err)
         return out
+
+    def fire_github(self, name: str, body: bytes, signature: str | None, event: str | None,
+                    delivery: str | None) -> tuple[int, dict]:
+        """1.59.0 (OPEN-DECISIONS G1-G3): a signed GitHub delivery fires a trigger. Returns (status, body).
+
+        Signature first, over the exact bytes, before anything the delivery says is believed; then a `ping`
+        or an event the trigger does not list is answered and fires nothing; then the delivery id must be
+        new and the rate limit must allow (one lock, TR.Store.admit). The payload is never read.
+        """
+        trigger = self.triggers.get(name)
+        if trigger is None or trigger.github_events is None:
+            raise RequestError(404, f"no GitHub trigger named {name!r}")
+        try:
+            secret = TR.load_secret(self.cfg.state, name)
+        except TR.TriggerError as e:
+            sys.stderr.write(f"console github trigger: {e}\n")
+            secret = None
+        if secret is None:
+            raise RequestError(503, f"trigger {name!r} has no GitHub secret yet; the owner sets one in the "
+                                    "terminal with agent.py github-secret")
+        if not TR.signature_matches(secret, body, signature):
+            raise RequestError(401, "the X-Hub-Signature-256 signature is missing or wrong")
+        if not isinstance(event, str) or not TR.EVENT.match(event):
+            raise RequestError(400, "send X-GitHub-Event, as GitHub does")
+        if not isinstance(delivery, str) or not TR.DELIVERY.match(delivery):
+            raise RequestError(400, "send X-GitHub-Delivery, as GitHub does")
+        if event == "ping":
+            return 200, {"fired": False, "reason": "ping: the webhook reaches this console"}
+        if event not in trigger.github_events:
+            return 202, {"fired": False, "reason": f"trigger {name!r} does not take {event!r} events"}
+        import time as _t
+        admitted = self.triggers.admit(name, delivery, _t.time())
+        if admitted == "replay":
+            raise RequestError(409, f"delivery {delivery} was received before; it does not fire twice")
+        if admitted is not None:
+            raise RequestError(429, f"trigger {name!r} is rate-limited; next firing allowed at epoch "
+                                    f"{int(admitted)}")
+        return 200, {"fired": True, **self._run_trigger(trigger, "github")}
 
     def playbook_plan(self, name: object) -> dict:
         """1.3.0: dry-run preview of a playbook. Evaluates `when` predicates and item membership against
@@ -4504,8 +4548,10 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, RecursionError):   # bad JSON, bad UTF-8, or nesting deeper than the decoder recurses
             raise RequestError(400, "the body is not JSON") from None
 
-    def _raw_body(self) -> bytes:
-        """The body's bytes under the Content-Length rules every route keeps (1.46.0: shared with /signin's form)."""
+    def _raw_body(self, cap: int | None = None) -> bytes:
+        """The body's bytes under the Content-Length rules every route keeps (1.46.0: shared with /signin's form).
+        `cap` (1.59.0: a GitHub delivery's) replaces `max_body`."""
+        cap = self.max_body if cap is None else cap
         raw = self.headers.get("Content-Length")
         if raw is None:
             raise RequestError(411, "send a Content-Length")
@@ -4514,8 +4560,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not re.fullmatch(r"[0-9]{1,12}", raw.strip()):
             raise RequestError(400, "bad Content-Length")
         n = int(raw)
-        if n > self.max_body:
-            raise RequestError(413, f"the body is over {self.max_body} bytes")
+        if n > cap:
+            raise RequestError(413, f"the body is over {cap} bytes")
         self._body_taken = True
         data = self._read_within(n, BODY_SECONDS)
         if data is None:   # the connection is closed after this answer, so the unread rest never matters
@@ -5073,6 +5119,25 @@ class OwnerHandler(SigninDoor, _Handler):
             return self._send(e.code, {"error": str(e)})
         self._send(200, result)
 
+    def _fire_github(self, name: str) -> None:
+        """1.59.0: a signed GitHub delivery (Console.fire_github). No credential, no Origin; who is acting is
+        no one, as with a service token. The body is read whole, up to TR.MAX_BODY, because the signature
+        covers its exact bytes."""
+        self.console.act_as(None)
+        if self._host_refused():
+            return
+        if not isinstance(name, str) or not TR.NAME.match(name):
+            return self._send(400, {"error": "the trigger name is lowercase letters, digits, '_' or '-' "
+                                             "(1-64), with no path components"})
+        try:
+            body = self._raw_body(TR.MAX_BODY)
+            code, out = self.console.fire_github(name, body, self.headers.get("X-Hub-Signature-256"),
+                                                 self.headers.get("X-GitHub-Event"),
+                                                 self.headers.get("X-GitHub-Delivery"))
+        except RequestError as e:
+            return self._send(e.code, {"error": str(e)})
+        self._send(code, out)
+
     def _impact_graph(self, query: dict[str, str]) -> None:
         """0.14.0: Cytoscape impact graph scoped to one item."""
         self._only(query, {"item"}, "/api/impact-graph")
@@ -5132,6 +5197,11 @@ class OwnerHandler(SigninDoor, _Handler):
     def do_POST(self) -> None:
         if self._signin():   # 1.46.0: link mode's POST /signin, which spends an invite (its own Origin check)
             return
+        # 1.59.0 (G1): the one route a request without the console's credential may reach, and only behind
+        # Cloudflare Access, where the owner's Bypass rule names /api/github/* alone: GitHub cannot send Access
+        # headers, so its HMAC signature over the body is the gate here. In link mode it meets the gate below.
+        if self.path.startswith(GITHUB_ROUTE) and self._auth() == "cloudflare":
+            return self._fire_github(self.path[len(GITHUB_ROUTE):])
         if not self._gate():
             return
         # 0.12.0: external-webhook triggers. The path's suffix names the trigger; the bearer token is the
