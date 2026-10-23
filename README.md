@@ -25,6 +25,9 @@
 
 ## What is it?
 
+> New to all this? [Overture, explained simply](docs/OVERVIEW-SIMPLIFIED.md)
+> is a plain-language tour, from the first install to visuals and UX View.
+
 When you run AI coding agents (for example several Claude Code sessions),
 they keep needing **decisions** from you. Which database should we use? How
 many retries? Which region? Today each agent stops and waits in its own
