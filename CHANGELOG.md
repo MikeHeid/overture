@@ -3047,7 +3047,27 @@ the clearing round reopened three of the answers (OPEN-DECISIONS.md
   check. So a session that ended in that window left "listening" up until
   the promise lapsed. The handling now comes before the first heartbeat.
   The kit's own test found it as a flake.
-- **Real run.** REAL-RUN-RESULTS
+- **Real run.** Headless Claude Code sessions (2.1.310, Linux,
+  bubblewrap) ran with the generated rules against a real console server
+  on a scratch STATE holding a GitHub secret and a webhook URL. The rules
+  were passed with `--settings`, not written to `/etc`, so the check's
+  "managed settings" row failed as expected. Everything else held:
+  - every protected file read as absent, and STATE listed only
+    `agent.sock` and `steward/`;
+  - `health` reached the console through its socket;
+  - the steward's temp-file-and-rename into `steward/` landed on disk;
+  - every socket that existed when the settings were made was refused,
+    including Claude Code's daemon, the Codex daemon, X11, a process
+    manager's socket and a stand-in daemon;
+  - a stand-in daemon started after the settings answered. The check
+    named it, and also named a .NET diagnostics port. A glob rule now
+    covers those (six refused on the next run).
+
+  The runs found three more things, all fixed:
+  - an `Edit` deny rule becomes a sandbox write denial that beats
+    `allowWrite`, so one on all of STATE made `steward/` read-only;
+  - the sign-in devices live in `~/.config/overture`, not in STATE;
+  - the sandbox's own proxy sockets must be neither denied nor counted.
 - **Independent clearer: NOT CLEARED, then fixed.** The first round found
   the Linux socket door open (F1, HIGH) and `steward/` writable by any
   session (F2, HIGH, accepted as I7). F3–F6 are fixed: the managed file's

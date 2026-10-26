@@ -31,6 +31,7 @@ Measured under Claude Code's sandbox on Linux (the 1.60 real run), and why each 
 from __future__ import annotations
 
 import errno
+import fnmatch
 import json
 import os
 import socket
@@ -70,6 +71,13 @@ ESCAPE_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/c
 SOCKET_DIRS = ("/tmp/cc-daemon-{uid}", "/tmp/codex-daemon-{uid}", "/tmp/.X11-unix", "/tmp/.ICE-unix",
                "/tmp/tmux-{uid}", "/tmp/screen", "/run/screen", "/var/run/screen", "/run/dbus", "/var/run/dbus",
                "{home}/.gnupg")
+# Socket names a program makes afresh in a shared folder, one per process (a .NET runtime's diagnostics port, which
+# newer runtimes load code through; VS Code's IPC; an ssh-agent's folder). A denyRead glob is expanded to the paths it
+# matches when a session starts (Claude Code's docs, Linux), so it covers more than a list made by `settings`.
+SOCKET_GLOBS = ("/tmp/dotnet-diagnostic-*", "/tmp/vscode-ipc-*", "/tmp/vscode-git-*", "/tmp/ssh-*")
+# The sandbox's own plumbing, made per session for its network proxy (measured, 1.60 real run): never denied, which
+# would cut the session's network, and not counted by the check.
+SANDBOX_OWN = ("/tmp/claude-http-*.sock", "/tmp/srt-mux-*.sock")
 SOCKET_ROOTS = ("/tmp", "/run", "/var/run")   # walked for sockets, with the home folder (I5, I6)
 WALK_DEPTH = 4
 WALK_LIMIT = 20000   # entries visited per root; a check that never ends proves nothing
@@ -141,6 +149,10 @@ def _doors(states: list[Path]) -> set[str]:
     return {str(s / AGENT_SOCKET) for s in states}
 
 
+def _sandbox_own(p: str) -> bool:
+    return any(fnmatch.fnmatchcase(p, g) for g in SANDBOX_OWN)
+
+
 def settings(states: list[Path], env=os.environ, uid: int | None = None, platform: str = sys.platform,
              sockets: list[str] | None = None) -> dict:
     """The managed-settings document for these consoles (I1, I3, I5, I7). `sockets`: those to deny, found by
@@ -148,11 +160,13 @@ def settings(states: list[Path], env=os.environ, uid: int | None = None, platfor
     uid = os.getuid() if uid is None else uid
     doors = _doors(states)
     deny = [str(s) for s in states] + list(ESCAPE_SOCKETS) + [str(runtime_dir(env, uid))]
-    deny += [d.format(uid=uid, home=_home(env)) for d in SOCKET_DIRS]
+    deny += [d.format(uid=uid, home=_home(env)) for d in SOCKET_DIRS] + list(SOCKET_GLOBS)
     if env.get("SSH_AUTH_SOCK"):   # an agent that reaches your ssh-agent signs as you
         deny.append(env["SSH_AUTH_SOCK"])
     for p in find_sockets(env) if sockets is None else sockets:
-        if p not in doors and not any(p == d or p.startswith(d + "/") for d in deny):
+        if p in doors or _sandbox_own(p) or any(fnmatch.fnmatchcase(p, g) for g in SOCKET_GLOBS):
+            continue
+        if not any(p == d or p.startswith(d + "/") for d in deny):
             deny.append(p)
     allow_read = [str(s / name) for s in states for name in (AGENT_SOCKET, *READABLE, D.STEWARD_DIR)]
     # macOS has the per-path list (strict); Linux has only all-or-nothing, so every other socket is denied above.
@@ -265,7 +279,7 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
             got, why = _connect(path)
             row("reach an escape socket", path, ("blocked", "absent"), got, why)
     doors = _doors(states)
-    others = [p for p in (find_sockets(env) if sockets is None else sockets) if p not in doors]
+    others = [p for p in (find_sockets(env) if sockets is None else sockets) if p not in doors and not _sandbox_own(p)]
     answered = [p for p in others if _connect(p, timeout=1)[0] == "open"]
     row("reach any other socket", f"{len(others)} tried", ("blocked",), "open" if answered else "blocked",
         ", ".join(answered[:6]) + (" ..." if len(answered) > 6 else ""))

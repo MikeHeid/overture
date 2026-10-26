@@ -248,7 +248,9 @@ process managers. A session that reached one would be outside the sandbox.
 - **On Linux** the sandbox has no per-path socket list. Reaching
   `agent.sock` needs the switch that opens every socket not denied by path.
   So `isolation settings` denies each socket the machine has when you run
-  it, and the folders daemons keep theirs in. That is best-effort:
+  it, the folders daemons keep theirs in, and the names some programs
+  make afresh for each process (a .NET diagnostics port, VS Code's IPC).
+  The sandbox's own proxy sockets are left alone. That is best-effort:
   software you install later can add a socket the rules don't name.
   `isolation check` finds it, because it tries every socket it can see.
   Re-run both after installing software that runs a daemon. A separate OS

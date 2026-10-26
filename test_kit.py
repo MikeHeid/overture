@@ -6562,6 +6562,13 @@ class IsolationTests(unittest.TestCase):
         self.assertIn("/tmp/pm2-x/rpc.sock", fs["denyRead"])
         self.assertNotIn(door, fs["denyRead"])
         self.assertNotIn(str(other / "inner.sock"), fs["denyRead"])
+        # Catches (1.60 real run 2): a .NET diagnostics port made after the settings (each process makes its own in
+        # /tmp), which only a glob covers; and the sandbox's own proxy sockets denied, which cuts its network.
+        self.assertIn("/tmp/dotnet-diagnostic-*", fs["denyRead"])
+        doc = ISO.settings([self.state], env=self.env, platform="linux",
+                           sockets=["/tmp/claude-http-1f.sock", "/tmp/srt-mux-9-0.sock", "/tmp/dotnet-diagnostic-1-2-socket"])
+        deny = doc["sandbox"]["filesystem"]["denyRead"]
+        self.assertFalse([p for p in deny if "claude-http" in p or "srt-mux" in p or p.endswith("-socket")], deny)
         self.assertEqual(sb["network"], {"allowAllUnixSockets": True})   # allowUnixSockets alone is macOS-only
 
     def test_on_macos_only_the_doors_are_allowed_by_path(self):
@@ -6672,6 +6679,11 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual((row["got"], row["ok"]), ("open", False))
         self.assertEqual(row["detail"], str(self.root / "daemon.sock"))
         row = self.rows(sockets=socks[:1] + socks[2:])[("reach any other socket", "1 tried")]
+        self.assertEqual((row["got"], row["ok"]), ("blocked", True))
+        # Catches (1.60 real run 2): the sandbox's own proxy sockets, which answer by design, failing every check.
+        self.listener(self.root / "claude-http-1f.sock")
+        with mock.patch.object(ISO, "SANDBOX_OWN", (str(self.root / "claude-http-*.sock"),)):
+            row = self.rows(sockets=[str(self.root / "claude-http-1f.sock")])[("reach any other socket", "0 tried")]
         self.assertEqual((row["got"], row["ok"]), ("blocked", True))
 
     def test_find_sockets_walks_without_links_to_a_depth_and_reads_the_kernels_list(self):
