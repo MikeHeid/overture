@@ -1,4 +1,4 @@
-<!-- area: plugin/hooks · checked: 9aa3736 -->
+<!-- area: plugin/hooks · checked: 6add3a4 -->
 - Claude Code runs these hooks in every session of the user's (hooks.json), so all but install_notice.py (a banner once per version) act only in a project the user registered with `agent.py register`: trust comes from the user's registry, never the repository (session_start.py, §7.7).
 - They fail open: an error of any kind prints nothing and exits 0, so a guardrail never costs the owner a session, a prompt or an edit.
 - Only ask_guard.py makes a permission decision: it denies AskUserQuestion to a session that is not the steward (0.8.3). ruling_lookup.py prints `additionalContext` only, because "allow" would skip the owner's own prompt (1.52 R2).
