@@ -1,4 +1,4 @@
-<!-- area: plugin/kit/overture · checked: ef0a2a3 -->
+<!-- area: plugin/kit/overture · checked: 5a9b8c1 -->
 - server.py is one process and the store's only writer (store.py: one writer per file); agents write through its socket, never a second Store.
 - Two doors: the owner's (HTTP on 127.0.0.1, an Access token or a 1.46 device cookie, D5 even on loopback) stamps `by: owner`; the agent's (a 0600 Unix socket) stamps `by: agent`. The page never picks its author. One route skips the owner door's credential: `POST /api/github/<trigger>` (G1, 1.59), in Cloudflare mode only, gated by GitHub's HMAC over the exact body, and it can only start that trigger's playbook; any other credential-less path is a hole.
 - `serve` calls `gitseam.close()` first: the server starts no git (CONSOLE-kit/Q23); git facts arrive pushed by the steward (stewardgit.py). It never imports or runs a project's adapter (Q24, items.py).
