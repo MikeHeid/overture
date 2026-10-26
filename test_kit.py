@@ -6515,6 +6515,13 @@ class IsolationTests(unittest.TestCase):
             self.assertIn(f"Read(/{s}/**)", doc["permissions"]["deny"])
         # Catches (measured in the real run): a write allowed on STATE itself re-opens every read in it.
         self.assertNotIn(str(self.state), fs["allowWrite"])
+        # Catches (measured in the real run): an Edit rule becomes a sandbox write denial that beats allowWrite, so
+        # one on STATE/** made steward/ read-only. Each secret is denied by name instead.
+        edits = [r[len("Edit(/"):-1] for r in doc["permissions"]["deny"] if r.startswith("Edit(")]
+        steward = str(self.state / D.STEWARD_DIR) + "/cursor"
+        self.assertFalse([e for e in edits if e.endswith("/**") and steward.startswith(e[:-2])], edits)
+        for name in ("store.jsonl", "github-secrets/**", "inbox.jsonl", "roles.json"):
+            self.assertIn(f"Edit(/{self.state}/{name})", doc["permissions"]["deny"])
         for esc in ("/var/run/docker.sock", "/run/docker.sock", str(self.root / "run"), "/tmp/ssh-x/agent.1"):
             self.assertIn(esc, fs["denyRead"])
         self.assertTrue(sb["network"]["allowAllUnixSockets"])   # allowUnixSockets alone is macOS-only
@@ -6548,6 +6555,22 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(weak["got"], "weak")
         self.assertIn("allowUnsandboxedCommands", weak["detail"])
         self.assertIn("failIfUnavailable", weak["detail"])
+
+    def test_the_users_overture_folder_is_never_writable_from_a_session(self):
+        # Catches (found in the 1.60 real run): devices.json lives there, not in STATE, and a device a session
+        # wrote into it would sign its own browser in. The rule must cover the built-in tools, and the check the
+        # folder's write bit.
+        cfg = self.root / "cfg"
+        self.env["XDG_CONFIG_HOME"] = str(cfg)
+        self.assertIn(f"Edit(/{cfg / 'overture'}/**)", ISO.settings([self.state], env=self.env)["permissions"]["deny"])
+        key = ("write the user's overture folder", "overture")
+        self.assertEqual((self.rows()[key]["got"], self.rows()[key]["ok"]), ("absent", True))
+        (cfg / "overture").mkdir(parents=True)
+        self.assertEqual((self.rows()[key]["got"], self.rows()[key]["ok"]), ("open", False))
+        if os.geteuid() != 0:   # root writes through any mode
+            (cfg / "overture").chmod(0o500)
+            self.addCleanup((cfg / "overture").chmod, 0o700)
+            self.assertEqual((self.rows()[key]["got"], self.rows()[key]["ok"]), ("blocked", True))
 
     def test_a_reachable_escape_socket_and_a_listed_runtime_folder_are_findings(self):
         # Catches: Docker's socket (root on most hosts) or the session bus left reachable, which allowAllUnixSockets

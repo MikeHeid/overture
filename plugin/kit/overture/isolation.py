@@ -30,7 +30,6 @@ import socket
 import sys
 from pathlib import Path
 
-from . import devices as DV
 from . import doorbell as D
 from . import notify as NT
 from . import operators as OP
@@ -44,7 +43,7 @@ DOORBELL = "inbox.jsonl"
 ALLOWED = frozenset({AGENT_SOCKET, DOORBELL, D.STEWARD_DIR})   # all a session may see in a STATE folder
 # The secrets and records a session must never read, by each module's own name for them.
 PROTECTED = ("store.jsonl", NT.URL_FILE, NT.STATE_FILE, TR.SECRET_DIR, PE.SECRETS_DIR, RO.FILE, RO.LOG_FILE,
-             SET.FILE, DV.FILE, OP.FILE, OP.NAMES_FILE)
+             SET.FILE, OP.FILE, OP.NAMES_FILE)
 # Sockets that run something for whoever connects: a container (root on most hosts), or the user's own
 # services through the session bus and systemd, which would start a process outside the sandbox.
 ESCAPE_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock",
@@ -57,6 +56,12 @@ SANDBOX_ENV = "SANDBOX_RUNTIME"   # "1" inside Claude Code's sandbox (measured, 
 
 def runtime_dir(env=os.environ, uid: int | None = None) -> Path:
     return Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid() if uid is None else uid}")
+
+
+def config_dir(env=os.environ) -> Path:
+    """The user's overture folder (registry.location's), which holds the registry and the sign-in devices
+    (devices.py): a session may read them, which says nothing the socket does not, but never write them."""
+    return Path(env.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")) / "overture"
 
 
 def consoles(registry: dict) -> list[Path]:
@@ -86,7 +91,14 @@ def settings(states: list[Path], env=os.environ, uid: int | None = None) -> dict
                            "allowWrite": [str(s / D.STEWARD_DIR) for s in states]},
             "network": {"allowAllUnixSockets": True},
         },
-        "permissions": {"deny": [f"{kind}(/{s}/**)" for s in states for kind in ("Read", "Edit")]},
+        # The built-in tools, which the sandbox does not cover. Claude Code also turns an Edit rule into a sandbox
+        # write denial that beats allowWrite (measured, 1.60 real run), so an Edit rule on all of STATE would make
+        # steward/ read-only: each protected name, and the doorbell, is denied by itself instead. A device a session
+        # wrote into devices.json would sign its browser in, so the user's overture folder is denied too.
+        "permissions": {"deny": [f"Read(/{s}/**)" for s in states]
+                        + [f"Edit(/{s / name}{tail})" for s in states for name in PROTECTED + (DOORBELL,)
+                           for tail in ("", "/**")]
+                        + [f"Edit(/{config_dir(env)}/**)"]},
     }
 
 
@@ -173,6 +185,9 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
     elif got == "blocked" and seen == "ENOENT":
         got = "absent"
     row("list the runtime folder", runtime_dir(env, uid), ("blocked", "narrowed", "absent"), got, seen)
+    cfg = config_dir(env)   # asked, never tried: a write that worked would change the user's sign-ins
+    got = "absent" if not cfg.is_dir() else ("open" if os.access(cfg, os.W_OK) else "blocked")
+    row("write the user's overture folder", cfg, ("blocked", "absent"), got)
     return rows
 
 

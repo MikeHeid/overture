@@ -266,7 +266,9 @@ a new console.
    On macOS the path is
    `/Library/Application Support/ClaudeCode/managed-settings.json`. If the
    file already exists, merge the two `sandbox` and `permissions` blocks
-   instead of replacing it.
+   instead of replacing it. Do not add an `Edit` rule for a whole STATE
+   folder. Claude Code turns it into a write denial that overrides
+   `allowWrite`, so the steward could no longer write in `steward/`.
 4. Start a new session. Ask it to run `agent.py isolation check`. It
    tries every door from inside the session and ends with
    `isolation holds`, or it lists each door that is open. It exits 1 if
@@ -276,7 +278,9 @@ a new console.
 so a machine without a working sandbox refuses to start a session; it never
 runs quietly without one. `allowUnsandboxedCommands` is off, so a command
 cannot retry outside the sandbox. `Read` and `Edit` deny rules cover the
-built-in file tools, which the sandbox alone does not.
+built-in file tools, which the sandbox alone does not. An `Edit` rule also
+covers `~/.config/overture`. The sign-in devices are kept there, and a
+device an agent added would sign its own browser in.
 
 **Limits.**
 

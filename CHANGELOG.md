@@ -3006,14 +3006,18 @@ them. The lane's waypoint and a design round decided how to stop that
   project can loosen. In each STATE, a session can reach only
   `agent.sock`, the doorbell and `steward/`. The rules also deny Docker's
   and the other container sockets, the user's runtime folder and the
-  ssh-agent, and add `Read`/`Edit` deny rules for the built-in tools. With
+  ssh-agent, and add `Read`/`Edit` deny rules for the built-in tools. An
+  `Edit` rule also covers `~/.config/overture`, where the sign-in devices
+  are kept (found in the real run): a device an agent wrote there would
+  sign its own browser in. With
   `failIfUnavailable` set, a machine without a working sandbox refuses to
   start a session; with `allowUnsandboxedCommands` off, a command cannot
   retry outside the sandbox.
 - **`agent.py isolation check` is the proof (I2).** Run inside a session,
   it tries every door: each protected file, each STATE listing, each
-  console socket, each escape socket and the runtime folder. It also reads
-  the managed file. It ends with `isolation holds`, or it lists each door
+  console socket, each escape socket and the runtime folder. It asks
+  whether `~/.config/overture` is writable, without writing to it, and it
+  reads the managed file. It ends with `isolation holds`, or it lists each door
   that is open and exits 1.
 - **The steward writes into `STATE/steward/` (I4).** Under the sandbox, a
   folder that may be written is also readable. So the steward's cursor and
@@ -3025,6 +3029,21 @@ them. The lane's waypoint and a design round decided how to stop that
   so they cannot give each hosted project only its own token in
   `~/.config/overture/tokens/`. A separate OS user per project closes that;
   it is written up for later.
+- **Real run.** A headless Claude Code session (2.1.310, Linux,
+  bubblewrap) ran with the generated rules against a real console server
+  on a scratch STATE holding a GitHub secret and a webhook URL:
+  - `isolation check` passed every door except managed settings, which was
+    expected: the run passed the rules with `--settings`, not by writing
+    `/etc`;
+  - `health` reached the console through its socket;
+  - the steward's temp-file-and-rename into `steward/` worked and was on
+    disk outside the sandbox, while the secret read as absent and STATE
+    listed only `agent.sock` and `steward/`.
+  - It found two things, both fixed. First, an `Edit` deny rule becomes a
+    sandbox write denial that beats `allowWrite`, so one on all of STATE
+    made `steward/` read-only; each protected name is now denied by
+    itself. Second, the sign-in devices live in `~/.config/overture`, not
+    in STATE.
 - Docs: features/hosting.md, "Keep agents out of STATE (1.60)", step by
   step. JOIN.md and MIGRATION.md link to it.
 
