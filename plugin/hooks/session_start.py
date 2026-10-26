@@ -430,20 +430,16 @@ def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None
 
 
 def _cursor(state: Path, key: str = "through") -> int:
-    # As doorbell.steward_read_path: STATE/steward/ when it is a real folder holding the cursor, else beside the
-    # doorbell; when both are there, the one written last (a kit before 1.60 still writes beside the doorbell).
+    # As doorbell.steward_read_path: beside the doorbell when a file is there (a kit before 1.60 wrote it since
+    # every 1.60 write retired it), else STATE/steward/ when it is a real folder holding the cursor.
     new, old = state / STEWARD_DIR / CURSOR_FILE, state / CURSOR_FILE
-    try:
-        in_steward = stat.S_ISDIR(os.lstat(state / STEWARD_DIR).st_mode) and os.path.lexists(new)
-    except OSError:
-        in_steward = False
-    p = new if in_steward else old
-    if in_steward:
+    p = old
+    if not os.path.lexists(old):
         try:
-            if os.lstat(old).st_mtime_ns > os.lstat(new).st_mtime_ns:
-                p = old
+            if stat.S_ISDIR(os.lstat(state / STEWARD_DIR).st_mode) and os.path.lexists(new):
+                p = new
         except OSError:
-            pass   # no old one (or, inside a sandbox, none to see): steward/ stands
+            pass
     try:
         data = _read_regular(p, MAX_CURSOR)
         v = json.loads(data.decode("utf-8")).get(key, 0) if data is not None else 0

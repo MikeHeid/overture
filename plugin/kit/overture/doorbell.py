@@ -65,21 +65,31 @@ def steward_dir(state: Path) -> Path:
 
 
 def steward_read_path(state: Path, name: str) -> Path:
-    """Where to read `name`: STATE/steward/ when it is a real folder holding it, else beside the doorbell. When
-    both are there, the one written last: a kit before 1.60, still running after an upgrade, writes beside the
-    doorbell, and its newer cursor must not lose to steward/'s older one (requests would wake again)."""
+    """Where to read `name`: beside the doorbell when a file is there, else STATE/steward/ when it is a real folder.
+
+    Every write into steward/ retires the copy beside the doorbell (`retire_old`), so one found there was written
+    since by a kit before 1.60, still running its last watch after an upgrade: it is the newer, and steward/'s
+    older cursor must not win over it (requests would wake again). Inside a sandbox the old place cannot be
+    seen at all, so steward/ is read there."""
     d, old = Path(state) / STEWARD_DIR, Path(state) / name
-    try:
-        if not (stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name)):
-            return old
-    except OSError:
+    if os.path.lexists(old):
         return old
     try:
-        if os.lstat(old).st_mtime_ns > os.lstat(d / name).st_mtime_ns:
-            return old
+        if stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name):
+            return d / name
     except OSError:
-        pass   # no old one (or, inside a sandbox, none to see)
-    return d / name
+        pass
+    return old
+
+
+def retire_old(state: Path, name: str) -> None:
+    """After a write into steward/: remove `name` beside the doorbell, where kits before 1.60 kept it, so the
+    file read is the one just written (steward_read_path). A failure (a sandbox refuses it) changes nothing:
+    there the old place cannot be read either."""
+    try:
+        os.unlink(Path(state) / name)
+    except OSError:
+        pass
 
 
 def migrate_steward(state: Path) -> list[str]:
@@ -227,6 +237,7 @@ def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: 
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    retire_old(state, WATCH_FILE)
 
 
 def _read_watch(path: Path) -> bytes | None:
@@ -402,4 +413,5 @@ def write_cursor(state: Path, through: int, rx_through: int | None = None) -> in
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"through": now, **({"rx_through": rx} if rx else {})}) + "\n")
     os.replace(tmp, p)
+    retire_old(state, CURSOR_FILE)
     return now

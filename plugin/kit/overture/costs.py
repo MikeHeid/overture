@@ -315,6 +315,7 @@ def write(state: Path, new: list[dict]) -> dict:
                 for k in sorted(merged):
                     fh.write(json.dumps(merged[k], sort_keys=True, ensure_ascii=False) + "\n")
             os.replace(tmp, sd / FILE)
+            D.retire_old(st, FILE)   # merged in above, so nothing is lost
         except BaseException:
             try:
                 os.unlink(tmp)

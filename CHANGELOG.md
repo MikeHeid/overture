@@ -3035,10 +3035,11 @@ the clearing round reopened three of the answers (OPEN-DECISIONS.md
   else: the steward's cursor and heartbeat, the watch's prune and
   notes-check throttles and its note about `gh`, and `costs.jsonl`, which
   `costs collect` writes. Reads fall back to the old place. `isolation
-  settings` moves the old files across, and never over a newer one. While
-  both places hold a file, the one written last is read: a pre-1.60 watch
-  still finishing after an upgrade writes beside the doorbell, and its
-  cursor must not lose to an older one, or requests would wake again. Known
+  settings` moves the old files across, and never over a newer one. Each
+  write into `steward/` removes the copy beside the doorbell. A file found
+  there was therefore written since by a pre-1.60 watch still finishing
+  after an upgrade, and it is the one read; otherwise an older cursor
+  would win and requests would wake again. Known
   limit, accepted: any session can fake the cursor or heartbeat there, as
   one could before.
 - **Known limit: hosted tokens.** Managed settings cover the whole machine,

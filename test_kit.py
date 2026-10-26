@@ -6473,16 +6473,25 @@ class StewardDirTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("ck_hook_mtime", HERE / "plugin" / "hooks" / "session_start.py")
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
-        D.write_cursor(self.state, 5)
         old = self.state / D.CURSOR_FILE
-        old.write_text('{"through": 7}')
-        t = (self.state / D.STEWARD_DIR / D.CURSOR_FILE).stat().st_mtime_ns
-        os.utime(old, ns=(t + 10**9, t + 10**9))
+        old.write_text('{"through": 3}')
+        D.write_cursor(self.state, 5)                      # a 1.60 write retires the old place
+        self.assertFalse(old.exists())
+        old.write_text('{"through": 7}')                   # the older kit's watch, still finishing, writes again
         self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (7, 7))
-        os.utime(old, ns=(t - 10**9, t - 10**9))
-        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (5, 5))
-        old.unlink()
-        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (5, 5))
+        D.write_cursor(self.state, 8)
+        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (8, 8))
+        self.assertFalse(old.exists())
+        # The other steward files follow the same rule (Catches: one writer that never retires its old copy).
+        import agent as AG
+        from overture import costs as C
+        for name, write in ((D.WATCH_FILE, lambda: D.write_watch(self.state, True)),
+                            (AG.PRUNE_FILE, lambda: AG._write_prune_record(self.state, {"at": 1.0, "stale": []})),
+                            (AG.NOTES_FILE, lambda: AG._write_notes_record(self.state, {"at": 1.0})),
+                            (C.FILE, lambda: C.write(self.state, []))):
+            (self.state / name).write_text("{}\n")
+            write()
+            self.assertFalse((self.state / name).exists(), name)
 
     def test_the_gh_note_is_never_written_through_a_planted_link(self):
         # Catches (1.60 review M1): a session, which may write steward/, planting the note's name as a link to a file
@@ -6505,7 +6514,7 @@ class StewardDirTests(unittest.TestCase):
         (self.state / D.STEWARD_DIR / D.CURSOR_FILE).write_text('{"through": 9}')
         (self.state / D.CURSOR_FILE).write_text('{"through": 1}')
         self.assertEqual(D.migrate_steward(self.state), [])
-        self.assertEqual(D.read_cursor(self.state), 9)
+        self.assertEqual(json.loads((self.state / D.STEWARD_DIR / D.CURSOR_FILE).read_text()), {"through": 9})
         self.assertEqual(json.loads((self.state / D.CURSOR_FILE).read_text()), {"through": 1})
         (self.state / D.WATCH_FILE).write_text('{"old": 1}')
         real_link = os.link

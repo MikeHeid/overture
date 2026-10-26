@@ -936,6 +936,7 @@ def _write_prune_record(state: Path, rec: dict) -> None:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
+        D.retire_old(state, PRUNE_FILE)
 
 
 def _write_gh_note(state: Path) -> None:
@@ -946,6 +947,7 @@ def _write_gh_note(state: Path) -> None:
                      0o600)
         with os.fdopen(fd, "w") as fh:
             fh.write("1\n")
+        D.retire_old(state, GH_NOTE)
 
 
 def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | None:
@@ -1038,6 +1040,7 @@ def _write_notes_record(state: Path, rec: dict) -> None:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
+        D.retire_old(state, NOTES_FILE)
 
 
 def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | None:
