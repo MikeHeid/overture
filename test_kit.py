@@ -6466,6 +6466,42 @@ class StewardDirTests(unittest.TestCase):
         self.assertEqual(AG._prune_record(self.state)["at"], 1.0)
         self.assertEqual(AG._notes_record(self.state)["at"], 1.0)
 
+    def test_the_gh_note_is_never_written_through_a_planted_link(self):
+        # Catches (1.60 review M1): a session, which may write steward/, planting the note's name as a link to a file
+        # of the user's; the next unsandboxed watch would truncate it.
+        import agent as AG
+        target = self.state / "victim"
+        target.write_text("keep me\n")
+        D.steward_dir(self.state)
+        (self.state / D.STEWARD_DIR / AG.GH_NOTE).symlink_to(target)
+        AG._write_gh_note(self.state)
+        self.assertEqual(target.read_text(), "keep me\n")
+        (self.state / D.STEWARD_DIR / AG.GH_NOTE).unlink()
+        AG._write_gh_note(self.state)
+        self.assertEqual((self.state / D.STEWARD_DIR / AG.GH_NOTE).read_text(), "1\n")
+
+    def test_migrate_keeps_a_steward_file_and_takes_back_a_link_to_a_replaced_one(self):
+        # Catches (1.60 review M5, M4): an existing steward/ file replaced by the old one (a rename instead of a
+        # link), and the unlink deleting a newer file a running kit wrote over the old one mid-move.
+        D.steward_dir(self.state)
+        (self.state / D.STEWARD_DIR / D.CURSOR_FILE).write_text('{"through": 9}')
+        (self.state / D.CURSOR_FILE).write_text('{"through": 1}')
+        self.assertEqual(D.migrate_steward(self.state), [])
+        self.assertEqual(D.read_cursor(self.state), 9)
+        self.assertEqual(json.loads((self.state / D.CURSOR_FILE).read_text()), {"through": 1})
+        (self.state / D.WATCH_FILE).write_text('{"old": 1}')
+        real_link = os.link
+
+        def link_then_kit_writes(src, dst, **kw):
+            real_link(src, dst, **kw)
+            tmp = self.state / "newer.tmp"
+            tmp.write_text('{"newer": 1}')
+            os.replace(tmp, src)   # a kit before 1.60 renaming its newer heartbeat into place
+        with mock.patch.object(D.os, "link", side_effect=link_then_kit_writes):
+            self.assertEqual(D.migrate_steward(self.state), [])
+        self.assertEqual(json.loads((self.state / D.WATCH_FILE).read_text()), {"newer": 1})
+        self.assertFalse((self.state / D.STEWARD_DIR / D.WATCH_FILE).exists())
+
     def test_the_cost_sidecar_moves_into_steward_and_keeps_what_was_beside_the_store(self):
         # Catches: costs collected before 1.60 lost on the first collect after it.
         from overture import costs as C
@@ -6565,8 +6601,12 @@ class IsolationTests(unittest.TestCase):
         # Catches (1.60 real run 2): a .NET diagnostics port made after the settings (each process makes its own in
         # /tmp), which only a glob covers; and the sandbox's own proxy sockets denied, which cuts its network.
         self.assertIn("/tmp/dotnet-diagnostic-*", fs["denyRead"])
-        doc = ISO.settings([self.state], env=self.env, platform="linux",
-                           sockets=["/tmp/claude-http-1f.sock", "/tmp/srt-mux-9-0.sock", "/tmp/dotnet-diagnostic-1-2-socket"])
+        for name in ("claude-http-0123abcd.sock", "srt-mux-9-0.sock"):
+            self.listener(self.root / name)
+        with mock.patch.object(ISO, "SANDBOX_OWN_DIR", str(self.root)):
+            doc = ISO.settings([self.state], env=self.env, platform="linux",
+                               sockets=[str(self.root / "claude-http-0123abcd.sock"), str(self.root / "srt-mux-9-0.sock"),
+                                        "/tmp/dotnet-diagnostic-1-2-socket"])
         deny = doc["sandbox"]["filesystem"]["denyRead"]
         self.assertFalse([p for p in deny if "claude-http" in p or "srt-mux" in p or p.endswith("-socket")], deny)
         self.assertEqual(sb["network"], {"allowAllUnixSockets": True})   # allowUnixSockets alone is macOS-only
@@ -6680,11 +6720,24 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(row["detail"], str(self.root / "daemon.sock"))
         row = self.rows(sockets=socks[:1] + socks[2:])[("reach any other socket", "1 tried")]
         self.assertEqual((row["got"], row["ok"]), ("blocked", True))
-        # Catches (1.60 real run 2): the sandbox's own proxy sockets, which answer by design, failing every check.
-        self.listener(self.root / "claude-http-1f.sock")
-        with mock.patch.object(ISO, "SANDBOX_OWN", (str(self.root / "claude-http-*.sock"),)):
-            row = self.rows(sockets=[str(self.root / "claude-http-1f.sock")])[("reach any other socket", "0 tried")]
-        self.assertEqual((row["got"], row["ok"]), ("blocked", True))
+        # Catches (1.60 real run 2): the sandbox's own proxy sockets, which answer by design, failing every check;
+        # and (automated review) an exemption wide enough to hide a daemon's socket one folder down, or one of the
+        # right name owned by someone else; and exempted sockets dropped from sight.
+        own = self.root / "claude-http-0123abcd.sock"
+        self.listener(own)
+        (self.root / "claude-http-0123abcd.sock.d").mkdir()
+        nested = self.root / "claude-http-0123abcd.sock.d" / "srt-mux-1-0.sock"
+        self.listener(nested)
+        with mock.patch.object(ISO, "SANDBOX_OWN_DIR", str(self.root)):
+            r = self.rows(sockets=[str(own), str(nested), str(self.root / "claude-http-zz.sock")])
+            self.assertTrue(ISO._sandbox_own(str(own)))
+            self.assertFalse(ISO._sandbox_own(str(nested)))
+            with mock.patch.object(ISO.os, "getuid", return_value=os.getuid() + 1):
+                self.assertFalse(ISO._sandbox_own(str(own)))
+        self.assertEqual((r[("reach any other socket", "2 tried")]["got"],
+                          r[("reach any other socket", "2 tried")]["detail"]), ("open", str(nested)))
+        seen = r[("the sandbox's own proxy sockets", "1 seen")]
+        self.assertEqual((seen["ok"], seen["detail"]), (True, str(own)))
 
     def test_find_sockets_walks_without_links_to_a_depth_and_reads_the_kernels_list(self):
         # Catches: a sweep that misses a socket a daemon keeps a few folders down, follows a link out of its root,
@@ -6705,6 +6758,47 @@ class IsolationTests(unittest.TestCase):
         self.assertIn("/srv/elsewhere/x.sock", got)
         self.assertNotIn(str(deep / "far.sock"), got)
         self.assertFalse([p for p in got if "loop" in p or "abstract" in p])
+
+    def test_a_stalled_socket_a_spaced_path_and_a_partial_sweep_are_never_read_as_closed(self):
+        # Catches (1.60 review M2): a listener that stalls reported "blocked"; a kernel path with a space cut at it;
+        # a sweep that stopped at its entry limit passing in silence.
+        with mock.patch.object(ISO.socket.socket, "connect", side_effect=TimeoutError):
+            self.assertEqual(ISO._connect(str(self.root / "x.sock")), ("open", "stalled"))
+        proc = self.root / "unix"
+        proc.write_text("Num RefCount Protocol Flags Type St Inode Path\n"
+                        "0: 00000002 00000000 00010000 0001 01 1 /srv/my app/ctl.sock\n")
+        self.assertEqual(ISO.find_sockets(roots=(), proc=proc), ["/srv/my app/ctl.sock"])
+        for i in range(12):
+            (self.root / f"f{i}").write_text("")
+        cut: list[str] = []
+        with mock.patch.object(ISO, "WALK_LIMIT", 5):
+            ISO.find_sockets(roots=(str(self.root),), proc=proc, cut=cut)
+            with mock.patch.object(ISO, "SOCKET_ROOTS", (str(self.root),)), \
+                    mock.patch.object(ISO, "MANAGED", {"linux": self.root / "m.json", "darwin": self.root / "m.json"}):
+                rows = ISO.check([self.state], env=self.env)
+        self.assertEqual(cut, [str(self.root)])
+        sweep = [r for r in rows if r["what"] == "the socket sweep"][0]
+        self.assertEqual(sweep["got"], "partial")
+        self.assertIn(f"stopped after 5 entries in {self.root}", ISO.render(rows))
+
+    def test_a_new_file_in_state_is_a_finding_and_the_runtime_folder_narrowed_is_not(self):
+        # Catches (1.60 review L1, M5): a name no Edit rule lists written into STATE unnoticed; and the sandbox's
+        # empty view of the runtime folder taken for an open one.
+        r = self.rows()
+        self.assertEqual((r[("write a new file in STATE", "state")]["got"], r[("write a new file in STATE", "state")]["ok"]),
+                         ("open", False))
+        self.assertEqual(sorted(os.listdir(self.state)), [])   # the probe leaves nothing behind
+        (self.root / "run").mkdir()
+        self.assertEqual(r[("list the runtime folder", "run")]["got"], "absent")
+        r = self.rows()
+        self.assertEqual((r[("list the runtime folder", "run")]["got"], r[("list the runtime folder", "run")]["ok"]),
+                         ("narrowed", True))
+        if os.geteuid() != 0:
+            self.state.chmod(0o500)
+            self.addCleanup(self.state.chmod, 0o700)
+            r = self.rows()
+            self.assertEqual((r[("write a new file in STATE", "state")]["got"],
+                              r[("write a new file in STATE", "state")]["ok"]), ("blocked", True))
 
     def test_outside_the_sandbox_the_check_says_so_and_fails(self):
         with mock.patch.object(ISO, "MANAGED", {"linux": self.root / "m.json", "darwin": self.root / "m.json"}):

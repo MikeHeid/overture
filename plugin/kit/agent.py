@@ -938,6 +938,16 @@ def _write_prune_record(state: Path, rec: dict) -> None:
             raise
 
 
+def _write_gh_note(state: Path) -> None:
+    """Remember that the steward was told prune needs gh. 1.60 review M1: a session may write steward/, so the
+    note is made new, never through a link planted at its name (which would truncate the link's target)."""
+    with contextlib.suppress(OSError):
+        fd = os.open(D.steward_dir(state) / GH_NOTE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("1\n")
+
+
 def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | None:
     """The steward's prune (W3): the stale ones for the heartbeat, or None (nothing said).
 
@@ -974,8 +984,7 @@ def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | Non
             if not note.exists():
                 print(f"worktree prune skipped: {why}; agent worktrees are kept until gh is there (said once)",
                       file=sys.stderr)
-                with contextlib.suppress(OSError):
-                    (D.steward_dir(state) / GH_NOTE).write_text("1\n")
+                _write_gh_note(state)
             _write_prune_record(state, {"at": t, "stale": None, "resume_after": None})
             return None
         with contextlib.suppress(OSError):

@@ -3072,10 +3072,21 @@ the clearing round reopened three of the answers (OPEN-DECISIONS.md
   the Linux socket door open (F1, HIGH) and `steward/` writable by any
   session (F2, HIGH, accepted as I7). F3–F6 are fixed: the managed file's
   denyRead is checked, Edit rules name everything in STATE, `sessions.jsonl`
-  is readable, and the migration links rather than renames. A second round
-  is on the PR. Running agent.py outside the sandbox was weighed and turned
-  down: it runs git and the project's adapter, which a session can write
-  (CONSOLE-kit/Q23).
+  is readable, and the migration links rather than renames. Running
+  agent.py outside the sandbox was weighed and turned down: it runs git and
+  the project's adapter, which a session can write (CONSOLE-kit/Q23).
+- **Second clearer: CLEARED**, with no CRITICAL or HIGH findings. Fixed
+  after it:
+  - the watch's note about `gh` is made new, never through a link a
+    session planted in `steward/`;
+  - a socket that stalls counts as answering, a sweep cut short says so,
+    and a kernel path with a space is read whole;
+  - the sandbox's own proxy sockets are exempt only by exact name, directly
+    in `/tmp` and owned by you, and the check lists them on a row of their
+    own;
+  - the migration takes back its link if a running kit replaced the old
+    file mid-move;
+  - the check also tries to write a new file into each STATE.
 - Docs: features/hosting.md, "Keep agents out of STATE (1.60)", step by
   step. JOIN.md and MIGRATION.md link to it.
 

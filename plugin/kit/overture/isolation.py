@@ -34,6 +34,7 @@ import errno
 import fnmatch
 import json
 import os
+import re
 import socket
 import stat
 import sys
@@ -75,9 +76,11 @@ SOCKET_DIRS = ("/tmp/cc-daemon-{uid}", "/tmp/codex-daemon-{uid}", "/tmp/.X11-uni
 # newer runtimes load code through; VS Code's IPC; an ssh-agent's folder). A denyRead glob is expanded to the paths it
 # matches when a session starts (Claude Code's docs, Linux), so it covers more than a list made by `settings`.
 SOCKET_GLOBS = ("/tmp/dotnet-diagnostic-*", "/tmp/vscode-ipc-*", "/tmp/vscode-git-*", "/tmp/ssh-*")
-# The sandbox's own plumbing, made per session for its network proxy (measured, 1.60 real run): never denied, which
-# would cut the session's network, and not counted by the check.
-SANDBOX_OWN = ("/tmp/claude-http-*.sock", "/tmp/srt-mux-*.sock")
+# The sandbox's own plumbing, made per session for its network proxy (measured, 1.60 real run: claude-http-<hex>.sock,
+# srt-mux-<pid>-<n>.sock): never denied, which would cut the session's network, and shown by the check on a row of its
+# own rather than counted. Only a name of exactly that shape, directly in SANDBOX_OWN_DIR and owned by this user.
+SANDBOX_OWN_DIR = "/tmp"
+SANDBOX_OWN = (re.compile(r"claude-http-[0-9a-f]{8,64}\.sock\Z"), re.compile(r"srt-mux-[0-9]{1,10}-[0-9]{1,6}\.sock\Z"))
 SOCKET_ROOTS = ("/tmp", "/run", "/var/run")   # walked for sockets, with the home folder (I5, I6)
 WALK_DEPTH = 4
 WALK_LIMIT = 20000   # entries visited per root; a check that never ends proves nothing
@@ -113,11 +116,13 @@ def consoles(registry: dict) -> list[Path]:
     return out
 
 
-def find_sockets(env=os.environ, roots: tuple[str, ...] | None = None, proc: Path = Path("/proc/net/unix")) -> list[str]:
+def find_sockets(env=os.environ, roots: tuple[str, ...] | None = None, proc: Path = Path("/proc/net/unix"),
+                 cut: list[str] | None = None) -> list[str]:
     """Every Unix socket on a path this process can see: a walk of SOCKET_ROOTS and the home folder (no link
     followed, at most WALK_DEPTH deep and WALK_LIMIT entries a root), and on Linux every bound path in
     /proc/net/unix. Abstract sockets have no path and are left out: the sandbox gives a session its own
-    network namespace, where none of the host's abstract sockets exists."""
+    network namespace, where none of the host's abstract sockets exists. Each root whose walk stopped at
+    WALK_LIMIT is appended to `cut`, so a partial sweep says so (1.60 review M2)."""
     found: set[str] = set()
     for root in (roots if roots is not None else (*SOCKET_ROOTS, _home(env))):
         base = len(Path(root).parts)
@@ -134,10 +139,12 @@ def find_sockets(env=os.environ, roots: tuple[str, ...] | None = None, proc: Pat
                 except OSError:
                     pass
             if seen > WALK_LIMIT:
+                if cut is not None:
+                    cut.append(root)
                 break
     try:
         for line in proc.read_text(encoding="utf-8", errors="replace").splitlines()[1:]:
-            parts = line.split()
+            parts = line.split(None, 7)   # the path is the last field and may hold a space (review M2)
             if len(parts) >= 8 and parts[7].startswith("/"):
                 found.add(parts[7])
     except OSError:
@@ -150,7 +157,15 @@ def _doors(states: list[Path]) -> set[str]:
 
 
 def _sandbox_own(p: str) -> bool:
-    return any(fnmatch.fnmatchcase(p, g) for g in SANDBOX_OWN)
+    """A socket of the sandbox's own proxy: one name of SANDBOX_OWN's shape, directly in SANDBOX_OWN_DIR (no
+    folder in between, so `*` never spans one), and owned by this user."""
+    if os.path.dirname(p) != SANDBOX_OWN_DIR or not any(r.match(os.path.basename(p)) for r in SANDBOX_OWN):
+        return False
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    return stat.S_ISSOCK(st.st_mode) and st.st_uid == os.getuid()
 
 
 def settings(states: list[Path], env=os.environ, uid: int | None = None, platform: str = sys.platform,
@@ -209,6 +224,19 @@ def _read_attempt(p: Path) -> tuple[str, str]:
         return "blocked", errno.errorcode.get(e.errno, type(e).__name__)
 
 
+def _write_attempt(folder: Path) -> tuple[str, str]:
+    """("open", "") when a new file could be made in `folder` (it is removed at once), else ("blocked", why). A name
+    no Edit rule lists (review L1): the sandbox, not a rule by name, has to refuse it."""
+    p = folder / f".isolation-probe-{os.getpid()}"
+    try:
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as e:
+        return "blocked", errno.errorcode.get(e.errno, type(e).__name__)
+    os.close(fd)
+    os.unlink(p)
+    return "open", ""
+
+
 def _connect(path: str, timeout: float = 3) -> tuple[str, str]:
     """("open", "") when something answers; ("blocked", why) when the sandbox or permissions refuse;
     ("absent", why) when nothing is there to reach."""
@@ -221,6 +249,8 @@ def _connect(path: str, timeout: float = 3) -> tuple[str, str]:
         return "absent", "ENOENT"
     except ConnectionRefusedError:
         return "absent", "nothing listening"
+    except TimeoutError:   # review M2: something took the call and stalled: counted as answering, never as closed
+        return "open", "stalled"
     except OSError as e:
         return "blocked", errno.errorcode.get(e.errno, type(e).__name__)
     finally:
@@ -254,9 +284,9 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
     """
     rows: list[dict] = []
 
-    def row(what, path, want, got, detail=""):
+    def row(what, path, want, got, detail="", info=False):
         rows.append({"what": what, "path": str(path), "want": "/".join(want), "got": got, "detail": detail,
-                     "ok": got in want})
+                     "ok": got in want, "info": info})
 
     inside = env.get(SANDBOX_ENV) == "1"
     row("inside Claude Code's sandbox", "", ("yes",), "yes" if inside else "no",
@@ -272,6 +302,8 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
         for name in PROTECTED:
             got, why = _read_attempt(s / name)
             row("read", s / name, ("blocked", "absent"), "absent" if why == "ENOENT" else got, why)
+        got, why = _write_attempt(s)
+        row("write a new file in STATE", s, ("blocked",), got, why)
         got, why = _connect(str(s / AGENT_SOCKET))
         row("reach the agent socket", s / AGENT_SOCKET, ("open", "absent"), got, why)
     for path in ESCAPE_SOCKETS:
@@ -279,10 +311,17 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
             got, why = _connect(path)
             row("reach an escape socket", path, ("blocked", "absent"), got, why)
     doors = _doors(states)
-    others = [p for p in (find_sockets(env) if sockets is None else sockets) if p not in doors and not _sandbox_own(p)]
+    cut: list[str] = []
+    found = [p for p in (find_sockets(env, cut=cut) if sockets is None else sockets) if p not in doors]
+    own = [p for p in found if _sandbox_own(p)]
+    others = [p for p in found if p not in own]
     answered = [p for p in others if _connect(p, timeout=1)[0] == "open"]
     row("reach any other socket", f"{len(others)} tried", ("blocked",), "open" if answered else "blocked",
         ", ".join(answered[:6]) + (" ..." if len(answered) > 6 else ""))
+    # Shown, never counted: an unexpected listener of that shape stays visible to whoever reads the check.
+    row("the sandbox's own proxy sockets", f"{len(own)} seen", ("listed",), "listed", ", ".join(own[:6]), info=True)
+    row("the socket sweep", "", ("complete", "partial"), "partial" if cut else "complete",
+        (f"stopped after {WALK_LIMIT} entries in " + ", ".join(cut)) if cut else "", info=True)
     got, seen = _read_attempt(runtime_dir(env, uid))
     if got == "open" and not seen:
         got = "narrowed"   # the sandbox shows a denied folder as empty
@@ -297,7 +336,7 @@ def check(states: list[Path], env=os.environ, uid: int | None = None, platform: 
 
 def render(rows: list[dict]) -> str:
     lines = [f"{'ok  ' if r['ok'] else 'FAIL'}  {r['got']:<9} {r['what']}{(' ' + r['path']) if r['path'] else ''}"
-             + (f" ({r['detail']})" if r["detail"] and not r["ok"] else "") for r in rows]
+             + (f" ({r['detail']})" if r["detail"] and (not r["ok"] or r.get("info")) else "") for r in rows]
     bad = sum(not r["ok"] for r in rows)
     lines.append("isolation holds" if not bad else f"isolation does NOT hold: {bad} finding(s)")
     return "\n".join(lines)

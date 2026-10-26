@@ -81,19 +81,29 @@ def migrate_steward(state: Path) -> list[str]:
     old place, and a cursor it cannot read is 0. Returns the names moved.
 
     A link, then an unlink, never a rename: a link refuses an existing name, so a newer file a running kit
-    wrote there between the look and the move is never replaced (1.60 review F6)."""
+    wrote there between the look and the move is never replaced (1.60 review F6). If a running kit before 1.60
+    replaces the old file between the link and the unlink (review M4), the two no longer share an inode: the
+    stale link is taken back and the newer file is left for the next run. Stop the steward's watch first to
+    close the last window, between that look and the unlink."""
     moved = []
     d = steward_dir(state)
     for name in STEWARD_FILES:
-        old = Path(state) / name
+        old, new = Path(state) / name, d / name
         try:
             if not stat.S_ISREG(os.lstat(old).st_mode):
                 continue
-            os.link(old, d / name, follow_symlinks=False)
+            os.link(old, new, follow_symlinks=False)
         except FileNotFoundError:
             continue
         except FileExistsError:
             continue   # steward/ has its own, which is the newer one
+        try:
+            same = os.lstat(old).st_ino == os.lstat(new).st_ino
+        except FileNotFoundError:
+            same = False
+        if not same:
+            os.unlink(new)
+            continue
         os.unlink(old)
         moved.append(name)
     return moved

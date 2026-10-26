@@ -266,7 +266,8 @@ daemon.
 1. Install the sandbox's tools. On Linux, install `bubblewrap` and
    `socat`, for example `sudo apt install bubblewrap socat`. macOS needs
    nothing extra.
-2. In your own terminal, outside any session, run:
+2. Stop each steward's watch (end its session), then in your own
+   terminal, outside any session, run:
 
    ```sh
    <py> <kit>/agent.py isolation settings > isolation.json
@@ -290,9 +291,10 @@ daemon.
    `allowWrite`, so sessions could no longer write in `steward/`.
 4. Start a new session. Ask it to run `agent.py isolation check`. It
    tries every door from inside the session, including every socket it can
-   find, and ends with `isolation holds`, or it lists each door that is
-   open. It exits 1 if any door is open. It also says if the managed file
-   leaves out a registered console. `--json` prints the rows.
+   find, and a write into each STATE. It ends with `isolation holds`, or
+   it lists each door that is open, and exits 1 if any is. It also says if
+   the managed file leaves out a registered console, and if its socket
+   sweep stopped short of a large folder. `--json` prints the rows.
 
 **What the rules set.** The sandbox is on and `failIfUnavailable` is set,
 so a machine without a working sandbox refuses to start a session; it never
@@ -312,6 +314,9 @@ agent added would sign its own browser in.
   and on the console. A session could already do this before 1.60, and the
   separate-user tier closes it.
 - **Linux sockets are best-effort** (above).
+- **Restart sessions after restarting a console.** The sandbox opens
+  `agent.sock` when a session starts. A console server restarted later
+  makes a new socket, which a running session may not reach.
 - **Hosted mode.** Each project's agent needs its own token, in
   `~/.config/overture/tokens/`. Managed settings cover the whole machine,
   so they cannot give each project only its own token. A sandboxed agent
