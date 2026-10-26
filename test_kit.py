@@ -5520,9 +5520,9 @@ class CostSidecarTests(unittest.TestCase):
         self.assertEqual(naive, 3 * 300)
         self.assertNotEqual(naive, self.want["a1"]["fresh"] - 50)
         # Collecting again replaces each subagent's line; it never appends a second one.
-        before = (self.state / "costs.jsonl").read_bytes()
+        before = (D.steward_dir(self.state) / "costs.jsonl").read_bytes()
         self.assertEqual(self.run_cli("costs", "collect").returncode, 0)
-        self.assertEqual((self.state / "costs.jsonl").read_bytes(), before)
+        self.assertEqual((D.steward_dir(self.state) / "costs.jsonl").read_bytes(), before)
         self.assertEqual(len(before.splitlines()), 6)
 
     def test_ac22_store_untouched_and_the_previous_kit_starts_on_the_dir(self):
@@ -5570,11 +5570,11 @@ print(code)
         start_old()                                        # the old kit makes the store
         store = (self.state / "store.jsonl").read_bytes()
         self.assertEqual(self.run_cli("costs", "collect").returncode, 0)
-        self.assertTrue((self.state / "costs.jsonl").stat().st_size > 0)
+        self.assertTrue((D.steward_dir(self.state) / "costs.jsonl").stat().st_size > 0)
         self.assertEqual((self.state / "store.jsonl").read_bytes(), store)   # no record was added
-        self.assertEqual(stat_mode(self.state / "costs.jsonl"), 0o600)
+        self.assertEqual(stat_mode(D.steward_dir(self.state) / "costs.jsonl"), 0o600)
         start_old()                                        # and still starts with costs.jsonl beside it
-        self.assertTrue((self.state / "costs.jsonl").exists())
+        self.assertTrue((D.steward_dir(self.state) / "costs.jsonl").exists())
 
     def test_ac23_a_fork_bills_exactly_its_tagged_subagents(self):
         # Catches: summing every subagent of the steward's session, or matching seats by role name or
@@ -5643,7 +5643,7 @@ print(code)
         r = self.run_cli("costs", "collect")
         self.assertEqual(r.returncode, 1)
         self.assertIn("single directory names", r.stderr)
-        self.assertFalse((self.state / "costs.jsonl").exists())
+        self.assertFalse((D.steward_dir(self.state) / "costs.jsonl").exists())
         other = Path(self.tmp.name) / "other-state"
         other.mkdir()
         with self.assertRaises(self.C.CostError):
@@ -5662,7 +5662,7 @@ print(code)
         self.assertEqual(self.C.fork_of(f"ck-fork:{self.FORK_A}"), self.FORK_A)
         r = self.run_cli("costs", "collect")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn(self.SENTINEL, r.stdout + r.stderr + (self.state / "costs.jsonl").read_text())
+        self.assertNotIn(self.SENTINEL, r.stdout + r.stderr + (D.steward_dir(self.state) / "costs.jsonl").read_text())
         self.assertEqual(self.lines()["a1"]["fork"], self.FORK_A)
 
     def test_m2_a_symlinked_sidecar_is_not_followed(self):
@@ -5670,14 +5670,14 @@ print(code)
         elsewhere = Path(self.tmp.name) / "elsewhere.jsonl"
         elsewhere.write_text(json.dumps({"key": "x", "fork": self.FORK_A, "fresh": 1, "secret": self.SENTINEL}) + "\n")
         before = elsewhere.read_bytes()
-        (self.state / "costs.jsonl").symlink_to(elsewhere)
+        (D.steward_dir(self.state) / "costs.jsonl").symlink_to(elsewhere)
         for args in (("costs", "collect"), ("costs", "show", "--fork", self.FORK_A)):
             r = self.run_cli(*args)
             self.assertEqual(r.returncode, 1, args)
             self.assertIn("symlink", r.stderr)
             self.assertNotIn(self.SENTINEL, r.stdout + r.stderr)
         self.assertEqual(elsewhere.read_bytes(), before)
-        self.assertTrue((self.state / "costs.jsonl").is_symlink())
+        self.assertTrue((D.steward_dir(self.state) / "costs.jsonl").is_symlink())
         self.assertEqual(list(self.state.glob(".costs.*.tmp")), [])
 
     def test_m2_only_known_fields_survive_and_malformed_lines_are_counted(self):
@@ -5685,7 +5685,7 @@ print(code)
         rows = [{"key": "k1", "fork": self.FORK_A, "session": "S", "fresh": 5, "cache_read": 0, "output": 1,
                  "turns": 1, "secret": self.SENTINEL},
                 {"key": "k2", "fork": self.FORK_A, "fresh": "lots"}]
-        (self.state / "costs.jsonl").write_text("\n".join(json.dumps(x) for x in rows) + "\nnot json\n")
+        (D.steward_dir(self.state) / "costs.jsonl").write_text("\n".join(json.dumps(x) for x in rows) + "\nnot json\n")
         got, bad = self.C.read_counted(self.state)
         self.assertEqual(bad, 2)
         self.assertEqual([r["key"] for r in got], ["k1"])
@@ -5698,7 +5698,7 @@ print(code)
 
     def test_m2_an_oversized_sidecar_is_refused(self):
         from unittest import mock
-        (self.state / "costs.jsonl").write_text(json.dumps({"key": "k", "fresh": 1}) + "\n" * 64)
+        (D.steward_dir(self.state) / "costs.jsonl").write_text(json.dumps({"key": "k", "fresh": 1}) + "\n" * 64)
         with mock.patch.object(self.C, "MAX_COSTS", 16):
             with self.assertRaises(self.C.CostError):
                 self.C.read_counted(self.state)
@@ -5737,7 +5737,7 @@ print(code)
         r = self.run_cli("costs", "collect")
         self.assertEqual(r.returncode, 1)
         self.assertIn("steward", r.stderr)
-        self.assertFalse((self.state / "costs.jsonl").exists())
+        self.assertFalse((D.steward_dir(self.state) / "costs.jsonl").exists())
         r = self.run_cli("--as", "agent-5", "costs", "collect")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual({x["agent"] for x in self.C.read(self.state)}, {"agent-5"})
@@ -5754,7 +5754,7 @@ print(code)
             with self.assertRaises(RuntimeError):
                 self.C.write(self.state, got)
         self.assertEqual(list(self.state.glob(".costs.*.tmp")), [])
-        self.assertFalse((self.state / "costs.jsonl").exists())
+        self.assertFalse((D.steward_dir(self.state) / "costs.jsonl").exists())
 
 
 def stat_mode(p: Path) -> int:
@@ -6452,10 +6452,35 @@ class StewardDirTests(unittest.TestCase):
         self.assertFalse((self.state / D.WATCH_FILE).exists())
         self.assertEqual(D.listening(self.state)["state"], "listening")
 
+    def test_every_file_a_session_writes_in_state_is_a_steward_file(self):
+        # Catches (1.60 real run, I7): a writer left beside the doorbell, which the sandbox refuses: the watch's
+        # throttles (it would prune and check notes on every wake), its gh note, or the cost sidecar a fork collects.
+        import agent as AG
+        from overture import costs as C
+        self.assertEqual(set(D.STEWARD_FILES), {D.CURSOR_FILE, D.WATCH_FILE, AG.PRUNE_FILE, AG.GH_NOTE,
+                                                AG.NOTES_FILE, C.FILE})
+        AG._write_prune_record(self.state, {"at": 1.0, "stale": [], "resume_after": None})
+        AG._write_notes_record(self.state, {"at": 1.0, "counts": {}})
+        C.write(self.state, [])
+        self.assertEqual(sorted(os.listdir(self.state)), [D.STEWARD_DIR])
+        self.assertEqual(AG._prune_record(self.state)["at"], 1.0)
+        self.assertEqual(AG._notes_record(self.state)["at"], 1.0)
+
+    def test_the_cost_sidecar_moves_into_steward_and_keeps_what_was_beside_the_store(self):
+        # Catches: costs collected before 1.60 lost on the first collect after it.
+        from overture import costs as C
+        (self.state / C.FILE).write_text(json.dumps({"key": "old", "fresh": 1}) + "\n")
+        self.assertEqual([r["key"] for r in C.read(self.state)], ["old"])
+        C.write(self.state, [{"key": "new", "fresh": 2}])
+        self.assertEqual(sorted(r["key"] for r in C.read(self.state)), ["new", "old"])
+        self.assertTrue((self.state / D.STEWARD_DIR / C.FILE).exists())
+
     def test_migrate_moves_the_old_files_once_and_never_over_a_newer_one(self):
         (self.state / D.CURSOR_FILE).write_text('{"through": 5}')
         (self.state / D.WATCH_FILE).write_text("{}")
-        self.assertEqual(sorted(D.migrate_steward(self.state)), sorted([D.CURSOR_FILE, D.WATCH_FILE]))
+        (self.state / ".notes-check.json").write_text("{}")
+        self.assertEqual(sorted(D.migrate_steward(self.state)),
+                         sorted([D.CURSOR_FILE, D.WATCH_FILE, ".notes-check.json"]))
         self.assertEqual(D.read_cursor(self.state), 5)
         self.assertEqual(D.migrate_steward(self.state), [])
         (self.state / D.CURSOR_FILE).write_text('{"through": 1}')   # an older kit wrote again
@@ -6492,7 +6517,7 @@ from overture import isolation as ISO  # noqa: E402
 
 
 class IsolationTests(unittest.TestCase):
-    """1.60.0 (OPEN-DECISIONS I1-I3): the sandbox rules for every console, and the check that proves them."""
+    """1.60.0 (OPEN-DECISIONS I1-I7): the sandbox rules for every console, and the check that proves them."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -6500,42 +6525,79 @@ class IsolationTests(unittest.TestCase):
         self.root = Path(os.path.realpath(self.tmp.name))
         self.state = self.root / "state"
         self.state.mkdir()
-        self.env = {"XDG_RUNTIME_DIR": str(self.root / "run"), "SANDBOX_RUNTIME": "1"}
+        self.env = {"XDG_RUNTIME_DIR": str(self.root / "run"), "SANDBOX_RUNTIME": "1", "HOME": str(self.root)}
 
-    def test_settings_deny_every_console_and_the_escapes_and_leave_only_the_three_doors(self):
+    def test_what_a_session_may_see_and_what_it_must_not_are_exact(self):
+        # Catches (1.60 review): a name slipped into ALLOWED (the check would then pass a visible store), or a secret
+        # dropped from PROTECTED (neither probed nor Edit-denied any more).
+        self.assertEqual(ISO.ALLOWED, {"agent.sock", "inbox.jsonl", "sessions.jsonl", "lessons.jsonl", D.STEWARD_DIR})
+        self.assertEqual(set(ISO.PROTECTED), {
+            "store.jsonl", "notify.json", "notify-state.json", "github-secrets", "portfolio-secrets", "roles.json",
+            "roles-log.jsonl", "settings.json", "operators.jsonl", "operator-names.json", "pending-locks.json",
+            "names.jsonl", "items.json", "server.lock", "refs.json", "prs.json", "issues.json", "drafts.json",
+            "favorites.json", "assets", "visuals"})
+        self.assertFalse(ISO.ALLOWED & set(ISO.PROTECTED))
+
+    def test_settings_deny_every_console_and_the_escapes_and_leave_only_the_doors(self):
         other = self.root / "other"
-        doc = ISO.settings([self.state, other], env={**self.env, "SSH_AUTH_SOCK": "/tmp/ssh-x/agent.1"})
+        door = str(self.state / "agent.sock")
+        doc = ISO.settings([self.state, other], env={**self.env, "SSH_AUTH_SOCK": "/tmp/ssh-x/agent.1"}, uid=1234,
+                           platform="linux", sockets=[door, "/tmp/pm2-x/rpc.sock", str(other / "inner.sock")])
         sb, fs = doc["sandbox"], doc["sandbox"]["filesystem"]
         self.assertEqual((sb["enabled"], sb["failIfUnavailable"], sb["allowUnsandboxedCommands"]), (True, True, False))
         for s in (self.state, other):
             self.assertIn(str(s), fs["denyRead"])
             self.assertEqual([p for p in fs["allowRead"] if p.startswith(str(s) + "/")],
-                             [str(s / "agent.sock"), str(s / "inbox.jsonl"), str(s / D.STEWARD_DIR)])
+                             [str(s / n) for n in ("agent.sock", "inbox.jsonl", "sessions.jsonl", "lessons.jsonl",
+                                                   D.STEWARD_DIR)])
             self.assertIn(str(s / D.STEWARD_DIR), fs["allowWrite"])
             self.assertIn(f"Read(/{s}/**)", doc["permissions"]["deny"])
         # Catches (measured in the real run): a write allowed on STATE itself re-opens every read in it.
         self.assertNotIn(str(self.state), fs["allowWrite"])
-        # Catches (measured in the real run): an Edit rule becomes a sandbox write denial that beats allowWrite, so
-        # one on STATE/** made steward/ read-only. Each secret is denied by name instead.
-        edits = [r[len("Edit(/"):-1] for r in doc["permissions"]["deny"] if r.startswith("Edit(")]
-        steward = str(self.state / D.STEWARD_DIR) + "/cursor"
-        self.assertFalse([e for e in edits if e.endswith("/**") and steward.startswith(e[:-2])], edits)
-        for name in ("store.jsonl", "github-secrets/**", "inbox.jsonl", "roles.json"):
-            self.assertIn(f"Edit(/{self.state}/{name})", doc["permissions"]["deny"])
-        for esc in ("/var/run/docker.sock", "/run/docker.sock", str(self.root / "run"), "/tmp/ssh-x/agent.1"):
+        for esc in ("/var/run/docker.sock", "/run/docker.sock", str(self.root / "run"), "/tmp/ssh-x/agent.1",
+                    "/tmp/cc-daemon-1234", "/tmp/codex-daemon-1234", "/tmp/.X11-unix", f"{self.root}/.gnupg"):
             self.assertIn(esc, fs["denyRead"])
-        self.assertTrue(sb["network"]["allowAllUnixSockets"])   # allowUnixSockets alone is macOS-only
+        # Catches (1.60 review F1): a socket the machine has (here a process manager's) left reachable, which
+        # allowAllUnixSockets opens; the door itself denied; a socket inside a denied STATE listed twice.
+        self.assertIn("/tmp/pm2-x/rpc.sock", fs["denyRead"])
+        self.assertNotIn(door, fs["denyRead"])
+        self.assertNotIn(str(other / "inner.sock"), fs["denyRead"])
+        self.assertEqual(sb["network"], {"allowAllUnixSockets": True})   # allowUnixSockets alone is macOS-only
+
+    def test_on_macos_only_the_doors_are_allowed_by_path(self):
+        # Catches: macOS given Linux's all-or-nothing switch, when its per-path list can name the doors alone.
+        doc = ISO.settings([self.state], env=self.env, platform="darwin", sockets=[])
+        self.assertEqual(doc["sandbox"]["network"], {"allowUnixSockets": [str(self.state / "agent.sock")]})
+
+    def test_edit_rules_name_each_thing_in_state_and_never_cover_steward(self):
+        # Catches (measured in the real run): an Edit rule becomes a sandbox write denial that beats allowWrite, so
+        # one on STATE/** made steward/ read-only. Each name is denied by itself instead, including (1.60 review F4)
+        # one no module lists, which STATE holds when settings run.
+        (self.state / "later-file.json").write_text("{}")
+        (self.state / D.STEWARD_DIR).mkdir()
+        deny = ISO.settings([self.state], env=self.env, sockets=[])["permissions"]["deny"]
+        edits = [r[len("Edit(/"):-1] for r in deny if r.startswith("Edit(")]
+        steward = str(self.state / D.STEWARD_DIR) + "/cursor"
+        self.assertFalse([e for e in edits if steward == e or (e.endswith("/**") and steward.startswith(e[:-2]))
+                          or e == str(self.state / D.STEWARD_DIR)], edits)
+        for name in ("store.jsonl", "github-secrets/**", "inbox.jsonl", "roles.json", "later-file.json"):
+            self.assertIn(f"Edit(/{self.state}/{name})", deny)
 
     def rows(self, **kw):
+        kw.setdefault("sockets", [])
         with mock.patch.object(ISO, "MANAGED", {"linux": self.root / "managed.json",
                                                 "darwin": self.root / "managed.json"}):
             return {(r["what"], Path(r["path"]).name): r for r in ISO.check([self.state], env=self.env, **kw)}
 
+    def managed(self, **sandbox):
+        doc = {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+               "filesystem": {"denyRead": [str(self.state)]}, **sandbox}
+        (self.root / "managed.json").write_text(json.dumps({"sandbox": doc}))
+
     def test_an_open_state_folder_and_a_readable_secret_are_findings(self):
         # Catches: a check that passes in a session where nothing is sandboxed, which is the case it exists for.
         (self.state / "notify.json").write_text('{"url": "https://hooks.example.com/x"}')
-        (self.root / "managed.json").write_text(json.dumps({"sandbox": {"enabled": True, "failIfUnavailable": True,
-                                                                         "allowUnsandboxedCommands": False}}))
+        self.managed()
         r = self.rows()
         self.assertEqual(r[("list STATE", "state")]["got"], "open")
         self.assertIn("notify.json", r[("list STATE", "state")]["detail"])
@@ -6544,17 +6606,23 @@ class IsolationTests(unittest.TestCase):
         self.assertTrue(r[("managed settings", "managed.json")]["ok"])
 
     def test_a_narrowed_state_passes_and_weak_or_missing_managed_settings_do_not(self):
-        (self.state / "inbox.jsonl").write_text("")
+        for name in ("inbox.jsonl", "sessions.jsonl", "lessons.jsonl"):
+            (self.state / name).write_text("")
         (self.state / D.STEWARD_DIR).mkdir()
         r = self.rows()
         self.assertEqual((r[("list STATE", "state")]["got"], r[("list STATE", "state")]["ok"]), ("narrowed", True))
         self.assertEqual(r[("managed settings", "")]["got"], "absent")
-        (self.root / "managed.json").write_text(json.dumps({"sandbox": {"enabled": True,
-                                                                         "allowUnsandboxedCommands": True}}))
+        self.managed(allowUnsandboxedCommands=True, failIfUnavailable=None)
         weak = self.rows()[("managed settings", "")]
         self.assertEqual(weak["got"], "weak")
         self.assertIn("allowUnsandboxedCommands", weak["detail"])
         self.assertIn("failIfUnavailable", weak["detail"])
+        # Catches (1.60 review F3): a managed file with the three switches right that leaves a console out, as one
+        # written before that console was registered does.
+        self.managed(filesystem={"denyRead": ["/elsewhere"]})
+        weak = self.rows()[("managed settings", "")]
+        self.assertEqual(weak["got"], "weak")
+        self.assertIn(f"denyRead leaves out {self.state}", weak["detail"])
 
     def test_the_users_overture_folder_is_never_writable_from_a_session(self):
         # Catches (found in the 1.60 real run): devices.json lives there, not in STATE, and a device a session
@@ -6562,7 +6630,8 @@ class IsolationTests(unittest.TestCase):
         # folder's write bit.
         cfg = self.root / "cfg"
         self.env["XDG_CONFIG_HOME"] = str(cfg)
-        self.assertIn(f"Edit(/{cfg / 'overture'}/**)", ISO.settings([self.state], env=self.env)["permissions"]["deny"])
+        self.assertIn(f"Edit(/{cfg / 'overture'}/**)",
+                      ISO.settings([self.state], env=self.env, sockets=[])["permissions"]["deny"])
         key = ("write the user's overture folder", "overture")
         self.assertEqual((self.rows()[key]["got"], self.rows()[key]["ok"]), ("absent", True))
         (cfg / "overture").mkdir(parents=True)
@@ -6572,28 +6641,62 @@ class IsolationTests(unittest.TestCase):
             self.addCleanup((cfg / "overture").chmod, 0o700)
             self.assertEqual((self.rows()[key]["got"], self.rows()[key]["ok"]), ("blocked", True))
 
+    def listener(self, path: Path):
+        import socket as _s
+        srv = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
+        srv.bind(str(path))
+        srv.listen(4)
+        self.addCleanup(srv.close)
+
     def test_a_reachable_escape_socket_and_a_listed_runtime_folder_are_findings(self):
         # Catches: Docker's socket (root on most hosts) or the session bus left reachable, which allowAllUnixSockets
         # would allow unless each is denied by path.
-        import socket as _s
         run = self.root / "run"
         run.mkdir()
         (run / "bus").write_text("")
-        esc = str(self.root / "d.sock")
-        srv = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
-        srv.bind(esc)
-        srv.listen(1)
-        self.addCleanup(srv.close)
-        with mock.patch.object(ISO, "ESCAPE_SOCKETS", (esc,)):
+        self.listener(self.root / "d.sock")
+        with mock.patch.object(ISO, "ESCAPE_SOCKETS", (str(self.root / "d.sock"),)):
             r = self.rows()
         self.assertEqual((r[("reach an escape socket", "d.sock")]["got"],
                           r[("reach an escape socket", "d.sock")]["ok"]), ("open", False))
         self.assertEqual((r[("list the runtime folder", "run")]["got"], r[("list the runtime folder", "run")]["ok"]),
                          ("open", False))
 
+    def test_any_other_socket_that_answers_is_a_finding_and_the_door_is_not(self):
+        # Catches (1.60 review F1, I6): a check that tries only a fixed list, and passes while a daemon's socket
+        # (Claude Code's own, tmux, a process manager) answers; or one that counts the console's own door.
+        self.listener(self.state / "agent.sock")
+        self.listener(self.root / "daemon.sock")
+        socks = [str(self.state / "agent.sock"), str(self.root / "daemon.sock"), str(self.root / "gone.sock")]
+        row = self.rows(sockets=socks)[("reach any other socket", "2 tried")]
+        self.assertEqual((row["got"], row["ok"]), ("open", False))
+        self.assertEqual(row["detail"], str(self.root / "daemon.sock"))
+        row = self.rows(sockets=socks[:1] + socks[2:])[("reach any other socket", "1 tried")]
+        self.assertEqual((row["got"], row["ok"]), ("blocked", True))
+
+    def test_find_sockets_walks_without_links_to_a_depth_and_reads_the_kernels_list(self):
+        # Catches: a sweep that misses a socket a daemon keeps a few folders down, follows a link out of its root,
+        # never ends in a deep tree, or ignores the kernel's list of bound paths (sockets in folders it cannot walk).
+        (self.root / "a" / "b").mkdir(parents=True)
+        self.listener(self.root / "a" / "b" / "near.sock")
+        deep = self.root / "d1" / "d2" / "d3" / "d4" / "d5"
+        deep.mkdir(parents=True)
+        self.listener(deep / "far.sock")
+        (self.root / "loop").symlink_to(self.root / "a")
+        proc = self.root / "unix"
+        proc.write_text("Num RefCount Protocol Flags Type St Inode Path\n"
+                        "0: 00000002 00000000 00010000 0001 01 1 /srv/elsewhere/x.sock\n"
+                        "0: 00000002 00000000 00010000 0001 01 2 @abstract-name\n"
+                        "0: 00000002 00000000 00010000 0001 01 3\n")
+        got = ISO.find_sockets(roots=(str(self.root),), proc=proc)
+        self.assertIn(str(self.root / "a" / "b" / "near.sock"), got)
+        self.assertIn("/srv/elsewhere/x.sock", got)
+        self.assertNotIn(str(deep / "far.sock"), got)
+        self.assertFalse([p for p in got if "loop" in p or "abstract" in p])
+
     def test_outside_the_sandbox_the_check_says_so_and_fails(self):
         with mock.patch.object(ISO, "MANAGED", {"linux": self.root / "m.json", "darwin": self.root / "m.json"}):
-            rows = ISO.check([self.state], env={"XDG_RUNTIME_DIR": str(self.root / "run")})
+            rows = ISO.check([self.state], env={"XDG_RUNTIME_DIR": str(self.root / "run")}, sockets=[])
         self.assertFalse(rows[0]["ok"])
         self.assertIn("SANDBOX_RUNTIME", rows[0]["detail"])
         self.assertIn("isolation does NOT hold", ISO.render(rows))
@@ -6607,7 +6710,7 @@ class IsolationTests(unittest.TestCase):
         env = {**os.environ, "XDG_CONFIG_HOME": str(self.root / "cfg")}
         env.pop("CLAUDECODE", None)
         run = lambda extra: subprocess.run([sys.executable, str(KIT / "agent.py"), "isolation", "settings"],
-                                           capture_output=True, text=True, env={**env, **extra}, timeout=60)
+                                           capture_output=True, text=True, env={**env, **extra}, timeout=120)
         r = run({"SANDBOX_RUNTIME": "1"})
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertTrue((self.state / D.CURSOR_FILE).exists())
@@ -6616,6 +6719,12 @@ class IsolationTests(unittest.TestCase):
         self.assertIn(str(self.state), json.loads(r.stdout)["sandbox"]["filesystem"]["denyRead"])
         self.assertFalse((self.state / D.CURSOR_FILE).exists())
         self.assertEqual(D.read_cursor(self.state), 4)
+
+    def test_consoles_are_listed_once_each_by_real_path(self):
+        # Catches: two checkouts registered on one console giving it two sets of rules (and two rows per secret).
+        (self.root / "link").symlink_to(self.state)
+        reg = {"/p1": {"state": str(self.state)}, "/p2": {"state": str(self.root / "link")}, "/p3": "bad"}
+        self.assertEqual(ISO.consoles(reg), [self.state])
 
 
 from overture import trust as TR  # noqa: E402
@@ -8742,7 +8851,7 @@ class WorktreeTests(unittest.TestCase):
 
     def age_prune_record(self, state, seconds):
         import agent as AG
-        p = state / AG.PRUNE_FILE
+        p = D.steward_dir(state) / AG.PRUNE_FILE
         rec = json.loads(p.read_text())
         rec["at"] -= seconds
         p.write_text(json.dumps(rec))
@@ -8833,7 +8942,7 @@ class WorktreeTests(unittest.TestCase):
             self.watch(state)                                   # not throttled: the pass is unfinished
             self.assertFalse(Path(b["path"]).exists())          # taken up after API-1, not from the top again
             self.assertTrue(Path(a["path"]).is_dir())
-        self.assertIsNone(json.loads((state / AG.PRUNE_FILE).read_text())["resume_after"])
+        self.assertIsNone(json.loads((D.steward_dir(state) / AG.PRUNE_FILE).read_text())["resume_after"])
 
     def test_a_deeply_nested_or_corrupt_state_file_reads_as_no_record(self):
         # Catches (1.50 clearing round Z3): the watch's prune record, the worktree registry or gh's output nested
@@ -8847,7 +8956,7 @@ class WorktreeTests(unittest.TestCase):
         deep = "[" * 8000
         for text in (deep, '{"at": ' + deep, "not json", '{"at": true}', ""):
             with self.subTest(text=text[:12]):
-                (state / AG.PRUNE_FILE).write_text(text)
+                (D.steward_dir(state) / AG.PRUNE_FILE).write_text(text)
                 self.assertEqual(AG._prune_record(state), {})
         self.new()
         (self.root() / ".registry.json").write_text('{"worktrees": ' + "[" * 100000)
@@ -8861,13 +8970,13 @@ class WorktreeTests(unittest.TestCase):
             prs, why = self.WT.gh_prs(self.repo)
         self.assertIsNone(prs)
         self.assertIn("not JSON", why)
-        (state / AG.PRUNE_FILE).write_text(deep)
+        (D.steward_dir(state) / AG.PRUNE_FILE).write_text(deep)
         R.register(self.repo, state, KIT)
         with mock.patch.object(self.WT, "gh_prs", return_value=(lambda b: None, None)):
             rc, err = self.watch(state)
         self.assertEqual(rc, 3, err)
         self.assertNotIn("Traceback", err)
-        self.assertIsInstance(json.loads((state / AG.PRUNE_FILE).read_text())["at"], float)
+        self.assertIsInstance(json.loads((D.steward_dir(state) / AG.PRUNE_FILE).read_text())["at"], float)
 
     def test_a_slow_git_and_gh_keep_one_prune_within_its_cap_and_the_heartbeat_fresh(self):
         # Catches (1.50 clearing round Z2): the prune's cap not bounding its wall time: gh's own 120 s timeout
@@ -8899,7 +9008,7 @@ class WorktreeTests(unittest.TestCase):
         for case, gh, bound in (("gh hangs", "exec sleep 30", call_max + 1.5), ("git is slow", "printf '[]'", cap + 1.0)):
             with self.subTest(case=case):
                 stub("gh", gh)
-                (state / AG.PRUNE_FILE).unlink(missing_ok=True)
+                (D.steward_dir(state) / AG.PRUNE_FILE).unlink(missing_ok=True)
                 samples, span = [], {}
                 stop = threading.Event()
                 def sample():
@@ -9347,7 +9456,7 @@ class WorktreeTests(unittest.TestCase):
         last = [{"branch": "overture/ticket/API-9", "age_days": 20}]
         t = self.t0
         def watch_at(stamp):
-            (state / AG.PRUNE_FILE).write_text(json.dumps({"at": stamp, "stale": last, "resume_after": None}))
+            (D.steward_dir(state) / AG.PRUNE_FILE).write_text(json.dumps({"at": stamp, "stale": last, "resume_after": None}))
             with mock.patch.object(AG.R, "enclosing", return_value=None), \
                     mock.patch.object(AG, "_enclosing_via_worktree", return_value=None):
                 return AG._watch_prune(state, now=t)
@@ -9605,13 +9714,13 @@ class WorktreeTests(unittest.TestCase):
         self.new(item="API-2")                                      # fresh: not stale
         first = {"branch": "overture/ticket/API-1", "age_days": 20}     # before the resume point: kept
         later = {"branch": "overture/ticket/API-3", "age_days": 20}     # after it: looked at again, and gone
-        (state / AG.PRUNE_FILE).write_text(json.dumps({"at": self.t0 - 30, "stale": [first, later],
+        (D.steward_dir(state) / AG.PRUNE_FILE).write_text(json.dumps({"at": self.t0 - 30, "stale": [first, later],
                                                        "resume_after": first["branch"]}))
         with mock.patch.object(AG.Path, "cwd", return_value=self.repo), \
                 mock.patch.object(self.WT, "gh_prs", return_value=(lambda b: None, None)):
             got = AG._watch_prune(state, now=self.t0 + self.DAY)
         self.assertEqual(got, [first])
-        self.assertEqual(json.loads((state / AG.PRUNE_FILE).read_text())["stale"], [first])
+        self.assertEqual(json.loads((D.steward_dir(state) / AG.PRUNE_FILE).read_text())["stale"], [first])
 
     def test_the_consoles_marks_warn_of_other_agents_only(self):
         # Catches (A11): `worktree new` reading the console's branch marks and warning the agent about ITS OWN
@@ -10287,7 +10396,7 @@ class StewardNotesTests(unittest.TestCase):
         return json.loads((D.steward_dir(self.state) / D.WATCH_FILE).read_text()).get("area_notes")
 
     def age(self, seconds):
-        p = self.state / self.AG.NOTES_FILE
+        p = D.steward_dir(self.state) / self.AG.NOTES_FILE
         rec = json.loads(p.read_text())
         rec["at"] -= seconds
         p.write_text(json.dumps(rec))
@@ -10364,7 +10473,7 @@ class StewardNotesTests(unittest.TestCase):
         finally:
             os.chdir(here)
         self.assertNotIn("notes check skipped", err.getvalue())
-        self.assertFalse((self.state / self.AG.NOTES_FILE).exists())
+        self.assertFalse((D.steward_dir(self.state) / self.AG.NOTES_FILE).exists())
         self.watch()
         self.assertEqual(self.counts()["undeclared"], 1)
 
@@ -10372,7 +10481,7 @@ class StewardNotesTests(unittest.TestCase):
         # Catches: a clock set back (or a record written ahead) trusted as "checked a moment ago" for as long as
         # the skew lasts, so the check never runs and its old counts ride the heartbeat.
         import time
-        (self.state / self.AG.NOTES_FILE).write_text(json.dumps(
+        (D.steward_dir(self.state) / self.AG.NOTES_FILE).write_text(json.dumps(
             {"at": time.time() + 10 * 86400, "counts": {"current": 0, "malformed": 0, "stale": 9, "undeclared": 0}}))
         self.watch()
         self.assertEqual((self.counts()["stale"], self.counts()["undeclared"]), (0, 1))
@@ -10382,13 +10491,13 @@ class StewardNotesTests(unittest.TestCase):
         # the watch before its first heartbeat, or trusted as a time or as counts.
         for text in ("{not json", json.dumps({"at": True, "counts": {}}), json.dumps([1, 2])):
             with self.subTest(record=text):
-                (self.state / self.AG.NOTES_FILE).write_text(text)
+                (D.steward_dir(self.state) / self.AG.NOTES_FILE).write_text(text)
                 self.assertEqual(self.AG._notes_record(self.state), {})
                 self.assertEqual(self.watch()[0], 3)
                 self.assertEqual(self.counts()["undeclared"], 1)
-        (self.state / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": -1}}))
+        (D.steward_dir(self.state) / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": -1}}))
         self.assertEqual(self.AG._notes_record(self.state), {"at": 5.0, "counts": None})
-        (self.state / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": 2, "current": 1}}))
+        (D.steward_dir(self.state) / self.AG.NOTES_FILE).write_text(json.dumps({"at": 5, "counts": {"stale": 2, "current": 1}}))
         self.assertEqual(self.AG._notes_record(self.state), {"at": 5.0, "counts": {"current": 1, "stale": 2}})
 
     def test_a_project_that_declares_no_areas_is_left_alone(self):
