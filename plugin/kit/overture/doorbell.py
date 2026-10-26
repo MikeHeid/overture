@@ -7,7 +7,15 @@ requests wake it: `process` (answers are in), `fork` (deliberate), `chat` (0.7.0
 `visual` (0.8.0, draw a visual of an item).
 
 The agent's own cursor, the highest doorbell seq it has processed, is kept in
-`agent-cursor.json` beside the doorbell. It only moves forward.
+`steward/agent-cursor.json` beside the doorbell. It only moves forward.
+
+1.60.0 (OPEN-DECISIONS I4, I7): the files a session writes in STATE live in
+`STATE/steward/`, a folder holding nothing else (`STEWARD_FILES`: the cursor,
+`watch.json`, the watch's two throttles and its note about `gh`, and the cost
+sidecar). A sandbox can then let sessions write there without re-opening reads
+of the rest of STATE (I1: a write-allowed folder is a readable one). Reads
+prefer it and fall back to the file beside the doorbell, where kits before 1.60
+kept it.
 
 A scan for a resolve (CONSOLE-kit/Q40, Q41) is a refactor record, not a store
 record, so its line cannot take a store seq of its own: it carries the store's
@@ -35,6 +43,87 @@ WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link
 CURSOR_FILE = "agent-cursor.json"
 MAX_DOORBELL = 64 << 20  # one short line per owner write; far past any real console
 MAX_CURSOR = 4096
+STEWARD_DIR = "steward"  # 1.60.0 (I4): the files a session writes in STATE, and nothing else
+WATCH_FILE = "watch.json"
+# Every file kept in STEWARD_DIR, by the name its writer uses: agent.py's prune and notes throttles and its
+# once-told gh note, and costs.py's sidecar. test_kit holds each writer's constant to this list.
+STEWARD_FILES = (CURSOR_FILE, WATCH_FILE, ".worktrees-prune.json", ".worktrees-no-gh", ".notes-check.json",
+                 "costs.jsonl")
+
+
+def steward_dir(state: Path) -> Path:
+    """STATE/steward/, made 0700 when absent. Refused (OSError) when it is a link or a file: a planted link
+    there would carry the steward's writes somewhere else."""
+    d = Path(state) / STEWARD_DIR
+    try:
+        os.mkdir(d, 0o700)
+    except FileExistsError:
+        pass
+    if not stat.S_ISDIR(os.lstat(d).st_mode):
+        raise OSError(f"{d} is not a folder (a link or a file), so the steward writes nothing there")
+    return d
+
+
+def steward_read_path(state: Path, name: str) -> Path:
+    """Where to read `name`: beside the doorbell when a file is there, else STATE/steward/ when it is a real folder.
+
+    Every write into steward/ retires the copy beside the doorbell (`retire_old`), so one found there was written
+    since by a kit before 1.60, still running its last watch after an upgrade: it is the newer, and steward/'s
+    older cursor must not win over it (requests would wake again). Inside a sandbox the old place cannot be
+    seen at all, so steward/ is read there."""
+    d, old = Path(state) / STEWARD_DIR, Path(state) / name
+    if os.path.lexists(old):
+        return old
+    try:
+        if stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name):
+            return d / name
+    except OSError:
+        pass
+    return old
+
+
+def retire_old(state: Path, name: str) -> None:
+    """After a write into steward/: remove `name` beside the doorbell, where kits before 1.60 kept it, so the
+    file read is the one just written (steward_read_path). A failure (a sandbox refuses it) changes nothing:
+    there the old place cannot be read either."""
+    try:
+        os.unlink(Path(state) / name)
+    except OSError:
+        pass
+
+
+def migrate_steward(state: Path) -> list[str]:
+    """Move each of STEWARD_FILES kept beside the doorbell (before 1.60) into STATE/steward/, unless one is
+    there already. Run outside any sandbox, before one is switched on: a sandboxed steward cannot read the
+    old place, and a cursor it cannot read is 0. Returns the names moved.
+
+    A link, then an unlink, never a rename: a link refuses an existing name, so a newer file a running kit
+    wrote there between the look and the move is never replaced (1.60 review F6). If a running kit before 1.60
+    replaces the old file between the link and the unlink (review M4), the two no longer share an inode: the
+    stale link is taken back and the newer file is left for the next run. Stop the steward's watch first to
+    close the last window, between that look and the unlink."""
+    moved = []
+    d = steward_dir(state)
+    for name in STEWARD_FILES:
+        old, new = Path(state) / name, d / name
+        try:
+            if not stat.S_ISREG(os.lstat(old).st_mode):
+                continue
+            os.link(old, new, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except FileExistsError:
+            continue   # steward/ has its own, which is the newer one
+        try:
+            same = os.lstat(old).st_ino == os.lstat(new).st_ino
+        except FileNotFoundError:
+            same = False
+        if not same:
+            os.unlink(new)
+            continue
+        os.unlink(old)
+        moved.append(name)
+    return moved
 
 
 def read_lines(path: Path) -> list[dict]:
@@ -104,7 +193,6 @@ def watch(path: Path, since: int, *, poll: float = 2.0, timeout: float | None = 
 # watch that exits normally says so at once. It is a hint for the owner, never
 # something the doorbell depends on: a failed write is reported and the watch
 # goes on.
-WATCH_FILE = "watch.json"
 BEAT_EVERY = 10.0     # seconds between writes while waiting; a 2 s poll does not write every 2 s
 BEAT_GRACE = 20.0     # slack past the promised next beat before "listening" lapses
 MAX_WATCH = 4096
@@ -140,7 +228,7 @@ def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: 
     if notes is not None:
         rec["area_notes"] = {k: v for k, v in notes.items() if isinstance(k, str) and isinstance(v, int)
                              and not isinstance(v, bool)}
-    p = Path(state) / WATCH_FILE
+    p = steward_dir(state) / WATCH_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".watch.", suffix=".tmp")  # 0600 from creation
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -149,6 +237,7 @@ def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: 
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    retire_old(state, WATCH_FILE)
 
 
 def _read_watch(path: Path) -> bytes | None:
@@ -180,7 +269,7 @@ def listening(state: Path, *, now: float | None = None) -> dict:
     """
     t = time.time() if now is None else now
     try:
-        data = _read_watch(Path(state) / WATCH_FILE)
+        data = _read_watch(steward_read_path(state, WATCH_FILE))
         rec = json.loads(data.decode("utf-8")) if data is not None else None
     except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: never
         rec = None
@@ -228,7 +317,7 @@ def stale_worktrees(state: Path, *, now: float | None = None) -> dict | None:
     """
     t = time.time() if now is None else now
     try:
-        data = _read_watch(Path(state) / WATCH_FILE)
+        data = _read_watch(steward_read_path(state, WATCH_FILE))
         rec = json.loads(data.decode("utf-8")) if data is not None else None
     except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: nothing
         return None
@@ -295,7 +384,7 @@ class Heartbeat:
 
 def _cursor_value(state: Path, key: str) -> int:
     try:
-        data = read_regular(Path(state) / CURSOR_FILE, MAX_CURSOR)
+        data = read_regular(steward_read_path(state, CURSOR_FILE), MAX_CURSOR)
         v = json.loads(data.decode("utf-8")).get(key, 0) if data is not None else 0
     except (OSError, ValueError, AttributeError, RecursionError):   # 1.50 clearing round: too deep reads as 0
         return 0
@@ -319,9 +408,10 @@ def write_cursor(state: Path, through: int, rx_through: int | None = None) -> in
     """
     now = max(read_cursor(state), through)
     rx = max(read_rx_cursor(state), rx_through or 0)
-    p = Path(state) / CURSOR_FILE
+    p = steward_dir(state) / CURSOR_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".agent-cursor.", suffix=".tmp")  # 0600, unique, from creation
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"through": now, **({"rx_through": rx} if rx else {})}) + "\n")
     os.replace(tmp, p)
+    retire_old(state, CURSOR_FILE)
     return now

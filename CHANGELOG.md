@@ -2990,6 +2990,110 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Agents kept out of STATE (1.60.0)
+
+Wave 5's third Trust lane. An agent runs as your OS user, so it could read
+every console's store, the GitHub trigger secrets, the webhook URL and the
+roles. Project tokens stop mistakes, not an agent that sets out to read
+them. The lane's waypoint and a design round decided how to stop that, and
+the clearing round reopened three of the answers (OPEN-DECISIONS.md
+"Same-user isolation", I1–I7, the owner's ★ on each).
+
+- **Claude Code's sandbox, configured for you (I1, I3).** `agent.py
+  isolation settings`, which you run in your own terminal, prints managed
+  settings for every console registered on the machine. You install them in
+  `/etc/claude-code/managed-settings.json` (macOS: `/Library/Application
+  Support/ClaudeCode/managed-settings.json`), which neither a session nor a
+  project can loosen.
+  - In each STATE, a session can reach only `agent.sock`, read the
+    doorbell, `sessions.jsonl` and `lessons.jsonl`, and read and write
+    `steward/`.
+  - `Read`/`Edit` deny rules cover the built-in tools: each name in STATE,
+    and `~/.config/overture`, where the sign-in devices are kept.
+  - With `failIfUnavailable` set, a machine without a working sandbox
+    refuses to start a session. With `allowUnsandboxedCommands` off, a
+    command cannot retry outside the sandbox.
+- **Sockets (I5).** On macOS only each console's `agent.sock` is allowed.
+  On Linux the sandbox has no per-path socket list, and the switch that
+  reaches `agent.sock` opens every socket not denied by path. On the
+  owner's machine those included Claude Code's own daemon, Codex's daemon,
+  X11, dbus and a process manager, any of which runs a command outside the
+  sandbox. So the settings deny every socket the machine has when they are
+  made, plus the folders daemons keep theirs in. The docs call this
+  best-effort; a separate OS user is the real fix, planned for later.
+- **`agent.py isolation check` is the proof (I2, I6).** Run inside a
+  session, it tries every door: each protected file, each STATE listing,
+  each console socket, and every other socket it can find (a walk of
+  `/tmp`, `/run` and the home folder, and the kernel's list). It asks
+  whether `~/.config/overture` is writable, without writing to it. It
+  checks that the managed file is set and denies every registered console.
+  It ends with `isolation holds`, or it lists each door that is open and
+  exits 1.
+- **What sessions write in STATE moves into `STATE/steward/` (I4, I7).**
+  Under the sandbox, a folder that may be written is also readable. So the
+  files sessions write in STATE move into a folder that holds nothing
+  else: the steward's cursor and heartbeat, the watch's prune and
+  notes-check throttles and its note about `gh`, and `costs.jsonl`, which
+  `costs collect` writes. Reads fall back to the old place. `isolation
+  settings` moves the old files across, and never over a newer one. Each
+  write into `steward/` removes the copy beside the doorbell. A file found
+  there was therefore written since by a pre-1.60 watch still finishing
+  after an upgrade, and it is the one read; otherwise an older cursor
+  would win and requests would wake again. Known
+  limit, accepted: any session can fake the cursor or heartbeat there, as
+  one could before.
+- **Known limit: hosted tokens.** Managed settings cover the whole machine,
+  so they cannot give each hosted project only its own token in
+  `~/.config/overture/tokens/`. A separate OS user per project closes that;
+  it is written up for later.
+- **Fixed: a watch ended during its prune said "listening".** The watch
+  set up its SIGTERM/SIGHUP handling only after the prune and the notes
+  check. So a session that ended in that window left "listening" up until
+  the promise lapsed. The handling now comes before the first heartbeat.
+  The kit's own test found it as a flake.
+- **Real run.** Headless Claude Code sessions (2.1.310, Linux,
+  bubblewrap) ran with the generated rules against a real console server
+  on a scratch STATE holding a GitHub secret and a webhook URL. The rules
+  were passed with `--settings`, not written to `/etc`, so the check's
+  "managed settings" row failed as expected. Everything else held:
+  - every protected file read as absent, and STATE listed only
+    `agent.sock` and `steward/`;
+  - `health` reached the console through its socket;
+  - the steward's temp-file-and-rename into `steward/` landed on disk;
+  - every socket that existed when the settings were made was refused,
+    including Claude Code's daemon, the Codex daemon, X11, a process
+    manager's socket and a stand-in daemon;
+  - a stand-in daemon started after the settings answered. The check
+    named it, and also named a .NET diagnostics port. A glob rule now
+    covers those (six refused on the next run).
+
+  The runs found three more things, all fixed:
+  - an `Edit` deny rule becomes a sandbox write denial that beats
+    `allowWrite`, so one on all of STATE made `steward/` read-only;
+  - the sign-in devices live in `~/.config/overture`, not in STATE;
+  - the sandbox's own proxy sockets must be neither denied nor counted.
+- **Independent clearer: NOT CLEARED, then fixed.** The first round found
+  the Linux socket door open (F1, HIGH) and `steward/` writable by any
+  session (F2, HIGH, accepted as I7). F3–F6 are fixed: the managed file's
+  denyRead is checked, Edit rules name everything in STATE, `sessions.jsonl`
+  is readable, and the migration links rather than renames. Running
+  agent.py outside the sandbox was weighed and turned down: it runs git and
+  the project's adapter, which a session can write (CONSOLE-kit/Q23).
+- **Second clearer: CLEARED**, with no CRITICAL or HIGH findings. Fixed
+  after it:
+  - the watch's note about `gh` is made new, never through a link a
+    session planted in `steward/`;
+  - a socket that stalls counts as answering, a sweep cut short says so,
+    and a kernel path with a space is read whole;
+  - the sandbox's own proxy sockets are exempt only by exact name, directly
+    in `/tmp` and owned by you, and the check lists them on a row of their
+    own;
+  - the migration takes back its link if a running kit replaced the old
+    file mid-move;
+  - the check also tries to write a new file into each STATE.
+- Docs: features/hosting.md, "Keep agents out of STATE (1.60)", step by
+  step. JOIN.md and MIGRATION.md link to it.
+
 ## Signed GitHub webhooks (1.59.0)
 
 Wave 5's second lane: GitHub calls a trigger directly, with no bridge.

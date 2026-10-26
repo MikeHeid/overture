@@ -211,10 +211,124 @@ refuses the old token from the next request.
   write another project's console through the kit.
 - **What it does not stop:** an agent running as the same OS user that
   sets out to cross over. It can read `tokens/` and the state directories
-  directly. Real isolation needs a sandbox or a separate user.
+  directly. To stop that, sandbox the sessions:
+  [Keep agents out of STATE](#isolation).
 - **An old per-project server is a way around it.** While one still
   listens on `STATE/agent.sock`, that socket answers without a token.
   Stop it before relying on the token.
+
+<a id="isolation"></a>
+## Keep agents out of STATE (1.60)
+
+An agent runs as your OS user, so it can read any file you can. That
+includes every console's store, the GitHub trigger secrets, the webhook URL
+and the roles. Claude Code's
+[sandbox](https://code.claude.com/docs/en/sandboxing) narrows what a
+session's commands can read. `agent.py isolation` writes the rules for your
+consoles and then checks that they hold (OPEN-DECISIONS I1–I7).
+
+**What a sandboxed session still reaches**, in each registered console's
+STATE:
+
+- `agent.sock`, the agent's door;
+- `inbox.jsonl`, `sessions.jsonl` and `lessons.jsonl`, to read. The
+  doorbell, the session names and the withdrawn rulings hold no secret;
+- `steward/`, to read and write. It holds the steward's cursor and
+  heartbeat, the watch's two throttles and the cost sidecar. It is the only
+  place in STATE a session may write.
+
+Everything else in STATE is hidden. A denied file reads as "not there".
+
+**Sockets.** Some sockets run a command for whoever connects:
+Docker's, Claude Code's and Codex's own daemons, X11, dbus, tmux and
+process managers. A session that reached one would be outside the sandbox.
+
+- **On macOS** the rules allow each console's `agent.sock` by path, and no
+  other socket.
+- **On Linux** the sandbox has no per-path socket list. Reaching
+  `agent.sock` needs the switch that opens every socket not denied by path.
+  So `isolation settings` denies each socket the machine has when you run
+  it, the folders daemons keep theirs in, and the names some programs
+  make afresh for each process (a .NET diagnostics port, VS Code's IPC).
+  The sandbox's own proxy sockets are left alone. That is best-effort:
+  software you install later can add a socket the rules don't name.
+  `isolation check` finds it, because it tries every socket it can see.
+  Re-run both after installing software that runs a daemon. A separate OS
+  user for the console, planned for later, is the real fix.
+
+The rules also deny your runtime folder (`/run/user/UID`) and your
+ssh-agent.
+
+**Set it up.** You do this once per machine, again after you register a
+new console, and on Linux again after installing software that runs a
+daemon.
+
+1. Install the sandbox's tools. On Linux, install `bubblewrap` and
+   `socat`, for example `sudo apt install bubblewrap socat`. macOS needs
+   nothing extra.
+2. Stop each steward's watch (end its session), then in your own
+   terminal, outside any session, run:
+
+   ```sh
+   <py> <kit>/agent.py isolation settings > isolation.json
+   ```
+
+   This also moves each console's old steward files (`agent-cursor.json`,
+   `watch.json`, the throttles, `costs.jsonl`) into `steward/`. It refuses
+   to run inside a sandbox, which would block the move.
+3. Install the file as managed settings. A session or a project cannot
+   loosen managed settings, and an agent cannot edit them.
+
+   ```sh
+   sudo install -D -m 0644 isolation.json /etc/claude-code/managed-settings.json
+   ```
+
+   On macOS the path is
+   `/Library/Application Support/ClaudeCode/managed-settings.json`. If the
+   file already exists, merge the two `sandbox` and `permissions` blocks
+   instead of replacing it. Do not add an `Edit` rule for a whole STATE
+   folder. Claude Code turns it into a write denial that overrides
+   `allowWrite`, so sessions could no longer write in `steward/`.
+4. Start a new session. Ask it to run `agent.py isolation check`. It
+   tries every door from inside the session, including every socket it can
+   find, and a write into each STATE. It ends with `isolation holds`, or
+   it lists each door that is open, and exits 1 if any is. It also says if
+   the managed file leaves out a registered console, and if its socket
+   sweep stopped short of a large folder. `--json` prints the rows.
+
+**What the rules set.** The sandbox is on and `failIfUnavailable` is set,
+so a machine without a working sandbox refuses to start a session; it never
+runs quietly without one. `allowUnsandboxedCommands` is off, so a command
+cannot retry outside the sandbox. `Read` and `Edit` deny rules cover the
+built-in file tools, which the sandbox alone does not. The `Edit` rules name
+each file and folder in STATE: those listed in the kit, plus whatever else
+STATE holds when you run `settings`. An `Edit` rule also covers
+`~/.config/overture`. The sign-in devices are kept there, and a device an
+agent added would sign its own browser in.
+
+**Limits.**
+
+- **Any session can write `steward/`.** It can fake the steward's cursor
+  (so the watch misses requests) or its heartbeat (so the console shows a
+  steward as watching). Both are advisory: the requests stay in the store
+  and on the console. A session could already do this before 1.60, and the
+  separate-user tier closes it.
+- **Linux sockets are best-effort** (above).
+- **Restart sessions after restarting a console.** The sandbox opens
+  `agent.sock` when a session starts. A console server restarted later
+  makes a new socket, which a running session may not reach.
+- **Hosted mode.** Each project's agent needs its own token, in
+  `~/.config/overture/tokens/`. Managed settings cover the whole machine,
+  so they cannot give each project only its own token. A sandboxed agent
+  can still read the other projects' tokens and use the kit to reach their
+  consoles. A separate OS user per project closes that; it is planned, not
+  built.
+- **Commands only.** The sandbox covers the commands a session runs and the
+  built-in tools it denies. An MCP server you add runs outside it.
+- **`agent.py portfolio`** reads each console's store to count questions,
+  so inside the sandbox it reports every console as having no store.
+- **Measured on Linux.** The 1.60 real run was on Linux with bubblewrap.
+  The macOS rules have not been run there yet.
 
 <a id="windows"></a>
 ## Windows (0.9.1, 1.26, 1.53.2)

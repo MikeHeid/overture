@@ -6272,7 +6272,7 @@ class ProjectTokenTests(_RawAgent, _OneServer, unittest.TestCase):
                 r = self.agent_py(self.t, *args, state=A["state"], check=1)      # outside every root
                 self.assertIn("inside no registered project root", r.stderr, args)
             self.assertEqual(seen, [])                                    # not one request reached the socket
-            self.assertFalse((B["state"] / "watch.json").exists())         # and B's doorbell was never watched
+            self.assertFalse((B["state"] / "steward" / "watch.json").exists())         # and B's doorbell was never watched
             # The control: from each project's own root, its own token on its own path.
             for name in ("alpha", "beta"):
                 self.agent_py(self.p[name]["root"], "health", state=self.p[name]["state"], check=0)
@@ -6301,7 +6301,7 @@ class ProjectTokenTests(_RawAgent, _OneServer, unittest.TestCase):
                                                "watch", "--timeout", timeout, "--poll", "0.1"], cwd=v["root"],
                                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         deadline = time.monotonic() + 30
-        while not all((v["state"] / "watch.json").exists() for v in (A, B)):   # both are polling
+        while not all((v["state"] / "steward" / "watch.json").exists() for v in (A, B)):   # both are polling
             self.assertLess(time.monotonic(), deadline, "the watchers never started")
             time.sleep(0.05)
         code, out = self.owner("beta", "POST", "/api/message", {"item": "@chat", "text": "only for beta",

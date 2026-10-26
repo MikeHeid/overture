@@ -328,7 +328,7 @@ are still judgement calls.
 | Lane | Progress | Shipped | Next items |
 |---|---|---|---|
 | Core decision engine | 85% | Rulings as a CI check (1.36); the "rulings touching this path" lookup before an agent edits (1.52); symbol anchors (1.54) | An open spec for the schema; ruling search and dependencies |
-| Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1); trusted backlinks (1.58); GitHub webhooks verified by their signature (1.59) | Same-UID isolation recipe |
+| Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1); trusted backlinks (1.58); GitHub webhooks verified by their signature (1.59); agents kept out of STATE by the sandbox (1.60) | A separate OS user per project, for hosted tokens |
 | Ecosystem & integrations | 55% | MCP server for other agent tools (1.35); a Slack-style webhook digest (1.45) | Linear/Jira adapters; ruling-aware PR comments; MADR/ADR templates |
 | Onboarding & distribution | 65% | Sign-in links without Cloudflare (1.46); ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47); launchd (1.51); the prerequisite scan (1.53.2); the USER-GUIDE drift fixed | Docker; a hosted demo; a 5-minute path with no adapter; native Windows (A1: not now) |
 | Team & multi-operator | 80% | Named operators (1.38); roles and People (1.39, 1.40); routing (1.41); the role log (1.42); two-key locks (1.43); settings (1.44) | Per-operator handoff |
@@ -374,7 +374,8 @@ Each wave below builds on the one before it.
          on how trust is decided (built in 1.58, OPEN-DECISIONS T1, T2);
        - GitHub webhooks verified by their HMAC signature, with no bridge
          (built in 1.59, OPEN-DECISIONS G1–G3);
-       - a recipe for keeping agents that run as the same user apart.
+       - a recipe for keeping agents that run as the same user apart (built in
+         1.60, OPEN-DECISIONS I1–I4).
     2. Then ruling-aware PR comments and Linear (Wave 3's last item).
   - *Not in it, kept for a later wave:* Docker (optional, A8), Jira, MADR/ADR
     templates, a hosted demo, and ruling search and dependencies.

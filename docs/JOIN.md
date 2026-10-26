@@ -249,4 +249,4 @@ from their state directories.
 **What a token protects.** A project's token stops cross-talk: a wrong
 `--state` or a skill bug can't reach another project's console. It does not
 isolate agents that run as the same OS user, because such an agent can read
-`tokens/` directly. Real isolation needs a sandbox or a separate user.
+`tokens/` directly. To keep agents out of STATE, sandbox them: [hosting](features/hosting.md#isolation).

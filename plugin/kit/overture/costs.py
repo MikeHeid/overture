@@ -56,6 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import doorbell as D
 from . import registry as R
 from . import serverfile as SF
 
@@ -263,7 +264,7 @@ def _clean(rec: object) -> dict | None:
 
 def read_counted(state: Path) -> tuple[list[dict], int]:
     """(the sidecar's lines, how many malformed lines were dropped). A symlinked or oversized file is refused."""
-    p = Path(state) / FILE
+    p = D.steward_read_path(state, FILE)   # 1.60 (I7): in STATE/steward/, else where kits before 1.60 kept it
     try:
         raw = R.read_regular(p, MAX_COSTS, nofollow=True)
     except OSError as e:
@@ -294,9 +295,13 @@ def read(state: Path) -> list[dict]:
 
 
 def write(state: Path, new: list[dict]) -> dict:
-    """Merge `new` into STATE/costs.jsonl by key, under an exclusive lock; atomic, 0600, no temp file left."""
+    """Merge `new` into STATE/steward/costs.jsonl by key, under an exclusive lock; atomic, 0600, no temp file left.
+
+    1.60 (I7): in STATE/steward/, the one folder of STATE a sandboxed session may write, since `costs collect`
+    runs in any session. A sidecar kept beside the store (before 1.60) is read once and merged in."""
     st = Path(state)
-    lock_fd = os.open(st / LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    sd = D.steward_dir(st)
+    lock_fd = os.open(sd / LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         old, bad = read_counted(st)
@@ -304,12 +309,13 @@ def write(state: Path, new: list[dict]) -> dict:
         before = len(merged)
         for r in new:
             merged[r["key"]] = _clean(r) or r
-        fd, tmp = tempfile.mkstemp(dir=st, prefix=".costs.", suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(dir=sd, prefix=".costs.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 for k in sorted(merged):
                     fh.write(json.dumps(merged[k], sort_keys=True, ensure_ascii=False) + "\n")
-            os.replace(tmp, st / FILE)
+            os.replace(tmp, sd / FILE)
+            D.retire_old(st, FILE)   # merged in above, so nothing is lost
         except BaseException:
             try:
                 os.unlink(tmp)

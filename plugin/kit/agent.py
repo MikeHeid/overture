@@ -136,7 +136,7 @@ the project, this state dir, and the kit this agent.py lives in. The plugin
 acts only in registered projects and takes the paths it runs from there, never
 from the repository (§7.7).
 
-While `watch` waits it records so in watch.json beside the doorbell, and the
+While `watch` waits it records so in steward/watch.json beside the doorbell, and the
 owner's console shows "agent listening" until it exits or stops renewing it.
 
 `watch` exits 0 with the waiting lines, or 3 when --timeout runs out. The
@@ -902,8 +902,8 @@ def _worktree_new(a, WT, repo: Path, name: str) -> int:
     return 0
 
 
-GH_NOTE = ".worktrees-no-gh"   # in STATE: the steward was told once that prune needs gh
-PRUNE_FILE = ".worktrees-prune.json"   # in STATE: when the watch last pruned, what was stale, where it stopped
+GH_NOTE = ".worktrees-no-gh"   # in STATE/steward/ (1.60, I7): the steward was told once that prune needs gh
+PRUNE_FILE = ".worktrees-prune.json"   # in STATE/steward/: when the watch last pruned, what was stale, where it stopped
 PRUNE_EVERY = 600.0    # 1.50 review C2: the watch prunes at most once per 10 minutes...
 PRUNE_BUDGET = 60.0    # ...and spends at most this long in all (its gh call too), then takes up there next time
 MAX_PRUNE_FILE = 16384
@@ -912,7 +912,7 @@ MAX_PRUNE_FILE = 16384
 def _prune_record(state: Path) -> dict:
     """The watch's last prune: {"at": epoch, "stale": list | None, "resume_after": branch | None}; {} if none."""
     try:
-        data = R.read_regular(Path(state) / PRUNE_FILE, MAX_PRUNE_FILE, nofollow=True)
+        data = R.read_regular(D.steward_read_path(state, PRUNE_FILE), MAX_PRUNE_FILE, nofollow=True)
         rec = json.loads(data.decode("utf-8")) if data is not None else {}
     except (OSError, ValueError, RecursionError, R.RegistryError):   # Z3: nested past the parser's depth: no record
         return {}
@@ -926,8 +926,8 @@ def _prune_record(state: Path) -> dict:
 
 def _write_prune_record(state: Path, rec: dict) -> None:
     import tempfile
-    p = Path(state) / PRUNE_FILE
     with contextlib.suppress(OSError):
+        p = D.steward_dir(state) / PRUNE_FILE
         fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".worktrees-prune.", suffix=".tmp")   # 0600
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -936,6 +936,18 @@ def _write_prune_record(state: Path, rec: dict) -> None:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
+        D.retire_old(state, PRUNE_FILE)
+
+
+def _write_gh_note(state: Path) -> None:
+    """Remember that the steward was told prune needs gh. 1.60 review M1: a session may write steward/, so the
+    note is made new, never through a link planted at its name (which would truncate the link's target)."""
+    with contextlib.suppress(OSError):
+        fd = os.open(D.steward_dir(state) / GH_NOTE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("1\n")
+        D.retire_old(state, GH_NOTE)
 
 
 def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | None:
@@ -969,13 +981,12 @@ def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | Non
             _write_prune_record(state, {"at": t, "stale": [], "resume_after": None})
             return []
         prs, why = WT.gh_prs(main, cycle)
-        note = Path(state) / GH_NOTE
+        note = D.steward_read_path(state, GH_NOTE)
         if prs is None:
             if not note.exists():
                 print(f"worktree prune skipped: {why}; agent worktrees are kept until gh is there (said once)",
                       file=sys.stderr)
-                with contextlib.suppress(OSError):
-                    note.write_text("1\n")
+                _write_gh_note(state)
             _write_prune_record(state, {"at": t, "stale": None, "resume_after": None})
             return None
         with contextlib.suppress(OSError):
@@ -998,7 +1009,7 @@ def _watch_prune(state: Path, now: float | None = None, beat=None) -> list | Non
     return stale[:WT.MAX_STALE_REPORT]
 
 
-NOTES_FILE = ".notes-check.json"   # in STATE: when the watch last checked the area notes, and its counts
+NOTES_FILE = ".notes-check.json"   # in STATE/steward/ (1.60, I7): when the watch last checked the area notes, and its counts
 NOTES_EVERY = 86400.0   # 1.53.0: the watch checks the area notes at most once a day
 MAX_NOTES_FILE = 4096
 
@@ -1006,7 +1017,7 @@ MAX_NOTES_FILE = 4096
 def _notes_record(state: Path) -> dict:
     """The watch's last notes check: {"at": epoch, "counts": dict | None}; {} if none."""
     try:
-        data = R.read_regular(Path(state) / NOTES_FILE, MAX_NOTES_FILE, nofollow=True)
+        data = R.read_regular(D.steward_read_path(state, NOTES_FILE), MAX_NOTES_FILE, nofollow=True)
         rec = json.loads(data.decode("utf-8")) if data is not None else {}
     except (OSError, ValueError, RecursionError, R.RegistryError):
         return {}
@@ -1019,8 +1030,8 @@ def _notes_record(state: Path) -> dict:
 
 def _write_notes_record(state: Path, rec: dict) -> None:
     import tempfile
-    p = Path(state) / NOTES_FILE
     with contextlib.suppress(OSError):
+        p = D.steward_dir(state) / NOTES_FILE
         fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".notes-check.", suffix=".tmp")   # 0600
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -1029,6 +1040,7 @@ def _write_notes_record(state: Path, rec: dict) -> None:
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
+        D.retire_old(state, NOTES_FILE)
 
 
 def _watch_notes(state: Path, now: float | None = None, beat=None) -> dict | None:
@@ -2146,6 +2158,13 @@ def main(argv=None) -> int:
                        "here, never from the console or a session. Running it again replaces the secret.")
     s.add_argument("name", help="the trigger's name in .overture/triggers.json")
     s.add_argument("--clear", action="store_true", help="remove the secret: GitHub's calls are refused")
+    s = sub.add_parser("isolation", description="Keep agents that run as you out of every console's STATE "
+                       "(1.60, OPEN-DECISIONS I1-I4). `settings` prints the Claude Code sandbox rules for every "
+                       "console registered here, for /etc/claude-code/managed-settings.json, and first moves each "
+                       "steward's cursor and heartbeat into STATE/steward/; run it in your own terminal. `check` "
+                       "runs inside a session and tries each door: exit 0 when isolation holds, 1 when not.")
+    s.add_argument("iso_cmd", choices=("settings", "check"))
+    s.add_argument("--json", action="store_true", help="check: the rows as JSON")
     s = sub.add_parser("access", description="Show, set or clear what an Access login may do in the console (1.39). "
                        "With no roles set, every login that passes Access is the owner. Once one is set, an unlisted "
                        "login only reads. owner: everything; member AREA...: answers, locks and plain messages on "
@@ -2329,6 +2348,8 @@ def main(argv=None) -> int:
         return _symbol_at(a.source, a.json)
     if a.cmd == "adapter":   # Wave 4: the user's own vendor config and a checkout's AGENTS.md; no console, no door
         return _adapter(a)
+    if a.cmd == "isolation":   # 1.60: every console in the user's registry; no one console, no door
+        return _isolation(a.iso_cmd, a.json)
     if a.state is None:
         ap.error("the following arguments are required: --state")
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
@@ -2478,6 +2499,40 @@ def _github_secret(state: Path, name: str, clear: bool) -> int:
     print(f"github-secret: {name}: paste this into the webhook's Secret field on GitHub (shown once):")
     print(f"  {secret}")
     print(f"Payload URL: https://<your console>/api/github/{name}   Content type: application/json")
+    return 0
+
+
+def _isolation(cmd: str, as_json: bool) -> int:
+    """`isolation settings|check` (1.60): the sandbox rules for every console registered here, or the proof."""
+    from overture import isolation as ISO
+    try:
+        states = ISO.consoles(R.load())
+    except R.RegistryError as e:
+        print(f"agent.py: isolation: {e}", file=sys.stderr)
+        return 2
+    if not states:
+        print("agent.py: isolation: no console is registered here (agent.py register)", file=sys.stderr)
+        return 2
+    if cmd == "check":
+        rows = ISO.check(states)
+        print(json.dumps(rows, indent=2) if as_json else ISO.render(rows))
+        return 0 if all(r["ok"] for r in rows) else 1
+    if os.environ.get(ISO.SANDBOX_ENV) == "1":
+        print("agent.py: isolation settings: run it in your own terminal, outside the sandbox: it moves each "
+              "steward's files, which the sandbox would refuse", file=sys.stderr)
+        return 2
+    for s in states:
+        try:
+            moved = D.migrate_steward(s)
+        except OSError as e:
+            print(f"agent.py: isolation: {s}: {e}", file=sys.stderr)
+            return 2
+        if moved:
+            print(f"isolation: {s}: moved {', '.join(moved)} into {D.STEWARD_DIR}/", file=sys.stderr)
+    print(json.dumps(ISO.settings(states), indent=2))
+    print(f"isolation: save this as {ISO.MANAGED['darwin' if sys.platform == 'darwin' else 'linux']} (with sudo; "
+          "merge it into one that exists), start a new session, and run `agent.py isolation check` inside it",
+          file=sys.stderr)
     return 0
 
 
@@ -2873,15 +2928,16 @@ def _run(a, bell: Path) -> int:
         since = a.since if a.since is not None else D.read_cursor(a.state)
         beat = D.Heartbeat(a.state, a.poll, stale=_prune_record(a.state).get("stale"),   # "agent listening" (0.6.0)
                            notes=_notes_record(a.state).get("counts"))
-        beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
-        if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
-            beat.update(_watch_prune(a.state, beat=beat))   # W3: throttled and time-capped; the stale ones ride the heartbeat
-            beat.update_notes(_watch_notes(a.state, beat=beat))   # 1.53.0: once a day; the counts ride it too
         # A session that ends kills its watch with SIGTERM or SIGHUP; turn those into an
         # ordinary exit so `finally` says "stopped" now, rather than the owner seeing
         # "listening" until the promise lapses. SIGKILL cannot be caught: that is the lapse's job.
+        # 1.60: installed before the first beat, so a session that ends during the prune says so too.
         old = {sig: signal.signal(sig, lambda n, _f: sys.exit(128 + n)) for sig in (signal.SIGTERM, signal.SIGHUP)}
         try:
+            beat()   # 1.50 review C2: the owner sees "listening" first; the prune never holds that back
+            if not D.pending(bell, since, rx_since=D.read_rx_cursor(a.state)):   # work waiting goes first
+                beat.update(_watch_prune(a.state, beat=beat))   # W3: throttled and time-capped; the stale ones ride the heartbeat
+                beat.update_notes(_watch_notes(a.state, beat=beat))   # 1.53.0: once a day; the counts ride it too
             found = D.watch(bell, since, poll=a.poll, timeout=a.timeout, heartbeat=beat,
                             rx_since=D.read_rx_cursor(a.state))
         finally:  # woken, timed out, or interrupted: the owner is told at once, not when the promise lapses
