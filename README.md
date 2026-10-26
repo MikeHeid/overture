@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.53.2-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.60.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-1513-2da44e">
