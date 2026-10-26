@@ -65,14 +65,21 @@ def steward_dir(state: Path) -> Path:
 
 
 def steward_read_path(state: Path, name: str) -> Path:
-    """Where to read `name`: STATE/steward/ when it is a real folder holding it, else beside the doorbell."""
-    d = Path(state) / STEWARD_DIR
+    """Where to read `name`: STATE/steward/ when it is a real folder holding it, else beside the doorbell. When
+    both are there, the one written last: a kit before 1.60, still running after an upgrade, writes beside the
+    doorbell, and its newer cursor must not lose to steward/'s older one (requests would wake again)."""
+    d, old = Path(state) / STEWARD_DIR, Path(state) / name
     try:
-        if stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name):
-            return d / name
+        if not (stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name)):
+            return old
     except OSError:
-        pass
-    return Path(state) / name
+        return old
+    try:
+        if os.lstat(old).st_mtime_ns > os.lstat(d / name).st_mtime_ns:
+            return old
+    except OSError:
+        pass   # no old one (or, inside a sandbox, none to see)
+    return d / name
 
 
 def migrate_steward(state: Path) -> list[str]:

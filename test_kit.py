@@ -6466,6 +6466,24 @@ class StewardDirTests(unittest.TestCase):
         self.assertEqual(AG._prune_record(self.state)["at"], 1.0)
         self.assertEqual(AG._notes_record(self.state)["at"], 1.0)
 
+    def test_a_newer_cursor_beside_the_doorbell_wins_over_an_older_one_in_steward(self):
+        # Catches (1.60 suites): a kit before 1.60, still running its last watch after an upgrade, writing the cursor
+        # beside the doorbell while the new kit and hook read steward/'s older one: every request since wakes again.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ck_hook_mtime", HERE / "plugin" / "hooks" / "session_start.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        D.write_cursor(self.state, 5)
+        old = self.state / D.CURSOR_FILE
+        old.write_text('{"through": 7}')
+        t = (self.state / D.STEWARD_DIR / D.CURSOR_FILE).stat().st_mtime_ns
+        os.utime(old, ns=(t + 10**9, t + 10**9))
+        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (7, 7))
+        os.utime(old, ns=(t - 10**9, t - 10**9))
+        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (5, 5))
+        old.unlink()
+        self.assertEqual((D.read_cursor(self.state), hook._cursor(self.state)), (5, 5))
+
     def test_the_gh_note_is_never_written_through_a_planted_link(self):
         # Catches (1.60 review M1): a session, which may write steward/, planting the note's name as a link to a file
         # of the user's; the next unsandboxed watch would truncate it.
@@ -6521,7 +6539,7 @@ class StewardDirTests(unittest.TestCase):
         self.assertEqual(D.migrate_steward(self.state), [])
         (self.state / D.CURSOR_FILE).write_text('{"through": 1}')   # an older kit wrote again
         self.assertEqual(D.migrate_steward(self.state), [])
-        self.assertEqual(D.read_cursor(self.state), 5)
+        self.assertEqual(json.loads((self.state / D.STEWARD_DIR / D.CURSOR_FILE).read_text()), {"through": 5})
 
     def test_a_planted_link_at_steward_is_refused_for_writes_and_ignored_for_reads(self):
         # Catches: the steward's writes followed through a link to a folder of someone's choosing, or a cursor read
