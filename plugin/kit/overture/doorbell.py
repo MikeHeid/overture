@@ -7,7 +7,13 @@ requests wake it: `process` (answers are in), `fork` (deliberate), `chat` (0.7.0
 `visual` (0.8.0, draw a visual of an item).
 
 The agent's own cursor, the highest doorbell seq it has processed, is kept in
-`agent-cursor.json` beside the doorbell. It only moves forward.
+`steward/agent-cursor.json` beside the doorbell. It only moves forward.
+
+1.60.0 (OPEN-DECISIONS I4): the steward's two writable files, the cursor and
+`watch.json`, live in `STATE/steward/`, a folder holding nothing else. A sandbox
+can then let the steward write there without re-opening reads of the rest of
+STATE (I1: a write-allowed folder is a readable one). Reads prefer it and fall
+back to the file beside the doorbell, where kits before 1.60 kept it.
 
 A scan for a resolve (CONSOLE-kit/Q40, Q41) is a refactor record, not a store
 record, so its line cannot take a store seq of its own: it carries the store's
@@ -35,6 +41,50 @@ WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link
 CURSOR_FILE = "agent-cursor.json"
 MAX_DOORBELL = 64 << 20  # one short line per owner write; far past any real console
 MAX_CURSOR = 4096
+STEWARD_DIR = "steward"  # 1.60.0 (I4): the cursor and watch.json, and nothing else
+
+
+def steward_dir(state: Path) -> Path:
+    """STATE/steward/, made 0700 when absent. Refused (OSError) when it is a link or a file: a planted link
+    there would carry the steward's writes somewhere else."""
+    d = Path(state) / STEWARD_DIR
+    try:
+        os.mkdir(d, 0o700)
+    except FileExistsError:
+        pass
+    if not stat.S_ISDIR(os.lstat(d).st_mode):
+        raise OSError(f"{d} is not a folder (a link or a file), so the steward writes nothing there")
+    return d
+
+
+def _read_path(state: Path, name: str) -> Path:
+    """Where to read `name`: STATE/steward/ when it is a real folder holding it, else beside the doorbell."""
+    d = Path(state) / STEWARD_DIR
+    try:
+        if stat.S_ISDIR(os.lstat(d).st_mode) and os.path.lexists(d / name):
+            return d / name
+    except OSError:
+        pass
+    return Path(state) / name
+
+
+def migrate_steward(state: Path) -> list[str]:
+    """Move a cursor or watch.json kept beside the doorbell (before 1.60) into STATE/steward/, unless one is
+    there already. Run outside any sandbox, before one is switched on: a sandboxed steward cannot read the
+    old place, and a cursor it cannot read is 0. Returns the names moved."""
+    moved = []
+    for name in (CURSOR_FILE, "watch.json"):
+        old = Path(state) / name
+        try:
+            if not stat.S_ISREG(os.lstat(old).st_mode):
+                continue
+        except FileNotFoundError:
+            continue
+        new = steward_dir(state) / name
+        if not os.path.lexists(new):
+            os.replace(old, new)
+            moved.append(name)
+    return moved
 
 
 def read_lines(path: Path) -> list[dict]:
@@ -140,7 +190,7 @@ def write_watch(state: Path, watching: bool, *, every: float = BEAT_EVERY, now: 
     if notes is not None:
         rec["area_notes"] = {k: v for k, v in notes.items() if isinstance(k, str) and isinstance(v, int)
                              and not isinstance(v, bool)}
-    p = Path(state) / WATCH_FILE
+    p = steward_dir(state) / WATCH_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".watch.", suffix=".tmp")  # 0600 from creation
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -180,7 +230,7 @@ def listening(state: Path, *, now: float | None = None) -> dict:
     """
     t = time.time() if now is None else now
     try:
-        data = _read_watch(Path(state) / WATCH_FILE)
+        data = _read_watch(_read_path(state, WATCH_FILE))
         rec = json.loads(data.decode("utf-8")) if data is not None else None
     except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: never
         rec = None
@@ -228,7 +278,7 @@ def stale_worktrees(state: Path, *, now: float | None = None) -> dict | None:
     """
     t = time.time() if now is None else now
     try:
-        data = _read_watch(Path(state) / WATCH_FILE)
+        data = _read_watch(_read_path(state, WATCH_FILE))
         rec = json.loads(data.decode("utf-8")) if data is not None else None
     except (OSError, ValueError, RecursionError):   # 1.50 clearing round: nested past the parser's depth: nothing
         return None
@@ -295,7 +345,7 @@ class Heartbeat:
 
 def _cursor_value(state: Path, key: str) -> int:
     try:
-        data = read_regular(Path(state) / CURSOR_FILE, MAX_CURSOR)
+        data = read_regular(_read_path(state, CURSOR_FILE), MAX_CURSOR)
         v = json.loads(data.decode("utf-8")).get(key, 0) if data is not None else 0
     except (OSError, ValueError, AttributeError, RecursionError):   # 1.50 clearing round: too deep reads as 0
         return 0
@@ -319,7 +369,7 @@ def write_cursor(state: Path, through: int, rx_through: int | None = None) -> in
     """
     now = max(read_cursor(state), through)
     rx = max(read_rx_cursor(state), rx_through or 0)
-    p = Path(state) / CURSOR_FILE
+    p = steward_dir(state) / CURSOR_FILE
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".agent-cursor.", suffix=".tmp")  # 0600, unique, from creation
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"through": now, **({"rx_through": rx} if rx else {})}) + "\n")

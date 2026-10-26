@@ -358,8 +358,8 @@ it with that project's own token (`tokens/NAME` beside `server.json`, mode
 kit and by mistake: a wrong `--state` or a skill bug cannot reach another
 project's console. It is **not** isolation between agents running as the same
 user: such an agent can read `tokens/` and every other project's state
-directory directly. Real isolation needs a sandbox or a separate user covering
-both.
+directory directly. The sandbox recipe in [hosting](features/hosting.md#isolation)
+keeps agents out of STATE; tokens need a separate user, which is planned.
 
 Two consequences for the cut-over:
 

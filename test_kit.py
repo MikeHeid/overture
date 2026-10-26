@@ -2005,7 +2005,7 @@ class DoorbellTests(Tmp):
         self.assertEqual(D.write_cursor(self.dir, 9), 9)
         self.assertEqual(D.write_cursor(self.dir, 4), 9)
         self.assertEqual(D.read_cursor(self.dir), 9)
-        (self.dir / D.CURSOR_FILE).write_text('{"through": "nine"}')
+        (D.steward_dir(self.dir) / D.CURSOR_FILE).write_text('{"through": "nine"}')
         self.assertEqual(D.read_cursor(self.dir), 0)
 
 
@@ -2031,7 +2031,7 @@ class ListeningTests(Tmp):
 
     def test_a_bad_file_under_claims(self):
         # Catches: a malformed or forged file read as "listening". The safe error is "never".
-        p = self.dir / D.WATCH_FILE
+        p = D.steward_dir(self.dir) / D.WATCH_FILE
         for text in ("not json", "[]", '{"watching": true}', '{"watching": true, "at": 5, "until": 9}'):
             with self.subTest(text=text):
                 p.write_text(text)
@@ -2053,14 +2053,14 @@ class ListeningTests(Tmp):
         for text in ("[" * 4000, '{"at": ' + "[" * 4000, b"\xff\xfe"):
             with self.subTest(text=text[:10]):
                 for name in (D.WATCH_FILE, D.CURSOR_FILE):
-                    p = self.dir / name
+                    p = D.steward_dir(self.dir) / name
                     p.write_bytes(text if isinstance(text, bytes) else text.encode())
                 self.assertEqual(D.listening(self.dir, now=self.T0), {"state": "never", "last_seen": None})
                 self.assertIsNone(D.stale_worktrees(self.dir, now=self.T0))
                 self.assertEqual((D.read_cursor(self.dir), D.read_rx_cursor(self.dir)), (0, 0))
 
     def test_a_fifo_at_the_watch_file_reads_never_without_blocking(self):
-        os.mkfifo(self.dir / D.WATCH_FILE)
+        os.mkfifo(D.steward_dir(self.dir) / D.WATCH_FILE)
         self.assertEqual(D.listening(self.dir, now=self.T0)["state"], "never")
 
     def test_a_symlinked_watch_file_reads_never(self):
@@ -2068,10 +2068,10 @@ class ListeningTests(Tmp):
         # make this state dir read "listening". Counter-check: the same file, not linked, does.
         real = self.dir / "elsewhere.json"
         real.write_text(json.dumps({"watching": True, "at": D._ts(self.T0), "until": D._ts(self.T0 + 30)}))
-        (self.dir / D.WATCH_FILE).symlink_to(real)
+        (D.steward_dir(self.dir) / D.WATCH_FILE).symlink_to(real)
         self.assertEqual(D.listening(self.dir, now=self.T0 + 1)["state"], "never")
-        (self.dir / D.WATCH_FILE).unlink()
-        real.rename(self.dir / D.WATCH_FILE)
+        (D.steward_dir(self.dir) / D.WATCH_FILE).unlink()
+        real.rename(D.steward_dir(self.dir) / D.WATCH_FILE)
         self.assertEqual(D.listening(self.dir, now=self.T0 + 1)["state"], "listening")
 
     def test_the_heartbeat_writes_at_most_once_per_interval(self):
@@ -2120,10 +2120,10 @@ class ListeningTests(Tmp):
         with contextlib.redirect_stderr(io.StringIO()):
             rc = AG.main(["--state", str(self.dir), "watch", "--timeout", "0.05", "--poll", "0.01"])
         self.assertEqual(rc, 3)
-        rec = json.loads((self.dir / D.WATCH_FILE).read_text())
+        rec = json.loads((D.steward_dir(self.dir) / D.WATCH_FILE).read_text())
         self.assertIs(rec["watching"], False)
         self.assertEqual(D.listening(self.dir)["state"], "idle")
-        self.assertEqual(oct((self.dir / D.WATCH_FILE).stat().st_mode & 0o777), "0o600")
+        self.assertEqual(oct((D.steward_dir(self.dir) / D.WATCH_FILE).stat().st_mode & 0o777), "0o600")
 
     def test_a_watch_ended_by_sigterm_or_sighup_says_so_at_once(self):
         # Catches: a session that ends (its shell gets SIGHUP, its runner SIGTERM) leaving
@@ -2137,7 +2137,7 @@ class ListeningTests(Tmp):
                 self.addCleanup(p.kill)
                 deadline = _t.monotonic() + 20
                 while D.listening(self.dir)["state"] != "listening" or \
-                        json.loads((self.dir / D.WATCH_FILE).read_text())["watching"] is not True:
+                        json.loads((D.steward_dir(self.dir) / D.WATCH_FILE).read_text())["watching"] is not True:
                     self.assertLess(_t.monotonic(), deadline, "the watch never said it was listening")
                     _t.sleep(0.05)
                 p.send_signal(sig)
@@ -2265,7 +2265,7 @@ class SessionStartHookTests(Tmp):
         with self.assertRaises(R.RegistryError):
             D.read_lines(bell)
         bell.unlink()
-        os.mkfifo(Path(cfg["state"]) / D.CURSOR_FILE)
+        os.mkfifo(D.steward_dir(Path(cfg["state"])) / D.CURSOR_FILE)
         self.assertEqual(D.read_cursor(Path(cfg["state"])), 0)
         big = self.dir / "big"
         with open(big, "wb") as fh:
@@ -2318,7 +2318,7 @@ class SessionStartHookTests(Tmp):
         # The hook carries its own reader so it runs no project code; this holds the two
         # to one fixture so they cannot drift. Catches: either one alone changing its rules.
         hook = self._hook_module()
-        for name in ("WAKE_INTENTS", "CURSOR_FILE", "MAX_DOORBELL", "MAX_CURSOR"):
+        for name in ("WAKE_INTENTS", "CURSOR_FILE", "STEWARD_DIR", "MAX_DOORBELL", "MAX_CURSOR"):
             self.assertEqual(getattr(hook, name), getattr(D, name), name)
         bell = self.dir / "inbox.jsonl"
         with open(bell, "wb") as fh:
@@ -2342,11 +2342,11 @@ class SessionStartHookTests(Tmp):
             self.assertEqual(hook._waiting(bell, since, rx_since), D.pending(bell, since, rx_since=rx_since),
                              (since, rx_since))
         self.assertEqual([r.get("rx") for r in hook._waiting(bell, 9, 2)], [3])
-        (self.dir / D.CURSOR_FILE).write_text('{"through": 7, "rx_through": 3}')
+        (D.steward_dir(self.dir) / D.CURSOR_FILE).write_text('{"through": 7, "rx_through": 3}')
         self.assertEqual((hook._cursor(self.dir), hook._rx_cursor(self.dir)),
                          (D.read_cursor(self.dir), D.read_rx_cursor(self.dir)))
         for body in ('{"through": 7}', '{"through": true}', '{"through": -1}', "junk", "[]"):
-            (self.dir / D.CURSOR_FILE).write_text(body)
+            (D.steward_dir(self.dir) / D.CURSOR_FILE).write_text(body)
             self.assertEqual(hook._cursor(self.dir), D.read_cursor(self.dir), body)
 
     def test_the_hook_reads_the_registry_as_the_kit_does(self):
@@ -2435,8 +2435,10 @@ class RegistryTests(Tmp):
     def test_the_agent_cursor_is_written_private_from_creation(self):
         # The security review's LOW: a predictable temp name, chmod-ed after the write.
         D.write_cursor(self.dir, 3)
-        self.assertEqual(oct((self.dir / D.CURSOR_FILE).stat().st_mode & 0o777), "0o600")
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), [D.CURSOR_FILE])
+        self.assertEqual(oct((D.steward_dir(self.dir) / D.CURSOR_FILE).stat().st_mode & 0o777), "0o600")
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), [D.STEWARD_DIR])   # 1.60 (I4)
+        self.assertEqual(sorted(p.name for p in (self.dir / D.STEWARD_DIR).iterdir()), [D.CURSOR_FILE])
+        self.assertEqual(oct((self.dir / D.STEWARD_DIR).stat().st_mode & 0o777), "0o700")
 
 
 # -- 0.8.3: the steward (owner, 2026-09-30, "Lock + hook others ★") --------------------------
@@ -2586,6 +2588,7 @@ class StewardLockTests(_Steward):
         self.assert_refused(rc, err)
         self.assertIn("unnamed", err)
         self.assertFalse((self.state / "watch.json").exists())      # a refused watch never says "listening"
+        self.assertFalse((self.state / D.STEWARD_DIR / "watch.json").exists())
         self.assertEqual(self.agent("watch", "--timeout", "0.1", agent="agent-5")[0], 3)
         self.assertEqual(self.agent("--as", "agent-5", "watch", "--timeout", "0.1", agent="agent-6")[0], 3)
 
@@ -6427,6 +6430,171 @@ class GithubTriggerTests(unittest.TestCase):
                     TG.load_secret(st, name)
 
 
+class StewardDirTests(unittest.TestCase):
+    """1.60.0 (OPEN-DECISIONS I4): the steward's cursor and heartbeat live in STATE/steward/, a folder holding
+    nothing else, so a sandbox can allow writes there without re-opening the rest of STATE."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name)
+
+    def test_writes_land_in_steward_and_reads_fall_back_to_a_pre_160_file(self):
+        # Catches: a write still beside the doorbell (the sandbox refuses it there), and an upgrade that reads the
+        # cursor as 0 because the old file is no longer looked at (every request since would fire again).
+        (self.state / D.CURSOR_FILE).write_text('{"through": 12, "rx_through": 4}')
+        self.assertEqual((D.read_cursor(self.state), D.read_rx_cursor(self.state)), (12, 4))
+        D.write_cursor(self.state, 13)
+        self.assertEqual(json.loads((self.state / D.STEWARD_DIR / D.CURSOR_FILE).read_text()),
+                         {"through": 13, "rx_through": 4})
+        D.write_watch(self.state, True)
+        self.assertTrue((self.state / D.STEWARD_DIR / D.WATCH_FILE).exists())
+        self.assertFalse((self.state / D.WATCH_FILE).exists())
+        self.assertEqual(D.listening(self.state)["state"], "listening")
+
+    def test_migrate_moves_the_old_files_once_and_never_over_a_newer_one(self):
+        (self.state / D.CURSOR_FILE).write_text('{"through": 5}')
+        (self.state / D.WATCH_FILE).write_text("{}")
+        self.assertEqual(sorted(D.migrate_steward(self.state)), sorted([D.CURSOR_FILE, D.WATCH_FILE]))
+        self.assertEqual(D.read_cursor(self.state), 5)
+        self.assertEqual(D.migrate_steward(self.state), [])
+        (self.state / D.CURSOR_FILE).write_text('{"through": 1}')   # an older kit wrote again
+        self.assertEqual(D.migrate_steward(self.state), [])
+        self.assertEqual(D.read_cursor(self.state), 5)
+
+    def test_a_planted_link_at_steward_is_refused_for_writes_and_ignored_for_reads(self):
+        # Catches: the steward's writes followed through a link to a folder of someone's choosing, or a cursor read
+        # from there.
+        elsewhere = self.state / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / D.CURSOR_FILE).write_text('{"through": 99}')
+        (self.state / D.STEWARD_DIR).symlink_to(elsewhere)
+        self.assertEqual(D.read_cursor(self.state), 0)
+        with self.assertRaises(OSError):
+            D.write_cursor(self.state, 3)
+        self.assertEqual(json.loads((elsewhere / D.CURSOR_FILE).read_text()), {"through": 99})
+
+    def test_the_session_hook_reads_the_cursor_where_the_kit_does(self):
+        # Catches: the hook (which carries its own reader) still reading beside the doorbell, so a steward's first
+        # session after 1.60 lists every request it already handled.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ck_hook_i4", HERE / "plugin" / "hooks" / "session_start.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        self.assertEqual(hook.STEWARD_DIR, D.STEWARD_DIR)
+        (self.state / D.CURSOR_FILE).write_text('{"through": 2}')
+        self.assertEqual(hook._cursor(self.state), 2)
+        D.write_cursor(self.state, 8)
+        self.assertEqual(hook._cursor(self.state), 8)
+
+
+from overture import isolation as ISO  # noqa: E402
+
+
+class IsolationTests(unittest.TestCase):
+    """1.60.0 (OPEN-DECISIONS I1-I3): the sandbox rules for every console, and the check that proves them."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(os.path.realpath(self.tmp.name))
+        self.state = self.root / "state"
+        self.state.mkdir()
+        self.env = {"XDG_RUNTIME_DIR": str(self.root / "run"), "SANDBOX_RUNTIME": "1"}
+
+    def test_settings_deny_every_console_and_the_escapes_and_leave_only_the_three_doors(self):
+        other = self.root / "other"
+        doc = ISO.settings([self.state, other], env={**self.env, "SSH_AUTH_SOCK": "/tmp/ssh-x/agent.1"})
+        sb, fs = doc["sandbox"], doc["sandbox"]["filesystem"]
+        self.assertEqual((sb["enabled"], sb["failIfUnavailable"], sb["allowUnsandboxedCommands"]), (True, True, False))
+        for s in (self.state, other):
+            self.assertIn(str(s), fs["denyRead"])
+            self.assertEqual([p for p in fs["allowRead"] if p.startswith(str(s) + "/")],
+                             [str(s / "agent.sock"), str(s / "inbox.jsonl"), str(s / D.STEWARD_DIR)])
+            self.assertIn(str(s / D.STEWARD_DIR), fs["allowWrite"])
+            self.assertIn(f"Read(/{s}/**)", doc["permissions"]["deny"])
+        # Catches (measured in the real run): a write allowed on STATE itself re-opens every read in it.
+        self.assertNotIn(str(self.state), fs["allowWrite"])
+        for esc in ("/var/run/docker.sock", "/run/docker.sock", str(self.root / "run"), "/tmp/ssh-x/agent.1"):
+            self.assertIn(esc, fs["denyRead"])
+        self.assertTrue(sb["network"]["allowAllUnixSockets"])   # allowUnixSockets alone is macOS-only
+
+    def rows(self, **kw):
+        with mock.patch.object(ISO, "MANAGED", {"linux": self.root / "managed.json",
+                                                "darwin": self.root / "managed.json"}):
+            return {(r["what"], Path(r["path"]).name): r for r in ISO.check([self.state], env=self.env, **kw)}
+
+    def test_an_open_state_folder_and_a_readable_secret_are_findings(self):
+        # Catches: a check that passes in a session where nothing is sandboxed, which is the case it exists for.
+        (self.state / "notify.json").write_text('{"url": "https://hooks.example.com/x"}')
+        (self.root / "managed.json").write_text(json.dumps({"sandbox": {"enabled": True, "failIfUnavailable": True,
+                                                                         "allowUnsandboxedCommands": False}}))
+        r = self.rows()
+        self.assertEqual(r[("list STATE", "state")]["got"], "open")
+        self.assertIn("notify.json", r[("list STATE", "state")]["detail"])
+        self.assertEqual((r[("read", "notify.json")]["got"], r[("read", "notify.json")]["ok"]), ("open", False))
+        self.assertEqual(r[("read", "store.jsonl")]["got"], "absent")
+        self.assertTrue(r[("managed settings", "managed.json")]["ok"])
+
+    def test_a_narrowed_state_passes_and_weak_or_missing_managed_settings_do_not(self):
+        (self.state / "inbox.jsonl").write_text("")
+        (self.state / D.STEWARD_DIR).mkdir()
+        r = self.rows()
+        self.assertEqual((r[("list STATE", "state")]["got"], r[("list STATE", "state")]["ok"]), ("narrowed", True))
+        self.assertEqual(r[("managed settings", "")]["got"], "absent")
+        (self.root / "managed.json").write_text(json.dumps({"sandbox": {"enabled": True,
+                                                                         "allowUnsandboxedCommands": True}}))
+        weak = self.rows()[("managed settings", "")]
+        self.assertEqual(weak["got"], "weak")
+        self.assertIn("allowUnsandboxedCommands", weak["detail"])
+        self.assertIn("failIfUnavailable", weak["detail"])
+
+    def test_a_reachable_escape_socket_and_a_listed_runtime_folder_are_findings(self):
+        # Catches: Docker's socket (root on most hosts) or the session bus left reachable, which allowAllUnixSockets
+        # would allow unless each is denied by path.
+        import socket as _s
+        run = self.root / "run"
+        run.mkdir()
+        (run / "bus").write_text("")
+        esc = str(self.root / "d.sock")
+        srv = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
+        srv.bind(esc)
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        with mock.patch.object(ISO, "ESCAPE_SOCKETS", (esc,)):
+            r = self.rows()
+        self.assertEqual((r[("reach an escape socket", "d.sock")]["got"],
+                          r[("reach an escape socket", "d.sock")]["ok"]), ("open", False))
+        self.assertEqual((r[("list the runtime folder", "run")]["got"], r[("list the runtime folder", "run")]["ok"]),
+                         ("open", False))
+
+    def test_outside_the_sandbox_the_check_says_so_and_fails(self):
+        with mock.patch.object(ISO, "MANAGED", {"linux": self.root / "m.json", "darwin": self.root / "m.json"}):
+            rows = ISO.check([self.state], env={"XDG_RUNTIME_DIR": str(self.root / "run")})
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn("SANDBOX_RUNTIME", rows[0]["detail"])
+        self.assertIn("isolation does NOT hold", ISO.render(rows))
+
+    def test_settings_refuses_inside_the_sandbox_and_moves_the_steward_files_outside_it(self):
+        # Catches: the migration run where the sandbox would refuse it (the old cursor left unread: 0), and a
+        # settings document printed before each steward's files are where the rules expect them.
+        (self.root / "proj").mkdir()
+        R.register(self.root / "proj", self.state, KIT, path=self.root / "cfg" / "overture" / "projects.json")
+        (self.state / D.CURSOR_FILE).write_text('{"through": 4}')
+        env = {**os.environ, "XDG_CONFIG_HOME": str(self.root / "cfg")}
+        env.pop("CLAUDECODE", None)
+        run = lambda extra: subprocess.run([sys.executable, str(KIT / "agent.py"), "isolation", "settings"],
+                                           capture_output=True, text=True, env={**env, **extra}, timeout=60)
+        r = run({"SANDBOX_RUNTIME": "1"})
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertTrue((self.state / D.CURSOR_FILE).exists())
+        r = run({})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(str(self.state), json.loads(r.stdout)["sandbox"]["filesystem"]["denyRead"])
+        self.assertFalse((self.state / D.CURSOR_FILE).exists())
+        self.assertEqual(D.read_cursor(self.state), 4)
+
+
 from overture import trust as TR  # noqa: E402
 
 
@@ -8819,7 +8987,7 @@ class WorktreeTests(unittest.TestCase):
         got = D.stale_worktrees(self.dir)
         self.assertEqual(got["worktrees"], [{"branch": "overture/ticket/API-3", "age_days": 16, "agent": "agent-5"},
                                             {"branch": "overture/fix/B", "age_days": 20}])
-        self.assertNotIn(str(self.home), (self.dir / D.WATCH_FILE).read_text())
+        self.assertNotIn(str(self.home), (D.steward_dir(self.dir) / D.WATCH_FILE).read_text())
         D.write_watch(self.dir, True)
         self.assertIsNone(D.stale_worktrees(self.dir))
         self.assertEqual(D.listening(self.dir)["state"], "listening")
@@ -10093,7 +10261,7 @@ class StewardNotesTests(unittest.TestCase):
         return rc, err.getvalue()
 
     def counts(self):
-        return json.loads((self.state / D.WATCH_FILE).read_text()).get("area_notes")
+        return json.loads((D.steward_dir(self.state) / D.WATCH_FILE).read_text()).get("area_notes")
 
     def age(self, seconds):
         p = self.state / self.AG.NOTES_FILE

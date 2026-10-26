@@ -211,10 +211,85 @@ refuses the old token from the next request.
   write another project's console through the kit.
 - **What it does not stop:** an agent running as the same OS user that
   sets out to cross over. It can read `tokens/` and the state directories
-  directly. Real isolation needs a sandbox or a separate user.
+  directly. To stop that, sandbox the sessions:
+  [Keep agents out of STATE](#isolation).
 - **An old per-project server is a way around it.** While one still
   listens on `STATE/agent.sock`, that socket answers without a token.
   Stop it before relying on the token.
+
+<a id="isolation"></a>
+## Keep agents out of STATE (1.60)
+
+An agent runs as your OS user, so it can read any file you can. That
+includes every console's store, the GitHub trigger secrets, the webhook URL
+and the roles. Claude Code's
+[sandbox](https://code.claude.com/docs/en/sandboxing) narrows what a
+session's commands can read. `agent.py isolation` writes the rules for your
+consoles and then checks that they hold.
+
+**What a sandboxed session still reaches**, in each registered console's
+STATE:
+
+- `agent.sock`, the agent's door;
+- `inbox.jsonl`, the doorbell the steward watches;
+- `steward/`, where the steward keeps its cursor and heartbeat. This is
+  the only place in STATE it may write.
+
+Everything else in STATE is hidden. A denied file reads as "not there".
+The sandbox also denies Docker's and the other container sockets, your
+runtime folder (`/run/user/UID`: the session bus and systemd), and your
+ssh-agent. Any of those would run something for the agent outside the
+sandbox.
+
+**Set it up.** You do this once per machine, and again after you register
+a new console.
+
+1. Install the sandbox's tools. On Linux, install `bubblewrap` and
+   `socat`, for example `sudo apt install bubblewrap socat`. macOS needs
+   nothing extra.
+2. In your own terminal, outside any session, run:
+
+   ```sh
+   <py> <kit>/agent.py isolation settings > isolation.json
+   ```
+
+   This also moves each steward's old `agent-cursor.json` and
+   `watch.json` into `steward/`. It refuses to run inside a sandbox,
+   which would block the move.
+3. Install the file as managed settings. A session or a project cannot
+   loosen managed settings, and an agent cannot edit them.
+
+   ```sh
+   sudo install -D -m 0644 isolation.json /etc/claude-code/managed-settings.json
+   ```
+
+   On macOS the path is
+   `/Library/Application Support/ClaudeCode/managed-settings.json`. If the
+   file already exists, merge the two `sandbox` and `permissions` blocks
+   instead of replacing it.
+4. Start a new session. Ask it to run `agent.py isolation check`. It
+   tries every door from inside the session and ends with
+   `isolation holds`, or it lists each door that is open. It exits 1 if
+   any door is open. `--json` prints the rows.
+
+**What the rules set.** The sandbox is on and `failIfUnavailable` is set,
+so a machine without a working sandbox refuses to start a session; it never
+runs quietly without one. `allowUnsandboxedCommands` is off, so a command
+cannot retry outside the sandbox. `Read` and `Edit` deny rules cover the
+built-in file tools, which the sandbox alone does not.
+
+**Limits.**
+
+- **Hosted mode.** Each project's agent needs its own token, in
+  `~/.config/overture/tokens/`. Managed settings cover the whole machine,
+  so they cannot give each project only its own token. A sandboxed agent
+  can still read the other projects' tokens and use the kit to reach their
+  consoles. A separate OS user per project closes that; it is planned, not
+  built.
+- **Commands only.** The sandbox covers the commands a session runs and the
+  built-in tools it denies. An MCP server you add runs outside it.
+- **Measured on Linux.** The 1.60 real run was on Linux with bubblewrap.
+  The macOS rules are the same, but they have not been run there yet.
 
 <a id="windows"></a>
 ## Windows (0.9.1, 1.26, 1.53.2)

@@ -2990,6 +2990,44 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Agents kept out of STATE (1.60.0)
+
+Wave 5's third Trust lane. An agent runs as your OS user, so it could read
+every console's store, the GitHub trigger secrets, the webhook URL and the
+roles. Project tokens stop mistakes, not an agent that sets out to read
+them. The lane's waypoint and a design round decided how to stop that
+(OPEN-DECISIONS.md "Same-user isolation", I1–I4, the owner's ★ on each).
+
+- **Claude Code's sandbox, configured for you (I1, I3).** `agent.py
+  isolation settings`, which you run in your own terminal, prints managed
+  settings for every console registered on the machine. You install them in
+  `/etc/claude-code/managed-settings.json` (macOS: `/Library/Application
+  Support/ClaudeCode/managed-settings.json`), which neither a session nor a
+  project can loosen. In each STATE, a session can reach only
+  `agent.sock`, the doorbell and `steward/`. The rules also deny Docker's
+  and the other container sockets, the user's runtime folder and the
+  ssh-agent, and add `Read`/`Edit` deny rules for the built-in tools. With
+  `failIfUnavailable` set, a machine without a working sandbox refuses to
+  start a session; with `allowUnsandboxedCommands` off, a command cannot
+  retry outside the sandbox.
+- **`agent.py isolation check` is the proof (I2).** Run inside a session,
+  it tries every door: each protected file, each STATE listing, each
+  console socket, each escape socket and the runtime folder. It also reads
+  the managed file. It ends with `isolation holds`, or it lists each door
+  that is open and exits 1.
+- **The steward writes into `STATE/steward/` (I4).** Under the sandbox, a
+  folder that may be written is also readable. So the steward's cursor and
+  heartbeat (`agent-cursor.json`, `watch.json`) move into a folder that
+  holds nothing else. Reads fall back to the old place, and `isolation
+  settings` moves the old files across. The SessionStart hook reads the
+  cursor from there too.
+- **Known limit: hosted tokens.** Managed settings cover the whole machine,
+  so they cannot give each hosted project only its own token in
+  `~/.config/overture/tokens/`. A separate OS user per project closes that;
+  it is written up for later.
+- Docs: features/hosting.md, "Keep agents out of STATE (1.60)", step by
+  step. JOIN.md and MIGRATION.md link to it.
+
 ## Signed GitHub webhooks (1.59.0)
 
 Wave 5's second lane: GitHub calls a trigger directly, with no bridge.

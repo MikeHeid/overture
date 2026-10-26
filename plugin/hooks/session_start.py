@@ -61,6 +61,7 @@ O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 WAKE_INTENTS = ("process", "fork", "chat", "visual", "scan", "ux-save", "ux-link", "pr-merge")     # overture/doorbell.py
 CURSOR_FILE = "agent-cursor.json"      # overture/doorbell.py
+STEWARD_DIR = "steward"                # overture/doorbell.py (1.60, I4)
 MAX_DOORBELL = 64 << 20                # overture/doorbell.py
 MAX_CURSOR = 4096                      # overture/doorbell.py
 REGISTRY_FILE = "projects.json"        # overture/registry.py
@@ -429,8 +430,15 @@ def steward_line(e: dict, agent: str, me: str | None = None) -> tuple[str | None
 
 
 def _cursor(state: Path, key: str = "through") -> int:
+    # As doorbell._read_path: STATE/steward/ when it is a real folder holding the cursor, else beside the doorbell.
+    p = state / STEWARD_DIR / CURSOR_FILE
     try:
-        data = _read_regular(state / CURSOR_FILE, MAX_CURSOR)
+        if not (stat.S_ISDIR(os.lstat(state / STEWARD_DIR).st_mode) and os.path.lexists(p)):
+            p = state / CURSOR_FILE
+    except OSError:
+        p = state / CURSOR_FILE
+    try:
+        data = _read_regular(p, MAX_CURSOR)
         v = json.loads(data.decode("utf-8")).get(key, 0) if data is not None else 0
     except (OSError, ValueError, AttributeError):
         return 0

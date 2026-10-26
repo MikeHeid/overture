@@ -136,7 +136,7 @@ the project, this state dir, and the kit this agent.py lives in. The plugin
 acts only in registered projects and takes the paths it runs from there, never
 from the repository (§7.7).
 
-While `watch` waits it records so in watch.json beside the doorbell, and the
+While `watch` waits it records so in steward/watch.json beside the doorbell, and the
 owner's console shows "agent listening" until it exits or stops renewing it.
 
 `watch` exits 0 with the waiting lines, or 3 when --timeout runs out. The
@@ -2146,6 +2146,13 @@ def main(argv=None) -> int:
                        "here, never from the console or a session. Running it again replaces the secret.")
     s.add_argument("name", help="the trigger's name in .overture/triggers.json")
     s.add_argument("--clear", action="store_true", help="remove the secret: GitHub's calls are refused")
+    s = sub.add_parser("isolation", description="Keep agents that run as you out of every console's STATE "
+                       "(1.60, OPEN-DECISIONS I1-I4). `settings` prints the Claude Code sandbox rules for every "
+                       "console registered here, for /etc/claude-code/managed-settings.json, and first moves each "
+                       "steward's cursor and heartbeat into STATE/steward/; run it in your own terminal. `check` "
+                       "runs inside a session and tries each door: exit 0 when isolation holds, 1 when not.")
+    s.add_argument("iso_cmd", choices=("settings", "check"))
+    s.add_argument("--json", action="store_true", help="check: the rows as JSON")
     s = sub.add_parser("access", description="Show, set or clear what an Access login may do in the console (1.39). "
                        "With no roles set, every login that passes Access is the owner. Once one is set, an unlisted "
                        "login only reads. owner: everything; member AREA...: answers, locks and plain messages on "
@@ -2329,6 +2336,8 @@ def main(argv=None) -> int:
         return _symbol_at(a.source, a.json)
     if a.cmd == "adapter":   # Wave 4: the user's own vendor config and a checkout's AGENTS.md; no console, no door
         return _adapter(a)
+    if a.cmd == "isolation":   # 1.60: every console in the user's registry; no one console, no door
+        return _isolation(a.iso_cmd, a.json)
     if a.state is None:
         ap.error("the following arguments are required: --state")
     # The agent name: --as, then this session's /overture:as (0.8.4), then OVERTURE_AGENT (0.8.2);
@@ -2478,6 +2487,40 @@ def _github_secret(state: Path, name: str, clear: bool) -> int:
     print(f"github-secret: {name}: paste this into the webhook's Secret field on GitHub (shown once):")
     print(f"  {secret}")
     print(f"Payload URL: https://<your console>/api/github/{name}   Content type: application/json")
+    return 0
+
+
+def _isolation(cmd: str, as_json: bool) -> int:
+    """`isolation settings|check` (1.60): the sandbox rules for every console registered here, or the proof."""
+    from overture import isolation as ISO
+    try:
+        states = ISO.consoles(R.load())
+    except R.RegistryError as e:
+        print(f"agent.py: isolation: {e}", file=sys.stderr)
+        return 2
+    if not states:
+        print("agent.py: isolation: no console is registered here (agent.py register)", file=sys.stderr)
+        return 2
+    if cmd == "check":
+        rows = ISO.check(states)
+        print(json.dumps(rows, indent=2) if as_json else ISO.render(rows))
+        return 0 if all(r["ok"] for r in rows) else 1
+    if os.environ.get(ISO.SANDBOX_ENV) == "1":
+        print("agent.py: isolation settings: run it in your own terminal, outside the sandbox: it moves each "
+              "steward's files, which the sandbox would refuse", file=sys.stderr)
+        return 2
+    for s in states:
+        try:
+            moved = D.migrate_steward(s)
+        except OSError as e:
+            print(f"agent.py: isolation: {s}: {e}", file=sys.stderr)
+            return 2
+        if moved:
+            print(f"isolation: {s}: moved {', '.join(moved)} into {D.STEWARD_DIR}/", file=sys.stderr)
+    print(json.dumps(ISO.settings(states), indent=2))
+    print(f"isolation: save this as {ISO.MANAGED['darwin' if sys.platform == 'darwin' else 'linux']} (with sudo; "
+          "merge it into one that exists), start a new session, and run `agent.py isolation check` inside it",
+          file=sys.stderr)
     return 0
 
 
