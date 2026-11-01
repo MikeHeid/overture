@@ -623,3 +623,12 @@ skill inside the repository.
 - **"Answer these together" groups open questions only**, so a stale answer
   is never offered inside a group whose form would skip it.
 - Rounds, their forms, the server and the store are unchanged.
+
+## A test that no longer races (0.8.19)
+
+- **`test_an_oversized_body_is_refused` sends only the headers.** It sent a
+  body one byte over the limit; the server refuses on the declared length and
+  closes, and when that close met the client still writing, the reset failed
+  the test instead of the 413. It now uses `raw_post`, as the Content-Length
+  tests do, and checks that nothing reached the doorbell. A patch on the 0.8
+  line for consumers pinned to it; the kit itself is unchanged.
