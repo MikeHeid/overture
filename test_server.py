@@ -757,9 +757,13 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.doorbell(), [])
 
     def test_an_oversized_body_is_refused(self):
-        big = self.answer(own_text="x" * (SV.MAX_BODY + 1))
-        code, _ = self.req("POST", "/api/answer", big, tok=token())
-        self.assertEqual(code, 413)
+        # The server refuses on the declared length before it reads a byte, so
+        # only the headers are sent. Sending the whole body raced the server's
+        # close against unread bytes, and the kernel's reset failed the test
+        # (ConnectionResetError, twice in one night in a pinned consumer): the
+        # same race raw_post was written for (PR #168 review).
+        self.assertEqual(self.raw_post(str(SV.MAX_BODY + 1)), 413)
+        self.assertEqual(self.doorbell(), [])
 
     def raw_post(self, content_length: str) -> int:
         """Send only the headers, keep the socket open, and read the reply.
