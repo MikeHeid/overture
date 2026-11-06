@@ -214,7 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.53.2
+      - uses: MikeHeid/overture@v1.61.0
 ```
 
 The question, ruling and `valid_if` format is a published spec, with a JSON

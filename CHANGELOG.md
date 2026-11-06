@@ -3000,8 +3000,10 @@ reviews code" (W5-1). Its waypoint was given in the conversation
 - **The pull request comment quotes the ruling (C1).** For each ruling the
   change touches or breaks, the Action's comment shows the question, what
   the owner ruled (the picked options or their own words), who locked it by
-  the owner-set short name and when, and the cited place; a broken ruling
-  keeps its diff below. Every word from a ruling file passes the same
+  the owner-set short name and when, and the cited place, linked to those
+  lines in the file at the base commit; a broken ruling keeps its diff
+  below. The owner's words come whole, up to 1,000 characters (the
+  lookup's 160 stays for an agent's one line). Every word from a ruling file passes the same
   escaping as before: no markup, no mention, no bare link. A ruling file
   the change itself adds is not at the base, so its words are shown as the
   file's claim for the reviewer to confirm, with no base link. The text and
@@ -3021,8 +3023,25 @@ reviews code" (W5-1). Its waypoint was given in the conversation
   change is reviewed; a pass that touches no ruling stays silent, and no
   comment follows an adapter run (1.37). If the real run shows most pull
   requests touch a ruling, a `comment: broken` level is next.
-- Docs: features/mcp-and-ci.md. Tests: test_rulecheck.py (`Markdown`,
-  `Action`).
+- **Real run** (2026-11-06), on a scratch repository with the Action used
+  from the release branch and a ruling exported by `fold.py export`:
+  - a pull request editing the cited file got one comment, the ruling
+    quoted, a mention in the owner's words left as plain text, and both
+    links opening;
+  - a push that changed the cited line failed the check and rewrote the
+    same comment red, with the ruling above the diff;
+  - a push that put the line back turned it green again;
+  - a push that stopped touching the file left the one-line result;
+  - a pull request editing only the README got no comment.
+
+  The run found two gaps, fixed before release: the cited place was named
+  but not linked, and the owner's words came through a 160-character cut.
+  It also showed that a pull request from a fork gets no comment (GitHub's
+  read-only token), which the docs now say.
+- The examples in the README, features/mcp-and-ci.md and action.yml pin
+  `@v1.61.0`: an older pin keeps the older comment.
+- Docs: features/mcp-and-ci.md, with a screenshot of the comment. Tests:
+  test_rulecheck.py (`Markdown`, `Action`).
 
 ## Agents kept out of STATE (1.60.0)
 
