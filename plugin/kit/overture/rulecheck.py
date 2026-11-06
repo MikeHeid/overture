@@ -43,6 +43,7 @@ import argparse
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 from . import anchors as A
@@ -57,6 +58,16 @@ NOTABLE = "<!-- overture-rulecheck: notable -->"   # second line when the Action
 MAX_COMMENT = 60000   # characters; GitHub's limit for a comment is 65536
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,199}\Z")   # a sha, branch or tag; never an option
 MD_SPECIAL = re.compile(r"([\\`*_\[\]|#~])")
+# 1.61 (C2): what the link is built from. A repository is OWNER/NAME in GitHub's own character set (a name
+# may start with `.` or `_`: `acme/.github`), never `.` or `..`; the server is an origin with no path (an
+# Enterprise host may be http). Nothing else reaches the URL, so a link in the comment is always a blob link.
+# A value that is not shaped so costs the links, not the check (clearer, 1.61): it comes from the runner.
+REPO = re.compile(r"^(?!\.\.?/)[A-Za-z0-9._\-]{1,100}/(?!\.\.?\Z)[A-Za-z0-9._\-]{1,100}\Z")
+SERVER = re.compile(r"^https?://[A-Za-z0-9_][A-Za-z0-9_.\-]{0,252}(:[0-9]{1,5})?\Z")
+DEFAULT_SERVER = "https://github.com"
+# The owner's words in a report: the lookup's 160 suits one line in an agent's context, and cut a real
+# ruling short in the comment where a reviewer reads it (the 1.61 real run); the ruling file has the rest.
+RULED_CHARS = 1000
 
 
 class CheckError(Exception):
@@ -166,8 +177,15 @@ def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
             rows.append(_unread_now(c, A.explain(c, tree, history, e["source"], candidates), tree, before))
     state = "broken" if any(r["holds"] is False for r in rows) else \
         "unchecked" if any(r["holds"] is None for r in rows) else "holds"
-    out = {"qid": e["qid"], "question": e["question"], "source": e["source"], "anchored_by": origin,
-           "lock_id": e["locked"]["lock_id"], "state": state, "conditions": rows}
+    # 1.61 (C1): the ruling itself, for the reviewer who reads the comment: the owner's words, by whom
+    # (the owner-set short name only; export never writes an email), and when. `answer_words` shortens
+    # and strips control characters, as the lookup's entry does.
+    lk = e["locked"]
+    out = {"qid": e["qid"], "item": e["item"], "question": e["question"], "source": e["source"],
+           "anchored_by": origin, "lock_id": lk["lock_id"], "answer": L.answer_words(lk, RULED_CHARS),
+           "locked_at": lk.get("locked_at"), "state": state, "conditions": rows}
+    if isinstance(lk.get("locked_by_name"), str):
+        out["locked_by_name"] = lk["locked_by_name"]
     moved = [{"from": A.symbol_ref(r["condition"]["path"], r["condition"]["symbol"]),
               "to": A.symbol_ref(r["moved_to"]["path"], r["moved_to"]["symbol"])} for r in rows if "moved_to" in r]
     if moved:   # K3: it holds where its code went; the owner confirms the new place (`propose-anchor`)
@@ -252,8 +270,15 @@ def changed_paths(root: Path, base: str) -> tuple[set[str], list[str]]:
     return touched, sorted(set(now))
 
 
-def run(root: Path, locked: str, base: str | None, items: dict | None, strict: bool = False) -> dict:
-    """The whole report: what is broken, re-ruled, unchecked, touched and holds, and which ruling files changed."""
+def run(root: Path, locked: str, base: str | None, items: dict | None, strict: bool = False,
+        link_base: str | None = None) -> dict:
+    """The whole report: what is broken, re-ruled, unchecked, touched and holds, and which ruling files changed.
+
+    `link_base` (1.61, C2) is the URL of the base commit's tree, ending in
+    `/`; with it, every judged ruling that is at the base carries `link`, the
+    committed ruling file, and `source_link`, the lines it cites as the base
+    has them: both are what the pull request cannot have edited.
+    """
     root = Path(root).resolve()
     item_status = None if items is None else {k: v.get("status") for k, v in items.items()}
     head = parse(from_dir(root / locked), items, "")
@@ -270,6 +295,15 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
             rep["settled"].append({"qid": e["qid"], "outcome": e["outcome"]["kind"]})
             continue
         j = judge(e, tree, history, item_status, candidates, before)
+        j["file"] = name
+        # A file the change adds is not at the base: its words are the pull request's claim, not a ruling
+        # the base holds, so the comment says so and no base link is built for it (1.61 review).
+        j["at_base"] = name in old
+        if link_base and j["at_base"]:
+            j["link"] = f"{link_base}{urllib.parse.quote(locked, safe='/')}/{urllib.parse.quote(name, safe='')}"
+            cited = _source_link(link_base, e["source"], before)
+            if cited:
+                j["source_link"] = cited
         now = head.get(name)
         if j["state"] == "broken" and base and now is not None and now is not e and (
                 "outcome" in now or (now["locked"]["lock_id"] != e["locked"]["lock_id"]
@@ -283,9 +317,11 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
     # project that adds the Action before its first ruling would get one on every pull request, and
     # the folder comes from the base, so a pull request cannot empty it.
     rep["empty"] = not old and not head
-    # What a reviewer must see on the pull request itself, not only in the job summary.
+    # What a reviewer must see on the pull request itself, not only in the job summary. Since 1.61 (C3) a
+    # touched ruling is one: the change sits on the lines a ruling cites, so the ruling is shown where the
+    # change is reviewed. A pass that touches no ruling stays silent.
     rep["moved"] = [{"qid": j["qid"], **m} for k in ("touched", "holds") for j in rep[k] for m in j.get("moved", [])]
-    rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or rep["moved"]
+    rep["notable"] = bool(rep["broken"] or rep["reruled"] or rep["unchecked"] or rep["moved"] or rep["touched"]
                           or any(rep["files"].values()))
     rep["strict"] = strict
     rep["notable"] = rep["notable"] or (strict and rep["empty"])   # a strict failure shows on the pull request
@@ -333,6 +369,55 @@ def _unchecked_words(j: dict) -> str:
     return " ".join(c["words"] for c in j["conditions"] if c["holds"] is None)
 
 
+def _source_link(link_base: str, source: object, before) -> str | None:
+    """The cited lines at the base commit, `…/blob/<sha>/<path>#L2-L5` (1.61 real run), or None.
+
+    Only for a `path:line` or `path:start-end` source whose file the base has:
+    `before` reads it from git, so a path that is not a real file of the base
+    tree (a `..`, an absolute path, a file since deleted) gets no link.
+    """
+    m = A.SOURCE_RANGE.match(source) if isinstance(source, str) else None
+    if not m or before is None:
+        return None
+    path, a, b = m.group("path"), m.group("a"), m.group("b")
+    # A line number is at most 7 digits: a longer one is no line of a file the kit reads, and int() of
+    # thousands of digits raises, which would cost every pull request its report (clearer, round 3).
+    if len(a) > 7 or len(b or "") > 7:
+        return None
+    if path.startswith("/") or {".", ".."} & set(path.split("/")) or before(path) is None:
+        return None
+    lines = f"L{int(a)}" + (f"-L{int(b)}" if b else "")
+    return f"{link_base}{urllib.parse.quote(path, safe='/')}#{lines}"
+
+
+def _cited_md(j: dict) -> str:
+    """Where the ruling is cited, as a link to those lines at the base when there is one."""
+    return f"[{_md(j['source'])}]({j['source_link']})" if j.get("source_link") else _md(j["source"])
+
+
+def _ruled(j: dict) -> str:
+    """The ruling in the comment (1.61, C1): the owner's words, when and by whom, and the file's link (C2).
+
+    The words and the name pass `_md`; the link does not, since its every part
+    was checked against REPO, SERVER and REF, and its file name is URL-quoted.
+    """
+    when = (j.get("locked_at") or "")[:10]
+    who = f" by {_md(j['locked_by_name'])}" if j.get("locked_by_name") else ""
+    if not j.get("at_base", True):
+        return (f"This ruling file is added by this change, so it is not at the base: the file says the owner "
+                f"ruled **{_md(j['answer'])}** (locked {when}{who}); confirm the owner did.")
+    s = f"The owner ruled: **{_md(j['answer'])}** (locked {when}{who})."
+    return s + (f" [The ruling file]({j['link']})" if j.get("link") else "")
+
+
+def _ruled_plain(j: dict) -> str:
+    when = (j.get("locked_at") or "")[:10]
+    who = f" by {_plain(j['locked_by_name'])}" if j.get("locked_by_name") else ""
+    if not j.get("at_base", True):
+        return f"  added by this change, not at the base; the file says: {_plain(j['answer'])} (locked {when}{who})"
+    return f"  ruled: {_plain(j['answer'])} (locked {when}{who})" + (f"; {j['link']}" if j.get("link") else "")
+
+
 def _count(rep: dict) -> int:
     return sum(len(rep[k]) for k in ("broken", "reruled", "unchecked", "touched", "holds"))
 
@@ -356,7 +441,8 @@ def markdown(rep: dict) -> str:
                    f"folder is wrong: nothing was checked.\n")
     for j in rep["broken"]:
         out.append(f"### {_md(j['qid'])}: {_md(j['question'])}")
-        out.append(f"Cited at {_md(j['source'])}. The owner's ruling no longer holds:")
+        out.append(_ruled(j))
+        out.append(f"Cited at {_cited_md(j)}. It no longer holds:")
         for c in j["conditions"]:
             if c["holds"] is False:
                 out.append(f"- {_md(c['words'])}")
@@ -379,8 +465,13 @@ def markdown(rep: dict) -> str:
         out += [f"- {_md(m['qid'])}: {_md(m['from'])} → {_md(m['to'])}" for m in rep["moved"]]
         out.append("")
     if rep["touched"]:
-        out.append("**Touched, still holds:**")
-        out += [f"- {_md(j['qid'])}: {', '.join(_md(f) for f in j['files'])}" for j in rep["touched"]]
+        # C1: the change sits on the lines these rulings cite. Each ruling is shown whole, so the reviewer
+        # reads what was ruled where the change is reviewed, without opening the console.
+        out.append("**This change touches code these rulings rest on. They still hold; read them before "
+                   "you review:**")
+        for j in rep["touched"]:   # one line each, so the comment's cut never parts a ruling from its words
+            out.append(f"- **{_md(j['qid'])}: {_md(j['question'])}** (cited at {_cited_md(j)}; this change "
+                       f"edits {', '.join(_md(f) for f in j['files'])}). {_ruled(j)}")
         out.append("")
     f = rep["files"]
     if any(f.values()):
@@ -400,6 +491,7 @@ def text(rep: dict) -> str:
     out = []
     for j in rep["broken"]:
         out.append(f"BROKEN {P(j['qid'])} (cited at {P(j['source'])}, anchored by {P(j['anchored_by'])}):")
+        out.append(_ruled_plain(j))
         for c in j["conditions"]:
             out.append(f"  {'holds' if c['holds'] else 'unchecked' if c['holds'] is None else 'FAILS'}: "
                        f"{P(c['words'])}")
@@ -409,8 +501,9 @@ def text(rep: dict) -> str:
             f"confirm the owner did this" for j in rep["reruled"]]
     out += [f"unchecked {P(j['qid'])}: {P(_unchecked_words(j))}" for j in rep["unchecked"]]
     out += [_moved_line(m) for m in rep["moved"]]
-    out += [f"touched {P(j['qid'])}: {', '.join(P(f) for f in j['files'])} changed; it still holds"
-            for j in rep["touched"]]
+    for j in rep["touched"]:
+        out.append(f"touched {P(j['qid'])}: {', '.join(P(f) for f in j['files'])} changed; it still holds")
+        out.append(_ruled_plain(j))
     out += [f"ruling files {k}: {', '.join(P(x) for x in v)}" for k, v in rep["files"].items() if v]
     if rep["empty"]:
         out.append(f"no ruling files in {P(rep['locked'])}: if this project has rulings, the folder is wrong")
@@ -441,6 +534,30 @@ def _locked_default(root: Path, base: str | None) -> str:
     return v if isinstance(v, str) else DEFAULT_LOCKED
 
 
+def _link_base(root: Path, base: str | None, locked: str, repo: str | None, server: str) -> str | None:
+    """`<server>/<repo>/blob/<base sha>/` (1.61, C2), or None without --repo or --base.
+
+    The base is resolved to its commit sha, so the link stays the same file
+    when the branch moves on. A repo or server that is not shaped as one is
+    said on stderr and gives no links: the values come from the runner, and a
+    link is a convenience the check must not fail over (clearer, 1.61).
+    """
+    if not SERVER.match(server):
+        print(f"rulecheck: no links: --server {server!r} is not an http(s) origin", file=sys.stderr)
+        return None
+    if repo is None:
+        return None
+    if not REPO.match(repo):
+        print(f"rulecheck: no links: --repo {repo!r} is not OWNER/NAME", file=sys.stderr)
+        return None
+    if not base:
+        return None
+    sha = _git(root, ["rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"])
+    if sha is None:
+        raise CheckError(f"--base {base!r}: git could not resolve it to a commit")
+    return f"{server}/{repo}/blob/{sha.decode().strip()}/"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", type=Path, default=Path("."), help="the project checkout (default: here)")
@@ -451,6 +568,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--format", choices=("text", "markdown", "json"), default="text")
     ap.add_argument("--strict", action="store_true",
                     help="fail (exit 1) when a ruling could not be checked, such as an item status with no --adapter")
+    ap.add_argument("--repo", metavar="OWNER/NAME", help="the GitHub repository; with --base, each ruling in the "
+                                                          "report links to its committed file at the base commit")
+    ap.add_argument("--server", default=DEFAULT_SERVER, metavar="URL",
+                    help=f"the GitHub server the links point at (default {DEFAULT_SERVER})")
     a = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(errors="replace")
@@ -463,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
         locked = (a.locked if a.locked is not None else _locked_default(root, a.base)).rstrip("/")
         F.inside(root, locked, "--locked")   # the same boundary fold holds its paths to
         items = F.load_adapter(F.inside(root, a.adapter, "--adapter")).items() if a.adapter else None
-        rep = run(root, locked, a.base, items, a.strict)
+        rep = run(root, locked, a.base, items, a.strict, _link_base(root, a.base, locked, a.repo, a.server))
     except (CheckError, F.FoldError) as e:
         print(f"rulecheck: {e}", file=sys.stderr)
         return 2

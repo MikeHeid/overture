@@ -338,6 +338,164 @@ class Markdown(Repo):
         fence = RC._fence("- a ``` b\n+ c")
         self.assertTrue(fence.startswith("````diff\n") and fence.endswith("\n````"))
 
+    # -- 1.61: the ruling where the reviewer reads it (owner C1-C3) --------------------------------------
+
+    def touch(self) -> None:
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n")
+        self.commit("pr")
+
+    def test_a_touched_ruling_is_notable_and_quoted_whole(self):
+        # Catches (C1, C3): a change that sits on a ruling's cited lines and posts nothing, or posts the qid
+        # alone, so the reviewer still has to open the console to learn what was ruled, by whom and when.
+        e = json.loads(self.ruling().read_text())
+        e["locked"]["locked_by_name"] = "mo"
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("named lock")
+        self.touch()
+        rc, out, err = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertIn(RC.NOTABLE, out)
+        self.assertIn("touches code these rulings rest on", out)
+        self.assertIn("**LANE.1/Q1: Which for LANE.1/Q1?**", out)
+        self.assertIn("The owner ruled: **Option B ★** (locked 2026-10-13 by mo).", out)
+        rc, rep = self.report("--base", self.base)
+        j = rep["touched"][0]
+        self.assertEqual((j["answer"], j["locked_by_name"], j["locked_at"][:10], j["file"], rep["notable"]),
+                         ("Option B ★", "mo", "2026-10-13", RULING, True))
+
+    def test_a_broken_ruling_shows_what_was_ruled(self):
+        # Catches (C1): the red comment naming the question but not the ruling, in markdown and in text.
+        self.break_code()
+        self.commit("pr")
+        rc, out, _ = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual(rc, 1)
+        self.assertIn("The owner ruled: **Option B ★** (locked 2026-10-13).", out)
+        rc, out, _ = self.check("--base", self.base)
+        self.assertIn("  ruled: Option B ★ (locked 2026-10-13)", out)
+        self.touch()   # and for a touched ruling, in text, with its link
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r")
+        self.assertIn(f"touched LANE.1/Q1: src/pay.py changed; it still holds\n  ruled: Option B ★ (locked "
+                      f"2026-10-13); https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}\n", out)
+
+    def test_the_rulings_words_are_inert_in_the_comment(self):
+        # Catches (C1): the owner's own text printed raw, where @someone pings a person and a URL links.
+        # (A short name cannot carry either: fold refuses any but lowercase letters, digits and hyphens.)
+        a2 = self.store.append(answer(picks=(), own_text="ask @octocat at https://evil.example",
+                                      supersedes=self.a1["id"], reason="words now"))
+        self.store.append(lock(a2))
+        self.export()
+        self.base = self.commit("hostile words")
+        self.touch()
+        rc, out, err = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertIn("ask @​octo", out)
+        for raw in ("@octocat", "://"):
+            self.assertNotIn(raw, out)
+
+    def test_each_ruling_links_to_its_committed_file_at_the_base(self):
+        # Catches (C2): a link to the branch (which the pull request can edit), or none; the base is
+        # resolved to its sha, and the folder and file name are URL-quoted.
+        git(self.root, "tag", "base")
+        self.touch()
+        rc, rep = self.report("--base", "base", "--repo", "o/r")
+        self.assertEqual(rc, 0)
+        self.assertEqual(rep["touched"][0]["link"], f"https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}")
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--server", "https://ghe.example:8443",
+                                "--format", "markdown")
+        self.assertIn(f"[The ruling file](https://ghe.example:8443/o/r/blob/{self.base}/.overture/locked/{RULING})", out)
+        # Without --repo there is no link, and nothing else changes.
+        rc, rep = self.report("--base", self.base)
+        self.assertNotIn("link", rep["touched"][0])
+        self.assertNotIn("source_link", rep["touched"][0])
+
+    def test_the_cited_lines_link_to_the_file_at_the_base(self):
+        # Catches (C1, the real run): the cited place named but not reachable, so the reviewer cannot read
+        # the lines the ruling rests on as the base has them; a range gets both ends.
+        self.touch()
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        self.assertEqual(rep["touched"][0]["source_link"], f"https://github.com/o/r/blob/{self.base}/src/pay.py#L2")
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--format", "markdown")
+        self.assertIn(f"(cited at [src/pay.py:2](https://github.com/o/r/blob/{self.base}/src/pay.py#L2); this", out)
+        e = json.loads(self.ruling().read_text())
+        e["source"] = "src/pay.py:1-2"
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("a range")
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n# another\n")
+        self.commit("pr 2")
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        self.assertTrue(rep["touched"][0]["source_link"].endswith("/src/pay.py#L1-L2"))
+
+    def test_a_cited_place_the_base_does_not_hold_gets_no_link(self):
+        # Catches: a link built from a ruling file's `source` as written: one that climbs out of the
+        # repository's tree (and so to another repository's page), or to a file the base does not have.
+        # And (clearer, round 3) a line number no file has: thousands of digits made int() raise, and the
+        # whole report with it.
+        for source in ("../../../evil/repo/blob/main/x:1", "/etc/passwd:1", "src/gone.py:3", "src/pay.py", "notes",
+                       "./src/pay.py:1", "src/pay.py:1-" + "9" * 8):
+            e = json.loads(self.ruling().read_text())
+            e["source"] = source
+            self.ruling().write_text(json.dumps(e))
+            self.base = self.commit(f"source {source[:40]}")
+            (self.root / "src/pay.py").write_text((self.root / "src/pay.py").read_text() + "# more\n")
+            self.commit("pr")
+            rc, out, err = self.check("--base", self.base, "--repo", "o/r", "--format", "json")
+            self.assertEqual((rc, err), (0, ""), source)
+            j = json.loads(out)["touched"][0]
+            self.assertIn("link", j, source)
+            self.assertNotIn("source_link", j, source)
+        # fold refuses a source that long before a link is built; the link code holds on its own too.
+        held = lambda path: "text"   # noqa: E731 - the base holds every file asked for
+        self.assertIsNone(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:" + "9" * 5000, held))
+        self.assertIsNone(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:1-" + "9" * 8, held))
+        self.assertEqual(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:9999999", held),
+                         "https://x/o/r/blob/s/src/pay.py#L9999999")
+
+    def test_the_owner_s_words_are_not_cut_at_a_line_s_length(self):
+        # Catches (the real run): the lookup's 160-character answer, right for one line in an agent's
+        # context, cutting a real ruling short in the comment where the reviewer reads it.
+        words = "Banker's rounding. " + "Totals over a day must not drift, and the auditors check them. " * 6
+        a2 = self.store.append(answer(picks=("b",), own_text=words, supersedes=self.a1["id"], reason="in full"))
+        self.store.append(lock(a2))
+        self.export()
+        self.base = self.commit("long words")
+        self.touch()
+        rc, out, _ = self.check("--base", self.base, "--format", "markdown")
+        self.assertIn("the auditors check them. Totals over a day must not drift, and the auditors check them.**", out)
+        self.assertNotIn("…", out)
+
+    def test_a_ruling_file_the_change_adds_is_not_quoted_as_the_base_s_ruling(self):
+        # Catches (1.61 review): a ruling file the pull request itself writes shown as "The owner ruled",
+        # with a link to the base commit, where the file does not exist.
+        self.store.append(question(qid="LANE.1/Q2", valid_if=[EXCERPT], source="src/pay.py:2"))
+        a = self.store.append(answer(qid="LANE.1/Q2", picks=("a",)))
+        self.store.append(lock(a))
+        self.export()
+        self.touch()
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        by_qid = {j["qid"]: j for j in rep["touched"]}
+        self.assertEqual((rc, by_qid["LANE.1/Q1"]["at_base"], by_qid["LANE.1/Q2"]["at_base"]), (0, True, False))
+        self.assertIn("link", by_qid["LANE.1/Q1"])
+        self.assertNotIn("link", by_qid["LANE.1/Q2"])
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--format", "markdown")
+        self.assertIn("added by this change, so it is not at the base: the file says the owner ruled **Option A**", out)
+        self.assertEqual(out.count("[The ruling file]("), 1)
+
+    def test_a_repo_or_server_that_is_not_one_costs_the_links_not_the_check(self):
+        # Catches (C2): a value from the runner pasted into a URL as it came; and (clearer) a check that
+        # turns red over a link it could not build. Each is named on stderr, the report has no link.
+        self.touch()
+        for args in (("--repo", "o/r/x"), ("--repo", "../r"), ("--repo", "o/.."), ("--repo", "o r"),
+                     ("--repo", "o/r", "--server", "https://x/path"), ("--repo", "o/r", "--server", "ftp://x"),
+                     ("--server", "https://x/path")):
+            rc, out, err = self.check("--base", self.base, *args, "--format", "json")
+            self.assertEqual(rc, 0, args)
+            self.assertIn(f"no links: {args[-2]} {args[-1]!r}", err)
+            self.assertNotIn("link", json.loads(out)["touched"][0])
+        # GitHub's own shapes pass: a name starting with a dot or underscore, an http Enterprise host.
+        for args in (("--repo", "acme/.github"), ("--repo", "acme/_tools", "--server", "http://ghe_x.corp:8080")):
+            rc, rep = self.report("--base", self.base, *args)
+            self.assertIn("link", rep["touched"][0], args)
+
 
 ACTION = Path(__file__).resolve().parent / "action.yml"
 # A stand-in for `gh`: it logs every call, and answers the comment listing with $GH_EXISTING (an id or nothing).
@@ -463,6 +621,7 @@ class Action(Repo):
                                   timeout=60).returncode
 
         self.assertEqual(bash(st["check"]["run"], {"KIT": str(KIT), "BASE": self.base, "LOCKED": "",
+                                                   "REPO": "o/r", "SERVER": "https://github.com",
                                                    "ADAPTER": adapter, "STRICT": strict}), 0)
         outs = dict(ln.split("=", 1) for ln in (tmp / "out").read_text().splitlines())
         if pr and not adapter:
@@ -533,6 +692,17 @@ class Action(Repo):
         rc, out, _, calls = self.step("7")
         self.assertEqual((rc, out), (0, "pass"))
         self.assertEqual(len(calls), 1)   # only the lookup for an earlier comment
+
+    def test_a_pr_touching_a_rulings_code_posts_the_ruling_with_its_link(self):
+        # Catches (C1-C3): a touched ruling that passes in silence, or a comment without the link the
+        # Action's REPO and SERVER were passed for.
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n")
+        self.commit("pr")
+        rc, out, summary, calls = self.step("7")
+        self.assertEqual((rc, out, len(calls)), (0, "pass", 2))
+        self.assertEqual(calls[-1].split()[:2], ["api", "repos/o/r/issues/7/comments"])
+        self.assertIn("The owner ruled: **Option B ★**", summary)
+        self.assertIn(f"https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}", summary)
 
 
 # -- 1.52.0: the ruling lookup before an agent edits (owner R1-R4) ------------------------------------
