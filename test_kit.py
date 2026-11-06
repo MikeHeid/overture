@@ -833,6 +833,47 @@ class FoldTests(Tmp):
         written, skipped = F.fold(out, ledger, ad, dry_run=False)
         self.assertEqual((written, len(skipped), len(ad.recorded)), ([], 1, 1))
 
+    def test_export_refuses_while_the_refactor_log_is_unread(self):
+        # 1.62 (audit A1). Catches: a refactor.jsonl the console refused to read (over the cap, edited by
+        # hand) making every withdrawn ruling export as if it still held, committed for CI to enforce.
+        st, _ = self.locked_store()
+        (self.dir / "refactor.jsonl").write_bytes(b"not json\n")
+        st = self.store()
+        self.assertTrue(st.refactor.problem)
+        with self.assertRaisesRegex(F.FoldError, "is not read.*nothing is exported.*withdrawn ruling"):
+            F.export(st)
+        import contextlib
+        import io
+        err, root = io.StringIO(), self.dir / "proj"
+        root.mkdir()
+        with contextlib.redirect_stderr(err):
+            rc = F.main(["--root", str(root), "export", "--store", str(self.path), "--out", "locked"])
+        self.assertEqual(rc, 1)
+        self.assertIn("nothing is exported", err.getvalue())
+        self.assertFalse((root / "locked").exists())
+
+    def test_a_folded_ruling_whose_item_is_gone_is_skipped_not_refused(self):
+        # 1.62 (audit A3). Catches: an item renamed or removed after its ruling was folded refusing every later
+        # fold ("does not resolve to a project item"), and the skip loosening any other check on that file.
+        st, _ = self.locked_store()
+        out, ledger = self.exported(st), self.dir / "folded.txt"
+        F.fold(out, ledger, FakeAdapter(ITEMS), dry_run=False)
+        gone = {k: v for k, v in ITEMS.items() if k == "LANE"}
+        written, skipped = F.fold(out, ledger, FakeAdapter(gone), dry_run=False)
+        self.assertEqual(written, [])
+        self.assertEqual(skipped, [f"LANE.1__Q1.json: lock {json.loads((out / 'LANE.1__Q1.json').read_text())['locked']['lock_id']}"
+                                   " already folded (its item 'LANE.1' is no longer in the project)"])
+        st.append(question(qid="LANE.1/Q3"))
+        st.append(lock(st.append(answer(qid="LANE.1/Q3"))))
+        F.write_export(F.export(st), out)
+        with self.assertRaisesRegex(F.FoldError, r"LANE.1__Q3.json: item 'LANE.1' does not resolve"):
+            F.fold(out, ledger, FakeAdapter(gone), dry_run=True)   # not yet folded: the item is still required
+        (out / "LANE.1__Q3.json").unlink()
+        e = json.loads((out / "LANE.1__Q1.json").read_text())
+        (out / "LANE.1__Q1.json").write_text(json.dumps({**e, "extra": 1}))
+        with self.assertRaisesRegex(F.FoldError, r"LANE.1__Q1.json: unknown field\(s\) extra"):
+            F.fold(out, ledger, FakeAdapter(gone), dry_run=True)   # folded, yet every other check still runs
+
     def test_dry_run_records_nothing_and_leaves_the_ledger(self):
         st, _ = self.locked_store()
         out, ledger, ad = self.exported(st), self.dir / "folded.txt", FakeAdapter(ITEMS)

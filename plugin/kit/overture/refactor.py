@@ -269,6 +269,11 @@ class Log:
             rec["ts"] = self.clock()
             data = self._raw + json.dumps(rec, sort_keys=True, ensure_ascii=False,
                                           separators=(",", ":")).encode("utf-8") + b"\n"
+            if len(data) > MAX_FILE:
+                # 1.62 (audit A1): _load refuses a file over MAX_FILE, so writing
+                # past it would make the next start forget every act in it.
+                raise RefactorError(f"{FILE} would pass {MAX_FILE} bytes, which the console refuses to read; "
+                                    f"nothing was written, and no more withdrawals, keeps or replaces can be recorded here")
             self.folder.mkdir(parents=True, exist_ok=True)
             fd = os.open(self.folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
             try:

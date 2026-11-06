@@ -8065,6 +8065,20 @@ class RefactorTests(_Live, unittest.TestCase):
                 self.console.store.refactor.append(rec, self.console.store)
             self.assertIn("only the owner may write one", str(e.exception))
 
+    def test_an_act_that_would_pass_the_file_cap_is_refused_and_nothing_is_written(self):
+        # 1.62 (audit A1). Catches: an append past MAX_FILE that succeeds, after which the next start refuses
+        # the whole file and every withdrawal in it is forgotten: withdrawn rulings in force again.
+        from overture import refactor as RXM
+        self.go_stale()
+        f = self.cfg.state / "refactor.jsonl"
+        with mock.patch.object(RXM, "MAX_FILE", 100):
+            code, out = self.act(REFACTOR_ACTIONS["withdraw"](self))
+        self.assertNotEqual(code, 200, out)
+        self.assertIn("would pass 100 bytes", out["error"])
+        self.assertFalse(f.exists())
+        self.assertEqual(self.act(REFACTOR_ACTIONS["withdraw"](self))[0], 200)   # under the real cap it is written
+        self.assertIsNone(RXM.Log(self.cfg.state, lambda: "x").problem)
+
     def test_the_log_itself_refuses_a_second_outcome_and_a_second_replacement(self):
         # The rules under the routes, driven at the log, since the routes check first and would hide a log that
         # forgot them. Catches: a settled lock settled again (two outcomes, which one is the record?), a second
@@ -12456,6 +12470,17 @@ class RulingsRouteTests(_Live, unittest.TestCase):
                 code, out = self.agent_post("/rulings", {"paths": paths})
                 self.assertEqual(code, 400, out)
                 self.assertIn(words, out["error"])
+
+    def test_unread_withdrawals_refuse_the_lookup(self):
+        # 1.62 (audit A1). Catches: the live lookup listing a withdrawn ruling as holding while refactor.jsonl
+        # is unread. A refusal sends the hook to the committed rulings, exported while the log was read.
+        self.console.store.refactor.problem = "refactor.jsonl is not read"
+        try:
+            code, out = self.rulings("src/pay.py")
+        finally:
+            self.console.store.refactor.problem = None
+        self.assertEqual(code, 503, out)
+        self.assertIn("refactor.jsonl is not read", out["error"])
 
     def test_at_most_fifty_paths_in_one_lookup(self):
         # Catches: a 51st path accepted, so one request can make the server match without the cap it states.

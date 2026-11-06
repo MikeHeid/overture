@@ -3245,6 +3245,7 @@ class Console:
         except L.PathRefused as e:
             raise RequestError(400, str(e)) from None
         from . import fold as F   # here: the export lives with the fold, which the server needs for nothing else
+        self._refactor_problem()   # 1.62: unread withdrawals would list a withdrawn ruling as holding
         entries = list(F.export(self.store, None, F.lock_names_beside(self.cfg.store)).values())
         try:
             statuses, known = self._status(self.items()), True
