@@ -754,6 +754,85 @@ class FakeAdapter:
         return []
 
 
+class StoreCheckTests(Tmp):
+    """1.62 (audit A2): `agent.py store-check`, every line replayed through the append rules."""
+
+    def forge(self, rec):
+        """Append `rec` by hand, as an older kit or an editor could: a valid shape, seq and id, no rules run."""
+        n = len(self.path.read_text().splitlines()) + 1
+        rec = {**rec, "ts": "2026-11-06T00:00:00Z", "seq": n}
+        rec["id"] = S.record_id(rec)
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        return rec
+
+    def run_check(self):
+        import contextlib
+        import io
+        import agent as AG
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = AG.main(["--state", str(self.dir), "store-check"])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_a_store_written_through_append_has_no_finding(self):
+        # Catches: a replay that flags its own history, e.g. checking each line against the WHOLE store
+        # (an answer then "follows" the lock that came after it).
+        st = self.store()
+        st.append(question())
+        a = st.append(answer())
+        st.append(lock(a))
+        st.append(answer(supersedes=a["id"], reason="changed my mind", picks=["a"]))
+        self.assertEqual(Store.replay(self.path), (4, []))
+        rc, out, _ = self.run_check()
+        self.assertEqual(rc, 0)
+        self.assertIn("4 records, every line passes the append rules", out)
+
+    def test_a_hand_written_line_the_rules_refuse_is_named_by_line(self):
+        # Catches: a store that loads clean (shape, seq and id all match) while holding what append forbids:
+        # a second lock of one answer and an answer naming a question that does not exist.
+        st = self.store()
+        st.append(question())
+        a = st.append(answer())
+        st.append(lock(a))
+        self.forge(lock(a))
+        self.forge(answer(qid="LANE.1/Q9"))
+        Store(self.path)   # it loads: only the replay sees it
+        n, found = Store.replay(self.path)
+        self.assertEqual(n, 5)
+        self.assertEqual([f.split(": ")[0] for f in found], [f"{self.path}:4", f"{self.path}:5"])
+        rc, out, _ = self.run_check()
+        self.assertEqual(rc, 1)
+        self.assertIn("5 records, 2 finding(s)", out)
+
+    def test_an_unloadable_store_and_an_unread_refactor_log_are_findings(self):
+        # Catches: store-check crashing on the very file it exists to diagnose, and staying silent about a
+        # refactor.jsonl the console refuses (every withdrawal then forgotten, A1).
+        st = self.store()
+        st.append(question())
+        (self.dir / "refactor.jsonl").write_bytes(b"{}")
+        n, found = Store.replay(self.path)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(found), 1)
+        self.assertRegex(found[0], r"refactor.jsonl line 1 has no newline, so it is not read")
+        self.path.write_text(self.path.read_text() + "{not json\n")
+        n, found = Store.replay(self.path)
+        self.assertEqual(n, 0)
+        self.assertRegex(found[0], r"store.jsonl:2: not JSON")
+
+    def test_a_fork_under_a_sub_item_is_scoped_by_items_json(self):
+        # Catches: a replay without the register's tree flagging every fork question asked on a sub-item.
+        st = Store(self.path, known_items=ITEMS, clock=self.clock)
+        st.append(question(qid="LANE.1.a/Q1"))
+        st.append(fork(item="LANE.1", about_qid="LANE.1.a/Q1", roles=["architect"]))   # in scope: LANE.1.a sits under LANE.1
+        self.assertEqual(Store.replay(self.path, {k: v["parent"] for k, v in ITEMS.items()}), (2, []))
+        n, found = Store.replay(self.path)                          # no tree: only the fork's own item
+        self.assertRegex(found[0], r":2: .*outside this fork's scope")
+        self.assertEqual(self.run_check()[0], 1)
+        (self.dir / "items.json").write_text(json.dumps({"items": ITEMS}))
+        self.assertEqual(self.run_check()[0], 0)
+
+
 class FoldTests(Tmp):
     def test_fold_paths_must_stay_inside_the_project_before_any_import(self):
         # PR #171 security re-review HIGH: `--adapter` is imported and run, and its value
