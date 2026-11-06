@@ -158,8 +158,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             deny = [line.strip() for line in a.deny_file.read_text(encoding="utf-8").splitlines()
                     if line.strip() and not line.startswith("#")]
-        except OSError as e:
-            print(f"build_zip: --deny-file {a.deny_file}: {e.strerror or e}; nothing was built", file=sys.stderr)
+        except (OSError, ValueError) as e:   # ValueError: not UTF-8 (clearer, 1.62)
+            print(f"build_zip: --deny-file {a.deny_file}: {getattr(e, 'strerror', None) or e}; nothing was built",
+                  file=sys.stderr)
             return 1
         if not deny:   # 1.62 (audit A4): an empty list scans for nothing, which is not what was asked
             print(f"build_zip: --deny-file {a.deny_file} lists no string; nothing was built", file=sys.stderr)

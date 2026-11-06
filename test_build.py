@@ -424,6 +424,11 @@ class DenyFileTests(unittest.TestCase):
             rc, err, built = self.run_main("--deny-file", str(empty))
             self.assertEqual((rc, built), (1, False))
             self.assertIn("lists no string; nothing was built", err)
+            bad = Path(td) / "latin1.txt"
+            bad.write_bytes(b"caf\xe9\n")
+            rc, err, built = self.run_main("--deny-file", str(bad))
+            self.assertEqual((rc, built), (1, False))
+            self.assertIn("nothing was built", err)
             rc, err, built = self.run_main("--deny-file", str(Path(td) / "nope.txt"))
             self.assertEqual((rc, built), (1, False))
             self.assertIn("nothing was built", err)
