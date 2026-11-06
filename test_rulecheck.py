@@ -338,6 +338,79 @@ class Markdown(Repo):
         fence = RC._fence("- a ``` b\n+ c")
         self.assertTrue(fence.startswith("````diff\n") and fence.endswith("\n````"))
 
+    # -- 1.61: the ruling where the reviewer reads it (owner C1-C3) --------------------------------------
+
+    def touch(self) -> None:
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n")
+        self.commit("pr")
+
+    def test_a_touched_ruling_is_notable_and_quoted_whole(self):
+        # Catches (C1, C3): a change that sits on a ruling's cited lines and posts nothing, or posts the qid
+        # alone, so the reviewer still has to open the console to learn what was ruled, by whom and when.
+        e = json.loads(self.ruling().read_text())
+        e["locked"]["locked_by_name"] = "mo"
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("named lock")
+        self.touch()
+        rc, out, err = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertIn(RC.NOTABLE, out)
+        self.assertIn("touches code these rulings rest on", out)
+        self.assertIn("**LANE.1/Q1: Which for LANE.1/Q1?**", out)
+        self.assertIn("The owner ruled: **Option B ★** (locked 2026-10-13 by mo).", out)
+        rc, rep = self.report("--base", self.base)
+        j = rep["touched"][0]
+        self.assertEqual((j["answer"], j["locked_by_name"], j["locked_at"][:10], j["file"], rep["notable"]),
+                         ("Option B ★", "mo", "2026-10-13", RULING, True))
+
+    def test_a_broken_ruling_shows_what_was_ruled(self):
+        # Catches (C1): the red comment naming the question but not the ruling, in markdown and in text.
+        self.break_code()
+        self.commit("pr")
+        rc, out, _ = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual(rc, 1)
+        self.assertIn("The owner ruled: **Option B ★** (locked 2026-10-13).", out)
+        rc, out, _ = self.check("--base", self.base)
+        self.assertIn("  ruled: Option B ★ (locked 2026-10-13)", out)
+
+    def test_the_rulings_words_are_inert_in_the_comment(self):
+        # Catches (C1): the owner's own text printed raw, where @someone pings a person and a URL links.
+        # (A short name cannot carry either: fold refuses any but lowercase letters, digits and hyphens.)
+        a2 = self.store.append(answer(picks=(), own_text="ask @octocat at https://evil.example",
+                                      supersedes=self.a1["id"], reason="words now"))
+        self.store.append(lock(a2))
+        self.export()
+        self.base = self.commit("hostile words")
+        self.touch()
+        rc, out, err = self.check("--base", self.base, "--format", "markdown")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertIn("ask @​octo", out)
+        for raw in ("@octocat", "://"):
+            self.assertNotIn(raw, out)
+
+    def test_each_ruling_links_to_its_committed_file_at_the_base(self):
+        # Catches (C2): a link to the branch (which the pull request can edit), or none; the base is
+        # resolved to its sha, and the folder and file name are URL-quoted.
+        git(self.root, "tag", "base")
+        self.touch()
+        rc, rep = self.report("--base", "base", "--repo", "o/r")
+        self.assertEqual(rc, 0)
+        self.assertEqual(rep["touched"][0]["link"], f"https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}")
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--server", "https://ghe.example:8443",
+                                "--format", "markdown")
+        self.assertIn(f"[The ruling file](https://ghe.example:8443/o/r/blob/{self.base}/.overture/locked/{RULING})", out)
+        # Without --repo there is no link, and nothing else changes.
+        rc, rep = self.report("--base", self.base)
+        self.assertNotIn("link", rep["touched"][0])
+
+    def test_a_repo_or_server_that_is_not_one_is_refused(self):
+        # Catches (C2): a value from the runner pasted into a URL as it came; each is refused by name.
+        for args in (("--repo", "o/r/x"), ("--repo", "../r"), ("--repo", "o/r", "--server", "http://x"),
+                     ("--repo", "o/r", "--server", "https://x/path"), ("--repo", "o r")):
+            rc, _, err = self.check("--base", self.base, *args)
+            self.assertEqual(rc, 2, args)
+            self.assertIn(args[-2], err)
+
 
 ACTION = Path(__file__).resolve().parent / "action.yml"
 # A stand-in for `gh`: it logs every call, and answers the comment listing with $GH_EXISTING (an id or nothing).
@@ -463,6 +536,7 @@ class Action(Repo):
                                   timeout=60).returncode
 
         self.assertEqual(bash(st["check"]["run"], {"KIT": str(KIT), "BASE": self.base, "LOCKED": "",
+                                                   "REPO": "o/r", "SERVER": "https://github.com",
                                                    "ADAPTER": adapter, "STRICT": strict}), 0)
         outs = dict(ln.split("=", 1) for ln in (tmp / "out").read_text().splitlines())
         if pr and not adapter:
@@ -533,6 +607,17 @@ class Action(Repo):
         rc, out, _, calls = self.step("7")
         self.assertEqual((rc, out), (0, "pass"))
         self.assertEqual(len(calls), 1)   # only the lookup for an earlier comment
+
+    def test_a_pr_touching_a_rulings_code_posts_the_ruling_with_its_link(self):
+        # Catches (C1-C3): a touched ruling that passes in silence, or a comment without the link the
+        # Action's REPO and SERVER were passed for.
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n")
+        self.commit("pr")
+        rc, out, summary, calls = self.step("7")
+        self.assertEqual((rc, out, len(calls)), (0, "pass", 2))
+        self.assertEqual(calls[-1].split()[:2], ["api", "repos/o/r/issues/7/comments"])
+        self.assertIn("The owner ruled: **Option B ★**", summary)
+        self.assertIn(f"https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}", summary)
 
 
 # -- 1.52.0: the ruling lookup before an agent edits (owner R1-R4) ------------------------------------

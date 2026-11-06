@@ -173,8 +173,23 @@ cannot pass by editing or deleting a ruling file. If you re-lock or
 settle a ruling and its export lands in the same pull request, it passes
 and is listed as re-ruled. The Action posts one comment on the pull
 request, and keeps it updated, when a ruling breaks or a reviewer must
-look: a re-ruling, an edited ruling file, or a ruling it could not
-check. If it finds no ruling files at all, the job summary says so.
+look: a re-ruling, an edited ruling file, a ruling it could not
+check, or (1.61) a ruling whose cited code the change touches. If it
+finds no ruling files at all, the job summary says so.
+
+**The ruling where the reviewer reads it (1.61).** When a change edits
+the lines a ruling cites, the comment quotes the ruling: the question,
+what the owner ruled (the picked options or their own words), who
+locked it by the owner-set short name, never an email, and when. Each
+ruling links to its committed file at the pull request's base commit,
+which the pull request cannot have edited, so anyone who can see the
+pull request can open it without a console. A broken ruling is quoted
+the same way, above its diff. A pass that touches no ruling stays
+silent. Every word from a ruling file is made inert first: no markup,
+no mention, no bare link. The owner's choices are C1–C3 in
+[OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#ruling-aware-pr-comments-and-linear-decided-2026-11-06).
+Run by hand, `rulecheck.py --base <base> --repo OWNER/NAME` adds the
+links (`--server` for a GitHub Enterprise host).
 
 What it trusts: ruling files arrive by pull request, as they always
 have, so a re-ruling in the comment is a claim for the reviewer to

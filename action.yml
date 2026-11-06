@@ -38,8 +38,9 @@ inputs:
     default: "false"
   comment:
     description: >-
-      Post one comment on the pull request when a ruling breaks, and keep it updated. Never with
-      adapter, whose run holds no token; the job summary still has the report.
+      Post one comment on the pull request when a ruling breaks, or when the change touches code a
+      ruling rests on (1.61: the ruling is quoted there, with a link to its committed file at the base),
+      and keep it updated. Never with adapter, whose run holds no token; the job summary still has the report.
     required: false
     default: "true"
   github-token:
@@ -65,6 +66,8 @@ runs:
       env:
         KIT: ${{ github.action_path }}/plugin/kit
         BASE: ${{ github.event.pull_request.base.sha }}
+        REPO: ${{ github.repository }}
+        SERVER: ${{ github.server_url }}
         LOCKED: ${{ inputs.locked }}
         ADAPTER: ${{ inputs.adapter }}
         STRICT: ${{ inputs.strict }}
@@ -98,6 +101,10 @@ runs:
             || git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$BASE" \
             || echo "::warning::could not fetch the base commit; use actions/checkout with fetch-depth: 0"
           args+=(--base "$BASE")
+          # 1.61 (C2): each ruling in the comment links to its committed file at the base commit. The values
+          # are data to rulecheck, which refuses any that is not shaped as a repository or an https origin.
+          [ -n "${REPO:-}" ] && args+=(--repo "$REPO")
+          [ -n "${SERVER:-}" ] && args+=(--server "$SERVER")
         fi
         [ -n "$LOCKED" ] && args+=(--locked "$LOCKED")
         [ -n "$ADAPTER" ] && args+=(--adapter "$ADAPTER")
@@ -131,8 +138,9 @@ runs:
           echo "::notice::no pull request comment with adapter: that run holds no token (see the job summary)"
         fi
     # One comment per pull request, found by the marker on its first line. It is posted when a ruling
-    # breaks or a reviewer must look (a re-ruling, an edited ruling file, an unchecked one), then kept
-    # up to date, so a fix turns it green rather than adding another. Never after an adapter ran: the
+    # breaks or a reviewer must look (a re-ruling, an edited ruling file, an unchecked one, and since 1.61
+    # a ruling whose cited code the change touches), then kept up to date, so a fix turns it green rather
+    # than adding another. Never after an adapter ran: the
     # pull request's code could have written into this job's later steps (GITHUB_ENV).
     - id: comment
       if: inputs.comment == 'true' && inputs.adapter == '' && github.event.pull_request.number

@@ -221,6 +221,28 @@ questions, and the owner chose the ★ on each.
 | W5-2 | The order inside the Trust lane | **Backlinks first** (owner ★). The order is: collaborator-only backlinks (risk 5), then GitHub webhooks verified by their HMAC signature instead of through a bridge (features/automation.md), then a recipe for keeping agents that run as the same user apart. Backlinks starts with a design round on how trust is decided. Weighed and not chosen: signed webhooks first, as the smallest item. |
 | W5-3 | What stays out | **Kept for a later wave** (owner ★): Docker (optional, A8), Jira, MADR/ADR templates, a hosted demo, and ruling search and dependencies. |
 
+## Ruling-aware PR comments and Linear (decided 2026-11-06)
+
+Wave 5's second step, Wave 3's last item (W5-1). Its waypoint was given in
+the conversation ([WAYPOINTS.md](WAYPOINTS.md)): proceed as mapped, the
+GitHub trigger action filter left open by 1.59 belongs here, and Linear is
+outbound only. Reading the Action first: since 1.37 it posts one comment per
+pull request, kept up to date, only when a ruling is broken, re-ruled,
+unchecked or moved, or a ruling file is edited; a ruling whose cited lines
+the change touches and that still holds is listed but posts nothing, and no
+comment shows the owner's words, who locked it, or a link. A design round
+asked these seven questions, and the owner chose the ★ on each ("defaults").
+
+| # | Question | Decision |
+|---|---|---|
+| C1 | What the comment says | **The ruling where the reviewer reads it** (owner ★). For each ruling the change touches or breaks: the owner's locked words (the picked labels, or their own text), who locked it by the owner-set short name (never an email), when, and the cited lines; a broken one keeps its diff. Every word from a ruling file passes `_md`, so it is inert in the comment, and the 60,000-character cut stays. Weighed and not chosen: the qid and question only (the reviewer still has to open the console); also every ruling citing any *file* the change edits, not only cited lines (noisier on hot files; revisited if the real run shows rulings cite files broadly). |
+| C2 | Where it links | **The committed ruling file at the pull request's base commit** (owner ★): a blob link built from the repository name, the base commit and the locked folder. It resolves for anyone who can see the pull request, needs no console and no secret, and the pull request cannot edit what it points at. Weighed and not chosen: the console (behind Access, outsiders hit a login wall, and every pull request would publish the console's host); no link. |
+| C3 | When it is silent | **Touched joins notable** (owner ★): the comment is posted when a ruling is touched, broken, re-ruled, unchecked or moved, or a ruling file is edited; silent on a pass that touches no ruling; never after an adapter ran (1.37). If the real run shows most pull requests touch a ruling, a `comment: broken` level is added. Weighed and not chosen: touched rides along only (defeats C1 in the common case); always post, even "All N hold". |
+| F1 | The GitHub trigger action filter (1.59's open item) | **An optional `actions` list beside `events`** (owner ★): `"github": {"events": ["pull_request"], "actions": ["opened", "synchronize"]}`. Absent, every action fires, as in 1.59; a delivery whose action is not listed is answered with a named no-op, as an unlisted event is (G3). Weighed and not chosen: `pull_request.opened` as event names (a second grammar for one list); a filter in the playbook's `when` (the payload is not passed to playbooks, G3). |
+| L1 | What Linear gets, outbound only | **A comment on the item's Linear issue when a ruling on it is locked, settled or withdrawn** (owner ★): the question, the owner's words, who and when, and the C2 link. The first outbound post that carries a question's text; the Slack digest (1.45) never does, and that stays so. Weighed and not chosen: mirroring items as Linear issues (a sync, and two-way pressure); a waiting-questions digest (Slack already does it). |
+| L2 | How an item finds its Linear issue | **A `linear` field on the item, holding the issue identifier, set by the owner where items are set today; nothing is guessed** (owner ★). Weighed and not chosen: matching by title (the wrong issue, silently); a map file in STATE (a second place to maintain). |
+| L3 | Who posts, and where the key lives | **Like `notify-url`** (owner ★): `agent.py linear-key` writes a 0600 file in the console's state directory, is the owner's alone and refused inside a session (G2); the server posts at lock time, through HTTPS_PROXY when set, and the console shows only that a key is set. A sandboxed steward never holds the key (1.60). Weighed and not chosen: an `agent.py linear-push` run by the steward with the key in its environment (puts a secret back in a session). |
+
 ## Same-user isolation (decided 2026-10-22)
 
 The third lane of Wave 5. Its waypoint was given in the conversation
