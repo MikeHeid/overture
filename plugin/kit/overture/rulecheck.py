@@ -65,6 +65,9 @@ MD_SPECIAL = re.compile(r"([\\`*_\[\]|#~])")
 REPO = re.compile(r"^(?!\.\.?/)[A-Za-z0-9._\-]{1,100}/(?!\.\.?\Z)[A-Za-z0-9._\-]{1,100}\Z")
 SERVER = re.compile(r"^https?://[A-Za-z0-9_][A-Za-z0-9_.\-]{0,252}(:[0-9]{1,5})?\Z")
 DEFAULT_SERVER = "https://github.com"
+# The owner's words in a report: the lookup's 160 suits one line in an agent's context, and cut a real
+# ruling short in the comment where a reviewer reads it (the 1.61 real run); the ruling file has the rest.
+RULED_CHARS = 1000
 
 
 class CheckError(Exception):
@@ -179,7 +182,7 @@ def judge(e: dict, tree: A.Tree, history: A.History, item_status: dict | None,
     # and strips control characters, as the lookup's entry does.
     lk = e["locked"]
     out = {"qid": e["qid"], "item": e["item"], "question": e["question"], "source": e["source"],
-           "anchored_by": origin, "lock_id": lk["lock_id"], "answer": L.answer_words(lk),
+           "anchored_by": origin, "lock_id": lk["lock_id"], "answer": L.answer_words(lk, RULED_CHARS),
            "locked_at": lk.get("locked_at"), "state": state, "conditions": rows}
     if isinstance(lk.get("locked_by_name"), str):
         out["locked_by_name"] = lk["locked_by_name"]
@@ -271,9 +274,10 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
         link_base: str | None = None) -> dict:
     """The whole report: what is broken, re-ruled, unchecked, touched and holds, and which ruling files changed.
 
-    `link_base` (1.61, C2) is the URL of the locked folder at the base commit,
-    ending in `/`; with it, every judged ruling carries `link`, the committed
-    file the reviewer can open, which the pull request cannot have edited.
+    `link_base` (1.61, C2) is the URL of the base commit's tree, ending in
+    `/`; with it, every judged ruling that is at the base carries `link`, the
+    committed ruling file, and `source_link`, the lines it cites as the base
+    has them: both are what the pull request cannot have edited.
     """
     root = Path(root).resolve()
     item_status = None if items is None else {k: v.get("status") for k, v in items.items()}
@@ -296,7 +300,10 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
         # the base holds, so the comment says so and no base link is built for it (1.61 review).
         j["at_base"] = name in old
         if link_base and j["at_base"]:
-            j["link"] = link_base + urllib.parse.quote(name, safe="")
+            j["link"] = f"{link_base}{urllib.parse.quote(locked, safe='/')}/{urllib.parse.quote(name, safe='')}"
+            cited = _source_link(link_base, e["source"], before)
+            if cited:
+                j["source_link"] = cited
         now = head.get(name)
         if j["state"] == "broken" and base and now is not None and now is not e and (
                 "outcome" in now or (now["locked"]["lock_id"] != e["locked"]["lock_id"]
@@ -362,6 +369,28 @@ def _unchecked_words(j: dict) -> str:
     return " ".join(c["words"] for c in j["conditions"] if c["holds"] is None)
 
 
+def _source_link(link_base: str, source: object, before) -> str | None:
+    """The cited lines at the base commit, `…/blob/<sha>/<path>#L2-L5` (1.61 real run), or None.
+
+    Only for a `path:line` or `path:start-end` source whose file the base has:
+    `before` reads it from git, so a path that is not a real file of the base
+    tree (a `..`, an absolute path, a file since deleted) gets no link.
+    """
+    m = A.SOURCE_RANGE.match(source) if isinstance(source, str) else None
+    if not m or before is None:
+        return None
+    path = m.group("path")
+    if path.startswith("/") or ".." in path.split("/") or before(path) is None:
+        return None
+    lines = f"L{int(m.group('a'))}" + (f"-L{int(m.group('b'))}" if m.group("b") else "")
+    return f"{link_base}{urllib.parse.quote(path, safe='/')}#{lines}"
+
+
+def _cited_md(j: dict) -> str:
+    """Where the ruling is cited, as a link to those lines at the base when there is one."""
+    return f"[{_md(j['source'])}]({j['source_link']})" if j.get("source_link") else _md(j["source"])
+
+
 def _ruled(j: dict) -> str:
     """The ruling in the comment (1.61, C1): the owner's words, when and by whom, and the file's link (C2).
 
@@ -409,7 +438,7 @@ def markdown(rep: dict) -> str:
     for j in rep["broken"]:
         out.append(f"### {_md(j['qid'])}: {_md(j['question'])}")
         out.append(_ruled(j))
-        out.append(f"Cited at {_md(j['source'])}. It no longer holds:")
+        out.append(f"Cited at {_cited_md(j)}. It no longer holds:")
         for c in j["conditions"]:
             if c["holds"] is False:
                 out.append(f"- {_md(c['words'])}")
@@ -437,7 +466,7 @@ def markdown(rep: dict) -> str:
         out.append("**This change touches code these rulings rest on. They still hold; read them before "
                    "you review:**")
         for j in rep["touched"]:   # one line each, so the comment's cut never parts a ruling from its words
-            out.append(f"- **{_md(j['qid'])}: {_md(j['question'])}** (cited at {_md(j['source'])}; this change "
+            out.append(f"- **{_md(j['qid'])}: {_md(j['question'])}** (cited at {_cited_md(j)}; this change "
                        f"edits {', '.join(_md(f) for f in j['files'])}). {_ruled(j)}")
         out.append("")
     f = rep["files"]
@@ -502,7 +531,7 @@ def _locked_default(root: Path, base: str | None) -> str:
 
 
 def _link_base(root: Path, base: str | None, locked: str, repo: str | None, server: str) -> str | None:
-    """`<server>/<repo>/blob/<base sha>/<locked>/` (1.61, C2), or None without --repo or --base.
+    """`<server>/<repo>/blob/<base sha>/` (1.61, C2), or None without --repo or --base.
 
     The base is resolved to its commit sha, so the link stays the same file
     when the branch moves on. A repo or server that is not shaped as one is
@@ -522,7 +551,7 @@ def _link_base(root: Path, base: str | None, locked: str, repo: str | None, serv
     sha = _git(root, ["rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"])
     if sha is None:
         raise CheckError(f"--base {base!r}: git could not resolve it to a commit")
-    return f"{server}/{repo}/blob/{sha.decode().strip()}/{urllib.parse.quote(locked, safe='/')}/"
+    return f"{server}/{repo}/blob/{sha.decode().strip()}/"
 
 
 def main(argv: list[str] | None = None) -> int:

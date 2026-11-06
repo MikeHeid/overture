@@ -170,10 +170,10 @@ def _short(text: object, n: int) -> str:
     return "".join("?" if _unsafe(ch) else ch for ch in s)
 
 
-def answer_words(lk: dict) -> str:
-    """The owner's answer in a few words: the picked labels, then the owner's own text."""
+def answer_words(lk: dict, n: int = ANSWER_CHARS) -> str:
+    """The owner's answer in a few words: the picked labels, then the owner's own text; at most `n` characters."""
     said = [*(lk.get("picked_labels") or []), *([lk["own_text"]] if lk.get("own_text") else [])]
-    return _short("; ".join(str(s) for s in said), ANSWER_CHARS) or "(no words)"
+    return _short("; ".join(str(s) for s in said), n) or "(no words)"
 
 
 def entry(e: dict, label: str, conds: list[dict], stale: bool) -> dict:

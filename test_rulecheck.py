@@ -406,6 +406,53 @@ class Markdown(Repo):
         # Without --repo there is no link, and nothing else changes.
         rc, rep = self.report("--base", self.base)
         self.assertNotIn("link", rep["touched"][0])
+        self.assertNotIn("source_link", rep["touched"][0])
+
+    def test_the_cited_lines_link_to_the_file_at_the_base(self):
+        # Catches (C1, the real run): the cited place named but not reachable, so the reviewer cannot read
+        # the lines the ruling rests on as the base has them; a range gets both ends.
+        self.touch()
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        self.assertEqual(rep["touched"][0]["source_link"], f"https://github.com/o/r/blob/{self.base}/src/pay.py#L2")
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--format", "markdown")
+        self.assertIn(f"(cited at [src/pay.py:2](https://github.com/o/r/blob/{self.base}/src/pay.py#L2); this", out)
+        e = json.loads(self.ruling().read_text())
+        e["source"] = "src/pay.py:1-2"
+        self.ruling().write_text(json.dumps(e))
+        self.base = self.commit("a range")
+        (self.root / "src/pay.py").write_text(CITED + "# a note\n# another\n")
+        self.commit("pr 2")
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        self.assertTrue(rep["touched"][0]["source_link"].endswith("/src/pay.py#L1-L2"))
+
+    def test_a_cited_place_the_base_does_not_hold_gets_no_link(self):
+        # Catches: a link built from a ruling file's `source` as written: one that climbs out of the
+        # repository's tree (and so to another repository's page), or to a file the base does not have.
+        for source in ("../../../evil/repo/blob/main/x:1", "/etc/passwd:1", "src/gone.py:3", "src/pay.py", "notes"):
+            e = json.loads(self.ruling().read_text())
+            e["source"] = source
+            self.ruling().write_text(json.dumps(e))
+            self.base = self.commit(f"source {source}")
+            (self.root / "src/pay.py").write_text((self.root / "src/pay.py").read_text() + "# more\n")
+            self.commit("pr")
+            rc, out, err = self.check("--base", self.base, "--repo", "o/r", "--format", "json")
+            self.assertEqual((rc, err), (0, ""), source)
+            j = json.loads(out)["touched"][0]
+            self.assertIn("link", j, source)
+            self.assertNotIn("source_link", j, source)
+
+    def test_the_owner_s_words_are_not_cut_at_a_line_s_length(self):
+        # Catches (the real run): the lookup's 160-character answer, right for one line in an agent's
+        # context, cutting a real ruling short in the comment where the reviewer reads it.
+        words = "Banker's rounding. " + "Totals over a day must not drift, and the auditors check them. " * 6
+        a2 = self.store.append(answer(picks=("b",), own_text=words, supersedes=self.a1["id"], reason="in full"))
+        self.store.append(lock(a2))
+        self.export()
+        self.base = self.commit("long words")
+        self.touch()
+        rc, out, _ = self.check("--base", self.base, "--format", "markdown")
+        self.assertIn("the auditors check them. Totals over a day must not drift, and the auditors check them.**", out)
+        self.assertNotIn("…", out)
 
     def test_a_ruling_file_the_change_adds_is_not_quoted_as_the_base_s_ruling(self):
         # Catches (1.61 review): a ruling file the pull request itself writes shown as "The owner ruled",
