@@ -12481,6 +12481,16 @@ class RulingsRouteTests(_Live, unittest.TestCase):
             self.console.store.refactor.problem = None
         self.assertEqual(code, 503, out)
         self.assertIn("refactor.jsonl is not read", out["error"])
+        from overture import lookup as LK   # the hook's own call: the committed rulings, and the server's reason
+        self.console.store.refactor.problem = "refactor.jsonl is not read"
+        try:
+            res = LK.lookup(self.cfg.state, self.cfg.root, ["src/pay.py"], where=(self.cfg.state / "agent.sock", None, None))
+        finally:
+            self.console.store.refactor.problem = None
+        self.assertEqual(res["source"], "committed")
+        self.assertTrue(res["note"].startswith(
+            "(from the committed rulings; the console server answered 503: refactor.jsonl is not read)"), res["note"])
+        self.assertNotIn("not answering", res["note"])
 
     def test_at_most_fifty_paths_in_one_lookup(self):
         # Catches: a 51st path accepted, so one request can make the server match without the cap it states.
