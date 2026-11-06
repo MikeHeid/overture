@@ -20,9 +20,9 @@ written after the lock in the lane's own worktree, the one the lane starts in.
 
 - **The start of anything new:** a lane (a branch of work with its own
   claim), a phase, a wave, a release line, or a section the project's plan
-  names. Run it before that lane's first commit, and before you ask the
-  lane's own design questions: the owner should agree on the direction
-  before choosing its details.
+  names. Run it before that lane's first commit. The lane's own design
+  questions come with it or after it, never before (step 2): the owner
+  should agree on the direction before choosing its details.
 - The user typed `/overture:waypoint` (optionally with the lane's name).
 - **Not** for a fix inside a lane already under way, a review round, or a
   release of work already agreed. If you are unsure whether something is a
@@ -53,6 +53,13 @@ where it came from (a file and its lines, a PR number, a commit).
   For each stage: done, in progress, next, or dropped. Then **drift**: what
   was decided differently from the plan, what the plan did not foresee, and
   what a recent finding makes less true (a real run, a review, a measurement).
+- **What already exists: check before you map anything new** (1.62, audit
+  B6). For each thing the lane would build, search the project for what
+  already does part of it: a command, a module, a skill, a feature page, a
+  decision row, a test helper. List each with its source, and say whether the
+  lane reuses, extends or replaces it. A lane that would build what exists is
+  drift (step 2). Say "nothing found" with what you searched, never leave it
+  out.
 - **Execution path: what is about to proceed.** The new lane in order: its
   goal in one sentence, what it will touch, the decisions it needs and when,
   and its gates (tests, red checks, a real run, an independent clearer, the
@@ -75,6 +82,15 @@ Two kinds, both from step 1:
   settle.** One lockable question each, laid out as the deliberate skill lays
   a decision out (two to four options, costs, a ★). At most three: more than
   three means the lane is not ready, which is option `c`.
+- **The lane's design questions, in the same post when the on-course ★ is
+  `a`** (OPEN-DECISIONS E1, which amends WP1). If the lane has design
+  questions of its own and you put the ★ on "proceed as mapped", ask them
+  now, after the on-course and drift questions, on the same item, so the
+  owner answers once. Each says in its text that it counts only if the
+  on-course answer is `a`. If the owner picks anything else, those answers
+  do not stand: say so on the item, and ask the questions again once the
+  course is settled. When the ★ is not `a`, the design questions wait for
+  the on-course answer, as before.
 
 ## 3. Post it to the inbox
 
@@ -100,6 +116,9 @@ Two kinds, both from step 1:
    - <stage>: done | in progress | next | dropped
    - Drift: <what changed from the plan, and why>  (<source>)
 
+   Already exists
+   - <command, module, page or decision>: reused | extended | replaced  (<source>)
+
    Execution path for <lane>
    1. <step>  (gate: <what must pass>)
    2. ...
@@ -112,7 +131,8 @@ Two kinds, both from step 1:
    ```
 
 2. **The questions**, through the console-ask skill: the on-course question
-   first, then any drift questions, on the same item.
+   first, then any drift questions, then (when the ★ is `a`) the lane's
+   design questions, on the same item.
 3. **Offer the grill.** If the owner asks for one (a `grill` message on the
    item, or "grill" in chat), run the grill-me skill on the lane as pitched
    in the announcement; its questions land on the same item.
@@ -123,7 +143,8 @@ The lane's first change waits for the on-course question to be locked (the
 console-process skill folds it). Meanwhile, finish work already under way in
 other lanes; do not start this one.
 
-- `a`: start the lane as mapped.
+- `a`: start the lane as mapped, with the design answers given in the same
+  post; ask any design question the post did not carry before building it.
 - `b`: amend the execution path as the owner said, reply with the amended
   path on the item, then start.
 - `c`: run the deliberate skill (or a roar panel, if the owner asked for one)

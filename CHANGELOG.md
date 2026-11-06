@@ -2994,10 +2994,8 @@ on its own.
 
 Wave 5's second step, Wave 3's last item: a team "sees rulings where it
 reviews code" (W5-1). Its waypoint was given in the conversation
-(WAYPOINTS.md), and a design round decided seven questions: C1–C3 for
-this release, F1 and L1–L3 for the two after it (OPEN-DECISIONS.md
-"Ruling-aware PR comments and Linear"). The owner answered "defaults", so
-each is an architect default.
+(WAYPOINTS.md), and a design round decided C1–C3 (OPEN-DECISIONS.md
+"Ruling-aware PR comments and Linear", the owner's ★ on each).
 
 - **The pull request comment quotes the ruling (C1).** For each ruling the
   change touches or breaks, the Action's comment shows the question, what

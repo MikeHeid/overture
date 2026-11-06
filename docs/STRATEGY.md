@@ -410,7 +410,27 @@ change of any new lane, phase, wave or major section, the agent runs the
 
 So the order of every lane is: waypoint → the lane's own decisions → build →
 red checks and a real run → an independent clearer → the owner's approve →
-release.
+release. When the waypoint's ★ is "proceed as mapped", the lane's own
+decisions ride in the same post, so the owner answers once (OPEN-DECISIONS
+E1).
+
+**What each step owes the next (1.62, after the 1.61 audit).** The order is
+the point: each later step checks what the earlier ones produced, so running
+one early wastes it.
+
+- **The real run comes before the clearer.** A real run finds what tests do
+  not: in 1.61 it found two gaps after the clearer had cleared, so the fixes
+  needed a second clearer. The clearer reviews the code the real run left.
+- **One clearer round per release, held to CRITICAL and HIGH.** A clearer
+  says NOT CLEAR only for a CRITICAL or HIGH finding. MEDIUM and LOW findings
+  are fixed or listed in the PR, and do not start another round. A fix for a
+  CRITICAL or HIGH finding goes back to the same clearer, who confirms that
+  fix only; the author never clears its own fix.
+- **Bump, stamp and full suites once, after CLEAR.** The version bump, the
+  area-note stamps and the long test suites run once, on the cleared code,
+  just before the PR. Stamping after each fix made five of 1.61's thirteen
+  commits stamps that the squash then hid. While building, run the suites
+  the change touches.
 
 ### Board bottom line
 
