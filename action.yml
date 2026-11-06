@@ -102,7 +102,7 @@ runs:
             || echo "::warning::could not fetch the base commit; use actions/checkout with fetch-depth: 0"
           args+=(--base "$BASE")
           # 1.61 (C2): each ruling in the comment links to its committed file at the base commit. The values
-          # are data to rulecheck, which refuses any that is not shaped as a repository or an https origin.
+          # are data to rulecheck; one not shaped as a repository or an origin costs the links, not the check.
           [ -n "${REPO:-}" ] && args+=(--repo "$REPO")
           [ -n "${SERVER:-}" ] && args+=(--server "$SERVER")
         fi

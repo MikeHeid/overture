@@ -58,10 +58,12 @@ NOTABLE = "<!-- overture-rulecheck: notable -->"   # second line when the Action
 MAX_COMMENT = 60000   # characters; GitHub's limit for a comment is 65536
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,199}\Z")   # a sha, branch or tag; never an option
 MD_SPECIAL = re.compile(r"([\\`*_\[\]|#~])")
-# 1.61 (C2): what the link is built from. A repository is OWNER/NAME as GitHub spells it, and the server an
-# https origin with no path: nothing else reaches the URL, so a link in the comment is always a blob link.
-REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,99}/[A-Za-z0-9][A-Za-z0-9._\-]{0,99}\Z")
-SERVER = re.compile(r"^https://[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(:[0-9]{1,5})?\Z")
+# 1.61 (C2): what the link is built from. A repository is OWNER/NAME in GitHub's own character set (a name
+# may start with `.` or `_`: `acme/.github`), never `.` or `..`; the server is an origin with no path (an
+# Enterprise host may be http). Nothing else reaches the URL, so a link in the comment is always a blob link.
+# A value that is not shaped so costs the links, not the check (clearer, 1.61): it comes from the runner.
+REPO = re.compile(r"^(?!\.\.?/)[A-Za-z0-9._\-]{1,100}/(?!\.\.?\Z)[A-Za-z0-9._\-]{1,100}\Z")
+SERVER = re.compile(r"^https?://[A-Za-z0-9_][A-Za-z0-9_.\-]{0,252}(:[0-9]{1,5})?\Z")
 DEFAULT_SERVER = "https://github.com"
 
 
@@ -434,9 +436,9 @@ def markdown(rep: dict) -> str:
         # reads what was ruled where the change is reviewed, without opening the console.
         out.append("**This change touches code these rulings rest on. They still hold; read them before "
                    "you review:**")
-        for j in rep["touched"]:
+        for j in rep["touched"]:   # one line each, so the comment's cut never parts a ruling from its words
             out.append(f"- **{_md(j['qid'])}: {_md(j['question'])}** (cited at {_md(j['source'])}; this change "
-                       f"edits {', '.join(_md(f) for f in j['files'])})  \n  {_ruled(j)}")
+                       f"edits {', '.join(_md(f) for f in j['files'])}). {_ruled(j)}")
         out.append("")
     f = rep["files"]
     if any(f.values()):
@@ -500,18 +502,21 @@ def _locked_default(root: Path, base: str | None) -> str:
 
 
 def _link_base(root: Path, base: str | None, locked: str, repo: str | None, server: str) -> str | None:
-    """`https://<server>/<repo>/blob/<base sha>/<locked>/` (1.61, C2), or None without --repo or --base.
+    """`<server>/<repo>/blob/<base sha>/<locked>/` (1.61, C2), or None without --repo or --base.
 
     The base is resolved to its commit sha, so the link stays the same file
-    when the branch moves on; a repo or server that is not shaped as one is a
-    CheckError, never a part of a URL.
+    when the branch moves on. A repo or server that is not shaped as one is
+    said on stderr and gives no links: the values come from the runner, and a
+    link is a convenience the check must not fail over (clearer, 1.61).
     """
+    if not SERVER.match(server):
+        print(f"rulecheck: no links: --server {server!r} is not an http(s) origin", file=sys.stderr)
+        return None
     if repo is None:
         return None
     if not REPO.match(repo):
-        raise CheckError(f"--repo {repo!r} is not OWNER/NAME")
-    if not SERVER.match(server):
-        raise CheckError(f"--server {server!r} is not an https origin")
+        print(f"rulecheck: no links: --repo {repo!r} is not OWNER/NAME", file=sys.stderr)
+        return None
     if not base:
         return None
     sha = _git(root, ["rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"])

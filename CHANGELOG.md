@@ -3010,8 +3010,9 @@ reviews code" (W5-1). Its waypoint was given in the conversation
 - **Each ruling links to its committed file at the base commit (C2).** The
   Action passes the repository and server to `rulecheck.py` (`--repo
   OWNER/NAME`, `--server`), which resolves the base to its commit and
-  builds a blob link; a value not shaped as a repository or an https origin
-  is refused (exit 2), never pasted into a URL. The link opens for anyone
+  builds a blob link; a value not shaped as a repository or an http(s)
+  origin is named on stderr and gives no links, never a red check and never
+  a part of a URL (the clearer's finding). The link opens for anyone
   who can see the pull request, with no console, and the pull request
   cannot have edited what it points at.
 - **A touched ruling posts the comment (C3).** Before, a change that sat

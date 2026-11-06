@@ -372,6 +372,10 @@ class Markdown(Repo):
         self.assertIn("The owner ruled: **Option B ★** (locked 2026-10-13).", out)
         rc, out, _ = self.check("--base", self.base)
         self.assertIn("  ruled: Option B ★ (locked 2026-10-13)", out)
+        self.touch()   # and for a touched ruling, in text, with its link
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r")
+        self.assertIn(f"touched LANE.1/Q1: src/pay.py changed; it still holds\n  ruled: Option B ★ (locked "
+                      f"2026-10-13); https://github.com/o/r/blob/{self.base}/.overture/locked/{RULING}\n", out)
 
     def test_the_rulings_words_are_inert_in_the_comment(self):
         # Catches (C1): the owner's own text printed raw, where @someone pings a person and a URL links.
@@ -420,13 +424,21 @@ class Markdown(Repo):
         self.assertIn("added by this change, so it is not at the base: the file says the owner ruled **Option A**", out)
         self.assertEqual(out.count("[The ruling file]("), 1)
 
-    def test_a_repo_or_server_that_is_not_one_is_refused(self):
-        # Catches (C2): a value from the runner pasted into a URL as it came; each is refused by name.
-        for args in (("--repo", "o/r/x"), ("--repo", "../r"), ("--repo", "o/r", "--server", "http://x"),
-                     ("--repo", "o/r", "--server", "https://x/path"), ("--repo", "o r")):
-            rc, _, err = self.check("--base", self.base, *args)
-            self.assertEqual(rc, 2, args)
-            self.assertIn(args[-2], err)
+    def test_a_repo_or_server_that_is_not_one_costs_the_links_not_the_check(self):
+        # Catches (C2): a value from the runner pasted into a URL as it came; and (clearer) a check that
+        # turns red over a link it could not build. Each is named on stderr, the report has no link.
+        self.touch()
+        for args in (("--repo", "o/r/x"), ("--repo", "../r"), ("--repo", "o/.."), ("--repo", "o r"),
+                     ("--repo", "o/r", "--server", "https://x/path"), ("--repo", "o/r", "--server", "ftp://x"),
+                     ("--server", "https://x/path")):
+            rc, out, err = self.check("--base", self.base, *args, "--format", "json")
+            self.assertEqual(rc, 0, args)
+            self.assertIn(f"no links: {args[-2]} {args[-1]!r}", err)
+            self.assertNotIn("link", json.loads(out)["touched"][0])
+        # GitHub's own shapes pass: a name starting with a dot or underscore, an http Enterprise host.
+        for args in (("--repo", "acme/.github"), ("--repo", "acme/_tools", "--server", "http://ghe_x.corp:8080")):
+            rc, rep = self.report("--base", self.base, *args)
+            self.assertIn("link", rep["touched"][0], args)
 
 
 ACTION = Path(__file__).resolve().parent / "action.yml"
