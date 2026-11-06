@@ -379,10 +379,14 @@ def _source_link(link_base: str, source: object, before) -> str | None:
     m = A.SOURCE_RANGE.match(source) if isinstance(source, str) else None
     if not m or before is None:
         return None
-    path = m.group("path")
-    if path.startswith("/") or ".." in path.split("/") or before(path) is None:
+    path, a, b = m.group("path"), m.group("a"), m.group("b")
+    # A line number is at most 7 digits: a longer one is no line of a file the kit reads, and int() of
+    # thousands of digits raises, which would cost every pull request its report (clearer, round 3).
+    if len(a) > 7 or len(b or "") > 7:
         return None
-    lines = f"L{int(m.group('a'))}" + (f"-L{int(m.group('b'))}" if m.group("b") else "")
+    if path.startswith("/") or {".", ".."} & set(path.split("/")) or before(path) is None:
+        return None
+    lines = f"L{int(a)}" + (f"-L{int(b)}" if b else "")
     return f"{link_base}{urllib.parse.quote(path, safe='/')}#{lines}"
 
 

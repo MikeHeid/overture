@@ -162,7 +162,7 @@ runs:
           :
         elif [ -n "$id" ] || [ "$post" = true ]; then
           gh api "repos/$REPO/issues/$PR/comments" -F "body=@$REPORT" >/dev/null \
-            || echo "::warning::could not post the ruling comment (does the token have pull-requests: write?)"
+            || echo "::warning::could not post the ruling comment: a pull request from a fork runs with a read-only token; otherwise give the job pull-requests: write. The job summary has the report"
         fi
     - id: finish
       shell: bash

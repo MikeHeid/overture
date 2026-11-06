@@ -428,11 +428,14 @@ class Markdown(Repo):
     def test_a_cited_place_the_base_does_not_hold_gets_no_link(self):
         # Catches: a link built from a ruling file's `source` as written: one that climbs out of the
         # repository's tree (and so to another repository's page), or to a file the base does not have.
-        for source in ("../../../evil/repo/blob/main/x:1", "/etc/passwd:1", "src/gone.py:3", "src/pay.py", "notes"):
+        # And (clearer, round 3) a line number no file has: thousands of digits made int() raise, and the
+        # whole report with it.
+        for source in ("../../../evil/repo/blob/main/x:1", "/etc/passwd:1", "src/gone.py:3", "src/pay.py", "notes",
+                       "./src/pay.py:1", "src/pay.py:1-" + "9" * 8):
             e = json.loads(self.ruling().read_text())
             e["source"] = source
             self.ruling().write_text(json.dumps(e))
-            self.base = self.commit(f"source {source}")
+            self.base = self.commit(f"source {source[:40]}")
             (self.root / "src/pay.py").write_text((self.root / "src/pay.py").read_text() + "# more\n")
             self.commit("pr")
             rc, out, err = self.check("--base", self.base, "--repo", "o/r", "--format", "json")
@@ -440,6 +443,12 @@ class Markdown(Repo):
             j = json.loads(out)["touched"][0]
             self.assertIn("link", j, source)
             self.assertNotIn("source_link", j, source)
+        # fold refuses a source that long before a link is built; the link code holds on its own too.
+        held = lambda path: "text"   # noqa: E731 - the base holds every file asked for
+        self.assertIsNone(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:" + "9" * 5000, held))
+        self.assertIsNone(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:1-" + "9" * 8, held))
+        self.assertEqual(RC._source_link("https://x/o/r/blob/s/", "src/pay.py:9999999", held),
+                         "https://x/o/r/blob/s/src/pay.py#L9999999")
 
     def test_the_owner_s_words_are_not_cut_at_a_line_s_length(self):
         # Catches (the real run): the lookup's 160-character answer, right for one line in an agent's

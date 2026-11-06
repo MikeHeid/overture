@@ -197,9 +197,9 @@ links (`--server` for a GitHub Enterprise host).
 <img src="../screenshots/feature-pr-comment.png" alt="The Action's comment on a pull request: all rulings hold; this change touches code a ruling rests on; the question, a link to the cited line, what the owner ruled and when, and a link to the ruling file" width="640">
 
 **A pull request from a fork gets no comment.** GitHub gives such a run
-a read-only token, so the comment cannot be posted; the Action says so
-in a warning, the check still passes or fails as it should, and the job
-summary has the same report.
+a read-only token, so the comment cannot be posted. When there was
+something to post, a warning on the run says why; the check still
+passes or fails as it should, and the job summary has the same report.
 
 What it trusts: ruling files arrive by pull request, as they always
 have, so a re-ruling in the comment is a claim for the reviewer to
