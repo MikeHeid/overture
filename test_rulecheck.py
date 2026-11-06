@@ -403,6 +403,23 @@ class Markdown(Repo):
         rc, rep = self.report("--base", self.base)
         self.assertNotIn("link", rep["touched"][0])
 
+    def test_a_ruling_file_the_change_adds_is_not_quoted_as_the_base_s_ruling(self):
+        # Catches (1.61 review): a ruling file the pull request itself writes shown as "The owner ruled",
+        # with a link to the base commit, where the file does not exist.
+        self.store.append(question(qid="LANE.1/Q2", valid_if=[EXCERPT], source="src/pay.py:2"))
+        a = self.store.append(answer(qid="LANE.1/Q2", picks=("a",)))
+        self.store.append(lock(a))
+        self.export()
+        self.touch()
+        rc, rep = self.report("--base", self.base, "--repo", "o/r")
+        by_qid = {j["qid"]: j for j in rep["touched"]}
+        self.assertEqual((rc, by_qid["LANE.1/Q1"]["at_base"], by_qid["LANE.1/Q2"]["at_base"]), (0, True, False))
+        self.assertIn("link", by_qid["LANE.1/Q1"])
+        self.assertNotIn("link", by_qid["LANE.1/Q2"])
+        rc, out, _ = self.check("--base", self.base, "--repo", "o/r", "--format", "markdown")
+        self.assertIn("added by this change, so it is not at the base: the file says the owner ruled **Option A**", out)
+        self.assertEqual(out.count("[The ruling file]("), 1)
+
     def test_a_repo_or_server_that_is_not_one_is_refused(self):
         # Catches (C2): a value from the runner pasted into a URL as it came; each is refused by name.
         for args in (("--repo", "o/r/x"), ("--repo", "../r"), ("--repo", "o/r", "--server", "http://x"),

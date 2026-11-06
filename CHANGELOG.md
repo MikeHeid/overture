@@ -3002,9 +3002,11 @@ reviews code" (W5-1). Its waypoint was given in the conversation
   the owner ruled (the picked options or their own words), who locked it by
   the owner-set short name and when, and the cited place; a broken ruling
   keeps its diff below. Every word from a ruling file passes the same
-  escaping as before: no markup, no mention, no bare link. The text and
+  escaping as before: no markup, no mention, no bare link. A ruling file
+  the change itself adds is not at the base, so its words are shown as the
+  file's claim for the reviewer to confirm, with no base link. The text and
   JSON reports carry the same fields (`answer`, `locked_at`,
-  `locked_by_name`, `file`).
+  `locked_by_name`, `file`, `at_base`).
 - **Each ruling links to its committed file at the base commit (C2).** The
   Action passes the repository and server to `rulecheck.py` (`--repo
   OWNER/NAME`, `--server`), which resolves the base to its commit and

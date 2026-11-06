@@ -290,7 +290,10 @@ def run(root: Path, locked: str, base: str | None, items: dict | None, strict: b
             continue
         j = judge(e, tree, history, item_status, candidates, before)
         j["file"] = name
-        if link_base:
+        # A file the change adds is not at the base: its words are the pull request's claim, not a ruling
+        # the base holds, so the comment says so and no base link is built for it (1.61 review).
+        j["at_base"] = name in old
+        if link_base and j["at_base"]:
             j["link"] = link_base + urllib.parse.quote(name, safe="")
         now = head.get(name)
         if j["state"] == "broken" and base and now is not None and now is not e and (
@@ -365,6 +368,9 @@ def _ruled(j: dict) -> str:
     """
     when = (j.get("locked_at") or "")[:10]
     who = f" by {_md(j['locked_by_name'])}" if j.get("locked_by_name") else ""
+    if not j.get("at_base", True):
+        return (f"This ruling file is added by this change, so it is not at the base: the file says the owner "
+                f"ruled **{_md(j['answer'])}** (locked {when}{who}); confirm the owner did.")
     s = f"The owner ruled: **{_md(j['answer'])}** (locked {when}{who})."
     return s + (f" [The ruling file]({j['link']})" if j.get("link") else "")
 
@@ -372,6 +378,8 @@ def _ruled(j: dict) -> str:
 def _ruled_plain(j: dict) -> str:
     when = (j.get("locked_at") or "")[:10]
     who = f" by {_plain(j['locked_by_name'])}" if j.get("locked_by_name") else ""
+    if not j.get("at_base", True):
+        return f"  added by this change, not at the base; the file says: {_plain(j['answer'])} (locked {when}{who})"
     return f"  ruled: {_plain(j['answer'])} (locked {when}{who})" + (f"; {j['link']}" if j.get("link") else "")
 
 
