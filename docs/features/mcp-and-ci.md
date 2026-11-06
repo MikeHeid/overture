@@ -188,8 +188,8 @@ see the pull request can open both without a console. A broken ruling
 is quoted the same way, above its diff. A pass that touches no ruling
 stays silent, and when a later push stops touching the ruling the
 comment shrinks to the one-line result. Every word from a ruling file
-is made inert first: no markup, no mention, no bare link. The owner's
-choices are C1–C3 in
+is made inert first: no markup, no mention, no bare link. The decisions
+are C1–C3 in
 [OPEN-DECISIONS.md](../proposals/OPEN-DECISIONS.md#ruling-aware-pr-comments-and-linear-decided-2026-11-06).
 Run by hand, `rulecheck.py --base <base> --repo OWNER/NAME` adds the
 links (`--server` for a GitHub Enterprise host).

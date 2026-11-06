@@ -23,7 +23,7 @@ not held back by it (test_build.py asserts the list covers them).
 
 Added in 0.9.2 after /health kept showing 0.8.18 across the 0.9.0 and 0.9.1
 releases: `__version__` and the repo-marketplace manifest had drifted from
-VERSION. `test_build.py::test_the_version_matches_everywhere_kit_is_installed`
+VERSION. `test_build.py::test_every_place_that_states_the_version_agrees`
 asserts they stay equal; this script makes it easy to keep them equal.
 """
 
