@@ -12774,8 +12774,8 @@ class GithubWebhookTests(_Live, unittest.TestCase):
         self.assertEqual((code, out["fired"]), (202, False))
         self.assertIn("carries no action", out["reason"])
         self.assertEqual(self.chats(), [])
-        code, out = self.deliver("pr-sync", body=b'{"action":"synchronize","number":1}')
-        self.assertEqual((code, out["fired"]), (200, True), out)
+        code, out = self.deliver("pr-sync", body=b'{"action":"synchronize","number":1}', delivery="cccc-1")
+        self.assertEqual((code, out["fired"]), (200, True), out)   # the no-op's id was not spent either
         later = time.time() + self.TR.MIN_INTERVAL_S + 1
         with mock.patch("time.time", return_value=later):   # no filter: a closed delivery fires as in 1.59
             code, out = self.deliver("pr-opened", body=closed, delivery="cccc-2")
