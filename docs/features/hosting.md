@@ -156,7 +156,7 @@ works the same way with `server.json`'s `listen`.
   | Deliberation | `fork-context`, `transcript`, `visual`, `visual-export`, `next-step`, `costs` |
   | Stale answers | `check`, `reanchor`, `propose-anchor`, `advise` |
   | Pushing data | `items-push`, `items-watch`, `history-push`, `prs-push`, `issues-push`, `page-snapshot`, `asset`, `component-source`, `design-inventory` |
-  | Owner only | `register`, `steward`, `role`, `access`, `operator-name`, `notify-url`, `invite`, `devices`, `server add`, `server auth`, `server listen`, `server token rotate`, `item-move`, `pr-merge`, `trigger-token`, `portfolio-token` |
+  | Owner only | `register`, `steward`, `role`, `access`, `operator-name`, `notify-url`, `linear-key`, `invite`, `devices`, `server add`, `server auth`, `server listen`, `server token rotate`, `item-move`, `pr-merge`, `trigger-token`, `portfolio-token` |
 
   `--as NAME` names the session.
 - **`fold.py`** writes locked answers, and what became of them, into

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -6471,6 +6472,125 @@ class PrsFromGhTests(Tmp):
 from overture import triggers as TG  # noqa: E402
 
 
+class LinearTests(unittest.TestCase):
+    """1.64.0 (OPEN-DECISIONS L1-L3): Linear, outbound only: the key, the item's issue, what a post says, the outbox."""
+
+    KEY = "lin_api_" + "A1b2C3d4E5f6G7h8I9j0"
+
+    def setUp(self):
+        from overture import linear as LN
+        self.LN = LN
+        self._td = tempfile.TemporaryDirectory()
+        self.state = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_only_a_key_and_an_issue_of_linears_shape_are_taken(self):
+        # Catches: a key that is not a personal API key (a pasted URL, a token with a newline) kept and sent as the
+        # Authorization header, and an issue id in a shape no Linear issue has (lower case, no number, a path).
+        self.assertIsNone(self.LN.key_problem(self.KEY))
+        for bad in ("", "lin_api_short", self.KEY + "\n", "Bearer " + self.KEY, "lin_oauth_" + "x" * 20, None):
+            self.assertTrue(self.LN.key_problem(bad), bad)
+        self.assertIsNone(self.LN.issue_problem("ENG-123"))
+        for bad in ("eng-123", "ENG", "ENG-", "ENG-12a", "../x-1", "TOOLONGTEAM1-1", None, 7):
+            self.assertTrue(self.LN.issue_problem(bad), bad)
+
+    def test_an_items_linear_field_is_checked_at_the_push(self):
+        # Catches (L2): an item's `linear` refused as unknown, or taken in any shape.
+        from overture import items as IT
+        ok = {"items": {"A": {"title": "a", "linear": "ENG-1"}, "B": {"title": "b", "linear": None}}}
+        self.assertIsNone(IT.snapshot_problem(ok))
+        self.assertIn("items.A.linear", IT.snapshot_problem({"items": {"A": {"title": "a", "linear": "eng 1"}}}))
+        self.assertIn("items.A.linear", IT.snapshot_problem({"items": {"A": {"title": "a", "linear": 1}}}))
+
+    def test_the_key_file_is_0600_and_the_role_log_never_holds_the_key(self):
+        # Catches (L3): a key written readable by others, or the key itself copied into the role log.
+        self.LN.set_key(self.state, self.KEY)
+        self.assertEqual((self.state / "linear.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.LN.load_key(self.state), self.KEY)
+        log = "".join(p.read_text() for p in self.state.glob("*log*"))
+        self.assertNotIn(self.KEY, log)
+        self.LN.set_key(self.state, None)
+        self.assertIsNone(self.LN.load_key(self.state))
+        with self.assertRaises(self.LN.LinearError):
+            self.LN.set_key(self.state, "not a key")
+
+    def test_a_post_is_inert_and_carries_the_ruling_the_name_and_the_link(self):
+        # Catches (L1): agent-written question text that pings someone or links out of Linear, an email where the
+        # owner's short name belongs, the owner's words cut at the lookup's 160, and a link that is not the file.
+        q = {"qid": "LANE.1/Q2", "text": "Ping @team and see https://evil.example.com/x?", "options":
+             [{"id": "a", "label": "Half up"}, {"id": "b", "label": "Half to even ★"}]}
+        a = {"picks": ["b"], "own_text": "x" * 300}
+        body = self.LN.body_locked("acme", q, a, {"ts": "2026-11-06T20:00:00Z"}, "ann",
+                                   self.LN.file_link("acme/app", ".overture/locked", "LANE.1/Q2"))
+        self.assertNotIn("@team", body)
+        self.assertNotIn("https://evil", body)
+        self.assertIn("Half to even", body)
+        self.assertIn("x" * 300, body)
+        self.assertIn("Locked by ann on 2026-11-06.", body)
+        self.assertIn("(https://github.com/acme/app/blob/HEAD/.overture/locked/LANE.1__Q2.json)", body)
+        self.assertIsNone(self.LN.file_link(None, ".overture/locked", "LANE.1/Q2"))
+        self.assertIn("by the owner".capitalize(), self.LN.body_settled("acme", q, {"type": "withdraw",
+                                                                               "ts": "2026-11-07T00:00:00Z",
+                                                                               "reason": "obsolete"}))
+
+    def test_nothing_is_queued_without_a_key_and_an_event_is_queued_once(self):
+        # Catches: a queue filled while no key was set, then posted as a backlog the moment one is; an event
+        # queued twice (a retried lock); a malformed issue queued.
+        self.assertFalse(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
+        self.LN.set_key(self.state, self.KEY)
+        self.assertTrue(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
+        self.assertFalse(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
+        self.assertFalse(self.LN.enqueue(self.state, "e2", "eng-1", "b"))
+        self.assertEqual(self.LN.status(self.state)["pending"], 1)
+        self.assertEqual((self.state / "linear-state.json").stat().st_mode & 0o777, 0o600)
+
+    def test_a_passing_failure_keeps_the_post_a_lasting_one_drops_it_named(self):
+        # Catches: a post lost to a network blip or a rate limit, a post that can never succeed (no such issue)
+        # retried forever and holding up the rest, and a sent post sent again.
+        self.LN.set_key(self.state, self.KEY)
+        for i in (1, 2, 3):
+            self.LN.enqueue(self.state, f"e{i}", f"ENG-{i}", f"body {i}")
+        sent, mode = [], {"ENG-1": "pass"}
+
+        def send(key, issue, body):
+            m = mode.get(issue)
+            if m == "pass":
+                raise self.LN.LinearError("Linear could not be reached (TimeoutError)")
+            if m == "lasting":
+                raise self.LN.LinearError("Linear has no issue ENG-2 this key can see", lasting=True)
+            sent.append(issue)
+        self.assertEqual(self.LN.tick(self.state, "t1", send=send), "failed")
+        self.assertEqual((sent, self.LN.status(self.state)["pending"]), ([], 3))   # stopped at the first
+        mode = {"ENG-2": "lasting"}
+        self.assertEqual(self.LN.tick(self.state, "t2", send=send), "failed")
+        st = self.LN.status(self.state)
+        self.assertEqual((sent, st["pending"]), (["ENG-1", "ENG-3"], 0))
+        self.assertIn("ENG-2", st["last_error"])
+        self.assertIn("dropped", st["last_error"])
+        self.assertIsNone(self.LN.tick(self.state, "t3", send=send))
+        self.assertFalse(self.LN.enqueue(self.state, "e1", "ENG-1", "again"))   # posted: never queued again
+
+    def test_linears_error_codes_decide_what_is_kept(self):
+        # Catches: a rate limit or a revoked key read as lasting, so every queued post is dropped at once.
+        self.assertEqual(self.LN._code(b'{"errors":[{"extensions":{"code":"RATELIMITED"}}]}'), "RATELIMITED")
+        self.assertIsNone(self.LN._code(b"{}"))
+        self.assertIn("RATELIMITED", self.LN.PASSING)
+        self.assertIn("AUTHENTICATION_ERROR", self.LN.PASSING)
+
+    def test_linear_key_is_refused_inside_a_session(self):
+        # Catches (L3): a session setting, testing or clearing the owner's Linear key.
+        import contextlib
+        import io
+        import agent as AG
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), contextlib.redirect_stderr(err):
+            rc = AG.main(["--state", str(self.state), "linear-key", "--clear"])
+        self.assertEqual(rc, 2)
+        self.assertIn("refused inside a Claude Code session", err.getvalue())
+
+
 class GithubTriggerTests(unittest.TestCase):
     """1.59.0 (OPEN-DECISIONS G1-G3): a trigger's `github` block, GitHub's signature, the replay guard, the secret."""
 
@@ -6744,7 +6864,7 @@ class IsolationTests(unittest.TestCase):
             "store.jsonl", "notify.json", "notify-state.json", "github-secrets", "portfolio-secrets", "roles.json",
             "roles-log.jsonl", "settings.json", "operators.jsonl", "operator-names.json", "pending-locks.json",
             "names.jsonl", "items.json", "server.lock", "refs.json", "prs.json", "issues.json", "drafts.json",
-            "favorites.json", "assets", "visuals"})
+            "favorites.json", "assets", "visuals", "linear.json", "linear-state.json"})   # 1.64: the Linear key
         self.assertFalse(ISO.ALLOWED & set(ISO.PROTECTED))
 
     def test_settings_deny_every_console_and_the_escapes_and_leave_only_the_doors(self):
