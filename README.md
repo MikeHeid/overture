@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.62.0-0969da">
+  <img alt="version" src="https://img.shields.io/badge/version-1.63.0-0969da">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
   <img alt="self-hosted" src="https://img.shields.io/badge/hosting-self--hosted-8250df">
   <img alt="tests" src="https://img.shields.io/badge/tests-1513-2da44e">
@@ -214,7 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.62.0
+      - uses: MikeHeid/overture@v1.63.0
 ```
 
 The question, ruling and `valid_if` format is a published spec, with a JSON

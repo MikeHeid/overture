@@ -164,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.62.0
+      - uses: MikeHeid/overture@v1.63.0
 ```
 
 The rulings checked, and the `.overture.json` that says where they live,
