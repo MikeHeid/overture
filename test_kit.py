@@ -6539,6 +6539,20 @@ class LinearTests(unittest.TestCase):
             self.LN.load_config(self.state)
         self.assertFalse(self.LN.team_allowed(self.state, "ENG-1"))    # a refused file posts nowhere
 
+    def test_a_post_queued_for_a_team_the_owner_has_since_removed_is_dropped_not_sent(self):
+        # Catches (1.64 security review, round 2): narrowing --teams leaving already-queued posts for the removed
+        # team to go out anyway.
+        self.LN.set_key(self.state, self.KEY, ["ENG", "OPS"])
+        self.assertTrue(self.LN.enqueue(self.state, "e1", "OPS-1", "b1"))
+        self.assertTrue(self.LN.enqueue(self.state, "e2", "ENG-1", "b2"))
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
+        sent = []
+        self.assertEqual(self.LN.tick(self.state, "t1", send=lambda k, i, b: sent.append(i)), "failed")
+        self.assertEqual(sent, ["ENG-1"])
+        st = self.LN.status(self.state)
+        self.assertEqual(st["pending"], 0)
+        self.assertIn("OPS-1: team OPS is not one the key was set for (dropped)", st["last_error"])
+
     def test_the_link_is_left_out_for_a_folder_or_repository_an_agent_could_bend(self):
         # Catches (1.64 security review): `fold.locked` from an agent-editable .overture.json walking the link out
         # of the ruling folder, or a repository that is not owner/name.

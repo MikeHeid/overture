@@ -314,9 +314,10 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
     then, so an event queued meanwhile is kept.
     """
     lock = lock or nullcontext()
-    key = load_key(state)
-    if key is None:
+    cfg = load_config(state)
+    if cfg is None:
         return None
+    key = cfg["key"]
     with lock:
         try:
             batch = list(load_state(state)["pending"][:PER_TICK])
@@ -327,6 +328,12 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
     gone: list[str] = []
     ok_at, error = None, None
     for ev in batch:
+        team = ev["issue"].split("-", 1)[0]
+        if issue_problem(ev["issue"]) or team not in cfg["teams"]:
+            # checked again at the post: the owner may have narrowed --teams since it was queued
+            gone.append(ev["id"])
+            error = f"{ev['issue']}: team {team} is not one the key was set for (dropped)"
+            continue
         try:
             send(key, ev["issue"], ev["body"])
         except LinearError as e:
