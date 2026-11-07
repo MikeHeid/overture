@@ -377,7 +377,7 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
         try:
             doc = load_state(state)
         except LinearError:
-            doc = fresh()
+            doc = {**fresh(), "last_error": _set_aside(state)}
         keep = [e for e in doc["pending"] if e["id"] not in gone]
         back = [{**e, "tries": e.get("tries", 0) + 1} for e in keep if e["id"] == stuck]
         doc = {**doc, "pending": [e for e in keep if e["id"] != stuck] + back,
