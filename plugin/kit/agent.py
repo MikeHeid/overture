@@ -206,6 +206,7 @@ from overture import gitseam as G  # noqa: E402
 from overture import lookup as L  # noqa: E402
 from overture import names as N  # noqa: E402
 from overture import playbooks as PB  # noqa: E402
+from overture import linear as LR  # noqa: E402
 from overture import notify as NT  # noqa: E402
 from overture import operators as OP  # noqa: E402
 from overture import roles as RO  # noqa: E402
@@ -2179,6 +2180,19 @@ def main(argv=None) -> int:
     g.add_argument("url", nargs="?", help="the webhook URL, https://... (none: show its host)")
     g.add_argument("--clear", action="store_true", help="remove the webhook: nothing is sent")
     g.add_argument("--test", action="store_true", help="post one test message to the webhook now")
+    s = sub.add_parser("linear-key", description="Set, show or clear the Linear personal API key the console posts "
+                       "rulings with (1.64, L3): a comment on an item's Linear issue when a ruling on it is locked, "
+                       "withdrawn or kept unchecked; the item names its issue in its `linear` field. The key is "
+                       "read from the terminal (never an argument, which shell history keeps) and kept in "
+                       "STATE/linear.json (0600). You run this, never a session.")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--set", action="store_true", help="ask for the key and keep it, with --teams (and --repo)")
+    g.add_argument("--clear", action="store_true", help="remove the key: nothing more is queued or posted")
+    g.add_argument("--test", metavar="ISSUE", help="post one test comment on this issue now, e.g. ENG-123")
+    s.add_argument("--teams", nargs="+", metavar="TEAM", help="with --set: the only Linear teams the console may post "
+                   "to, e.g. ENG; an item naming another team's issue posts nothing")
+    s.add_argument("--repo", metavar="OWNER/NAME", help="with --set: the GitHub repository the ruling link points at "
+                   "(none: no link)")
     s = sub.add_parser("github-secret", description="Make a new secret for a trigger that takes signed GitHub "
                        "webhooks (1.59), keep it in STATE/github-secrets/ (0600), and print it once to paste into "
                        "the webhook's Secret field on GitHub. Whoever holds it can fire the trigger, so it is set "
@@ -2411,7 +2425,7 @@ def main(argv=None) -> int:
 
 
 USER_COMMANDS = ("register", "steward", "role", "server", "costs", "next-step", "operator-name", "access",
-                 "notify-url", "invite", "devices", "github-secret")
+                 "notify-url", "invite", "devices", "github-secret", "linear-key")
 
 
 def steward_refusal(state: Path, agent: str | None, what: str) -> str | None:
@@ -2501,6 +2515,57 @@ def _notify_url(state: Path, url: str | None, clear: bool, test: bool) -> int:
         return 0
     except (OSError, NT.NotifyError, RO.RolesError) as e:
         print(f"agent.py: notify-url: {e}", file=sys.stderr)
+        return 2
+
+
+def _linear_key(state: Path, set_: bool, clear: bool, test: str | None, teams: list | None = None,
+                repo: str | None = None) -> int:
+    """`linear-key` (1.64, L3): set (asked for, never an argument), show whether set, clear, or post a test comment.
+    Never prints the key."""
+    try:
+        if os.environ.get("CLAUDECODE"):
+            # As `notify-url`: a session holding the key could post anything to the team's Linear as the owner.
+            print("agent.py: linear-key: refused inside a Claude Code session: the Linear key is set and tested by "
+                  "you, in your own terminal", file=sys.stderr)
+            return 2
+        if (teams or repo) and not set_:
+            print("agent.py: linear-key: --teams and --repo go with --set", file=sys.stderr)
+            return 2
+        if set_:
+            why = LR.config_problem("lin_api_" + "x" * 16, teams, repo)   # the teams and repo, before the prompt
+            if why:
+                print(f"agent.py: linear-key: {why}", file=sys.stderr)
+                return 2
+            import getpass
+            key = getpass.getpass("Linear personal API key (lin_api_...): ").strip()
+            LR.set_key(state, key, teams, repo)
+            print(f"linear: key set for team(s) {', '.join(sorted(set(teams)))}"
+                  + (f", links to {repo}" if repo else ", no ruling link (no --repo)")
+                  + "; rulings on items whose `linear` issue is in those teams are posted there")
+            return 0
+        if clear:
+            LR.set_key(state, None)
+            print("linear: key removed; nothing more is posted")
+            return 0
+        key = LR.load_key(state)
+        if key is None:
+            print("linear: no key; set one with agent.py linear-key --set")
+            return 0
+        if test is not None:
+            why = LR.issue_problem(test)
+            if why:
+                print(f"agent.py: linear-key: --test {test!r}: {why}", file=sys.stderr)
+                return 2
+            LR.post(key, test, "**Overture** · a test comment. Rulings on this issue's item will be posted here.")
+            print(f"linear: test comment posted on {test}")
+            return 0
+        st = LR.status(state)
+        print(f"linear: key set for team(s) {', '.join(st['teams'])}; {st['pending']} post(s) waiting"
+              + (f"; last posted {st['last_ok']}" if st["last_ok"] else "")
+              + (f"; last problem: {st['last_error']}" if st["last_error"] else ""))
+        return 0
+    except (OSError, LR.LinearError, RO.RolesError) as e:
+        print(f"agent.py: linear-key: {e}", file=sys.stderr)
         return 2
 
 
@@ -2843,6 +2908,8 @@ def _run(a, bell: Path) -> int:
         return _operator_name(a.state, a.email, a.short, a.clear)
     if a.cmd == "notify-url":
         return _notify_url(a.state, a.url, a.clear, a.test)
+    if a.cmd == "linear-key":
+        return _linear_key(a.state, a.set, a.clear, a.test, a.teams, a.repo)
     if a.cmd == "github-secret":
         return _github_secret(a.state, a.name, a.clear)
     if a.cmd == "access":

@@ -37,6 +37,48 @@ is set, the webhook is reached through it.
 
 <img src="../screenshots/feature-notify.png" alt="Settings, Notifications: posting to hooks.slack.com, Send notifications ticked, at most one message every 30 minutes, quiet hours 22:00 to 07:00" width="400">
 
+**Rulings on Linear (1.64).** The console can comment on an item's
+Linear issue when a ruling on that item is locked, withdrawn or kept
+but no longer checked (OPEN-DECISIONS L1–L3). The comment says what was
+asked, what you ruled, who locked it by the short name you set (never an
+email), when, and links to the ruling file in the repository once the
+steward has committed it. Words from the console are made inert first:
+no markup, no mention, no bare link.
+
+- **Which issue.** An item names its issue in a `linear` field, e.g.
+  `"linear": "ENG-123"`, set where its items are set (the project's
+  adapter, pushed with `items-push`). An item with none gets nothing;
+  nothing is guessed. An agent can edit the adapter, so the item alone
+  never decides where your words go: you name the Linear teams the
+  console may post to when you set the key, and an issue in any other
+  team gets nothing.
+- **The key.** A Linear personal API key (Linear: Settings, Security &
+  access). It can post as you, so you set it in your own terminal, where
+  it is asked for and never typed on the command line:
+
+        agent.py --state STATE linear-key --set --teams ENG --repo owner/name
+        agent.py --state STATE linear-key --test ENG-123   # post a test comment
+        agent.py --state STATE linear-key --clear
+
+  `--teams` takes one or more team keys (the `ENG` of `ENG-123`).
+  `--repo` is the GitHub repository the ruling link points at; without
+  it the comment has no link. To change either, run `--set` again. The
+  key is kept in the state folder (0600). A session cannot run the
+  command, and **Settings → Linear** shows only that a key is set and
+  for which teams.
+- **When it posts.** Within a minute, from a queue, so a slow or failing
+  Linear never holds up a lock. A failure that may pass (the network, a
+  rate limit, a key Linear refused) keeps the post queued and tries again
+  each minute; one that cannot pass (no such issue) is dropped and named
+  under Settings. A post that keeps failing waits behind the others and
+  is dropped, named, after a day of tries. If Linear made a comment but
+  its answer was lost, the retry can post it twice. An issue that has
+  moved to a team you did not name is not posted to. Rulings made while
+  no key is set are never posted later.
+  The link points at the file on the default branch, so it opens once the
+  steward's export is committed. It is left out when the project's ruling
+  folder is not a plain path inside the repository. HTTPS_PROXY is honoured.
+
 **Two-key areas are the administrator's (1.46).** A director sees the
 two-key areas under Settings but cannot change them; see
 [Two-key locks](two-key-locks.md).

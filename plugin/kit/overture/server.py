@@ -118,6 +118,7 @@ from . import assets as AS
 from . import names as N
 from . import operators as OP
 from . import roles as RO
+from . import linear as LR
 from . import notify as NT
 from . import settings as SET
 from . import twokey as KEY
@@ -1146,7 +1147,10 @@ class Console:
         self.operators = OP.Operators(cfg.state)
         self.first_keys = KEY.first_keys(cfg.state)   # 1.43.0 (W6): lock id -> the email of its first key
         self._acting = threading.local()
-        self.store.on_append = self.store.refactor.on_append = self._keep_operator
+        self.store.on_append = self.store.refactor.on_append = self._on_record
+        self._linear_lock = threading.Lock()   # 1.64.0: linear-state.json, between a request and the minute loop
+        self._linear_post = LR.post            # a test swaps it
+        self._linear_said: str | None = None
         self.favorites = FV.Favorites(cfg.state)   # 0.8.19: the owner's starred visuals and items
         self.triggers = TR.Store()                 # 0.12.0: external-webhook triggers → playbooks
         self.triggers.set_all(TR.load(cfg.root))   # malformed config refuses the start, by name
@@ -1521,7 +1525,9 @@ class Console:
                 "operators": sorted(set(self.operators.mapping().values()) | set(names)), "names": names,
                 "log": log, "log_total": log_total, "me": me.lower() if isinstance(me, str) else None,
                 # 1.45.0: the webhook's host only (its path is the secret) and how the last send went
-                "notify": {**NT.status(self.cfg.state), "every": list(SET.NOTIFY_EVERY)}}
+                "notify": {**NT.status(self.cfg.state), "every": list(SET.NOTIFY_EVERY)},
+                # 1.64.0 (L3): whether a Linear key is set (never the key), what waits, how the last post went
+                "linear": LR.status(self.cfg.state)}
 
     def put_setting(self, body: object) -> dict:
         """POST /api/settings {"key", "value"}: set one setting (null: back to the default), logged."""
@@ -1753,6 +1759,40 @@ class Console:
         if not RO.within(item, entry["areas"], self.items()):
             raise RequestError(403, f"you are signed in as a member for {', '.join(entry['areas'])}; "
                                     f"{item} is outside them")
+
+    def _on_record(self, rec: dict) -> None:
+        """Each new store or refactor record: keep who wrote it (1.38.0), then queue its Linear post (1.64.0)."""
+        self._keep_operator(rec)
+        try:
+            self._linear_enqueue(rec)
+        except Exception as e:  # noqa: BLE001 — the record is written; a post that cannot be queued is named, never a 500
+            sys.stderr.write(f"console linear: record {rec.get('id')} not queued: {type(e).__name__}: {e}\n")
+
+    def _linear_enqueue(self, rec: dict) -> None:
+        """1.64.0 (L1, L2): a lock, a withdrawal or a keep-unchecked on an item that names a Linear issue is queued.
+        Nothing is queued without a key (linear.enqueue), so setting one never posts a backlog."""
+        if rec.get("type") not in ("lock", "withdraw", "untrack"):
+            return
+        q = self.store.question(rec["qid"])
+        if q is None:
+            return
+        issue = (self.items().get(q["item"]) or {}).get("linear")
+        if not isinstance(issue, str) or not LR.team_allowed(self.cfg.state, issue):
+            return   # no key, or a team the owner did not name: an agent's push alone never picks where it goes
+        if rec["type"] == "lock":
+            from . import fold as F
+            from . import rulecheck as RC
+            answer = self.store.get(rec["answer"]) or {}
+            who = F.lock_names_beside(self.cfg.store).get(rec["id"])
+            try:
+                locked = RC._locked_default(self.cfg.root, None)   # .overture.json fold.locked, read as a file, no git
+            except RC.CheckError:
+                locked = RC.DEFAULT_LOCKED
+            link = LR.file_link((LR.load_config(self.cfg.state) or {}).get("repo"), locked, q["qid"])
+            body = LR.body_locked(self.cfg.project or "", q, answer, rec, who, link)
+        else:
+            body = LR.body_settled(self.cfg.project or "", q, rec)
+        LR.enqueue(self.cfg.state, rec["id"], issue, body, lock=self._linear_lock)
 
     def _keep_operator(self, rec: dict) -> None:
         """Keep the email of the owner request that wrote `rec`, beside the store (operators.py).
@@ -2315,12 +2355,33 @@ class Console:
         return {"records": records, "skipped": skipped}
 
     def _notify_loop(self) -> None:
-        """1.45.0: once a minute, tell the webhook about questions newly waiting (notify_tick)."""
+        """1.45.0: once a minute, tell the webhook about questions newly waiting (notify_tick); 1.64.0: and post
+        what waits for Linear (linear_tick), each on its own so one failing does not stop the other."""
         while not self._cron_stop.wait(timeout=60):
             try:
                 self.notify_tick(datetime.now())
             except Exception as e:  # noqa: BLE001 — one bad look must not stop the next
                 sys.stderr.write(f"console notify: {type(e).__name__}: {e}\n")
+            try:
+                self.linear_tick()
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"console linear: {type(e).__name__}: {e}\n")
+
+    def linear_tick(self) -> str | None:
+        """1.64.0 (L1, L3): post what waits for Linear (linear.tick). No key: reads one missing file."""
+        try:
+            done = LR.tick(self.cfg.state, datetime.now().isoformat(timespec="seconds"), send=self._linear_post,
+                           lock=self._linear_lock)
+        except LR.LinearError as e:
+            done, what = None, str(e)
+        else:
+            what = (LR.status(self.cfg.state)["last_error"] or "a post failed") if done == "failed" else None
+        if what and what != self._linear_said:   # each new problem named once in the server log
+            sys.stderr.write(f"console linear: {what}\n")
+        self._linear_said = what if what else (None if done == "sent" else self._linear_said)
+        if done:
+            self._bump()   # the Settings tab shows how the last post went
+        return done
 
     def notify_tick(self, now) -> str | None:
         """One look (notify.tick): "sent", "failed" or None. Off, it reads nothing but the settings."""

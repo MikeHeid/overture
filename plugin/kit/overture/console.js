@@ -4672,6 +4672,7 @@
     }
     if (s.key === 'lanes') return s.to ? ' changed the lane labels and colours' : ' reset the lanes to the project\'s';
     // 1.45: notifications. The webhook is logged by its host only.
+    if (s.key === 'linear_key') return s.to ? ' set the Linear key' : ' removed the Linear key';
     if (s.key === 'notify_url') return s.to ? ' set the notification webhook to ' + s.to : ' removed the notification webhook';
     if (s.key === 'notify_on') return s.to ? ' turned notifications on' : ' turned notifications off';
     if (s.key === 'notify_quiet') return s.to ? ' set the quiet hours to ' + s.to.from + '–' + s.to.to
@@ -5041,6 +5042,26 @@
     else if (n.last_ok) body.appendChild(el('p', { className: 'ck-muted' }, [
       'Last message sent ', el('span', { title: new Date(n.last_ok).toLocaleString() }, [relTime(n.last_ok)]), '.']));
   }
+  // 1.64 (L1-L3): rulings posted to each item's Linear issue, with the key the owner set in the terminal.
+  function renderLinearSettings(parent, s) {
+    const n = s.linear || {};
+    const body = el('section', { className: 'ck-settings-linear', 'aria-label': 'Linear' });
+    parent.appendChild(body);
+    body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Linear']));
+    body.appendChild(el('p', { className: 'ck-muted' }, [
+      'A comment on an item\'s Linear issue when a ruling on it is locked, withdrawn or kept unchecked: the ' +
+      'question, your words, who and when. Only items that name an issue in their ', el('code', {}, ['linear']),
+      ' field.']));
+    if (n.problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [n.problem]));
+    body.appendChild(el('p', { className: 'ck-settings-linear-where' }, n.key_set
+      ? ['A key is set' + ((n.teams || []).length ? ' for ' + n.teams.join(', ') : '') + (n.pending ? '; ' + n.pending + ' post' + (n.pending === 1 ? '' : 's') + ' waiting' : '') +
+         '. The owner changes it in the terminal.']
+      : ['No key yet. The owner sets one in the terminal: ', el('code', {}, ['agent.py linear-key --set --teams ENG'])]));
+    if (n.last_error) body.appendChild(el('p', { className: 'ck-error-msg' }, ['The last post failed: ' + n.last_error +
+      '.']));
+    else if (n.last_ok) body.appendChild(el('p', { className: 'ck-muted' }, [
+      'Last posted ', el('span', { title: new Date(n.last_ok).toLocaleString() }, [relTime(n.last_ok)]), '.']));
+  }
   function renderTwoKeySettings(body, s) {
     // 1.43 (W6): the areas where a lock needs a second person.
     body.appendChild(el('h3', { className: 'ck-section-heading' }, ['Two-key areas']));
@@ -5124,6 +5145,7 @@
     renderLimits(body, s);
     renderLaneSettings(body, s);
     renderNotifySettings(body, s);
+    renderLinearSettings(body, s);
     renderTwoKeySettings(body, s);
     renderOperatorNames(body, s);
     renderRoleLog(body, { log: s.log, log_total: s.log_total, me: s.me }, 'Changes');

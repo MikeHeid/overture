@@ -45,6 +45,7 @@ from . import items as IT
 from . import lessons as LE
 from . import multiserver as MS
 from . import names as NM
+from . import linear as LR
 from . import notify as NT
 from . import operators as OP
 from . import peers as PE
@@ -62,7 +63,7 @@ ALLOWED = frozenset({AGENT_SOCKET, D.STEWARD_DIR, *READABLE})   # all a session 
 # other files (refs, PRs, drafts, favourites, assets, visuals) are named here too, since an Edit rule goes by name.
 PROTECTED = ("store.jsonl", NT.URL_FILE, NT.STATE_FILE, TR.SECRET_DIR, PE.SECRETS_DIR, RO.FILE, RO.LOG_FILE,
              SET.FILE, OP.FILE, OP.NAMES_FILE, TK.FILE, NM.FILE, IT.ITEMS, MS.LOCK, "refs.json", "prs.json",
-             "issues.json", "drafts.json", "favorites.json", "assets", "visuals")
+             "issues.json", "drafts.json", "favorites.json", "assets", "visuals", LR.KEY_FILE, LR.STATE_FILE)
 # Sockets that run something for whoever connects: a container (root on most hosts).
 ESCAPE_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock",
                   "/run/podman/podman.sock", "/var/run/podman/podman.sock")

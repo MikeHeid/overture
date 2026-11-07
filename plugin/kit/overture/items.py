@@ -36,6 +36,9 @@ ITEM_FIELDS = {"title": (str,), "parent": (str, type(None)), "status": (str, typ
                # (D13), checked like a ux-link's url. Optional; an older kit refuses them by name.
                "ux": (bool,),
                "design": (str, type(None)),
+               # 1.64.0 (L2): the item's Linear issue (ENG-123), set by the owner where items are set. A ruling
+               # locked, withdrawn or kept unchecked on this item is commented there (linear.py). None: no post.
+               "linear": (str, type(None)),
                # 1.7.0: a dotted-number reference like "1", "1.2". Optional; the server auto-
                # assigns under each parent when absent. Lives in STATE/refs.json too — see refs.py.
                "ref": (str, type(None)),
@@ -94,6 +97,11 @@ def snapshot_problem(doc: object) -> str | None:
             why = S.design_url_problem(v["design"])
             if why:
                 return f"items.{k}.design: {why}"
+        if isinstance(v.get("linear"), str):
+            from . import linear as LN
+            why = LN.issue_problem(v["linear"])
+            if why:
+                return f"items.{k}.linear: {why}"
         if isinstance(v.get("kind"), str) and v["kind"] not in KINDS:
             return f"items.{k}.kind must be one of {', '.join(KINDS)}"
     if seeds is None:

@@ -2990,6 +2990,45 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Rulings on Linear (1.64.0)
+
+The last release of the ruling-aware PR comments and Linear lane (Wave 5's
+second step), decided as L1–L3 in its design round (OPEN-DECISIONS.md
+"Ruling-aware PR comments and Linear", architect defaults).
+
+- **A comment on the item's Linear issue (L1).** When a ruling is locked,
+  withdrawn, or kept but no longer checked on an item that names a Linear
+  issue, the console comments there: the question, what the owner ruled (up
+  to 1,000 characters), who locked it by the owner-set short name (never an
+  email), when, and a link to the ruling file. Every word from the store
+  passes the PR comment's escaping. It is the first outbound post that
+  carries a question's text; the Slack digest still never does.
+- **The item names its issue (L2).** A new optional item field, `linear`
+  (`ENG-123`), set where items are set and checked at `items-push`. An item
+  with none posts nothing.
+- **The owner's key, the server's post (L3).** `agent.py linear-key --set`
+  asks for a Linear personal API key in the terminal and keeps it in
+  STATE/linear.json (0600), with the teams the console may post to
+  (`--teams ENG`) and the repository for the link (`--repo owner/name`);
+  `--test ISSUE` posts a test comment; a session
+  cannot run it. The server posts once a minute from a queue
+  (STATE/linear-state.json), so a lock never waits on Linear. A rate limit,
+  an outage or a refused key keeps posts queued; a post that cannot succeed
+  (no such issue) is dropped and named under Settings → Linear. Nothing is
+  queued while no key is set, so setting one never posts a backlog. Both
+  files join the sandbox's protected list (1.60).
+- **Only what the owner named (security review).** Items arrive by
+  `items-push` from an adapter an agent can edit, so an item's `linear`
+  never chooses the destination alone: an issue outside the owner's
+  `--teams` is never queued, and the link uses the owner's `--repo`, not
+  the repository pushed with `prs-push`. The link is left out when the
+  ruling folder (`fold.locked`, also agent-editable) is not plain relative
+  segments.
+- **Builder's choices, for the owner's veto:** the link is to the file on the
+  default branch (`blob/HEAD`), since the file is committed after the lock;
+  the server resolves the issue by its identifier before commenting, which
+  also proves the key can see it.
+
 ## GitHub triggers by action (1.63.0)
 
 The action filter left open by 1.59, decided as F1 in the ruling-aware PR
