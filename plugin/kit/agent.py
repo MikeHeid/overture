@@ -2186,9 +2186,13 @@ def main(argv=None) -> int:
                        "read from the terminal (never an argument, which shell history keeps) and kept in "
                        "STATE/linear.json (0600). You run this, never a session.")
     g = s.add_mutually_exclusive_group()
-    g.add_argument("--set", action="store_true", help="ask for the key and keep it")
+    g.add_argument("--set", action="store_true", help="ask for the key and keep it, with --teams (and --repo)")
     g.add_argument("--clear", action="store_true", help="remove the key: nothing more is queued or posted")
     g.add_argument("--test", metavar="ISSUE", help="post one test comment on this issue now, e.g. ENG-123")
+    s.add_argument("--teams", nargs="+", metavar="TEAM", help="with --set: the only Linear teams the console may post "
+                   "to, e.g. ENG; an item naming another team's issue posts nothing")
+    s.add_argument("--repo", metavar="OWNER/NAME", help="with --set: the GitHub repository the ruling link points at "
+                   "(none: no link)")
     s = sub.add_parser("github-secret", description="Make a new secret for a trigger that takes signed GitHub "
                        "webhooks (1.59), keep it in STATE/github-secrets/ (0600), and print it once to paste into "
                        "the webhook's Secret field on GitHub. Whoever holds it can fire the trigger, so it is set "
@@ -2514,7 +2518,8 @@ def _notify_url(state: Path, url: str | None, clear: bool, test: bool) -> int:
         return 2
 
 
-def _linear_key(state: Path, set_: bool, clear: bool, test: str | None) -> int:
+def _linear_key(state: Path, set_: bool, clear: bool, test: str | None, teams: list | None = None,
+                repo: str | None = None) -> int:
     """`linear-key` (1.64, L3): set (asked for, never an argument), show whether set, clear, or post a test comment.
     Never prints the key."""
     try:
@@ -2524,10 +2529,16 @@ def _linear_key(state: Path, set_: bool, clear: bool, test: str | None) -> int:
                   "you, in your own terminal", file=sys.stderr)
             return 2
         if set_:
+            why = LR.config_problem("lin_api_" + "x" * 16, teams, repo)   # the teams and repo, before the prompt
+            if why:
+                print(f"agent.py: linear-key: {why}", file=sys.stderr)
+                return 2
             import getpass
             key = getpass.getpass("Linear personal API key (lin_api_...): ").strip()
-            LR.set_key(state, key)
-            print("linear: key set; rulings on items with a `linear` issue are posted there from now on")
+            LR.set_key(state, key, teams, repo)
+            print(f"linear: key set for team(s) {', '.join(sorted(set(teams)))}"
+                  + (f", links to {repo}" if repo else ", no ruling link (no --repo)")
+                  + "; rulings on items whose `linear` issue is in those teams are posted there")
             return 0
         if clear:
             LR.set_key(state, None)
@@ -2546,7 +2557,7 @@ def _linear_key(state: Path, set_: bool, clear: bool, test: str | None) -> int:
             print(f"linear: test comment posted on {test}")
             return 0
         st = LR.status(state)
-        print(f"linear: key set; {st['pending']} post(s) waiting"
+        print(f"linear: key set for team(s) {', '.join(st['teams'])}; {st['pending']} post(s) waiting"
               + (f"; last posted {st['last_ok']}" if st["last_ok"] else "")
               + (f"; last problem: {st['last_error']}" if st["last_error"] else ""))
         return 0
@@ -2895,7 +2906,7 @@ def _run(a, bell: Path) -> int:
     if a.cmd == "notify-url":
         return _notify_url(a.state, a.url, a.clear, a.test)
     if a.cmd == "linear-key":
-        return _linear_key(a.state, a.set, a.clear, a.test)
+        return _linear_key(a.state, a.set, a.clear, a.test, a.teams, a.repo)
     if a.cmd == "github-secret":
         return _github_secret(a.state, a.name, a.clear)
     if a.cmd == "access":

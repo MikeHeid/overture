@@ -12,7 +12,12 @@ is locked or withdrawn, or kept but no longer checked.
   (STATE/linear-state.json), so a slow or failing Linear never holds up a lock. The console shows only that a
   key is set, and how the last post went.
 
-    STATE/linear.json         {"key": "lin_api_..."}
+    STATE/linear.json         {"key": "lin_api_...", "teams": ["ENG"], "repo": "owner/name" | null}
+
+**What only the owner decides (1.64 security review).** Items arrive by `items-push`, from the project's adapter,
+which an agent can edit; so an item's `linear` alone never chooses where the owner's words go. The owner names,
+with the key, the Linear teams the console may post to (`--teams`), and the repository the ruling link points
+at (`--repo`; none, no link). An issue outside those teams is never queued.
     STATE/linear-state.json   {"pending": [{"id", "issue", "body"}], "done": [id...], "last_ok", "last_error"}
 
 An event is queued only while a key is set, so setting a key never posts a backlog. A post Linear refuses for
@@ -35,6 +40,9 @@ KEY_FILE = "linear.json"
 STATE_FILE = "linear-state.json"
 API = "https://api.linear.app/graphql"
 KEY = re.compile(r"^lin_api_[A-Za-z0-9]{16,128}\Z")     # a Linear personal API key
+TEAM = re.compile(r"^[A-Z][A-Z0-9]{0,9}\Z")              # a team key, the part of ENG-123 before the dash
+REPO = re.compile(r"^(?!\.\.?/)[A-Za-z0-9._\-]{1,100}/(?!\.\.?\Z)[A-Za-z0-9._\-]{1,100}\Z")   # rulecheck's REPO
+MAX_TEAMS = 20
 ISSUE = re.compile(r"^[A-Z][A-Z0-9]{0,9}-[0-9]{1,9}\Z")   # an issue identifier: ENG-123
 TIMEOUT = 10.0
 TOTAL = 30.0
@@ -67,7 +75,19 @@ def issue_problem(issue: object) -> str | None:
     return None
 
 
-def load_key(state: Path) -> str | None:
+def config_problem(key: object, teams: object, repo: object) -> str | None:
+    if key_problem(key):
+        return key_problem(key)
+    if (not isinstance(teams, list) or not 1 <= len(teams) <= MAX_TEAMS
+            or not all(isinstance(t, str) and TEAM.match(t) for t in teams)):
+        return f"name the Linear teams the console may post to: 1-{MAX_TEAMS} team keys, e.g. --teams ENG OPS"
+    if repo is not None and (not isinstance(repo, str) or not REPO.match(repo)):
+        return "--repo is the GitHub repository as owner/name"
+    return None
+
+
+def load_config(state: Path) -> dict | None:
+    """{"key", "teams", "repo"} as the owner set them, or None when no key is set. A file the kit refuses raises."""
     p = Path(state) / KEY_FILE
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
@@ -75,27 +95,44 @@ def load_key(state: Path) -> str | None:
         return None
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
         raise LinearError(f"{p}: not readable ({type(e).__name__})") from None
-    key = doc.get("key") if isinstance(doc, dict) and set(doc) == {"key"} else None
-    if key_problem(key):
-        raise LinearError(f'{p}: the file is exactly {{"key": "lin_api_..."}}')
-    return key
+    if (not isinstance(doc, dict) or set(doc) != {"key", "teams", "repo"}
+            or config_problem(doc["key"], doc["teams"], doc["repo"])):
+        raise LinearError(f'{p}: not the file linear-key writes; set it again with agent.py linear-key --set')
+    return doc
 
 
-def set_key(state: Path, key: str | None) -> None:
-    """Set (None: remove) the key, logged in the role log as set or removed only (the key is the secret)."""
-    if key is not None and key_problem(key):
-        raise LinearError(key_problem(key))
+def load_key(state: Path) -> str | None:
+    cfg = load_config(state)
+    return cfg["key"] if cfg else None
+
+
+def team_allowed(state: Path, issue: str) -> bool:
+    """Whether the owner named this issue's team when setting the key (the security review's confused deputy)."""
+    try:
+        cfg = load_config(state)
+    except LinearError:
+        return False          # a refused key file posts nowhere; status() names the problem in Settings
+    return bool(cfg) and issue_problem(issue) is None and issue.split("-", 1)[0] in cfg["teams"]
+
+
+def set_key(state: Path, key: str | None, teams: list[str] | None = None, repo: str | None = None) -> None:
+    """Set (None: remove) the key with its teams and repository, logged in the role log as set or removed only."""
+    if key is not None:
+        why = config_problem(key, teams, repo)
+        if why:
+            raise LinearError(why)
     p = Path(state) / KEY_FILE
+    doc = {"key": key, "teams": sorted(set(teams or [])), "repo": repo} if key else None
 
     def plan():
         try:
-            before = load_key(state)
+            before = load_config(state)
         except LinearError:
             before = None
-        if before == key and p.exists() == (key is not None):
+        if before == doc and p.exists() == (doc is not None):
             return None
-        return ({"setting": {"key": "linear_key", "from": "set" if before else None, "to": "set" if key else None}},
-                lambda: _write(p, {"key": key} if key else None))
+        return ({"setting": {"key": "linear_key", "from": "set" if before else None, "to": "set" if doc else None}},
+                lambda: _write(p, doc))
     RO.logged_change(state, None, plan)
 
 
@@ -126,8 +163,9 @@ def save_state(state: Path, doc: dict) -> None:
 
 
 def enqueue(state: Path, event_id: str, issue: str, body: str, lock=None) -> bool:
-    """Queue one post; False when no key is set, the event was queued or posted before, or the issue is malformed."""
-    if issue_problem(issue) or load_key(state) is None:
+    """Queue one post; False when no key is set, the issue's team is not one the owner named, the event was queued
+    or posted before, or the issue is malformed."""
+    if issue_problem(issue) or not team_allowed(state, issue):
         return False
     with lock or nullcontext():
         return _enqueue(state, event_id, issue, body)
@@ -164,12 +202,16 @@ def ruled_words(question: dict, answer: dict) -> str:
     return text if len(text) <= RULED_CHARS else text[:RULED_CHARS - 1] + "…"
 
 
+LOCKED_SEG = re.compile(r"^(?!\.\.?\Z)[A-Za-z0-9._\-]{1,100}\Z")
+
+
 def file_link(repo: str | None, locked: str, qid: str) -> str | None:
     """The ruling file on the default branch (`blob/HEAD`): the steward commits it after the lock (`fold.py export`),
-    so the link works from that commit on. None without a repository the steward pushed (`prs-push`)."""
+    so the link works from that commit on. None without the repository the OWNER set with the key, and None for a
+    ruling folder that is not plain relative segments (no `.`, no `..`): an agent can edit `.overture.json`."""
     from urllib.parse import quote
     from . import fold as F
-    if not repo:
+    if not repo or not REPO.match(repo) or not all(LOCKED_SEG.match(s) for s in locked.split("/")):
         return None
     return f"https://github.com/{repo}/blob/HEAD/{quote(locked, '/')}/{quote(F.locked_filename(qid), '')}"
 
@@ -313,9 +355,10 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
 
 def status(state: Path) -> dict:
     """For the Settings tab: whether a key is set (never the key), what waits, and how the last post went."""
-    out: dict = {"key_set": False, "problem": None, "pending": 0, "last_ok": None, "last_error": None}
+    out: dict = {"key_set": False, "teams": [], "problem": None, "pending": 0, "last_ok": None, "last_error": None}
     try:
-        out["key_set"] = load_key(state) is not None
+        cfg = load_config(state)
+        out["key_set"], out["teams"] = cfg is not None, (cfg or {}).get("teams") or []
     except LinearError:
         out["problem"] = "the Linear key file cannot be read, so nothing is posted; set it again with agent.py linear-key"
     try:

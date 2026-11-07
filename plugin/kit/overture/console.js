@@ -5054,9 +5054,9 @@
       ' field.']));
     if (n.problem) body.appendChild(el('p', { className: 'ck-error-msg' }, [n.problem]));
     body.appendChild(el('p', { className: 'ck-settings-linear-where' }, n.key_set
-      ? ['A key is set' + (n.pending ? '; ' + n.pending + ' post' + (n.pending === 1 ? '' : 's') + ' waiting' : '') +
+      ? ['A key is set' + ((n.teams || []).length ? ' for ' + n.teams.join(', ') : '') + (n.pending ? '; ' + n.pending + ' post' + (n.pending === 1 ? '' : 's') + ' waiting' : '') +
          '. The owner changes it in the terminal.']
-      : ['No key yet. The owner sets one in the terminal: ', el('code', {}, ['agent.py linear-key --set'])]));
+      : ['No key yet. The owner sets one in the terminal: ', el('code', {}, ['agent.py linear-key --set --teams ENG'])]));
     if (n.last_error) body.appendChild(el('p', { className: 'ck-error-msg' }, ['The last post failed: ' + n.last_error +
       '.']));
     else if (n.last_ok) body.appendChild(el('p', { className: 'ck-muted' }, [

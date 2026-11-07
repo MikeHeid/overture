@@ -3008,18 +3008,26 @@ second step), decided as L1–L3 in its design round (OPEN-DECISIONS.md
   with none posts nothing.
 - **The owner's key, the server's post (L3).** `agent.py linear-key --set`
   asks for a Linear personal API key in the terminal and keeps it in
-  STATE/linear.json (0600); `--test ISSUE` posts a test comment; a session
+  STATE/linear.json (0600), with the teams the console may post to
+  (`--teams ENG`) and the repository for the link (`--repo owner/name`);
+  `--test ISSUE` posts a test comment; a session
   cannot run it. The server posts once a minute from a queue
   (STATE/linear-state.json), so a lock never waits on Linear. A rate limit,
   an outage or a refused key keeps posts queued; a post that cannot succeed
   (no such issue) is dropped and named under Settings → Linear. Nothing is
   queued while no key is set, so setting one never posts a backlog. Both
   files join the sandbox's protected list (1.60).
+- **Only what the owner named (security review).** Items arrive by
+  `items-push` from an adapter an agent can edit, so an item's `linear`
+  never chooses the destination alone: an issue outside the owner's
+  `--teams` is never queued, and the link uses the owner's `--repo`, not
+  the repository pushed with `prs-push`. The link is left out when the
+  ruling folder (`fold.locked`, also agent-editable) is not plain relative
+  segments.
 - **Builder's choices, for the owner's veto:** the link is to the file on the
   default branch (`blob/HEAD`), since the file is committed after the lock;
   the server resolves the issue by its identifier before commenting, which
-  also proves the key can see it; the repository is the one the steward
-  pushed with `prs-push` (no link without it).
+  also proves the key can see it.
 
 ## GitHub triggers by action (1.63.0)
 

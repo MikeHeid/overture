@@ -1777,8 +1777,8 @@ class Console:
         if q is None:
             return
         issue = (self.items().get(q["item"]) or {}).get("linear")
-        if not isinstance(issue, str) or LR.issue_problem(issue) or LR.load_key(self.cfg.state) is None:
-            return
+        if not isinstance(issue, str) or not LR.team_allowed(self.cfg.state, issue):
+            return   # no key, or a team the owner did not name: an agent's push alone never picks where it goes
         if rec["type"] == "lock":
             from . import fold as F
             from . import rulecheck as RC
@@ -1788,7 +1788,7 @@ class Console:
                 locked = RC._locked_default(self.cfg.root, None)   # .overture.json fold.locked, read as a file, no git
             except RC.CheckError:
                 locked = RC.DEFAULT_LOCKED
-            link = LR.file_link(PR.load(self.cfg.state).get("repo"), locked, q["qid"])
+            link = LR.file_link((LR.load_config(self.cfg.state) or {}).get("repo"), locked, q["qid"])
             body = LR.body_locked(self.cfg.project or "", q, answer, rec, who, link)
         else:
             body = LR.body_settled(self.cfg.project or "", q, rec)

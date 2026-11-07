@@ -6506,7 +6506,7 @@ class LinearTests(unittest.TestCase):
 
     def test_the_key_file_is_0600_and_the_role_log_never_holds_the_key(self):
         # Catches (L3): a key written readable by others, or the key itself copied into the role log.
-        self.LN.set_key(self.state, self.KEY)
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
         self.assertEqual((self.state / "linear.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.LN.load_key(self.state), self.KEY)
         log = "".join(p.read_text() for p in self.state.glob("*log*"))
@@ -6515,6 +6515,38 @@ class LinearTests(unittest.TestCase):
         self.assertIsNone(self.LN.load_key(self.state))
         with self.assertRaises(self.LN.LinearError):
             self.LN.set_key(self.state, "not a key")
+
+    def test_only_the_teams_the_owner_named_are_posted_to(self):
+        # Catches (1.64 security review, confused deputy): an agent's pushed item choosing any issue the key can see,
+        # a key set with no teams (every team), a team key in a shape Linear has none, and a 1.64-dev key file
+        # without teams read as "every team".
+        with self.assertRaises(self.LN.LinearError):
+            self.LN.set_key(self.state, self.KEY)
+        for bad in ([], ["eng"], ["ENG-1"], "ENG", [1], ["T"] * 21):
+            self.assertTrue(self.LN.config_problem(self.KEY, bad, None), bad)
+        for bad in ("acme", "acme/app/x", "../app", "acme/..", 7):
+            self.assertTrue(self.LN.config_problem(self.KEY, ["ENG"], bad), bad)
+        self.LN.set_key(self.state, self.KEY, ["OPS", "ENG"], "acme/app")
+        self.assertEqual(self.LN.load_config(self.state), {"key": self.KEY, "teams": ["ENG", "OPS"],
+                                                            "repo": "acme/app"})
+        self.assertTrue(self.LN.team_allowed(self.state, "ENG-9"))
+        self.assertFalse(self.LN.team_allowed(self.state, "SEC-9"))
+        self.assertFalse(self.LN.enqueue(self.state, "e1", "SEC-9", "b"))
+        self.assertTrue(self.LN.enqueue(self.state, "e2", "OPS-9", "b"))
+        self.assertEqual(self.LN.status(self.state)["teams"], ["ENG", "OPS"])
+        (self.state / "linear.json").write_text(json.dumps({"key": self.KEY}))
+        with self.assertRaises(self.LN.LinearError):
+            self.LN.load_config(self.state)
+        self.assertFalse(self.LN.team_allowed(self.state, "ENG-1"))    # a refused file posts nowhere
+
+    def test_the_link_is_left_out_for_a_folder_or_repository_an_agent_could_bend(self):
+        # Catches (1.64 security review): `fold.locked` from an agent-editable .overture.json walking the link out
+        # of the ruling folder, or a repository that is not owner/name.
+        for locked in ("../../evil", "a/../b", "/abs", "a//b", ".", "a b"):
+            self.assertIsNone(self.LN.file_link("acme/app", locked, "LANE.1/Q2"), locked)
+        for repo in ("evil.example.com/x/y", "acme", "../x"):
+            self.assertIsNone(self.LN.file_link(repo, ".overture/locked", "LANE.1/Q2"), repo)
+        self.assertTrue(self.LN.file_link("acme/app", "console/locked", "LANE.1/Q2"))
 
     def test_a_post_is_inert_and_carries_the_ruling_the_name_and_the_link(self):
         # Catches (L1): agent-written question text that pings someone or links out of Linear, an email where the
@@ -6539,7 +6571,7 @@ class LinearTests(unittest.TestCase):
         # Catches: a queue filled while no key was set, then posted as a backlog the moment one is; an event
         # queued twice (a retried lock); a malformed issue queued.
         self.assertFalse(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
-        self.LN.set_key(self.state, self.KEY)
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
         self.assertTrue(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
         self.assertFalse(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
         self.assertFalse(self.LN.enqueue(self.state, "e2", "eng-1", "b"))
@@ -6549,7 +6581,7 @@ class LinearTests(unittest.TestCase):
     def test_a_passing_failure_keeps_the_post_a_lasting_one_drops_it_named(self):
         # Catches: a post lost to a network blip or a rate limit, a post that can never succeed (no such issue)
         # retried forever and holding up the rest, and a sent post sent again.
-        self.LN.set_key(self.state, self.KEY)
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
         for i in (1, 2, 3):
             self.LN.enqueue(self.state, f"e{i}", f"ENG-{i}", f"body {i}")
         sent, mode = [], {"ENG-1": "pass"}

@@ -10503,7 +10503,7 @@ class LinearServerTests(_Live, unittest.TestCase):
     def test_a_lock_is_posted_once_with_the_short_name_and_never_the_email(self):
         # Catches (L1, L3): a lock not posted, posted twice, posted with the owner's email, or posted in the
         # request itself (the request would wait on Linear).
-        self.LN.set_key(self.cfg.state, self.KEY)
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"])
         rec = self.lock()
         self.assertEqual(self.posted, [])                       # queued, not posted inside the request
         self.assertEqual(self.console.linear_tick(), "sent")
@@ -10523,7 +10523,7 @@ class LinearServerTests(_Live, unittest.TestCase):
     def test_a_withdrawal_and_a_keep_are_posted_and_other_records_are_not(self):
         # Catches (L1): a withdrawn or kept-unchecked ruling never told to Linear, or every record (an answer, a
         # proposal, a message) posted there.
-        self.LN.set_key(self.cfg.state, self.KEY)
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"])
         lk = self.lock()
         self.console.linear_tick()
         self.posted.clear()
@@ -10540,22 +10540,41 @@ class LinearServerTests(_Live, unittest.TestCase):
     def test_no_key_queues_nothing_and_setting_one_later_posts_no_backlog(self):
         # Catches: locks queued while no key was set, then all posted at once when the owner sets one.
         self.lock()
-        self.LN.set_key(self.cfg.state, self.KEY)
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"])
         self.assertIsNone(self.console.linear_tick())
         self.assertEqual(self.posted, [])
 
     def test_an_item_with_no_issue_posts_nothing(self):
         # Catches (L2): a guessed issue, or a post for an item that names none.
-        self.LN.set_key(self.cfg.state, self.KEY)
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"])
         code, out = self.agent_post("/question", self.seed_q(qid="LANE/Q9", item="LANE", nonce="linq0000009"))
         self.assertEqual(code, 200, out)
         self.lock("LANE/Q9", n=9)
         self.assertIsNone(self.console.linear_tick())
         self.assertEqual(self.posted, [])
 
+    def test_an_agent_pushed_issue_in_another_team_and_an_agent_pushed_repo_go_nowhere(self):
+        # Catches (1.64 security review): an item's `linear` (agent-pushed) sending the owner's ruling to a team the
+        # owner never named, and the ruling link built from the repository an agent pushed with prs-push.
+        from overture import prs as PR
+        self.LN.set_key(self.cfg.state, self.KEY, ["OPS"])
+        self.lock()
+        self.assertIsNone(self.console.linear_tick())
+        self.assertEqual(self.posted, [])
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"], "acme/app")
+        code, out = self.agent_post("/question", self.seed_q(qid="LANE.1/Q7", nonce="linq0000007"))
+        self.assertEqual(code, 200, out)
+        with mock.patch.object(PR, "load", return_value={"repo": "evil/repo"}):
+            self.lock("LANE.1/Q7", n=7)
+        self.assertEqual(self.console.linear_tick(), "sent")
+        [(_, issue, body)] = self.posted
+        self.assertEqual(issue, "ENG-42")
+        self.assertIn("(https://github.com/acme/app/blob/HEAD/", body)
+        self.assertNotIn("evil/repo", body)
+
     def test_a_failing_linear_never_fails_the_lock(self):
         # Catches: a Linear outage turning the owner's lock into an error, and the post lost instead of kept.
-        self.LN.set_key(self.cfg.state, self.KEY)
+        self.LN.set_key(self.cfg.state, self.KEY, ["ENG"])
 
         def down(key, issue, body):
             raise self.LN.LinearError("Linear could not be reached (TimeoutError)")
