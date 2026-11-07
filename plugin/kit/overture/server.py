@@ -2460,8 +2460,9 @@ class Console:
         """1.59.0 (OPEN-DECISIONS G1-G3): a signed GitHub delivery fires a trigger. Returns (status, body).
 
         Signature first, over the exact bytes, before anything the delivery says is believed; then a `ping`
-        or an event the trigger does not list is answered and fires nothing; then the delivery id must be
-        new and the rate limit must allow (one lock, TR.Store.admit). The payload is never read.
+        or an event the trigger does not list is answered and fires nothing, and so is an action it does not
+        list (1.63.0, F1: only the payload's top-level `action` is read, and only when the trigger lists
+        actions); then the delivery id must be new and the rate limit must allow (one lock, TR.Store.admit).
         """
         trigger = self.triggers.get(name)
         if trigger is None or trigger.github_events is None:
@@ -2484,6 +2485,13 @@ class Console:
             return 200, {"fired": False, "reason": "ping: the webhook reaches this console"}
         if event not in trigger.github_events:
             return 202, {"fired": False, "reason": f"trigger {name!r} does not take {event!r} events"}
+        if trigger.github_actions is not None:   # 1.63.0 (F1): the payload's `action`, and nothing else in it
+            action = TR.delivery_action(body)
+            if action is None:
+                return 202, {"fired": False, "reason": f"trigger {name!r} takes only the actions it lists, and this "
+                                                       f"{event!r} delivery carries no action"}
+            if action not in trigger.github_actions:
+                return 202, {"fired": False, "reason": f"trigger {name!r} does not take {event!r} {action!r}"}
         import time as _t
         admitted = self.triggers.admit(name, delivery, hashlib.sha256(body).hexdigest(), _t.time())
         if admitted == "replay":

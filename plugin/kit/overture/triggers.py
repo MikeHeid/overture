@@ -32,11 +32,17 @@ Bypass rule on `/api/github/*` lets GitHub through and the signature is the gate
 
         "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}}
 
+1.63.0 (OPEN-DECISIONS F1): an optional `actions` list beside `events` fires only on
+those actions, e.g. `{"events": ["pull_request"], "actions": ["opened", "synchronize"]}`.
+Absent, every action fires, as in 1.59. With it, a delivery whose top-level `action`
+is not listed, or that carries none (a `push` has none), is answered and fires nothing.
+
 The secret is the owner's, set in the terminal (`agent.py github-secret NAME`), and
 kept in STATE/github-secrets/NAME.json (0600), never in the repository. A `ping`
 is answered and fires nothing; an event not listed is answered and fires nothing;
 a delivery whose id or exact body was already received is refused (GitHub signs the
-body only). The payload is not given to the playbook.
+body only). The payload is not given to the playbook; with `actions` set, the
+server reads its top-level `action` string, after the signature, and nothing else.
 
 Rate limit: at most one firing per `MIN_INTERVAL_S` seconds per trigger (in-process).
 A rejected call responds 429 and names the next-allowed time.
@@ -66,6 +72,8 @@ _SHA256_HEX = re.compile(r"^[0-9a-f]{64}\Z")
 EVENT = re.compile(r"^[a-z][a-z_]{0,63}\Z")          # GitHub's X-GitHub-Event names: pull_request, push, ...
 DELIVERY = re.compile(r"^[0-9A-Za-z-]{1,64}\Z")      # X-GitHub-Delivery, a GUID
 MAX_EVENTS = 32
+MAX_ACTIONS = 32
+ACTION = re.compile(r"^[a-z][a-z_]{0,63}\Z")         # a payload's `action`: opened, synchronize, closed, ...
 SECRET_DIR = "github-secrets"
 _SECRET = re.compile(r"^[\x20-\x7e]{16,256}\Z")      # printable ASCII: what GitHub's Secret field takes
 DELIVERIES_KEPT = 4096   # delivery ids remembered per process, for the replay guard
@@ -82,6 +90,7 @@ class Trigger:
     token_sha256: str | None    # None → webhook disabled (cron-only trigger)
     cron: tuple | None          # (minutes, hours, days-of-month, months, days-of-week) each a frozenset of ints
     github_events: frozenset | None = None   # 1.59.0: None → no GitHub route; else the events that fire it
+    github_actions: frozenset | None = None  # 1.63.0 (F1): None → every action fires; else only these
 
     def to_public(self) -> dict:
         """For /view: token hash + cron shape aren't exposed; only name + playbook + what trigger kinds are armed."""
@@ -229,17 +238,22 @@ def _validate(name: str, cfg: object) -> Trigger:
             cron_fields = parse_cron(cron_raw)
         except ValueError as e:
             raise TriggerError(f"{FILE}: triggers[{name!r}].cron: {e}") from None
-    events = _github_events(name, cfg.get("github")) if "github" in cfg else None
+    events, actions = _github_events(name, cfg.get("github")) if "github" in cfg else (None, None)
     if token_sha is None and cron_fields is None and events is None:
         raise TriggerError(f"{FILE}: triggers[{name!r}] must set at least one of token_sha256 (webhook), "
                            "cron (schedule) or github (signed GitHub webhook)")
-    return Trigger(name=name, playbook=playbook, token_sha256=token_sha, cron=cron_fields, github_events=events)
+    return Trigger(name=name, playbook=playbook, token_sha256=token_sha, cron=cron_fields, github_events=events,
+                   github_actions=actions)
 
 
-def _github_events(name: str, gh: object) -> frozenset:
-    """1.59.0: `"github": {"events": ["pull_request", ...]}`, exactly; `ping` is always answered, never listed."""
-    shape = f'{FILE}: triggers[{name!r}].github is exactly {{"events": ["pull_request", ...]}}'
-    if not isinstance(gh, dict) or set(gh) != {"events"}:
+def _github_events(name: str, gh: object) -> tuple[frozenset, frozenset | None]:
+    """(events, actions): `"github": {"events": [...]}` (1.59.0), with an optional `"actions": [...]` (1.63.0, F1).
+
+    `ping` is always answered, never listed. No other key is accepted.
+    """
+    shape = (f'{FILE}: triggers[{name!r}].github is {{"events": ["pull_request", ...]}}, with an optional '
+             f'"actions": ["opened", ...]')
+    if not isinstance(gh, dict) or "events" not in gh or not set(gh) <= {"events", "actions"}:
         raise TriggerError(shape)
     events = gh["events"]
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_EVENTS:
@@ -251,7 +265,31 @@ def _github_events(name: str, gh: object) -> frozenset:
         if e == "ping":
             raise TriggerError(f"{FILE}: triggers[{name!r}].github.events: 'ping' is answered and never fires; "
                                "leave it out")
-    return frozenset(events)
+    if "actions" not in gh:
+        return frozenset(events), None
+    actions = gh["actions"]
+    if not isinstance(actions, list) or not 1 <= len(actions) <= MAX_ACTIONS:
+        raise TriggerError(f"{FILE}: triggers[{name!r}].github.actions is a list of 1-{MAX_ACTIONS} actions; "
+                           "leave it out to fire on every action")
+    for a in actions:
+        if not isinstance(a, str) or not ACTION.match(a):
+            raise TriggerError(f"{FILE}: triggers[{name!r}].github.actions: {a!r} is not a GitHub action name "
+                               "(lowercase letters and '_', as the payload's `action` says it, e.g. 'opened')")
+    return frozenset(events), frozenset(actions)
+
+
+def delivery_action(body: bytes) -> str | None:
+    """1.63.0 (F1): the payload's top-level `action`, when it is one well-formed string; else None.
+
+    Called only after the signature matched, and only for a trigger that lists actions. Nothing else in
+    the payload is read, and the payload is still never given to the playbook.
+    """
+    try:
+        doc = json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+    a = doc.get("action") if isinstance(doc, dict) else None
+    return a if isinstance(a, str) and ACTION.match(a) else None
 
 
 # -- GitHub's signature and the owner's secret (1.59.0) ---------------------------------------------------

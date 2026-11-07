@@ -12755,6 +12755,33 @@ class GithubWebhookTests(_Live, unittest.TestCase):
         self.assertEqual(self.chats(), [])
         self.assertEqual(self.deliver()[0], 200)
 
+    def test_an_actions_list_fires_only_on_those_actions_and_answers_the_rest(self):
+        # 1.63.0 (F1). Catches: the filter ignored (a `closed` fires), a no-op that spends the rate limit or the
+        # delivery id, a delivery with no action firing anyway, the action believed before the signature, and a
+        # trigger with no `actions` filtered at all.
+        (Path(self.cfg.root, ".overture", "triggers.json")).write_text(json.dumps({"triggers": {
+            "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}},
+            "pr-sync": {"playbook": "triage",
+                        "github": {"events": ["pull_request", "push"], "actions": ["opened", "synchronize"]}}}}))
+        self.console.triggers.set_all(self.TR.load(self.cfg.root))
+        self.TR.set_secret(self.cfg.state, "pr-sync", self.SECRET)
+        closed = b'{"action":"closed","number":1}'
+        self.assertEqual(self.deliver("pr-sync", body=closed, sig=self.sign(b"{}"))[0], 401)
+        code, out = self.deliver("pr-sync", body=closed, delivery="cccc-1")
+        self.assertEqual((code, out["fired"]), (202, False))
+        self.assertIn("'closed'", out["reason"])
+        code, out = self.deliver("pr-sync", event="push", body=b'{"ref":"refs/heads/main"}')
+        self.assertEqual((code, out["fired"]), (202, False))
+        self.assertIn("carries no action", out["reason"])
+        self.assertEqual(self.chats(), [])
+        code, out = self.deliver("pr-sync", body=b'{"action":"synchronize","number":1}')
+        self.assertEqual((code, out["fired"]), (200, True), out)
+        later = time.time() + self.TR.MIN_INTERVAL_S + 1
+        with mock.patch("time.time", return_value=later):   # no filter: a closed delivery fires as in 1.59
+            code, out = self.deliver("pr-opened", body=closed, delivery="cccc-2")
+        self.assertEqual((code, out["fired"]), (200, True), out)
+        self.assertEqual(len(self.chats()), 2)
+
     def test_a_delivery_id_fires_once_and_a_rate_limited_one_may_be_redelivered(self):
         # Catches (G3): a captured delivery replayed to fire again; and a delivery refused for the rate limit whose
         # id was kept anyway, so GitHub's Redeliver of it is refused as a replay.

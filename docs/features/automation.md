@@ -130,6 +130,11 @@ a console behind Cloudflare Access only.
 
         "pr-opened": {"playbook": "triage", "github": {"events": ["pull_request"]}}
 
+   To fire on some actions only (1.63, F1), add an `actions` list:
+
+        "pr-opened": {"playbook": "triage",
+                      "github": {"events": ["pull_request"], "actions": ["opened", "synchronize"]}}
+
 2. In your own terminal, run `agent.py github-secret pr-opened`. It makes
    a secret, keeps it in the console's state directory (0600, never in the
    repository) and prints it once. A Claude Code session cannot run it.
@@ -162,9 +167,13 @@ What the console does with a delivery:
   **Redeliver** works afterwards.
 - A body over 256 KiB gets 413. The payload is not passed to the
   playbook; the delivery only starts it.
-- An event fires on every one of its actions: `pull_request` covers
-  `opened`, `edited`, `synchronize`, `closed` and the rest, so pick
-  events whose every action should start the playbook.
+- With no `actions` list, an event fires on every one of its actions:
+  `pull_request` covers `opened`, `edited`, `synchronize`, `closed` and
+  the rest. With one (1.63), a delivery whose `action` is not listed gets
+  202 and fires nothing, and neither does one that carries no action,
+  such as a `push`; put events with no actions in a trigger of their own.
+  Reading `action` is the only thing the console reads from the payload,
+  after the signature matched, and only for a trigger that lists actions.
 - The Triggers tab lists the firing with the kind `github`.
 
 On a console with `--auth link` the route meets the sign-in gate like
