@@ -50,6 +50,8 @@ MAX_REPLY = 64 * 1024
 MAX_PENDING = 200        # queued posts kept; the oldest are dropped, named, past this
 MAX_DONE = 5000
 PER_TICK = 5             # posts tried in one look
+LOOK = 60.0              # seconds one look may spend posting, so the Slack digest beside it is never held long
+MAX_TRIES = 1440         # a post that keeps failing in a way that may pass is dropped, named, after a day of tries
 # Linear's error codes that pass with time or with the owner's fix (a new key): the post stays queued for those.
 PASSING = ("RATELIMITED", "AUTHENTICATION_ERROR", "FORBIDDEN", "INTERNAL_SERVER_ERROR")
 RULED_CHARS = 1000       # the owner's words, as in the PR comment (1.61)
@@ -149,7 +151,9 @@ def load_state(state: Path) -> dict:
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
         raise LinearError(f"{p}: not readable ({type(e).__name__})") from None
     ok = (isinstance(doc, dict) and set(doc) == set(fresh()) and isinstance(doc["pending"], list)
-          and all(isinstance(e, dict) and set(e) == {"id", "issue", "body"} and all(isinstance(v, str) for v in e.values())
+          and all(isinstance(e, dict) and set(e) - {"tries"} == {"id", "issue", "body"}
+                  and all(isinstance(e[k], str) for k in ("id", "issue", "body"))
+                  and (type(e.get("tries", 0)) is int and 0 <= e.get("tries", 0) <= MAX_TRIES)
                   for e in doc["pending"])
           and isinstance(doc["done"], list) and all(isinstance(i, str) for i in doc["done"])
           and all(doc[k] is None or isinstance(doc[k], str) for k in ("last_ok", "last_error")))
@@ -175,7 +179,7 @@ def _enqueue(state: Path, event_id: str, issue: str, body: str) -> bool:
     try:
         doc = load_state(state)
     except LinearError:
-        doc = fresh()   # a damaged file starts over: a post may be made twice, never lost silently
+        doc = {**fresh(), "last_error": _set_aside(state)}   # a damaged file starts over, named, kept beside it
     if event_id in doc["done"] or any(e["id"] == event_id for e in doc["pending"]):
         return False
     pending = doc["pending"] + [{"id": event_id, "issue": issue, "body": body}]
@@ -184,6 +188,18 @@ def _enqueue(state: Path, event_id: str, issue: str, body: str) -> bool:
         doc = {**doc, "last_error": f"{dropped} queued post(s) dropped: more than {MAX_PENDING} waited"}
     save_state(state, {**doc, "pending": pending[-MAX_PENDING:]})
     return True
+
+
+def _set_aside(state: Path) -> str:
+    """Move a damaged state file aside (kept for the owner) and say so; the posts queued in it are not made."""
+    p = Path(state) / STATE_FILE
+    aside = p.with_name(f"{STATE_FILE}.bad-{time.strftime('%Y%m%dT%H%M%S')}")
+    try:
+        os.replace(p, aside)
+        where = f"kept as {aside.name}"
+    except OSError as e:
+        where = f"not moved ({type(e).__name__})"
+    return f"the Linear queue file was damaged and started over ({where}); the posts queued in it were not made"
 
 
 # -- what a post says -------------------------------------------------------------------------------------------
@@ -296,10 +312,14 @@ def _code(raw: bytes) -> str | None:
 
 def post(key: str, issue: str, body: str) -> None:
     """Comment `body` on `issue`. The identifier is resolved first, which also proves the key can see it."""
-    found = _graphql(key, "query($id: String!) { issue(id: $id) { id } }", {"id": issue})
+    found = _graphql(key, "query($id: String!) { issue(id: $id) { id team { key } } }", {"id": issue})
     uid = (found.get("issue") or {}).get("id")
     if not isinstance(uid, str):
         raise LinearError(f"Linear has no issue {issue} this key can see", lasting=True)
+    now_in = ((found.get("issue") or {}).get("team") or {}).get("key")
+    if now_in != issue.split("-", 1)[0]:
+        # Linear still answers an old identifier after the issue moves team: the owner named the team, not the issue
+        raise LinearError(f"{issue} is now in another team ({_md(str(now_in))[:20]})", lasting=True)
     made = _graphql(key, "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success } }",
                     {"input": {"issueId": uid, "body": body}})
     if (made.get("commentCreate") or {}).get("success") is not True:
@@ -322,12 +342,16 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
         try:
             batch = list(load_state(state)["pending"][:PER_TICK])
         except LinearError:
-            return None
+            save_state(state, {**fresh(), "last_error": _set_aside(state)})
+            return "failed"
     if not batch:
         return None
     gone: list[str] = []
-    ok_at, error = None, None
+    ok_at, error, stuck = None, None, None
+    until = time.monotonic() + LOOK
     for ev in batch:
+        if time.monotonic() > until:
+            break
         team = ev["issue"].split("-", 1)[0]
         if issue_problem(ev["issue"]) or team not in cfg["teams"]:
             # checked again at the post: the owner may have narrowed --teams since it was queued
@@ -337,11 +361,15 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
         try:
             send(key, ev["issue"], ev["body"])
         except LinearError as e:
-            if not e.lasting:   # may pass: keep it, and stop this look rather than hammer a Linear that is down
-                error = f"{ev['issue']}: {e}"
+            tries = ev.get("tries", 0) + 1
+            if not e.lasting and tries < MAX_TRIES:
+                # may pass: keep it, moved behind the others so one issue never blocks the rest, and stop this
+                # look rather than hammer a Linear that is down
+                error, stuck = f"{ev['issue']}: {e}", ev["id"]
                 break
             gone.append(ev["id"])
-            error = f"{ev['issue']}: {e} (dropped)"
+            why = str(e) if e.lasting else f"{e}; still failing after {tries} tries"
+            error = f"{ev['issue']}: {why} (dropped)"
             continue
         gone.append(ev["id"])
         ok_at = now_iso
@@ -350,7 +378,9 @@ def tick(state: Path, now_iso: str, send=post, lock=None) -> str | None:
             doc = load_state(state)
         except LinearError:
             doc = fresh()
-        doc = {**doc, "pending": [e for e in doc["pending"] if e["id"] not in gone],
+        keep = [e for e in doc["pending"] if e["id"] not in gone]
+        back = [{**e, "tries": e.get("tries", 0) + 1} for e in keep if e["id"] == stuck]
+        doc = {**doc, "pending": [e for e in keep if e["id"] != stuck] + back,
                "done": doc["done"] + [i for i in gone if i not in doc["done"]]}
         if ok_at:
             doc["last_ok"] = ok_at

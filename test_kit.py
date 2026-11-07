@@ -6553,6 +6553,62 @@ class LinearTests(unittest.TestCase):
         self.assertEqual(st["pending"], 0)
         self.assertIn("OPS-1: team OPS is not one the key was set for (dropped)", st["last_error"])
 
+    def test_one_issue_that_keeps_failing_never_blocks_the_rest_and_is_dropped_after_a_day(self):
+        # Catches (1.64 clearer, MEDIUM 1): a post that fails the same passing way every time (403 on one issue)
+        # held at the head of the queue so nothing behind it is ever tried, and kept forever.
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
+        for i in (1, 2):
+            self.LN.enqueue(self.state, f"e{i}", f"ENG-{i}", "b")
+        sent = []
+
+        def send(key, issue, body):
+            if issue == "ENG-1":
+                raise self.LN.LinearError("Linear refused it (HTTP 403)")
+            sent.append(issue)
+        self.LN.tick(self.state, "t1", send=send)
+        self.LN.tick(self.state, "t2", send=send)
+        self.assertEqual(sent, ["ENG-2"])
+        doc = self.LN.load_state(self.state)
+        self.assertEqual([(e["issue"], e["tries"]) for e in doc["pending"]], [("ENG-1", 2)])
+        self.LN.save_state(self.state, {**doc, "pending": [{**doc["pending"][0], "tries": self.LN.MAX_TRIES - 1}]})
+        self.LN.tick(self.state, "t3", send=send)
+        st = self.LN.status(self.state)
+        self.assertEqual(st["pending"], 0)
+        self.assertIn("still failing after 1440 tries (dropped)", st["last_error"])
+
+    def test_a_damaged_queue_file_is_set_aside_and_named_not_silently_reset(self):
+        # Catches (1.64 clearer, MEDIUM 2): a damaged linear-state.json replaced by an empty one, its posts and its
+        # done list lost with nothing said.
+        self.LN.set_key(self.state, self.KEY, ["ENG"])
+        (self.state / "linear-state.json").write_text("{not json")
+        self.assertEqual(self.LN.tick(self.state, "t1", send=lambda *a: None), "failed")
+        self.assertIn("damaged and started over (kept as linear-state.json.bad-", self.LN.status(self.state)["last_error"])
+        self.assertEqual(len(list(self.state.glob("linear-state.json.bad-*"))), 1)
+        (self.state / "linear-state.json").write_text("[]")
+        self.assertTrue(self.LN.enqueue(self.state, "e1", "ENG-1", "b"))
+        self.assertIn("damaged", self.LN.status(self.state)["last_error"])
+
+    def test_an_issue_that_moved_team_is_not_posted_to(self):
+        # Catches (1.64 clearer, LOW 3): Linear resolving ENG-5 after the issue moved to a team the owner never named.
+        calls = []
+
+        def fake(key, query, variables):
+            calls.append(query)
+            return {"issue": {"id": "u-1", "team": {"key": "SEC"}}}
+        with mock.patch.object(self.LN, "_graphql", fake):
+            with self.assertRaises(self.LN.LinearError) as cm:
+                self.LN.post(self.KEY, "ENG-5", "b")
+        self.assertTrue(cm.exception.lasting)
+        self.assertEqual(len(calls), 1)                       # no comment was attempted
+
+    def test_teams_or_repo_without_set_is_refused(self):
+        # Catches (1.64 clearer, LOW 5): `linear-key --teams OPS` read as a change it is not.
+        import agent as AG
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            r = AG._linear_key(self.state, False, False, None, ["OPS"], None)
+        self.assertEqual(r, 2)
+
     def test_the_link_is_left_out_for_a_folder_or_repository_an_agent_could_bend(self):
         # Catches (1.64 security review): `fold.locked` from an agent-editable .overture.json walking the link out
         # of the ruling folder, or a repository that is not owner/name.
@@ -6612,7 +6668,7 @@ class LinearTests(unittest.TestCase):
         mode = {"ENG-2": "lasting"}
         self.assertEqual(self.LN.tick(self.state, "t2", send=send), "failed")
         st = self.LN.status(self.state)
-        self.assertEqual((sent, st["pending"]), (["ENG-1", "ENG-3"], 0))
+        self.assertEqual((sent, st["pending"]), (["ENG-3", "ENG-1"], 0))   # the one that failed went behind
         self.assertIn("ENG-2", st["last_error"])
         self.assertIn("dropped", st["last_error"])
         self.assertIsNone(self.LN.tick(self.state, "t3", send=send))

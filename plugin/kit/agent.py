@@ -2528,6 +2528,9 @@ def _linear_key(state: Path, set_: bool, clear: bool, test: str | None, teams: l
             print("agent.py: linear-key: refused inside a Claude Code session: the Linear key is set and tested by "
                   "you, in your own terminal", file=sys.stderr)
             return 2
+        if (teams or repo) and not set_:
+            print("agent.py: linear-key: --teams and --repo go with --set", file=sys.stderr)
+            return 2
         if set_:
             why = LR.config_problem("lin_api_" + "x" * 16, teams, repo)   # the teams and repo, before the prompt
             if why:

@@ -70,7 +70,11 @@ no markup, no mention, no bare link.
   Linear never holds up a lock. A failure that may pass (the network, a
   rate limit, a key Linear refused) keeps the post queued and tries again
   each minute; one that cannot pass (no such issue) is dropped and named
-  under Settings. Rulings made while no key is set are never posted later.
+  under Settings. A post that keeps failing waits behind the others and
+  is dropped, named, after a day of tries. If Linear made a comment but
+  its answer was lost, the retry can post it twice. An issue that has
+  moved to a team you did not name is not posted to. Rulings made while
+  no key is set are never posted later.
   The link points at the file on the default branch, so it opens once the
   steward's export is committed. It is left out when the project's ruling
   folder is not a plain path inside the repository. HTTPS_PROXY is honoured.
