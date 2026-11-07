@@ -1,0 +1,66 @@
+# Overture's own tests on every pull request (1.65; OPEN-DECISIONS E2, CP1).
+#
+# One job per suite, in parallel: the wall time is the longest suite's
+# (test_server, about nine minutes), and a failure names its suite. Every
+# test_*.py at the repository root is listed here; test_build asserts the
+# list is complete. test_browser skips without OVERTURE_BROWSER, as it does
+# on a machine without a browser, so it costs a few seconds here.
+#
+# The suites run the code under test, so this workflow asks for nothing but
+# a read of the repository, keeps no token in .git/config, and never runs on
+# a release or a tag: attest-release.yml is the only workflow that signs.
+name: Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - test_server
+          - test_kit
+          - test_rulecheck
+          - test_build
+          - test_mcp
+          - test_spec
+          - test_adapters
+          - test_onboard
+          - test_vendor
+          - test_browser
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0        # test_kit starts older released kits from their tags
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install what the suites import
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q -r plugin/kit/requirements.txt
+
+      - name: Install strace for the server's syscall tests
+        if: matrix.suite == 'test_server'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q strace
+
+      - name: Run the suite
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          case "$SUITE" in
+            test_*) ;;
+            *) echo "::error::unexpected suite name"; exit 1 ;;
+          esac
+          "$RUNNER_TEMP/venv/bin/python" -B "$SUITE.py"

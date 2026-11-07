@@ -2990,6 +2990,34 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## CI and one-command releases (1.65.0)
+
+The first step of the author-in-control sequence (proposals/AUTHOR-CONTROL.md),
+decided as E2 after the 1.61 audit and CP1–CP3 at this lane's waypoint
+(OPEN-DECISIONS.md).
+
+- **Every pull request runs every suite (E2, CP1).** `.github/workflows/ci.yml`
+  runs one job per `test_*.py` at the repository root, in parallel, with
+  read-only access and nothing from the pull request reaching a shell
+  unquoted; the browser suite skips, as without a browser. test_build asserts
+  the matrix lists every suite and the workflow never signs or writes.
+- **`release.py publish` (E2, CP2, CP3).** The eight steps the script printed
+  are now run, in order, each refusing before the next: `publish X.Y.Z`
+  (gate, CHANGELOG section, bump, test_build, commit on the lane's branch,
+  push, pull request); `publish --release` on main after the merge (the zip
+  scanned against `~/.config/overture/deny.txt`, refused without it; the
+  release against the merge commit; the attest run; `gh attestation
+  verify`). The release phase runs only for the merge commit of a merged
+  pull request: nothing merges without the owner's approve, so the merge is
+  the approve.
+- **Pins out of the docs area.** The bump now writes the README's version
+  badge and the `uses: MikeHeid/overture@vX.Y.Z` lines in README.md and
+  action.yml; docs/features/mcp-and-ci.md shows `@vX.Y.Z` and points at the
+  badge. At 1.63 and 1.64 the pins staled the docs note at every bump and
+  the release was refused until it was restamped; no note is staled now.
+- `build_zip.py` gained `read_deny_file`, the one reader of a deny list, so
+  `publish` and the command line refuse the same files for the same reasons.
+
 ## Rulings on Linear (1.64.0)
 
 The last release of the ruling-aware PR comments and Linear lane (Wave 5's

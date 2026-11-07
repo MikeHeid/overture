@@ -214,12 +214,19 @@ class ReleaseNotesGateTests(unittest.TestCase):
         self.addCleanup(td.cleanup)
         copy = Path(td.name)
         for rel in ("VERSION", "plugin/.claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
-                    "plugin/kit/overture/__init__.py"):
+                    "plugin/kit/overture/__init__.py", *REL.PIN_FILES):
             (copy / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(B.ROOT / rel, copy / rel)
         with mock.patch.object(REL, "ROOT", copy):
             written = REL.set_version("999.0.0")
-        self.assertEqual(len(written), 4, written)
+        self.assertEqual(len(written), 6, written)
+        # 1.65: the pins moved out of the docs area (mcp-and-ci.md shows @vX.Y.Z), so a bump stales no note
+        # without growing notes_ignore; every `@vN.N.N` and the badge now say the new version.
+        for rel in REL.PIN_FILES:
+            text = (copy / rel).read_text(encoding="utf-8")
+            self.assertEqual(set(re.findall(r"MikeHeid/overture@v(\d+\.\d+\.\d+)", text)) - {"999.0.0"}, set(), rel)
+        self.assertIn("version-999.0.0-", (copy / "README.md").read_text(encoding="utf-8"))
+        self.assertNotIn("@v1.", (B.ROOT / "docs/features/mcp-and-ci.md").read_text(encoding="utf-8"))
         declared = NO.areas(B.ROOT)
         ignore = NO.ignored(B.ROOT, declared)
         in_areas = sorted(f for f in written if any(f.startswith(a + "/") for a in declared))
@@ -245,6 +252,236 @@ class ReleaseNotesGateTests(unittest.TestCase):
         bump.assert_called_once_with("9.9.9")
 
 
+def run_blocks(text: str) -> list[str]:
+    """The `run:` scripts of a workflow file, one string each."""
+    blocks, current, indent = [], None, 0
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if current is not None:
+            if stripped and len(line) - len(stripped) <= indent:
+                blocks.append("\n".join(current))
+                current = None
+            else:
+                current.append(line)
+                continue
+        if stripped.startswith("run:"):
+            indent = len(line) - len(stripped)
+            current = [stripped[4:]]
+    if current is not None:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+class PublishTests(unittest.TestCase):
+    """1.65 (OPEN-DECISIONS E2, CP2, CP3): `release.py publish` runs the release steps in order and refuses at the
+    first that fails; the release phase runs only for the merge commit of a merged pull request on main."""
+
+    SHA = "a" * 40
+    DIGEST = "d" * 64
+
+    def setUp(self):
+        import release as REL
+        self.REL = REL
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = Path(td.name)
+        (self.root / "VERSION").write_text("1.65.0\n")
+        (self.root / "CHANGELOG.md").write_text("# Changelog\n\n## CI and publish (1.65.0)\n\n- x\n\n"
+                                                "## Rulings on Linear (1.64.0)\n")
+        self.cfg = self.root / "cfg"
+        (self.cfg / "overture").mkdir(parents=True)
+        (self.cfg / "overture" / "deny.txt").write_text("# mine\nconsole.example.com\n")
+        self.env = {"XDG_CONFIG_HOME": str(self.cfg)}
+        self.calls: list[tuple] = []
+        pulls = json.dumps([{"number": 201, "merged_at": "2026-11-07T00:00:00Z", "merge_commit_sha": self.SHA}])
+        self.answers = {("git", "rev-parse"): self.SHA + "\n", ("gh", "repo", "view"): '{"nameWithOwner": "o/r"}',
+                        ("gh", "api"): pulls, ("gh", "release", "create"): "https://example.com/rel\n",
+                        ("gh", "run", "list"): json.dumps([{"databaseId": 7, "status": "completed",
+                                                            "conclusion": "success", "headBranch": "v1.65.0"}]),
+                        ("gh", "attestation", "verify"): json.dumps([{"digest": {"sha256": self.DIGEST}}])}
+        p = mock.patch.object(REL, "run", side_effect=self.fake_run)
+        p.start()
+        self.addCleanup(p.stop)
+        self.built = mock.patch.object(B, "build", return_value=(self.root / "overture-1.65.0.zip", self.DIGEST,
+                                                                "validate: ok"))
+        self.built.start()
+        self.addCleanup(self.built.stop)
+        p = mock.patch.object(REL, "ATTEST_POLL", 0)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def fake_run(self, *cmd, cwd=None, timeout=600):
+        self.calls.append(cmd)
+        hits = sorted((p for p in self.answers if cmd[:len(p)] == p), key=len)   # the most specific answer wins
+        if hits:
+            ans = self.answers[hits[-1]]
+            if isinstance(ans, Exception):
+                raise ans
+            return ans
+        return ""
+
+    def names(self):
+        return [" ".join(c[:3]) for c in self.calls]
+
+    def test_release_runs_zip_release_attest_verify_in_order_for_a_merged_pull_request(self):
+        # Catches (CP2): the zip built or the release created before the merge was checked, the verify skipped,
+        # or the release notes not naming the pull request the owner approved.
+        said = self.REL.release(None, self.root, self.env)
+        self.assertTrue(B.build.called)
+        n = self.names()
+        self.assertLess(n.index(f"gh api repos/o/r/commits/{self.SHA}/pulls"), n.index("gh release create"))
+        self.assertLess(n.index("gh release create"), n.index("gh run list"))
+        self.assertLess(n.index("gh run list"), n.index("gh attestation verify"))
+        create = next(c for c in self.calls if c[:3] == ("gh", "release", "create"))
+        self.assertEqual(create[3:6], ("v1.65.0", str(self.root / "overture-1.65.0.zip"), "--target"))
+        self.assertEqual(create[6], self.SHA)
+        self.assertIn("#201", create[create.index("--notes") + 1])
+        self.assertIn("v1.65.0 — CI and publish", create)
+        self.assertIn("verified", said)
+        self.assertIn("released https://example.com/rel", said)
+
+    def test_release_refuses_a_commit_that_is_not_a_merged_pull_request_before_building(self):
+        # Catches (CP2): a release cut from a commit pushed to main without a pull request, which nobody approved.
+        self.answers[("gh", "api")] = json.dumps([{"number": 5, "merged_at": None, "merge_commit_sha": self.SHA}])
+        with self.assertRaises(self.REL.ReleaseError) as cm:
+            self.REL.release(None, self.root, self.env)
+        self.assertIn("not the merge commit of one merged pull request", str(cm.exception))
+        self.assertFalse(B.build.called)
+        self.assertNotIn("gh release create", self.names())
+
+    def test_release_refuses_without_the_owners_deny_list_and_names_where_it_goes(self):
+        # Catches (CP3): a zip published unscanned because the deny list was not given, the 1.62 refusal bypassed.
+        (self.cfg / "overture" / "deny.txt").unlink()
+        with self.assertRaises(self.REL.ReleaseError) as cm:
+            self.REL.release(None, self.root, self.env)
+        self.assertIn(str(self.cfg / "overture" / "deny.txt"), str(cm.exception))
+        self.assertIn("CP3", str(cm.exception))
+        self.assertFalse(B.build.called)
+        (self.cfg / "overture" / "deny.txt").write_text("# only a comment\n")
+        with self.assertRaises(self.REL.ReleaseError):
+            self.REL.release(None, self.root, self.env)
+        self.assertFalse(B.build.called)
+
+    def test_release_refuses_a_tag_already_released_and_a_failed_attestation(self):
+        # Catches: a second `gh release create` for a version already out, and a verify run against a release whose
+        # attest workflow failed (the message must say the release is published but not attested).
+        self.answers[("git", "ls-remote")] = f"{self.SHA}\trefs/tags/v1.65.0\n"
+        with self.assertRaises(self.REL.ReleaseError) as cm:
+            self.REL.release(None, self.root, self.env)
+        self.assertIn("already released", str(cm.exception))
+        self.assertFalse(B.build.called)
+        del self.answers[("git", "ls-remote")]
+        self.answers[("gh", "run", "list")] = json.dumps([{"databaseId": 8, "status": "completed",
+                                                           "conclusion": "failure", "headBranch": "v1.65.0"}])
+        with self.assertRaises(self.REL.ReleaseError) as cm:
+            self.REL.release(None, self.root, self.env)
+        self.assertIn("published but not attested", str(cm.exception))
+        self.assertNotIn("gh attestation verify", self.names())
+
+    def test_prepare_refuses_on_main_a_dirty_tree_and_a_missing_changelog_section_before_bumping(self):
+        # Catches: version files committed to main, a release commit carrying unrelated edits, and a release with
+        # no notes; each must stop before set_version touches anything.
+        REL = self.REL
+        with mock.patch.object(REL, "notes_gate", return_value=None), mock.patch.object(REL, "set_version") as bump:
+            self.answers[("git", "rev-parse", "--abbrev-ref")] = "main\n"
+            with self.assertRaises(REL.ReleaseError) as cm:
+                REL.prepare("1.65.0", None, self.root)
+            self.assertIn("never committed to main", str(cm.exception))
+            self.answers[("git", "rev-parse", "--abbrev-ref")] = "feat/x\n"
+            self.answers[("git", "status")] = " M release.py\n"
+            with self.assertRaises(REL.ReleaseError) as cm:
+                REL.prepare("1.65.0", None, self.root)
+            self.assertIn("uncommitted", str(cm.exception))
+            self.answers[("git", "status")] = ""
+            with self.assertRaises(REL.ReleaseError) as cm:
+                REL.prepare("1.66.0", None, self.root)
+            self.assertIn("CHANGELOG.md has no section", str(cm.exception))
+            bump.assert_not_called()
+        with mock.patch.object(REL, "notes_gate", return_value=["stale: docs/CLAUDE.md"]), \
+                mock.patch.object(REL, "set_version") as bump:
+            with self.assertRaises(REL.ReleaseError) as cm:
+                REL.prepare("1.65.0", None, self.root)
+            self.assertIn("stale: docs/CLAUDE.md", str(cm.exception))
+            bump.assert_not_called()
+
+    def test_prepare_bumps_tests_commits_pushes_and_opens_the_pull_request_in_order(self):
+        # Catches: a commit made before test_build ran, a push with nothing committed, a second pull request opened
+        # beside an existing one, or a title without the CHANGELOG's name for the release.
+        REL = self.REL
+        body = self.root / "pr.md"
+        body.write_text("the body\n")
+        self.answers[("git", "rev-parse", "--abbrev-ref")] = "feat/x\n"
+        self.answers[("gh", "pr", "list")] = "[]"
+        self.answers[("gh", "pr", "create")] = "https://example.com/pr/9\n"
+        order = []
+        with mock.patch.object(REL, "notes_gate", return_value=None), \
+                mock.patch.object(REL, "set_version", side_effect=lambda v: order.append("bump") or ["VERSION"]), \
+                mock.patch.object(REL.subprocess, "run", side_effect=lambda *a, **k: order.append("test_build") or
+                                  mock.Mock(returncode=0, stdout="OK", stderr="")):
+            said = REL.prepare("1.65.0", body, self.root)
+        n = self.names()
+        self.assertEqual(order, ["bump", "test_build"])
+        self.assertLess(n.index("git commit -q"), n.index("git push -q"))
+        self.assertLess(n.index("git push -q"), n.index("gh pr create"))
+        create = next(c for c in self.calls if c[:3] == ("gh", "pr", "create"))
+        self.assertIn("release: 1.65.0 — CI and publish", create)
+        self.assertIn("pull request opened: https://example.com/pr/9", said)
+        self.calls.clear()
+        self.answers[("gh", "pr", "list")] = '[{"url": "https://example.com/pr/9"}]'
+        with mock.patch.object(REL, "notes_gate", return_value=None), \
+                mock.patch.object(REL, "set_version", return_value=[]), \
+                mock.patch.object(REL.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+            said = REL.prepare("1.65.0", body, self.root)
+        self.assertNotIn("gh pr create", self.names())
+        self.assertNotIn("git commit -q", self.names())           # nothing changed, nothing to commit
+        self.assertIn("already open", said)
+
+    def test_the_changelog_heading_is_read_for_the_version_alone(self):
+        # Catches: "1.65.0" matching "1.65.01", or the heading taken from the wrong release.
+        self.assertEqual(self.REL.changelog_heading("1.65.0", self.root), "CI and publish")
+        self.assertEqual(self.REL.changelog_heading("1.64.0", self.root), "Rulings on Linear")
+        self.assertIsNone(self.REL.changelog_heading("1.6.0", self.root))
+
+
+class CiWorkflowTests(unittest.TestCase):
+    """1.65 (E2, CP1): ci.yml runs every suite at the repository root on each pull request, one job each, with
+    read-only access and nothing from the pull request reaching a shell unquoted."""
+
+    PATH = B.ROOT / ".github" / "workflows" / "ci.yml"
+
+    def setUp(self):
+        if not self.PATH.exists():
+            self.skipTest("no .github/workflows (not a checkout)")
+        self.text = self.PATH.read_text(encoding="utf-8")
+
+    def test_every_suite_at_the_root_is_in_the_matrix_once(self):
+        # Catches: a new test_*.py nobody added to CI, or a suite listed twice.
+        suites = sorted(p.stem for p in B.ROOT.glob("test_*.py"))
+        listed = re.findall(r"^\s+- (test_\w+)\s*$", self.text, re.M)
+        self.assertEqual(sorted(listed), suites)
+        self.assertEqual(len(listed), len(set(listed)))
+
+    def test_it_runs_on_pull_requests_with_read_access_only_and_pinned_actions(self):
+        # Catches: a workflow that could sign or write, that runs on a release or a tag, or an action pinned to a tag
+        # whoever controls can move.
+        self.assertRegex(self.text, r"(?m)^on:\n  pull_request:")
+        self.assertRegex(self.text, r"(?m)^permissions:\n  contents: read\n")
+        self.assertNotIn("write", self.text)
+        self.assertNotRegex(self.text, r"(?m)^\s+release:|^\s+push:|^\s+tags:")
+        for u in re.findall(r"^\s*-?\s*uses:\s*(\S+)", self.text, re.M):
+            self.assertRegex(u, r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$", u)
+        self.assertIn("persist-credentials: false", self.text)
+        self.assertIn("timeout-minutes:", self.text)
+
+    def test_nothing_from_the_event_is_expanded_inside_a_shell_step(self):
+        # Catches: `${{ matrix.suite }}` or any event field pasted into `run:`; values reach the shell through env.
+        blocks = run_blocks(self.text)
+        self.assertGreaterEqual(len(blocks), 2, blocks)
+        for block in blocks:
+            self.assertNotIn("${{", block)
+        self.assertIn("SUITE: ${{ matrix.suite }}", self.text)
+
+
 class AttestWorkflowTests(unittest.TestCase):
     """2026-10-21 (owner, "Actions build + attestation"): attest-release.yml rebuilds a release's zip from its tag,
     refuses a zip that differs from the uploaded one, and attests it with the workflow's identity."""
@@ -257,22 +494,7 @@ class AttestWorkflowTests(unittest.TestCase):
         self.text = self.PATH.read_text(encoding="utf-8")
 
     def run_blocks(self) -> list[str]:
-        blocks, current, indent = [], None, 0
-        for line in self.text.splitlines():
-            stripped = line.lstrip()
-            if current is not None:
-                if stripped and len(line) - len(stripped) <= indent:
-                    blocks.append("\n".join(current))
-                    current = None
-                else:
-                    current.append(line)
-                    continue
-            if stripped.startswith("run:"):
-                indent = len(line) - len(stripped)
-                current = [stripped[4:]]
-        if current is not None:
-            blocks.append("\n".join(current))
-        return blocks
+        return run_blocks(self.text)
 
     def test_every_action_is_pinned_to_a_full_commit_sha(self):
         # Catches: `uses: actions/checkout@v7` or a short sha, where whoever controls the tag controls what signs.

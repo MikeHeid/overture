@@ -340,6 +340,18 @@ log, `covers`, progress from locks, `lane check`, the "Your call" list and
 the defaults card (AC1–AC3, AC5, AC8); then the lane summary (E5, AC7); the
 first run (AC4); the public door (AC6).
 
+## CI and `release.py publish` (decided 2026-11-07)
+
+The 1.65 waypoint ([WAYPOINTS.md](WAYPOINTS.md)) found no drift and carried
+the lane's three design questions in the same post (E1). The owner chose
+the ★ on each.
+
+| # | Question | Decision |
+|---|---|---|
+| CP1 | Which tests run on every pull request, and how | **One job per suite, in parallel** (owner ★): every suite at the repository root, the browser suite skipping as it does without `OVERTURE_BROWSER`; wall time is the longest suite's, and a failure names its suite. Weighed and not chosen: one job in sequence (about 15 minutes, one light); a fast subset on the pull request with the full set on main (a server bug lands first). |
+| CP2 | How `release.py publish` knows the owner approved | **The merge is the approve** (owner ★): the release phase refuses unless its target is a merged pull request's commit on main, and names the pull request in the release. Nothing merges without the owner's approve (STRATEGY, "How each lane starts"), so no new step is added. Weighed and not chosen: the owner runs the release phase in their own terminal (refused under `CLAUDECODE`, as `linear-key` is); an approving review on the pull request. |
+| CP3 | Where `publish` reads the deny list for `build_zip --deny-file` | **A file in the owner's config folder**, `~/.config/overture/deny.txt`, never in the repository; `publish` refuses to build without it (owner ★). Weighed and not chosen: a flag each time; no deny list in `publish`. |
+
 ## Wave 4: the protocol (decided 2026-10-21)
 
 The owner picked Wave 4 as the next lane, then the ★ on every question. P5 was

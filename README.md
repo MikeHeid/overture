@@ -539,17 +539,27 @@ pages: stills in `docs/screenshots/feature-*.png`, hero shots in dark and
 light, and short GIFs (`anim-*.gif`) of the interactive ones. Only demo
 data appears: the Northwind project and `@example.com` logins.
 
-To build the release zip:
+Every pull request runs every suite above in GitHub Actions
+(`.github/workflows/ci.yml`, one job per suite; from 1.65).
 
-    python3 build_zip.py --deny-file ~/my-deployment-values.txt
+To release (from 1.65, one command, each step refusing out of order):
 
-It runs `claude plugin validate --strict` on the result. The deny file
-lists strings from your own deployment (hostnames, AUD tags, team
-domain, home path), and the build refuses if any of them appears in the
-zip. The zip carries the plugin and INSTALL.md, never an area note
-(`CLAUDE.md`); this README and `docs/features/` are read here on GitHub.
-Before the zip, `python3 plugin/kit/agent.py notes check` must say the area
-notes are current; `release.py` runs it first and bumps nothing until it does.
+    python3 release.py publish X.Y.Z --pr-body notes.md   # on the lane's branch
+    python3 release.py publish --release                  # on main, after the merge
+
+The first checks the area notes are current (`python3
+plugin/kit/agent.py notes check`), needs a CHANGELOG section for the
+version, bumps every file that carries the version, runs `test_build`,
+commits, pushes and opens the pull request. The second runs only for the
+merge commit of a merged pull request: it builds the zip with
+`build_zip.py`, scanned against `~/.config/overture/deny.txt` (strings from
+your own deployment: hostnames, AUD tags, team domain, home path; the build
+refuses if any appears in the zip, and refuses without the file), creates
+the release, waits for the attestation and verifies it. `build_zip.py
+--deny-file FILE` still builds a zip by hand; it runs `claude plugin
+validate --strict` on the result. The zip carries the plugin and
+INSTALL.md, never an area note (`CLAUDE.md`); this README and
+`docs/features/` are read here on GitHub.
 
 ## Changelog
 
