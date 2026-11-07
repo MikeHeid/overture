@@ -313,6 +313,33 @@ these two questions, and the owner chose the ★ on each.
 | T1 | Where a backlink's trust comes from | **GitHub's author association** (owner ★). `gh pr list` cannot return it, so `agent.py` asks GitHub for `authorAssociation` in one GraphQL call per push. OWNER, MEMBER and COLLABORATOR are trusted; every other value, or a missing one, is not. No setup, GitHub stays the authority, and it follows people joining and leaving. Weighed and not chosen: an owner allowlist of logins; association plus an allowlist. |
 | T2 | What happens to an untrusted backlink | **Dimmed for the owner, dropped for agents** (owner ★). The console shows it dimmed with an "outside author" chip, so a real outside PR is not lost. Anything that reaches an agent leaves it out, which closes the path by which outside text steers an agent. Weighed and not chosen: hidden everywhere; dimmed everywhere. |
 
+## The author in control (decided 2026-11-07)
+
+After 1.64 the owner asked whether Overture should grow Linear's features,
+then how it goes from a sampler (a check that blocks a pull request breaking
+a ruling) to a product. Two three-seat panels sat on 2026-11-06. The first
+answered the Linear question; the second reviewed the proposal
+[AUTHOR-CONTROL.md](AUTHOR-CONTROL.md) and moved several of its ★. The owner
+answered "defaults, merge the proposal, leave link issue out", so each row
+is an *architect default* except LB1, which is the owner's.
+
+| # | Question | Decision |
+|---|---|---|
+| LB1 | Whether Overture embeds Linear-like tracking, or deepens the bridge | **Neither, for now** (owner ★): no tracking in the console (items are pushed whole, so a second author means two truths); no inbound status line or assignee; a Linear label opening a question is deferred. The "Link issue" owner search the panel kept as the one worthwhile bridge piece is **left out** by the owner. Weighed and not chosen: an item's Linear status read by the server and shown read-only; owner-confirmed links in `linear-links.json`. |
+| AC1 | What "cheap to reverse" means, so an agent may take the ★ instead of asking | **A short list of reversible kinds in `.overture.json`** (naming, placeholder copy, test scaffolding), which the owner grows or shrinks, **plus veto-after** for anything an agent marks reversible beyond it. Weighed and not chosen: the agent decides alone (an honour system); everything asked until the owner has vetoed fewer than N in a row. |
+| AC2 | Where a lane's progress lives | **Worked out from the store each time**, from the lane's waypoint lock and its design-round locks. Weighed and not chosen: a field on the lane's item (`items-push` replaces items whole and refuses unknown fields); a playbook record (playbooks keep no state). |
+| AC3 | When a question reaches the owner | **At once, grouped on screen by lane and in the notification digest (N4).** Single-choice defaults appear together in one "confirm these" card with one Accept-all; nothing advances by itself. Weighed and not chosen: held until the next waypoint; hourly. |
+| AC4 | What a new project's first run produces | **Two questions, one at a time** ("in one sentence, what is this for?", "what must never happen?"), each locked as a ruling on the project's root item. Weighed and not chosen: a core-idea text on the root item; a document in the repository; nothing kept. |
+| AC5 | Whether an agent may pass a waypoint the owner has not answered | **Never, enforced at the merge**: a waypoint is an exported locked ruling, and `lane check` in CI fails a pull request whose lane has none; the console shows "waiting on your answer before it can ship" meanwhile. Hooks inform and fail open, so no edit-time block is promised. Weighed and not chosen: after N hours with the defaults; the project chooses. |
+| AC6 | Whether rulings can be written without the console | **Later, with a new marked file shape whose authority is the merge**, written by `agent.py rule add`, committed by the owner, read by the lookup beside the console's. Needs a PROTOCOL.md §13 change and a vector. Weighed and not chosen: the console's own file shape (its lock fields would be forged); an issue template; never. |
+| AC7 | What the lane summary may not contain | **Anything agent-written the owner has not confirmed**: open asks, proposals, the agent-written asks file. Lessons (locked) and area notes stay in. Weighed and not chosen: a cap only; no limit. |
+| AC8 | Whether `covers` (a question naming the ruling it would repeat) is in the protocol | **In PROTOCOL.md**, so an agent of any vendor is refused a re-ask the same way. Weighed and not chosen: console-only. |
+
+The order that follows: 1.65 CI and `release.py publish` (E2); 1.66 the ask
+log, `covers`, progress from locks, `lane check`, the "Your call" list and
+the defaults card (AC1–AC3, AC5, AC8); then the lane summary (E5, AC7); the
+first run (AC4); the public door (AC6).
+
 ## Wave 4: the protocol (decided 2026-10-21)
 
 The owner picked Wave 4 as the next lane, then the ★ on every question. P5 was
