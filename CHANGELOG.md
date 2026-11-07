@@ -2990,6 +2990,26 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## GitHub triggers by action (1.63.0)
+
+The action filter left open by 1.59, decided as F1 in the ruling-aware PR
+comments lane (OPEN-DECISIONS.md "Ruling-aware PR comments and Linear", an
+architect default).
+
+- **An optional `actions` list beside `events` (F1).** `"github":
+  {"events": ["pull_request"], "actions": ["opened", "synchronize"]}` fires
+  on those actions only. Without the list every action fires, as in 1.59,
+  so an existing `triggers.json` keeps working unchanged. A delivery whose
+  `action` is not listed, or that carries none (a `push`), is answered 202
+  with a named no-op, as an unlisted event is (G3); it spends neither the
+  rate limit nor the delivery id, so a later listed delivery still fires.
+- **What is read.** The console reads the payload's top-level `action`
+  string, after the signature matched and only for a trigger that lists
+  actions; nothing else in it is read, and the payload is still not passed
+  to the playbook. An `actions` list that is empty, not a list, or holds a
+  name no payload sends stops the console's start, named, as any other bad
+  `github` block does.
+
 ## Hardening after the audit (1.62.0)
 
 After 1.61 the owner asked for a full audit "to find ways to make more

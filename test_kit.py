@@ -6496,6 +6496,32 @@ class GithubTriggerTests(unittest.TestCase):
                 self.load({"playbook": "p", "github": gh})
             self.assertIn("github", str(c.exception))
 
+    def test_an_optional_actions_list_is_parsed_and_absent_means_every_action(self):
+        # 1.63.0 (F1). Catches: `actions` refused as an unknown key, or taken as an empty filter when absent.
+        t = self.load({"playbook": "p", "github": {"events": ["pull_request"], "actions": ["opened", "synchronize"]}})
+        self.assertEqual(t.github_actions, frozenset({"opened", "synchronize"}))
+        self.assertIsNone(self.load({"playbook": "p", "github": {"events": ["pull_request"]}}).github_actions)
+
+    def test_an_actions_list_of_any_other_shape_refuses_the_start_by_name(self):
+        # 1.63.0 (F1). Catches: a half-read filter (a string taken as letters, an empty list that fires nothing, an
+        # action in a shape no payload sends), and `actions` with no `events`.
+        for gh in ({"events": ["pull_request"], "actions": []}, {"events": ["pull_request"], "actions": "opened"},
+                   {"events": ["pull_request"], "actions": ["Opened"]}, {"events": ["pull_request"], "actions": [1]},
+                   {"events": ["pull_request"], "actions": ["a%d" % i for i in range(TG.MAX_ACTIONS + 1)]},
+                   {"actions": ["opened"]}):
+            with self.subTest(gh=gh), self.assertRaises(TG.TriggerError) as c:
+                self.load({"playbook": "p", "github": gh})
+            self.assertIn("github", str(c.exception))
+
+    def test_only_a_well_formed_top_level_action_is_read(self):
+        # 1.63.0 (F1). Catches: an action read from anywhere but the top level, or in any shape, or a crash on a
+        # body that is not a JSON object.
+        for body, want in ((b'{"action":"opened"}', "opened"), (b'{"pull_request":{"action":"opened"}}', None),
+                           (b'{"action":"Opened"}', None), (b'{"action":["opened"]}', None), (b'[1]', None),
+                           (b"not json", None), (b'{"action":"a b"}', None), (b"[" * 5000, None)):
+            with self.subTest(body=body[:40]):
+                self.assertEqual(TG.delivery_action(body), want)
+
     def test_the_signature_matches_githubs_published_example_and_nothing_near_it(self):
         # GitHub's docs, "Validating webhook deliveries": this secret, this payload, this signature.
         secret, body = "It's a Secret to Everybody", b"Hello, World!"
