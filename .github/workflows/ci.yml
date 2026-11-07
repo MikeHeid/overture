@@ -47,7 +47,8 @@ jobs:
       - name: Install what the suites import
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q -r plugin/kit/requirements.txt
+          "$RUNNER_TEMP/venv/bin/pip" install -q -r plugin/kit/requirements.txt markdown-it-py
+          # markdown-it-py is not the kit's: test_kit's hostile-title tests render through it when it is present
 
       - name: Install strace for the server's syscall tests
         if: matrix.suite == 'test_server'

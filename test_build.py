@@ -226,6 +226,11 @@ class ReleaseNotesGateTests(unittest.TestCase):
             text = (copy / rel).read_text(encoding="utf-8")
             self.assertEqual(set(re.findall(r"MikeHeid/overture@v(\d+\.\d+\.\d+)", text)) - {"999.0.0"}, set(), rel)
         self.assertIn("version-999.0.0-", (copy / "README.md").read_text(encoding="utf-8"))
+        with mock.patch.object(REL, "ROOT", copy):      # a pre-release suffix is replaced whole, not appended to
+            REL.set_version("999.1.0-rc1")
+            REL.set_version("999.1.0")
+        for rel in REL.PIN_FILES:
+            self.assertNotIn("rc1", (copy / rel).read_text(encoding="utf-8"), rel)
         self.assertNotIn("@v1.", (B.ROOT / "docs/features/mcp-and-ci.md").read_text(encoding="utf-8"))
         declared = NO.areas(B.ROOT)
         ignore = NO.ignored(B.ROOT, declared)
@@ -293,9 +298,16 @@ class PublishTests(unittest.TestCase):
         (self.cfg / "overture" / "deny.txt").write_text("# mine\nconsole.example.com\n")
         self.env = {"XDG_CONFIG_HOME": str(self.cfg)}
         self.calls: list[tuple] = []
-        pulls = json.dumps([{"number": 201, "merged_at": "2026-11-07T00:00:00Z", "merge_commit_sha": self.SHA}])
-        self.answers = {("git", "rev-parse"): self.SHA + "\n", ("gh", "repo", "view"): '{"nameWithOwner": "o/r"}',
-                        ("gh", "api"): pulls, ("gh", "release", "create"): "https://example.com/rel\n",
+        self.order: list[str] = []
+        self.pull = {"number": 201, "merged_at": "2026-11-07T00:00:00Z", "merge_commit_sha": self.SHA,
+                     "base": {"ref": "main"}}
+        # Every git or gh call the two phases make has an answer here; a call with none FAILS the test (clearer
+        # 1.65, M3), so a new or renamed step cannot pass unnoticed.
+        self.answers = {("git", "rev-parse"): self.SHA + "\n", ("git", "status"): "", ("git", "fetch"): "",
+                        ("git", "merge-base"): "", ("git", "ls-remote"): "", ("git", "add"): "",
+                        ("git", "commit"): "", ("git", "push"): "",
+                        ("gh", "repo", "view"): '{"nameWithOwner": "o/r"}',
+                        ("gh", "api"): json.dumps([self.pull]), ("gh", "release", "create"): "https://example.com/rel\n",
                         ("gh", "run", "list"): json.dumps([{"databaseId": 7, "status": "completed",
                                                             "conclusion": "success", "headBranch": "v1.65.0"}]),
                         ("gh", "attestation", "verify"): json.dumps([{"digest": {"sha256": self.DIGEST}}])}
@@ -312,13 +324,15 @@ class PublishTests(unittest.TestCase):
 
     def fake_run(self, *cmd, cwd=None, timeout=600):
         self.calls.append(cmd)
+        if cmd[:2] == ("git", "commit"):
+            self.order.append("commit")
         hits = sorted((p for p in self.answers if cmd[:len(p)] == p), key=len)   # the most specific answer wins
-        if hits:
-            ans = self.answers[hits[-1]]
-            if isinstance(ans, Exception):
-                raise ans
-            return ans
-        return ""
+        if not hits:
+            raise AssertionError(f"release.py made a call the test has no answer for: {cmd}")
+        ans = self.answers[hits[-1]]
+        if isinstance(ans, Exception):
+            raise ans
+        return ans
 
     def names(self):
         return [" ".join(c[:3]) for c in self.calls]
@@ -340,14 +354,52 @@ class PublishTests(unittest.TestCase):
         self.assertIn("verified", said)
         self.assertIn("released https://example.com/rel", said)
 
-    def test_release_refuses_a_commit_that_is_not_a_merged_pull_request_before_building(self):
-        # Catches (CP2): a release cut from a commit pushed to main without a pull request, which nobody approved.
-        self.answers[("gh", "api")] = json.dumps([{"number": 5, "merged_at": None, "merge_commit_sha": self.SHA}])
+    def refused(self, saying: str, *, built: bool = False):
         with self.assertRaises(self.REL.ReleaseError) as cm:
             self.REL.release(None, self.root, self.env)
-        self.assertIn("not the merge commit of one merged pull request", str(cm.exception))
-        self.assertFalse(B.build.called)
+        self.assertIn(saying, str(cm.exception))
+        self.assertEqual(B.build.called, built)
         self.assertNotIn("gh release create", self.names())
+        return str(cm.exception)
+
+    def test_release_refuses_a_commit_that_is_not_a_merged_pull_request_before_building(self):
+        # Catches (CP2): a release cut from a commit pushed to main without a pull request, which nobody approved;
+        # a pull request that merely contains the commit (another merge_commit_sha); two merged pull requests
+        # claiming the same commit; a pull request merged into another branch; a target that is not what is
+        # checked out; a commit not on origin/main. Each stops before the zip is built (clearer 1.65, H1, M2).
+        REL = self.REL
+        for bad, why in (([{**self.pull, "merged_at": None}], "not the merge commit"),
+                         ([{**self.pull, "merge_commit_sha": "b" * 40}], "not the merge commit"),
+                         ([self.pull, {**self.pull, "number": 202}], "not the merge commit"),
+                         ([{**self.pull, "base": {"ref": "dev"}}], "not the merge commit"),
+                         ([], "not the merge commit")):
+            self.answers[("gh", "api")] = json.dumps(bad)
+            self.refused(why)
+        self.answers[("gh", "api")] = json.dumps([self.pull])
+        self.answers[("git", "merge-base")] = REL.ReleaseError("git merge-base exited 1")
+        self.refused("not on origin/main")
+        del self.answers[("git", "merge-base")]
+        self.answers[("git", "merge-base")] = ""
+        self.answers[("git", "rev-parse", "--verify", "--end-of-options", "other")] = "c" * 40 + "\n"
+        with self.assertRaises(REL.ReleaseError) as cm:
+            REL.release("other", self.root, self.env)
+        self.assertIn("check out the commit to release", str(cm.exception))
+        self.answers[("git", "status")] = " M release.py\n"
+        self.calls.clear()
+        self.refused("uncommitted")
+        self.assertNotIn("gh api", " ".join(self.names()))      # the dirty tree is refused before any gh call
+
+    def test_release_verifies_this_zips_digest_with_the_tag_and_the_signer_pinned(self):
+        # Catches: a verify that answers for some other artifact, or one run without the source ref, the signer
+        # workflow or --deny-self-hosted-runners, so any attestation on the repository would do (clearer 1.65, H1).
+        self.answers[("gh", "attestation", "verify")] = json.dumps([{"digest": {"sha256": "e" * 64}}])
+        with self.assertRaises(self.REL.ReleaseError) as cm:
+            self.REL.release(None, self.root, self.env)
+        self.assertIn("not for this zip's digest", str(cm.exception))
+        verify = next(c for c in self.calls if c[:3] == ("gh", "attestation", "verify"))
+        for needed in ("--source-ref", "refs/tags/v1.65.0", "--signer-workflow",
+                       "o/r/.github/workflows/attest-release.yml", "--deny-self-hosted-runners", "--format", "json"):
+            self.assertIn(needed, verify)
 
     def test_release_refuses_without_the_owners_deny_list_and_names_where_it_goes(self):
         # Catches (CP3): a zip published unscanned because the deny list was not given, the 1.62 refusal bypassed.
@@ -370,7 +422,7 @@ class PublishTests(unittest.TestCase):
             self.REL.release(None, self.root, self.env)
         self.assertIn("already released", str(cm.exception))
         self.assertFalse(B.build.called)
-        del self.answers[("git", "ls-remote")]
+        self.answers[("git", "ls-remote")] = ""
         self.answers[("gh", "run", "list")] = json.dumps([{"databaseId": 8, "status": "completed",
                                                            "conclusion": "failure", "headBranch": "v1.65.0"}])
         with self.assertRaises(self.REL.ReleaseError) as cm:
@@ -413,14 +465,14 @@ class PublishTests(unittest.TestCase):
         self.answers[("git", "rev-parse", "--abbrev-ref")] = "feat/x\n"
         self.answers[("gh", "pr", "list")] = "[]"
         self.answers[("gh", "pr", "create")] = "https://example.com/pr/9\n"
-        order = []
+        order = self.order
         with mock.patch.object(REL, "notes_gate", return_value=None), \
                 mock.patch.object(REL, "set_version", side_effect=lambda v: order.append("bump") or ["VERSION"]), \
                 mock.patch.object(REL.subprocess, "run", side_effect=lambda *a, **k: order.append("test_build") or
                                   mock.Mock(returncode=0, stdout="OK", stderr="")):
             said = REL.prepare("1.65.0", body, self.root)
         n = self.names()
-        self.assertEqual(order, ["bump", "test_build"])
+        self.assertEqual(order, ["bump", "test_build", "commit"])     # the commit holds only a bump that tested green
         self.assertLess(n.index("git commit -q"), n.index("git push -q"))
         self.assertLess(n.index("git push -q"), n.index("gh pr create"))
         create = next(c for c in self.calls if c[:3] == ("gh", "pr", "create"))

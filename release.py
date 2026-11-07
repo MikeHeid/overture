@@ -56,8 +56,9 @@ ROOT = Path(__file__).resolve().parent
 
 VERSION_RE = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+].+)?$")
 PIN_FILES = ("README.md", "action.yml")                  # outside every area note (see the docstring)
-BADGE = re.compile(r"(img\.shields\.io/badge/version-)\d+\.\d+\.\d+(-)")
-USES = re.compile(r"(MikeHeid/overture@v)\d+\.\d+\.\d+")
+SEMVER = r"\d+\.\d+\.\d+(?:[-+][\w.]+)?"                  # a pre-release suffix is replaced with the rest
+BADGE = re.compile(r"(img\.shields\.io/badge/version-)" + SEMVER + r"(-0969da)")
+USES = re.compile(r"(MikeHeid/overture@v)" + SEMVER)
 ATTEST_WAIT = 15 * 60       # seconds to wait for attest-release.yml after the release is published
 ATTEST_POLL = 20
 
@@ -218,7 +219,8 @@ def merged_pull(sha: str, nwo: str, root: Path = ROOT) -> int:
         pulls = json.loads(raw or "[]")
     except ValueError:
         raise ReleaseError("gh api: the pull request list was not JSON") from None
-    hits = [p for p in pulls if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha]
+    hits = [p for p in pulls if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha
+            and ((p.get("base") or {}).get("ref") == "main")]
     if len(hits) != 1:
         raise ReleaseError(f"{sha[:12]} is not the merge commit of one merged pull request on main. Nothing "
                            "merges without the owner's approve, so nothing is released from a commit that was "
@@ -248,7 +250,7 @@ def wait_attested(tag: str, root: Path = ROOT, deadline: float = ATTEST_WAIT, po
 def release(target: str | None, root: Path = ROOT, env=os.environ) -> str:
     """After the merge: the zip, the GitHub release, the attestation, the verification. Returns what was done."""
     import build_zip as B
-    sha = run("git", "rev-parse", target or "HEAD", cwd=root).strip()
+    sha = run("git", "rev-parse", "--verify", "--end-of-options", target or "HEAD", cwd=root).strip()
     head = run("git", "rev-parse", "HEAD", cwd=root).strip()
     if sha != head:
         raise ReleaseError(f"the checkout is at {head[:12]}, not {sha[:12]}: check out the commit to release, so "
