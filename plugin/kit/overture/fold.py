@@ -111,6 +111,11 @@ def export(store: Store, names: dict[str, str] | None = None,
     login that took it (`operators.py`); such a lock carries `locked_by_name`.
     Never the email: these files are committed. A lock with no name gets no key.
     """
+    if store.refactor.problem:
+        # 1.62 (audit A1): refactor.jsonl holds the withdrawals. Unread, every
+        # withdrawn ruling would be exported as if it still held.
+        raise FoldError(f"{store.refactor.problem}; nothing is exported until then, or a withdrawn "
+                        f"ruling would be committed as if it still held")
     out: dict[str, dict] = {}
     for q in (r for r in store.records() if r["type"] == "question"):
         answers = store.answers(q["qid"])
@@ -231,8 +236,13 @@ def write_export(entries: dict[str, dict], out: Path) -> list[str]:
     return written
 
 
-def check_entry(name: str, e: object, items: dict[str, dict]) -> list[str]:
-    """Return every reason `fold` must refuse this file; an empty list means it may be folded."""
+def check_entry(name: str, e: object, items: dict[str, dict], *, require_item: bool = True) -> list[str]:
+    """Return every reason `fold` must refuse this file; an empty list means it may be folded.
+
+    `require_item=False` (1.62) skips only the check that the item still exists,
+    for a file already folded: an item renamed or removed since must not block
+    every later fold. Every other check still runs.
+    """
     if not isinstance(e, dict):
         return [f"{name}: not a JSON object"]
     if not S.is_schema_version(e.get("schemaVersion")):
@@ -244,7 +254,7 @@ def check_entry(name: str, e: object, items: dict[str, dict]) -> list[str]:
     qid = e.get("qid")
     if not isinstance(qid, str) or locked_filename(qid) != name:
         errs.append(f"{name}: file name does not match qid {qid!r}")
-    if e.get("item") not in items:
+    if require_item and e.get("item") not in items:
         errs.append(f"{name}: item {e.get('item')!r} does not resolve to a project item")
     for k in ("question", "source", "kind"):
         if not isinstance(e.get(k), str) or not e[k]:
@@ -322,6 +332,15 @@ def _check_outcome(name: str, e: dict) -> list[str]:
                                or o["replaced_by"] == e.get("qid")):
         errs.append(f"{name}: outcome replaced_by {o['replaced_by']!r} is not another question's qid")
     return errs
+
+
+def _already_folded(e: object, done: set[str]) -> bool:
+    """Whether the ledger already holds this file's lock and its outcome, read before the file is checked."""
+    try:
+        lock_id, okey = e["locked"]["lock_id"], outcome_key(e)
+    except (TypeError, KeyError):
+        return False
+    return isinstance(lock_id, str) and lock_id in done and (okey is None or (isinstance(okey, str) and okey in done))
 
 
 def outcome_key(e: dict) -> str | None:
@@ -515,15 +534,16 @@ def fold(locked_dir: Path, ledger: Path, adapter: ProjectAdapter, *, dry_run: bo
         except json.JSONDecodeError as err:
             refusals.append(f"{p.name}: not JSON ({err.msg})")
             continue
-        errs = check_entry(p.name, e, items)
+        folded = _already_folded(e, done)
+        errs = check_entry(p.name, e, items, require_item=not folded)
         if errs:
             refusals += errs
             continue
         # Every file counts toward its fork's cap, folded before or not.
         forks.setdefault(e.get("forked_from"), []).append(p.name)
-        okey = outcome_key(e)
-        if e["locked"]["lock_id"] in done and (okey is None or okey in done):
-            skipped.append(f"{p.name}: lock {e['locked']['lock_id']} already folded")
+        if folded:
+            gone = "" if e["item"] in items else f" (its item {e['item']!r} is no longer in the project)"
+            skipped.append(f"{p.name}: lock {e['locked']['lock_id']} already folded{gone}")
             continue
         todo.append(e)
     forks.pop(None, None)

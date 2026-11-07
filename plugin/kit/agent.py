@@ -467,6 +467,28 @@ def _check(state: Path, as_json: bool) -> int:
     return 0
 
 
+def _store_check(state: Path) -> int:
+    """1.62 (audit A2): every store line against the append rules; see Store.replay."""
+    from overture.store import Store
+    path = Path(state) / "store.jsonl"
+    if not path.is_file():
+        print(f"store-check: no store at {path}", file=sys.stderr)
+        return 1
+    parents = None
+    try:
+        items = json.loads((Path(state) / "items.json").read_text(encoding="utf-8"))["items"]
+        parents = {i: (d.get("parent") if isinstance(d, dict) else None) for i, d in items.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        print("store-check: no readable items.json, so a fork is scoped to its own item only; a finding on a "
+              "fork's question under a sub-item may be that", file=sys.stderr)
+    n, found = Store.replay(path, parents)
+    for line in found:
+        print(line)
+    print(f"store-check: {n} records, {len(found)} finding(s)" if found else
+          f"store-check: {n} records, every line passes the append rules")
+    return 1 if found else 0
+
+
 def _rulings(state: Path, raw: list[str], as_json: bool) -> int:
     """The owner's rulings on each path (1.52.0): the console server, else the rulings committed in this checkout.
 
@@ -1970,6 +1992,11 @@ def main(argv=None) -> int:
     s.add_argument("fork")
     s = sub.add_parser("check")
     s.add_argument("--json", action="store_true")
+    sub.add_parser("store-check", description="1.62: replay STATE/store.jsonl line by line through the rules "
+                   "every append is held to, on a copy that writes nothing, and name each line they would refuse "
+                   "today; refactor.jsonl is named if the console cannot read it. Reads the files directly, needs "
+                   "no server. Run it in a terminal: a sandboxed session cannot read STATE (1.60). Exit 0: no "
+                   "finding; 1: findings.")
     s = sub.add_parser("rulings")   # 1.52.0: the owner's rulings on these paths, before an edit
     s.add_argument("--path", action="append", required=True, metavar="P",
                    help="a project-relative file, or a folder ending in /; repeat for more")
@@ -2963,6 +2990,8 @@ def _run(a, bell: Path) -> int:
         return _fork_context(a.state, a.fork)
     if a.cmd == "check":
         return _check(a.state, a.json)
+    if a.cmd == "store-check":
+        return _store_check(a.state)
     if a.cmd == "rulings":
         return _rulings(a.state, a.path, a.json)
     if a.cmd == "reanchor":

@@ -448,9 +448,10 @@ been settled folds as before, with or without the line.
 **The settled acts live in `refactor.jsonl`, beside `store.jsonl`.** Back up
 both together. Nothing is added to the store itself.
 
-Read the release's notes in `INSTALL.md` ("Upgrading to …") first. Some
-releases ask for a step of their own, such as `reanchor` or a
-`.overture.json` key. Keep the old worktree until the new one has run for
+Read the release's notes first: `INSTALL.md` ("Upgrading to …") up to
+0.8.13, and the release's section of `CHANGELOG.md` after it. Some
+releases ask for a step of their own, such as `reanchor`, a
+`.overture.json` key or 1.60's managed sandbox settings. Keep the old worktree until the new one has run for
 a while: it is your rollback.
 
 ## Rolling back to the previous pin

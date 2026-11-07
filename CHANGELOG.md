@@ -2990,6 +2990,66 @@ on its own.
   unchanged: each grill-origin question is still a regular
   `question` record.
 
+## Hardening after the audit (1.62.0)
+
+After 1.61 the owner asked for a full audit "to find ways to make more
+efficient". Five seats read the tree. Their report was this release's
+waypoint (WAYPOINTS.md), and the owner answered "defaults" to its six
+questions (OPEN-DECISIONS.md "After the 1.61 audit", E1–E6, each an
+architect default). E6 puts these fixes first, ahead of the action filter
+and Linear.
+
+- **A withdrawn ruling can no longer come back into force unseen (A1).**
+  The owner's withdrawals, keeps and replacements live in `refactor.jsonl`,
+  which the console refuses to read past 8 MiB or when edited. Before, an
+  append could take the file past that size, and the next start forgot every
+  act in it. Now that append is refused, nothing is written, and the
+  refusal says why. While the file cannot be read, `fold.py export`
+  refuses (it would commit each withdrawn ruling as holding), and so does
+  the live ruling lookup. The edit hook then reads the committed rulings,
+  and its note gives the server's reason instead of "not answering" (found
+  in the real run).
+- **`agent.py store-check` (A2).** Loading checks each store line alone.
+  The rules that need the other lines (a qid minted once, one lock per
+  answer, a superseding answer after a lock) ran only on append, so a line
+  an older kit wrote, or one added by hand with a matching id, was never
+  held to them. `store-check` replays the file in order on a copy that
+  writes nothing, and names each line the rules would refuse today, by
+  number. It also says when `refactor.jsonl` cannot be read. It reads the
+  files directly, so it runs in a terminal with the server up; a sandboxed
+  session cannot read STATE (1.60). See RUNBOOK, "Store damaged".
+- **A renamed item no longer blocks the fold (A3).** The fold refused a
+  committed ruling whose item had left the register, even one it had folded
+  long ago, and one refusal refuses the lot. A ruling already folded now
+  skips only that check, and the skip names the missing item. A ruling not
+  yet folded still needs its item, and every other check still runs.
+- **The tunnel outlives a console restart (A4).** The tunnel unit had
+  `Requires=` on the per-project console. Stopping the console stopped the
+  tunnel, starting the console did not bring it back, and starting the
+  tunnel started the per-project server that one-server mode stops. It is
+  now ordered after either console and bound to neither. Re-run
+  `install.sh --project <dir>` to render the unit again. A real systemd run
+  compared the old and new units: with the new one, the tunnel stayed up
+  through a console stop and start.
+- **`build_zip.py` says when a zip was not scanned (A4).** With no
+  `--deny-file` it warns that the zip must not be published. A deny file
+  that lists nothing, or cannot be read, is refused. The Actions rebuild
+  still runs without one; it only compares bytes with the uploaded zip.
+- **Docs (A4, A5).** INSTALL's attestation example takes the release's
+  version, and its upgrade notes point past 0.8.13 to each release's
+  section here. The 1.61 decision rows C1–L3 said "owner ★"; the owner
+  answered "defaults", so they are architect defaults, and OPEN-DECISIONS
+  now says so. (1.61's notes above said "decided C1–C3": the round decided
+  seven, C1–C3 for 1.61 and F1, L1–L3 for later releases.) STRATEGY marks
+  the PR comment built.
+- **How a lane runs (B1, B6, E1).** STRATEGY now says what each step owes
+  the next: the real run before the clearer; one clearer round, NOT CLEAR
+  only for a CRITICAL or HIGH finding; the bump, the area-note stamps and
+  the long suites once, after CLEAR. The waypoint lists what already exists
+  for each part of a lane. When its ★ is "proceed as mapped", the lane's
+  design questions come in the same post, so the owner answers once (amends
+  WP1).
+
 ## The ruling where the reviewer reads it (1.61.0)
 
 Wave 5's second step, Wave 3's last item: a team "sees rulings where it

@@ -385,6 +385,54 @@ class UnitTemplateTests(unittest.TestCase):
                 self.assertIn("\nStartLimitBurst=5\n", head)
                 self.assertIn("\nRestartSec=5\n", unit)   # 5 starts at once land well inside 120 s
 
+    def test_the_tunnel_is_ordered_after_the_console_but_not_bound_to_it(self):
+        # Catches (1.62, audit A4): `Requires=` or `BindsTo=` on the console (stopping it stopped the tunnel,
+        # which then stayed down), or `Wants=` on the per-project console, which one-server mode stops and a
+        # tunnel start would bring back.
+        unit = (self.KIT / "deploy" / "console-tunnel.service.in").read_text()
+        head = unit.split("[Unit]", 1)[1].split("[Service]", 1)[0]
+        lines = [ln for ln in head.splitlines() if not ln.startswith("#")]
+        self.assertIn("After=network-online.target @NAME@-console.service overture-console.service", lines)
+        for ln in lines:
+            if ln.startswith(("Requires=", "BindsTo=", "Requisite=", "PartOf=", "Wants=")):
+                self.assertNotIn("console", ln, ln)
+
+
+class DenyFileTests(unittest.TestCase):
+    """1.62 (audit A4): build_zip says when nothing was scanned, and refuses a deny list that lists nothing."""
+
+    def run_main(self, *args):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()), mock.patch.object(B, "build", return_value=(Path(td), "d", "n")) as b:
+            rc = B.main([*args, "--no-validate", "--out-dir", td])
+        return rc, err.getvalue(), b.called
+
+    def test_no_deny_file_builds_with_a_warning(self):
+        # Catches: a zip built silently with no deny list, the default a hurried release falls into.
+        rc, err, built = self.run_main()
+        self.assertEqual((rc, built), (0, True))
+        self.assertIn("WARNING: no --deny-file", err)
+
+    def test_an_empty_or_missing_deny_file_is_refused(self):
+        # Catches: a deny file of only comments or blank lines (scans for nothing), and a typo'd path crashing.
+        with tempfile.TemporaryDirectory() as td:
+            empty = Path(td) / "deny.txt"
+            empty.write_text("# my values\n\n")
+            rc, err, built = self.run_main("--deny-file", str(empty))
+            self.assertEqual((rc, built), (1, False))
+            self.assertIn("lists no string; nothing was built", err)
+            bad = Path(td) / "latin1.txt"
+            bad.write_bytes(b"caf\xe9\n")
+            rc, err, built = self.run_main("--deny-file", str(bad))
+            self.assertEqual((rc, built), (1, False))
+            self.assertIn("nothing was built", err)
+            rc, err, built = self.run_main("--deny-file", str(Path(td) / "nope.txt"))
+            self.assertEqual((rc, built), (1, False))
+            self.assertIn("nothing was built", err)
+
 
 @unittest.skipUnless(shutil.which("claude"), "`claude` is not on PATH")
 class ValidateTests(Base):

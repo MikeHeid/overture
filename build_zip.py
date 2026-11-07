@@ -155,8 +155,21 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     deny = []
     if a.deny_file:
-        deny = [line.strip() for line in a.deny_file.read_text(encoding="utf-8").splitlines()
-                if line.strip() and not line.startswith("#")]
+        try:
+            deny = [line.strip() for line in a.deny_file.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.startswith("#")]
+        except (OSError, ValueError) as e:   # ValueError: not UTF-8 (clearer, 1.62)
+            print(f"build_zip: --deny-file {a.deny_file}: {getattr(e, 'strerror', None) or e}; nothing was built",
+                  file=sys.stderr)
+            return 1
+        if not deny:   # 1.62 (audit A4): an empty list scans for nothing, which is not what was asked
+            print(f"build_zip: --deny-file {a.deny_file} lists no string; nothing was built", file=sys.stderr)
+            return 1
+    else:
+        # 1.62 (audit A4): a zip to publish is scanned for this deployment's own values. The Actions rebuild
+        # (attest-release.yml) has no such list and only compares bytes, so this warns instead of refusing.
+        print("build_zip: WARNING: no --deny-file, so the zip was not scanned for your hostnames, paths or "
+              "names; do not publish it", file=sys.stderr)
     try:
         out, digest, note = build(deny, not a.no_validate, a.out_dir)
     except BuildError as e:

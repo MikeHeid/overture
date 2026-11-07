@@ -197,6 +197,39 @@ class Store:
         t._write = lambda rec: None
         return t
 
+    @staticmethod
+    def replay(path: Path, item_parents: Mapping[str, str | None] | None = None) -> tuple[int, list[str]]:
+        """(records read, findings): every line of the store at `path` run again through `append`'s rules (1.62).
+
+        Loading checks each line alone (shape, seq, id). The rules that need the
+        other records run only on append, so a line written by an older kit, or
+        added by hand with a matching id, was never held to them. This replays
+        the file in order on a copy that writes nothing, and names each line the
+        rules would refuse today. Items are not required to exist (one renamed
+        since is not a fault); `item_parents`, the register's tree, scopes forks.
+        A store that does not load is one finding, naming why.
+        """
+        try:
+            src = Store(path)
+        except (StoreError, OSError, UnicodeDecodeError) as e:
+            return 0, [str(e)]
+        t = Store.__new__(Store)
+        t.path, t.known_items, t.clock = src.path, None, src.clock
+        t.item_parents = dict(item_parents) if item_parents is not None else None
+        t.refactor, t._lock, t._records, t._by_id = src.refactor, threading.Lock(), [], {}
+        found = []
+        for rec in src.records():
+            if rec["id"] in t._by_id:
+                found.append(f"{path}:{rec['seq']}: the same record as line {t._by_id[rec['id']]['seq']}")
+            try:
+                t._check_rules({k: v for k, v in rec.items() if k not in ("id", "seq", "ts")})
+            except StoreError as e:
+                found.append(f"{path}:{rec['seq']}: {rec['type']} {rec.get('qid') or rec.get('item') or ''}: {e}")
+            t._index(rec)   # kept as written either way, so each later line meets the history it met
+        if src.refactor.problem:
+            found.append(src.refactor.problem)
+        return len(src.records()), found
+
     def _check_rules(self, rec: dict) -> None:
         kind = rec["type"]
         item = rec.get("item")

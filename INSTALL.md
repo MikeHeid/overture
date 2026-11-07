@@ -83,9 +83,13 @@ Claude installs plugins from a **marketplace**, and the unzipped folder is one.
 from 1.54.0 on is rebuilt from its tag by GitHub Actions, compared byte for
 byte with the uploaded zip, and attested:
 
-    gh attestation verify overture-1.55.1.zip --repo MikeHeid/overture \
+    gh attestation verify overture-<version>.zip --repo MikeHeid/overture \
       --signer-workflow MikeHeid/overture/.github/workflows/attest-release.yml \
-      --source-ref refs/tags/v1.55.1 --deny-self-hosted-runners
+      --source-ref refs/tags/v<version> --deny-self-hosted-runners
+
+with the release's version, e.g. `1.61.0`. In a script, add `--format json`:
+without a terminal the plain command prints nothing, pass or fail, and only
+its exit code says which.
 
 It fails unless that workflow, run from that tag on GitHub's own runners,
 attested these exact bytes. 1.54.0 predates the workflow, so a manual run,
@@ -186,6 +190,12 @@ path), then:
 Restart the session. Then, for each onboarded project, re-run
 `bash ~/overture/plugins/overture/kit/deploy/install.sh --project <dir> --start`.
 It copies the new kit and restarts that project's server.
+
+**Read the release's own notes first.** The "Upgrading to …" notes below
+stop at 0.8.13. From 0.8.14 on, a release that needs a step of its own says
+so in its section of [CHANGELOG.md](CHANGELOG.md): 1.60's managed sandbox
+settings, for example (features/hosting.md). Skipping several releases means
+reading each section in between.
 
 **Upgrading to 0.5.0.** Answers locked before 0.5.0 still go stale whenever
 the whole file they hash changes. To re-anchor the ones git history can

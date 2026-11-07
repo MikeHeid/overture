@@ -538,7 +538,8 @@ is named. Always run it from the project root, `--dry-run` first.
 |---|---|
 | `schemaVersion ... is not ...` | export and fold with the same kit version as the store |
 | `file name does not match qid` | a file was renamed; export again, never rename |
-| `item ... does not resolve to a project item` | the item left the register; restore it, or leave that question unfolded |
+| `item ... does not resolve to a project item` | the item left the register before this ruling was folded; restore it, or leave that question unfolded. A ruling already folded is skipped instead, and the skip names the missing item (1.62) |
+| `refactor.jsonl ... is not read; nothing is exported` | export refuses while the console cannot read the owner's withdrawals, or a withdrawn ruling would be committed as holding (1.62). Fix the file as "Store damaged" says |
 | `not locked` | the answer is not locked yet; lock it in the console first |
 | `must be a relative path inside the project` | run from the project root; fix `--locked`, `--ledger` or `--adapter` |
 | `cannot load adapter` / `lacks ...()` | the adapter file is missing or broken on this branch |
@@ -576,6 +577,21 @@ Then start the server and confirm:
 
     systemctl --user start <name>-console.service
     python3 <vendored>/agent.py --state <state> health
+
+**A store that loads can still break a rule (1.62).** Loading checks each line
+alone. The rules that need the other lines (a question minted once, one lock
+per answer, a superseding answer after a lock) run only when a line is
+appended, so a line an older kit wrote, or one added by hand with a matching
+`id`, was never held to them. To check the whole file, in a terminal (a
+sandboxed session cannot read STATE):
+
+    python3 <vendored>/agent.py --state <state> store-check
+
+It reads `store.jsonl` and writes nothing, so the server can keep running. It
+replays every line, in order, through the append rules and prints each line
+they would refuse today, with its number; an item renamed since is not a
+finding. It also says when `refactor.jsonl` cannot be read. Exit 0 means no
+finding. Run it after a migration or a restore from backup.
 
 ## The vendored copy drifted
 

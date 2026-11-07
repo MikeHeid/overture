@@ -503,6 +503,8 @@ def fetch(sock: Path, paths: list[str], project: str | None = None, token: str |
     why = out.get("error") if isinstance(out, dict) else None
     if resp.status == 400 and isinstance(why, str) and why:
         raise Refused(why)
+    if isinstance(why, str) and why:   # 1.62: a server that answered and refused says why (refactor.jsonl unread)
+        raise Unreachable(f"the console server answered {resp.status}: {_short(why, 240)}")
     raise Unreachable(f"the console server answered {resp.status}")
 
 
@@ -539,7 +541,10 @@ def lookup(state: Path | None, root: Path | None, paths: list[str], timeout: flo
         raise Unreachable(f"the console server did not answer ({why}) and there is no checkout to read")
     notes: list[str] = []
     found = committed(root, paths, notes)
-    return {"source": "committed", "note": " ".join([FALLBACK_NOTE, *notes]), "why": why, "rulings": found}
+    # 1.62: a server that answered with a reason is not "not answering"; the agent is told the reason.
+    lead = (f"(from the committed rulings; {why})" if why.startswith("the console server answered") and ": " in why
+            else FALLBACK_NOTE)
+    return {"source": "committed", "note": " ".join([lead, *notes]), "why": why, "rulings": found}
 
 
 # -- the checkout a file is in -----------------------------------------------------------------

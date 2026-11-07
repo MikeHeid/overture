@@ -322,14 +322,14 @@ friction aimed at decision quality rather than speed.
 
 ## Part 3: Lanes and waves
 
-Updated 2026-10-21, after 1.54 and release attestation. The percentages
+Updated 2026-11-06, after 1.61 and the efficiency audit. The percentages
 are still judgement calls.
 
 | Lane | Progress | Shipped | Next items |
 |---|---|---|---|
 | Core decision engine | 85% | Rulings as a CI check (1.36); the "rulings touching this path" lookup before an agent edits (1.52); symbol anchors (1.54) | An open spec for the schema; ruling search and dependencies |
 | Trust & security | 80% | Who decided, on every lock (1.38); roles enforced by the server (1.39); release zips rebuilt and attested by Actions (OPEN-DECISIONS C1); trusted backlinks (1.58); GitHub webhooks verified by their signature (1.59); agents kept out of STATE by the sandbox (1.60) | A separate OS user per project, for hosted tokens |
-| Ecosystem & integrations | 55% | MCP server for other agent tools (1.35); a Slack-style webhook digest (1.45) | Linear/Jira adapters; ruling-aware PR comments; MADR/ADR templates |
+| Ecosystem & integrations | 60% | MCP server for other agent tools (1.35); a Slack-style webhook digest (1.45); ruling-aware PR comments (1.61) | Linear outbound (L1–L3); Jira; MADR/ADR templates |
 | Onboarding & distribution | 65% | Sign-in links without Cloudflare (1.46); ZeroTier/Tailscale `--listen` and onboarding without Cloudflare (1.47); launchd (1.51); the prerequisite scan (1.53.2); the USER-GUIDE drift fixed | Docker; a hosted demo; a 5-minute path with no adapter; native Windows (A1: not now) |
 | Team & multi-operator | 80% | Named operators (1.38); roles and People (1.39, 1.40); routing (1.41); the role log (1.42); two-key locks (1.43); settings (1.44) | Per-operator handoff |
 | **Overall**, weighted toward the category 1.0 | **≈70%** | | |
@@ -376,7 +376,9 @@ Each wave below builds on the one before it.
          (built in 1.59, OPEN-DECISIONS G1–G3);
        - a recipe for keeping agents that run as the same user apart (built in
          1.60, OPEN-DECISIONS I1–I4).
-    2. Then ruling-aware PR comments and Linear (Wave 3's last item).
+    2. Then ruling-aware PR comments and Linear (Wave 3's last item): the
+       comment built in 1.61 (OPEN-DECISIONS C1–C3); the GitHub trigger action
+       filter (F1) and Linear outbound (L1–L3) follow the 1.62 hardening release.
   - *Not in it, kept for a later wave:* Docker (optional, A8), Jira, MADR/ADR
     templates, a hosted demo, and ruling search and dependencies.
 
@@ -408,7 +410,27 @@ change of any new lane, phase, wave or major section, the agent runs the
 
 So the order of every lane is: waypoint → the lane's own decisions → build →
 red checks and a real run → an independent clearer → the owner's approve →
-release.
+release. When the waypoint's ★ is "proceed as mapped", the lane's own
+decisions ride in the same post, so the owner answers once (OPEN-DECISIONS
+E1).
+
+**What each step owes the next (1.62, after the 1.61 audit).** The order is
+the point: each later step checks what the earlier ones produced, so running
+one early wastes it.
+
+- **The real run comes before the clearer.** A real run finds what tests do
+  not: in 1.61 it found two gaps after the clearer had cleared, so the fixes
+  needed a second clearer. The clearer reviews the code the real run left.
+- **One clearer round per release, held to CRITICAL and HIGH.** A clearer
+  says NOT CLEAR only for a CRITICAL or HIGH finding. MEDIUM and LOW findings
+  are fixed or listed in the PR, and do not start another round. A fix for a
+  CRITICAL or HIGH finding goes back to the same clearer, who confirms that
+  fix only; the author never clears its own fix.
+- **Bump, stamp and full suites once, after CLEAR.** The version bump, the
+  area-note stamps and the long test suites run once, on the cleared code,
+  just before the PR. Stamping after each fix made five of 1.61's thirteen
+  commits stamps that the squash then hid. While building, run the suites
+  the change touches.
 
 ### Board bottom line
 

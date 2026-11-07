@@ -5,8 +5,11 @@
 # create`, then `onboard.py tunnel`); until then this unit fails to start.
 [Unit]
 Description=Cloudflare tunnel for the @NAME@ owner console
-After=network-online.target @NAME@-console.service
-Requires=@NAME@-console.service
+# 1.62 (audit A4): ordered after the console, but not bound to it. `Requires=` stopped the tunnel whenever
+# the console stopped and did not bring it back, and it named the per-project unit that one-server mode
+# stops. Unbound, the tunnel answers 502 while the console is down and works again when it is back.
+After=network-online.target @NAME@-console.service overture-console.service
+Wants=network-online.target
 
 [Service]
 Type=simple

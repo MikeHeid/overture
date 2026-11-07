@@ -40,6 +40,8 @@ parts, and every line cites a file, PR or commit:
 - **Roll-up:** what shipped and was decided since the last waypoint.
 - **Direction map:** where the plan said the project would go, where it is,
   and what drifted.
+- **Already exists (1.62):** what the project already has for each part of
+  the lane, and whether the lane reuses, extends or replaces it.
 - **Execution path:** the lane's steps and gates, and what it postpones.
 
 The post ends with one **on-course question**:
@@ -50,6 +52,9 @@ The post ends with one **on-course question**:
 - **d** pause the lane.
 
 Where the record disagrees with the plan, up to three drift questions follow.
+When the ★ is "proceed as mapped", the lane's own design questions come in
+the same post, so you answer once; they count only if you pick **a** (E1,
+1.62).
 Before you lock an answer, you can **Grill** the lane or **Branch out** on any
 part of it from 💬 Chat ▾. Nothing in the lane is built until you lock the
 on-course question (WP1–WP3). Each waypoint is logged in
