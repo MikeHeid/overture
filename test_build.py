@@ -344,6 +344,7 @@ class PublishTests(unittest.TestCase):
         self.assertTrue(B.build.called)
         n = self.names()
         self.assertLess(n.index(f"gh api repos/o/r/commits/{self.SHA}/pulls"), n.index("gh release create"))
+        self.assertLess(n.index("git fetch -q"), n.index("git merge-base --is-ancestor"))   # a fresh origin/main
         self.assertLess(n.index("gh release create"), n.index("gh run list"))
         self.assertLess(n.index("gh run list"), n.index("gh attestation verify"))
         create = next(c for c in self.calls if c[:3] == ("gh", "release", "create"))
