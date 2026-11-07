@@ -164,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - uses: MikeHeid/overture@v1.64.0
+      - uses: MikeHeid/overture@vX.Y.Z   # the release the README's version badge shows
 ```
 
 The rulings checked, and the `.overture.json` that says where they live,
@@ -229,3 +229,30 @@ origin/main` (add `--format markdown` or `--format json`, and
 `--strict`). It exits 0 when every ruling holds, 1 when one is broken
 (or, with `--strict`, could not be checked), and 2 when it could not
 run.
+
+## Overture's own tests and releases (1.65)
+
+**Every pull request to this repository runs every test suite** (OPEN-DECISIONS
+E2, CP1). `.github/workflows/ci.yml` runs one job per `test_*.py` at the
+repository root, in parallel, with read-only access to the repository and
+nothing from the pull request reaching a shell unquoted. The browser suite
+skips there, as it does on any machine without a browser. A failure names
+its suite. The workflow never runs on a release or a tag;
+`attest-release.yml` is the only workflow that signs anything.
+
+**One command releases, in order** (E2, CP2, CP3). `release.py publish`
+replaces the eight steps the script used to print:
+
+    python3 release.py publish 1.65.0 --pr-body notes.md     # on the lane's branch
+    python3 release.py publish --release                     # on main, after the merge
+
+The first runs the area-note gate, requires a CHANGELOG section for the
+version, bumps every file that carries the version (the README badge and the
+`uses:` pins included), runs `test_build`, commits, pushes, and opens the
+pull request. It refuses on `main`, on a dirty tree, and without release
+notes. The second runs only for the merge commit of a merged pull request on
+`main`: nothing merges without the owner's approve, so the merge is the
+approve. It builds the zip scanned against `~/.config/overture/deny.txt`
+(refused when that file is missing or empty), creates the release against
+that commit, waits for `attest-release.yml`, and runs `gh attestation
+verify`. Each step that refuses stops the rest and says why.

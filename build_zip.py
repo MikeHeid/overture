@@ -138,6 +138,19 @@ def pack(top: Path, out: Path) -> str:
     return hashlib.sha256(out.read_bytes()).hexdigest()
 
 
+def read_deny_file(path: Path) -> list[str]:
+    """The strings a deny file lists (blank lines and # comments dropped). A missing, unreadable, non-UTF-8 or
+    empty file is a BuildError: an empty list scans for nothing, which is not what was asked (1.62, audit A4)."""
+    try:
+        deny = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith("#")]
+    except (OSError, ValueError) as e:   # ValueError: not UTF-8 (clearer, 1.62)
+        raise BuildError(f"{path}: {getattr(e, 'strerror', None) or e}") from None
+    if not deny:
+        raise BuildError(f"{path} lists no string")
+    return deny
+
+
 def build(deny: list[str], check: bool = True, out_dir: Path | None = None) -> tuple[Path, str, str]:
     with tempfile.TemporaryDirectory() as td:
         top = stage(Path(td))
@@ -156,14 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     deny = []
     if a.deny_file:
         try:
-            deny = [line.strip() for line in a.deny_file.read_text(encoding="utf-8").splitlines()
-                    if line.strip() and not line.startswith("#")]
-        except (OSError, ValueError) as e:   # ValueError: not UTF-8 (clearer, 1.62)
-            print(f"build_zip: --deny-file {a.deny_file}: {getattr(e, 'strerror', None) or e}; nothing was built",
-                  file=sys.stderr)
-            return 1
-        if not deny:   # 1.62 (audit A4): an empty list scans for nothing, which is not what was asked
-            print(f"build_zip: --deny-file {a.deny_file} lists no string; nothing was built", file=sys.stderr)
+            deny = read_deny_file(a.deny_file)
+        except BuildError as e:
+            print(f"build_zip: --deny-file {e}; nothing was built", file=sys.stderr)
             return 1
     else:
         # 1.62 (audit A4): a zip to publish is scanned for this deployment's own values. The Actions rebuild
