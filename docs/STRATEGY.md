@@ -377,8 +377,8 @@ Each wave below builds on the one before it.
        - a recipe for keeping agents that run as the same user apart (built in
          1.60, OPEN-DECISIONS I1–I4).
     2. Then ruling-aware PR comments and Linear (Wave 3's last item): the
-       comment built in 1.61 (OPEN-DECISIONS C1–C3); the GitHub trigger action
-       filter (F1) and Linear outbound (L1–L3) follow the 1.62 hardening release.
+       comment built in 1.61 (OPEN-DECISIONS C1–C3), the GitHub trigger action
+       filter in 1.63 (F1); Linear outbound (L1–L3) is next.
   - *Not in it, kept for a later wave:* Docker (optional, A8), Jira, MADR/ADR
     templates, a hosted demo, and ruling search and dependencies.
 

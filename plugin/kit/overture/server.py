@@ -2491,7 +2491,8 @@ class Console:
                 return 202, {"fired": False, "reason": f"trigger {name!r} takes only the actions it lists, and this "
                                                        f"{event!r} delivery carries no action"}
             if action not in trigger.github_actions:
-                return 202, {"fired": False, "reason": f"trigger {name!r} does not take {event!r} {action!r}"}
+                return 202, {"fired": False, "reason": f"trigger {name!r} does not take the {action!r} action of "
+                                                       f"{event!r}; it takes {', '.join(sorted(trigger.github_actions))}"}
         import time as _t
         admitted = self.triggers.admit(name, delivery, hashlib.sha256(body).hexdigest(), _t.time())
         if admitted == "replay":
