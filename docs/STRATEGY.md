@@ -379,6 +379,11 @@ Each wave below builds on the one before it.
     2. Then ruling-aware PR comments and Linear (Wave 3's last item): the
        comment built in 1.61 (OPEN-DECISIONS C1–C3), the GitHub trigger action
        filter in 1.63 (F1), Linear outbound in 1.64 (L1–L3).
+    3. Then the author in control (proposals/AUTHOR-CONTROL.md,
+       OPEN-DECISIONS AC1–AC8, decided 2026-11-07): 1.65 CI and `release.py
+       publish` (E2); 1.66 the ask log, `covers`, `lane check` and the "Your
+       call" list; then the lane summary (E5), the first run, and the
+       Action-alone public door. Linear stays outbound only (LB1).
   - *Not in it, kept for a later wave:* Docker (optional, A8), Jira, MADR/ADR
     templates, a hosted demo, and ruling search and dependencies.
 

@@ -6,9 +6,11 @@ where the author's answer changes what gets built, asks the right question
 there, batched, never twice, and carries the answer into every later step.
 The author decides; the agents build; nothing is lost between them.
 
-Status: proposed 2026-11-06 and reviewed by a three-seat panel the same
-day. Open decisions AC1–AC8 below, each with a ★ default that already
-carries the panel's corrections; the owner picks or vetoes. The first draft's
+Status: proposed 2026-11-06, reviewed by a three-seat panel the same day,
+**decided 2026-11-07**: the owner answered "defaults", so AC1–AC8 are
+*architect defaults*, recorded in [OPEN-DECISIONS.md](OPEN-DECISIONS.md)
+with LB1 (Linear stays outbound only; the "Link issue" search is left out).
+The ★ below carry the panel's corrections. The first draft's
 "Sequence" and "What makes it one product" are kept as written so the
 panel's changes can be read against them; "Sequence, revised" is current.
 
